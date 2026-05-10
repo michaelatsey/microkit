@@ -7,8 +7,6 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <ProjectReference Include="..\..\..\MicroKit.Caching\src\MicroKit.Caching\MicroKit.Caching.csproj" />
-    <ProjectReference Include="..\..\..\MicroKit.Data\src\MicroKit.Data.Abstractions\MicroKit.Data.Abstractions.csproj" />
     <ProjectReference Include="..\..\..\MicroKit.Domain\src\MicroKit.Domain.Contracts\MicroKit.Domain.Contracts.csproj" />
   </ItemGroup>
 

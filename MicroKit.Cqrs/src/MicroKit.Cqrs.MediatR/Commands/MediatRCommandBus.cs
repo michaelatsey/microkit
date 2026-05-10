@@ -1,10 +1,5 @@
 ﻿using MediatR;
 using MicroKit.Cqrs.Abstractions.Commands;
-using System;
-using System.Collections.Generic;
-using System.Text;
-using System.Windows.Input;
-using ICommand = MicroKit.Cqrs.Abstractions.Commands.ICommand;
 
 namespace MicroKit.Cqrs.MediatR.Commands;
 
@@ -14,22 +9,30 @@ public sealed class MediatRCommandBus : ICommandBus
 
     public MediatRCommandBus(ISender mediator) => _mediator = mediator;
 
+    /// <inheritdoc/>
     public async Task SendAsync<TCommand>(TCommand command, CancellationToken ct = default)
         where TCommand : ICommand
     {
-        // On redirige vers MediatR
-        await _mediator.Send(command, ct);
-    }
-
-    public async Task<TResponse> SendAsync<TResponse>(ICommand<TResponse> command, CancellationToken cancellationToken = default)
-    {
-        var result = await _mediator.Send(command, cancellationToken);
-
-        if (result is TResponse response)
+        if (command is IRequest<Unit> unitRequest)
         {
-            return response;
+            await _mediator.Send(unitRequest, ct);
+            return;
         }
 
-        throw new InvalidCastException($"Le résultat de MediatR ({result?.GetType().Name}) ne peut pas être converti en {typeof(TResponse).Name}");
+        // Fallback: dynamic dispatch for commands not using the Unit return convention.
+        await _mediator.Send((object)command!, ct);
+    }
+
+    /// <inheritdoc/>
+    public async Task<TResponse> SendAsync<TResponse>(ICommand<TResponse> command, CancellationToken cancellationToken = default)
+    {
+        if (command is IRequest<TResponse> typedRequest)
+            return await _mediator.Send(typedRequest, cancellationToken);
+
+        var result = await _mediator.Send((object)command!, cancellationToken);
+        return result is TResponse response
+            ? response
+            : throw new InvalidOperationException(
+                $"MediatR returned '{result?.GetType().Name ?? "null"}' but expected '{typeof(TResponse).Name}'.");
     }
 }

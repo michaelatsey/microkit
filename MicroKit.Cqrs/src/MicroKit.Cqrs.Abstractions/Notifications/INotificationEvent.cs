@@ -9,11 +9,8 @@ public interface INotificationEvent
 }
 
 
-/// <summary>
-/// 
-/// </summary>
-/// <typeparam name="TEventType">The type of the event type.</typeparam>
-/// <seealso cref="INotification" />
+/// <summary>A notification event that wraps a specific domain event type.</summary>
+/// <typeparam name="TEventType">The domain event type carried by this notification.</typeparam>
 public interface INotificationEvent<out TEventType> : INotificationEvent
     where TEventType : IDomainEvent
 {

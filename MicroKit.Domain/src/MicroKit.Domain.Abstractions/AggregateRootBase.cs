@@ -18,28 +18,21 @@ public abstract class AggregateRootBase
     public IReadOnlyCollection<IDomainEvent> DomainEvents => _domainEvents.AsReadOnly();
 
 
-    protected void AddDomainEvent(IDomainEvent @event)
-    {
-        _domainEvents ??= [];
-        _domainEvents.Add(@event);
-    }
+    protected void AddDomainEvent(IDomainEvent @event) => _domainEvents.Add(@event);
 
-    public void RemoveDomainEvent(IDomainEvent @event)
-    {
-        _domainEvents?.Remove(@event);
-    }
+    /// <summary>Removes a specific domain event raised by this aggregate. Use only within the aggregate.</summary>
+    protected void RemoveDomainEvent(IDomainEvent @event) => _domainEvents.Remove(@event);
 
-    public void ClearDomainEvents()
-    {
-        _domainEvents?.Clear();
-    }
+    /// <inheritdoc/>
+    public void ClearDomainEvents() => _domainEvents.Clear();
 
-    public void IncrementVersion() => Version++;
+    /// <summary>Increments the aggregate version. Call inside domain methods that change state.</summary>
+    protected void IncrementVersion() => Version++;
 
 }
 
 [Serializable]
-public abstract class AggregateRootBase<TKey> 
+public abstract class AggregateRootBase<TKey>
     : Entity<TKey>,
     IAggregateRoot<TKey>,
     IHasDomainEvents
@@ -61,27 +54,14 @@ public abstract class AggregateRootBase<TKey>
     {
     }
 
-    protected void AddDomainEvent(IDomainEvent @event)
-    {
-        _domainEvents ??= [];
-        _domainEvents.Add(@event);
-    }
+    protected void AddDomainEvent(IDomainEvent @event) => _domainEvents.Add(@event);
 
-    /// <summary>
-    /// Removes the domain event.
-    /// </summary>
-    /// <param name="event">The event.</param>
-    public void RemoveDomainEvent(IDomainEvent @event)
-    {
-        _domainEvents?.Remove(@event);
-    }
+    /// <summary>Removes a specific domain event raised by this aggregate. Use only within the aggregate.</summary>
+    protected void RemoveDomainEvent(IDomainEvent @event) => _domainEvents.Remove(@event);
 
-    /// <summary>
-    /// Clears the domain events.
-    /// </summary>
-    public void ClearDomainEvents()
-    {
-        _domainEvents?.Clear();
-    }
-    public void IncrementVersion() => Version++;
+    /// <inheritdoc/>
+    public void ClearDomainEvents() => _domainEvents.Clear();
+
+    /// <summary>Increments the aggregate version. Call inside domain methods that change state.</summary>
+    protected void IncrementVersion() => Version++;
 }

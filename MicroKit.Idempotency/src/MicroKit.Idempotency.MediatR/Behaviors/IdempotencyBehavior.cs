@@ -77,7 +77,7 @@ public class IdempotencyBehavior<TRequest, TResponse> : IPipelineBehavior<TReque
         if (existingState is not null)
         {
             (_idempotencyContext as IdempotencyContext)?.UpdateState(existingState);
-            return await HandleExistingState(existingState, request, cancellationToken);
+            return await HandleExistingState(existingState, request, next, tenantId, cancellationToken);
         }
 
         return await ProcessNewRequest(key, tenantId, request, next, cancellationToken);
@@ -101,9 +101,10 @@ public class IdempotencyBehavior<TRequest, TResponse> : IPipelineBehavior<TReque
     private async Task<TResponse> HandleExistingState(
         IdempotencyState existingState,
         TRequest request,
+        RequestHandlerDelegate<TResponse> next,
+        string tenantId,
         CancellationToken cancellationToken)
     {
-        // Verify request hash if enabled
         if (_options.VerifyRequestHashes && existingState.RequestHash is not null)
         {
             var currentHash = _requestHasher.ComputeHash(request);
@@ -121,30 +122,27 @@ public class IdempotencyBehavior<TRequest, TResponse> : IPipelineBehavior<TReque
                 throw new IdempotencyProgressingException(existingState.Key);
 
             case IdempotencyStatus.Completed:
-                if(_options.EnableLogging && _logger.IsEnabled(LogLevel.Information))
-                {
+                if (_options.EnableLogging && _logger.IsEnabled(LogLevel.Information))
                     _logger.LogInformation("Returning cached response for key: {Key}", existingState.Key);
-                }
-                if(string.IsNullOrEmpty(existingState.Response))
+
+                if (string.IsNullOrEmpty(existingState.Response))
                 {
                     _logger.LogWarning("Cached response is null or empty for key: {Key}", existingState.Key);
                     return default!;
                 }
-                var response = _serializer.Deserialize<TResponse>(existingState.Response);
-                return response ?? default!;
+                return _serializer.Deserialize<TResponse>(existingState.Response) ?? default!;
 
             case IdempotencyStatus.Failed:
             case IdempotencyStatus.Cancelled:
-                // Allow retry for failed/cancelled operations
                 if (_options.EnableLogging && _logger.IsEnabled(LogLevel.Information))
-                {
-                    _logger.LogInformation("Retrying failed operation for key: {Key}", existingState.Key);
-                }
-                await _store.DeleteAsync(existingState.Key, cancellationToken);
-                break;
-        }
+                    _logger.LogInformation("Retrying {Status} operation for key: {Key}", existingState.Status, existingState.Key);
 
-        throw new InvalidOperationException($"Unexpected status: {existingState.Status}");
+                await _store.DeleteAsync(existingState.Key, cancellationToken);
+                return await ProcessNewRequest(existingState.Key, tenantId, request, next, cancellationToken);
+
+            default:
+                throw new InvalidOperationException($"Unexpected idempotency status: {existingState.Status}");
+        }
     }
 
     private async Task<TResponse> ProcessNewRequest(

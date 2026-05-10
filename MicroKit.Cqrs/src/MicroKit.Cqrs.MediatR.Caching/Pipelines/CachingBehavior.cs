@@ -34,9 +34,6 @@ public class CachingBehavior<TRequest, TResponse>
         RequestHandlerDelegate<TResponse> next,
         CancellationToken cancellationToken)
     {
-        
-
-        // Étape 2: Vérifier si on bypass le cache
         if (request.Options?.BypassCache == true)
         {
             if(_logger.IsEnabled(LogLevel.Debug))
@@ -73,7 +70,6 @@ public class CachingBehavior<TRequest, TResponse>
         
         var result = await next(cancellationToken);
 
-        // Étape 6: Mettre en cache si valide
         if (_eligibilityChecker.IsEligible(result))
         {
             var cacheOptions = new CacheOptions

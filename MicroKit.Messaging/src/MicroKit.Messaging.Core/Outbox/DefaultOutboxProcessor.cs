@@ -101,14 +101,13 @@ public class DefaultOutboxProcessor : IOutboxProcessor
             }
         }
         catch (Exception ex)
-        { 
-            // Note: Si le commit échoue ici, les messages restent en statut 'Processing' 
-            // ou 'Pending' selon ta stratégie de lock, et seront re-tentés au prochain cycle.
+        {
+            // Messages remain in 'Processing' status until their lock expires and will be
+            // retried on the next cycle. The exception is rethrown so the worker can back off.
             if (_logger.IsEnabled(LogLevel.Critical))
-            {
-                _logger.LogCritical(ex, "[Tenant:{TenantId}] Failed to commit batch. Messages stay in 'Processing' until lease expires.", tenantId);
-            }
-           
+                _logger.LogCritical(ex, "[Tenant:{TenantId}] Failed to commit batch. Messages will be retried when their lease expires.", tenantId);
+
+            throw;
         }
     }
 

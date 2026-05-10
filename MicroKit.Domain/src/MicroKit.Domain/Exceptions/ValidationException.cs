@@ -31,16 +31,3 @@ public class ValidationException : DomainException
 /// <seealso cref="IEquatable&lt;ValidationError&gt;" />
 public record ValidationError(string PropertyName, string ErrorMessage);
 
-/// <summary>
-/// 
-/// </summary>
-public static class ValidationErrorMapper
-{
-    /// <summary>
-    /// Converts to ardalis.
-    /// </summary>
-    /// <param name="error">The error.</param>
-    /// <returns></returns>
-    public static Ardalis.Result.ValidationError ToArdalis(this ValidationError error) =>
-        new(error.PropertyName, error.ErrorMessage);
-}

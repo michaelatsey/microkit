@@ -2,6 +2,7 @@
 using MicroKit.MultiTenancy.Abstractions;
 using MicroKit.MultiTenancy.Attributes;
 using MicroKit.MultiTenancy.Configuration;
+using MicroKit.MultiTenancy.ResolutionStrategies;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
@@ -27,11 +28,10 @@ public sealed class TenantResolutionMiddleware
 
     public async Task InvokeAsync(
         HttpContext context,
-        ITenantResolutionStrategy strategy,
+        IHttpTenantResolutionStrategy strategy,
         ITenantStore store,
         ITenantContextSetter contextSetter,
-        ITenantIdAccessor tenantIdAccessor
-        ) // Un wrapper interne pour setter le TenantContext Scoped
+        ITenantIdAccessor tenantIdAccessor)
     {
         // Skip tenant validation for health checks and OpenAPI endpoints
         if (ShouldSkipValidation(context))

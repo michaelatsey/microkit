@@ -6,7 +6,7 @@ namespace MicroKit.Idempotency.Core.Persistence;
 
 public class InMemoryIdempotencyStore : IIdempotencyStore
 {
-    private static readonly ConcurrentDictionary<string, CacheEntry> _store = new();
+    private readonly ConcurrentDictionary<string, CacheEntry> _store = new();
 
     private record CacheEntry(IdempotencyState State, DateTimeOffset? ExpiresAt);
 

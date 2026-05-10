@@ -67,9 +67,15 @@ public class EfCoreIdempotencyStore<TContext> : IIdempotencyStore
         }
     }
 
-    public Task FailAsync(string key, IdempotencyStatus status, CancellationToken cancellationToken = default)
+    public async Task FailAsync(string key, IdempotencyStatus status, CancellationToken cancellationToken = default)
     {
-        throw new NotImplementedException();
+        var record = await _dbContext.Set<IdempotencyRecord>()
+            .FindAsync([key], cancellationToken: cancellationToken);
+        if (record is not null)
+        {
+            record.Status = status;
+            record.CompletedAtUtc = DateTimeOffset.UtcNow;
+        }
     }
 
     public async Task<IdempotencyState?> GetAsync(string key, CancellationToken cancellationToken = default)

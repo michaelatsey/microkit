@@ -1,8 +1,12 @@
-﻿using Microsoft.AspNetCore.Http;
+﻿namespace MicroKit.MultiTenancy.Abstractions;
 
-namespace MicroKit.MultiTenancy.Abstractions;
-
+/// <summary>
+/// Resolves the current tenant identifier from the ambient request context.
+/// Implementations are responsible for sourcing the identifier from whatever
+/// signal is appropriate (HTTP header, JWT claim, subdomain, etc.).
+/// </summary>
 public interface ITenantResolutionStrategy
 {
-    Task<string?> GetTenantIdentifierAsync(HttpContext context);
+    /// <summary>Resolves the tenant identifier, or <see langword="null"/> if unresolvable.</summary>
+    Task<string?> ResolveAsync(CancellationToken cancellationToken = default);
 }
