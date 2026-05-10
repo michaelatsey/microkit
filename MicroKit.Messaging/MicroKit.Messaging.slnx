@@ -1,0 +1,15 @@
+<Solution>
+  <Folder Name="/samples/">
+    <Project Path="samples/MicroKit.Sample.OrderApi/MicroKit.Sample.OrderApi.csproj" Id="c2344f4c-700a-4d20-8a72-64348fc1e342" />
+  </Folder>
+  <Folder Name="/src/">
+    <Project Path="src/MicroKit.Messaging.Abstractions/MicroKit.Messaging.Abstractions.csproj" />
+    <Project Path="src/MicroKit.Messaging.Core/MicroKit.Messaging.Core.csproj" />
+    <Project Path="src/MicroKit.Messaging.Persistence.Dapper/MicroKit.Messaging.Persistence.Dapper.csproj" />
+    <Project Path="src/MicroKit.Messaging.Persistence.EFCore/MicroKit.Messaging.Persistence.EFCore.csproj" />
+    <Project Path="src/MicroKit.Messaging.Publisher.MediatR/MicroKit.Messaging.Publisher.MediatR.csproj" Id="1ced6553-3441-496d-9cc9-f40ee28de915" />
+    <Project Path="src/MicroKit.Messaging.Transport.AzureSB/MicroKit.Messaging.Transport.AzureSB.csproj" />
+    <Project Path="src/MicroKit.Messaging.Transport.RabbitMQ/MicroKit.Messaging.Transport.RabbitMQ.csproj" />
+  </Folder>
+  <Folder Name="/tests/" />
+</Solution>

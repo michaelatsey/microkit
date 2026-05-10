@@ -1,0 +1,140 @@
+<Solution>
+  <Folder Name="/MicroKit.Abstractions/" />
+  <Folder Name="/MicroKit.Abstractions/samples/" />
+  <Folder Name="/MicroKit.Abstractions/src/">
+    <Project Path="MicroKit.Abstractions/src/MicroKit.Abstractions/MicroKit.Abstractions.csproj" />
+  </Folder>
+  <Folder Name="/MicroKit.Abstractions/tests/" />
+  <Folder Name="/MicroKit.Caching/" />
+  <Folder Name="/MicroKit.Caching/src/">
+    <Project Path="MicroKit.Caching/src/MicroKit.Caching.Distributed.Autofac/MicroKit.Caching.Distributed.Autofac.csproj" Id="3825b810-ef5a-43c9-bfec-6167d911d0e0" />
+    <Project Path="MicroKit.Caching/src/MicroKit.Caching.Distributed/MicroKit.Caching.Distributed.csproj" Id="e4d4998f-17e7-443f-9df4-f331d9743f5e" />
+    <Project Path="MicroKit.Caching/src/MicroKit.Caching/MicroKit.Caching.csproj" Id="561eb436-c06e-4c46-9821-eaf39b709f3c" />
+  </Folder>
+  <Folder Name="/MicroKit.Caching/tests/" />
+  <Folder Name="/MicroKit.Core/" />
+  <Folder Name="/MicroKit.Core/src/">
+    <Project Path="MicroKit.Core/src/MicroKit.Core/MicroKit.Core.csproj" />
+  </Folder>
+  <Folder Name="/MicroKit.Core/tests/" />
+  <Folder Name="/MicroKit.Cqrs/" />
+  <Folder Name="/MicroKit.Cqrs/docs/">
+    <File Path="MicroKit.Cqrs/docs/Readme.md" />
+  </Folder>
+  <Folder Name="/MicroKit.Cqrs/src/">
+    <Project Path="MicroKit.Cqrs/src/MicroKit.Cqrs.Abstractions/MicroKit.Cqrs.Abstractions.csproj" />
+    <Project Path="MicroKit.Cqrs/src/MicroKit.Cqrs.MediatR.Abstractions/MicroKit.Cqrs.MediatR.Abstractions.csproj" />
+    <Project Path="MicroKit.Cqrs/src/MicroKit.Cqrs.MediatR.Autofac/MicroKit.Cqrs.MediatR.Autofac.csproj" />
+    <Project Path="MicroKit.Cqrs/src/MicroKit.Cqrs.MediatR.Behaviors/MicroKit.Cqrs.MediatR.Behaviors.csproj" />
+    <Project Path="MicroKit.Cqrs/src/MicroKit.Cqrs.MediatR.Caching/MicroKit.Cqrs.MediatR.Caching.csproj" Id="be5f10b8-1e95-4c93-a2cf-aabfdc7f52fd" />
+    <Project Path="MicroKit.Cqrs/src/MicroKit.Cqrs.MediatR/MicroKit.Cqrs.MediatR.csproj" />
+    <Project Path="MicroKit.Cqrs/src/MicroKit.Cqrs/MicroKit.Cqrs.csproj" Id="c33a625a-b4c1-489d-8594-eee7605d9778" />
+  </Folder>
+  <Folder Name="/MicroKit.Cqrs/tests/" />
+  <Folder Name="/MicroKit.Data/" />
+  <Folder Name="/MicroKit.Data/src/">
+    <Project Path="MicroKit.Data/src/MicroKit.Data.Abstractions/MicroKit.Data.Abstractions.csproj" />
+    <Project Path="MicroKit.Data/src/MicroKit.Data.EntityFrameworkCore/MicroKit.Data.EntityFrameworkCore.csproj" />
+    <Project Path="MicroKit.Data/src/MicroKit.Data/MicroKit.Data.csproj" />
+  </Folder>
+  <Folder Name="/MicroKit.Data/tests/" />
+  <Folder Name="/MicroKit.Domain/" />
+  <Folder Name="/MicroKit.Domain/src/">
+    <Project Path="MicroKit.Domain/src/MicroKit.Domain.Abstractions/MicroKit.Domain.Abstractions.csproj" />
+    <Project Path="MicroKit.Domain/src/MicroKit.Domain.Contracts/MicroKit.Domain.Contracts.csproj" />
+    <Project Path="MicroKit.Domain/src/MicroKit.Domain/MicroKit.Domain.csproj" />
+  </Folder>
+  <Folder Name="/MicroKit.Domain/tests/" />
+  <Folder Name="/MicroKit.EntityFrameworkCore/" />
+  <Folder Name="/MicroKit.EntityFrameworkCore/src/">
+    <Project Path="MicroKit.EntityFrameworkCore/src/MicroKit.EntityFrameworkCore/MicroKit.EntityFrameworkCore.csproj" Id="c511a07e-ba93-47fc-a73b-5fbfb8aa049e" />
+  </Folder>
+  <Folder Name="/MicroKit.EntityFrameworkCore/tests/" />
+  <Folder Name="/MicroKit.Events/" />
+  <Folder Name="/MicroKit.Events/src/">
+    <Project Path="MicroKit.Events/src/MicroKit.Events.Contracts/MicroKit.Events.Contracts.csproj" />
+    <Project Path="MicroKit.Events/src/MicroKit.Events/MicroKit.Events.csproj" />
+  </Folder>
+  <Folder Name="/MicroKit.Events/tests/" />
+  <Folder Name="/MicroKit.Idempotency/" />
+  <Folder Name="/MicroKit.Idempotency/samples/" />
+  <Folder Name="/MicroKit.Idempotency/src/">
+    <Project Path="MicroKit.Idempotency/src/MicroKit.Idempotency.Abstractions/MicroKit.Idempotency.Abstractions.csproj" />
+    <Project Path="MicroKit.Idempotency/src/MicroKit.Idempotency.Core/MicroKit.Idempotency.Core.csproj" />
+    <Project Path="MicroKit.Idempotency/src/MicroKit.Idempotency.EFCore/MicroKit.Idempotency.EFCore.csproj" />
+    <Project Path="MicroKit.Idempotency/src/MicroKit.Idempotency.MediatR/MicroKit.Idempotency.MediatR.csproj" />
+    <Project Path="MicroKit.Idempotency/src/MicroKit.Idempotency.Redis/MicroKit.Idempotency.Redis.csproj" />
+  </Folder>
+  <Folder Name="/MicroKit.Idempotency/tests/">
+    <Project Path="MicroKit.Idempotency/tests/MicroKit.Idempotency.Tests/MicroKit.Idempotency.Tests.csproj" />
+  </Folder>
+  <Folder Name="/MicroKit.Messaging/" />
+  <Folder Name="/MicroKit.Messaging/src/">
+    <File Path="Readme.md" />
+    <Project Path="MicroKit.Messaging/src/MicroKit.Messaging.Abstractions/MicroKit.Messaging.Abstractions.csproj" />
+    <Project Path="MicroKit.Messaging/src/MicroKit.Messaging.Core/MicroKit.Messaging.Core.csproj" />
+    <Project Path="MicroKit.Messaging/src/MicroKit.Messaging.Persistence.Dapper/MicroKit.Messaging.Persistence.Dapper.csproj" />
+    <Project Path="MicroKit.Messaging/src/MicroKit.Messaging.Persistence.EFCore/MicroKit.Messaging.Persistence.EFCore.csproj" />
+    <Project Path="MicroKit.Messaging/src/MicroKit.Messaging.Publisher.MediatR/MicroKit.Messaging.Publisher.MediatR.csproj" />
+    <Project Path="MicroKit.Messaging/src/MicroKit.Messaging.Transport.AzureSB/MicroKit.Messaging.Transport.AzureSB.csproj" />
+    <Project Path="MicroKit.Messaging/src/MicroKit.Messaging.Transport.RabbitMQ/MicroKit.Messaging.Transport.RabbitMQ.csproj" />
+  </Folder>
+  <Folder Name="/MicroKit.Messaging/tests/" />
+  <Folder Name="/MicroKit.MultiTenancy/" />
+  <Folder Name="/MicroKit.MultiTenancy/src/">
+    <Project Path="MicroKit.MultiTenancy/src/MicroKit.MultiTenancy.Abstractions/MicroKit.MultiTenancy.Abstractions.csproj" />
+    <Project Path="MicroKit.MultiTenancy/src/MicroKit.MultiTenancy.EFCoreStore/MicroKit.MultiTenancy.EFCoreStore.csproj" />
+    <Project Path="MicroKit.MultiTenancy/src/MicroKit.MultiTenancy.Extensions/MicroKit.MultiTenancy.Extensions.csproj" />
+    <Project Path="MicroKit.MultiTenancy/src/MicroKit.MultiTenancy.Redis/MicroKit.MultiTenancy.Redis.csproj" />
+    <Project Path="MicroKit.MultiTenancy/src/MicroKit.MultiTenancy/MicroKit.MultiTenancy.csproj" />
+  </Folder>
+  <Folder Name="/MicroKit.MultiTenancy/tests/" />
+  <Folder Name="/MicroKit.OpenApi/" />
+  <Folder Name="/MicroKit.OpenApi/docs/">
+    <File Path="MicroKit.ApiVersioning/docs/Readme.md" />
+  </Folder>
+  <Folder Name="/MicroKit.OpenApi/src/">
+    <Project Path="MicroKit.OpenApi/src/MicroKit.OpenApi/MicroKit.OpenApi.csproj" Id="c2efc0a7-20c1-42df-8e5a-ea6017794dbb" />
+  </Folder>
+  <Folder Name="/MicroKit.OpenApi/tests/" />
+  <Folder Name="/MicroKit.Payments/" />
+  <Folder Name="/MicroKit.Payments/docs/" />
+  <Folder Name="/MicroKit.Payments/src/">
+    <Project Path="MicroKit.Payments/src/MicroKit.Payments.Abstractions/MicroKit.Payments.Abstractions.csproj" Id="75b69c16-c08c-4b0b-a15a-22f2177d782b" />
+    <Project Path="MicroKit.Payments/src/MicroKit.Payments.Stripe/MicroKit.Payments.Stripe.csproj" Id="bcf4c6af-4ac4-4059-a496-7e6fe8f095e5" />
+    <Project Path="MicroKit.Payments/src/MicroKit.Payments/MicroKit.Payments.csproj" Id="b7b38c4c-7249-4679-b477-78f46b0a23b8" />
+  </Folder>
+  <Folder Name="/MicroKit.Payments/tests/" />
+  <Folder Name="/MicroKit.Resilience/" />
+  <Folder Name="/MicroKit.Resilience/src/">
+    <Project Path="MicroKit.Resilience/src/MicroKit.Resilience/MicroKit.Resilience.csproj" />
+    <Project Path="MicroKit.Resilience\src\MicroKit.Resilience.MediatR\MicroKit.Resilience.MediatR.csproj" />
+  </Folder>
+  <Folder Name="/MicroKit.Resilience/tests/" />
+  <Folder Name="/MicroKit.Security/">
+    <Project Path="MicroKit.Security/src/MicroKit.Security.AspNetCore/MicroKit.Security.AspNetCore.csproj" Id="7a39dfff-b6fd-4435-a8e9-8105247ee071" />
+  </Folder>
+  <Folder Name="/MicroKit.Security/docs/">
+    <File Path="MicroKit.Security/docs/Readme.md" />
+  </Folder>
+  <Folder Name="/MicroKit.Security/src/">
+    <Project Path="MicroKit.Security/src/MicroKit.Security.Abstractions/MicroKit.Security.Abstractions.csproj" Id="3894cfae-b5ed-434d-a1dc-d4b552c2ff50" />
+    <Project Path="MicroKit.Security/src/MicroKit.Security.Core/MicroKit.Security.Core.csproj" Id="46f9c8cd-0f95-468b-a047-512cb306686a" />
+    <Project Path="MicroKit.Security/src/MicroKit.Security.MultiTenancy/MicroKit.Security.MultiTenancy.csproj" Id="f7d1aff6-b5f0-4f5f-b12f-82d54f832576" />
+  </Folder>
+  <Folder Name="/MicroKit.Security/src/Providers/">
+    <Project Path="MicroKit.Security/src/Providers/MicroKit.Security.ApiKey.AspNetCore/MicroKit.Security.ApiKey.AspNetCore.csproj" Id="932dd86d-457d-4774-9ea9-2d0bcc7a3698" />
+    <Project Path="MicroKit.Security/src/Providers/MicroKit.Security.ApiKey.RedisStore/MicroKit.Security.ApiKey.RedisStore.csproj" Id="d23da29a-49dc-408c-baa1-bb6525c06438" />
+    <Project Path="MicroKit.Security/src/Providers/MicroKit.Security.ApiKey/MicroKit.Security.ApiKey.csproj" Id="06e2e6c5-08e5-44c7-82c9-6a00d5e2dc95" />
+    <Project Path="MicroKit.Security/src/Providers/MicroKit.Security.AzureAd/MicroKit.Security.AzureAd.csproj" Id="af92e54f-bd2a-440a-bb7e-1969b24473ac" />
+    <Project Path="MicroKit.Security/src/Providers/MicroKit.Security.Cognito/MicroKit.Security.Cognito.csproj" Id="af319fc6-a35f-466f-a4a1-a3ebc8b2779f" />
+    <Project Path="MicroKit.Security/src/Providers/MicroKit.Security.Jwt.AspNetCore/MicroKit.Security.Jwt.AspNetCore.csproj" Id="a4b2816e-b0ad-4752-8dd6-e3bb623050ce" />
+    <Project Path="MicroKit.Security/src/Providers/MicroKit.Security.Jwt/MicroKit.Security.Jwt.csproj" Id="25efdbdf-1b67-4874-88b4-f54a040b6a9b" />
+  </Folder>
+  <Folder Name="/MicroKit.Security/tests/" />
+  <Folder Name="/Samples/" />
+  <Folder Name="/Samples/WebApi/">
+    <Project Path="Samples/WebApi/MicroKit.Sample.OrderApi/MicroKit.Sample.OrderApi.csproj" />
+  </Folder>
+  <Folder Name="/Éléments de solution/" />
+</Solution>

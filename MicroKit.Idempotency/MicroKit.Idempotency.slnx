@@ -1,0 +1,13 @@
+<Solution>
+  <Folder Name="/samples/" />
+  <Folder Name="/src/">
+    <Project Path="MicroKit.Idempotency.Redis/MicroKit.Idempotency.Redis.csproj" Id="4f564ae8-4b2c-48f8-bff3-048fba0375bf" />
+    <Project Path="src/MicroKit.Idempotency.Abstractions/MicroKit.Idempotency.Abstractions.csproj" Id="d8e625af-522c-46ee-99b2-88e7934e717c" />
+    <Project Path="src/MicroKit.Idempotency.Core/MicroKit.Idempotency.Core.csproj" Id="b40772e7-b6fa-4376-aa70-f2adf761626b" />
+    <Project Path="src/MicroKit.Idempotency.EFCore/MicroKit.Idempotency.EFCore.csproj" Id="9c51b6ea-2f0f-4d0b-9b41-fffa48262617" />
+    <Project Path="src/MicroKit.Idempotency.MediatR/MicroKit.Idempotency.MediatR.csproj" Id="983fbea5-eb25-45ac-9ca5-2d961eae06a3" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/MicroKit.Idempotency.Tests/MicroKit.Idempotency.Tests.csproj" Id="be1fd756-98be-4676-a484-ce38e47552f3" />
+  </Folder>
+</Solution>

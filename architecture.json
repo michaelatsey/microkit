@@ -1,0 +1,320 @@
+{
+    "version": "1.0",
+    "project": {
+        "name": "MicroKit",
+        "type": "nuget-library-suite",
+        "maturity": "stabilization-in-progress",
+        "language": "C#",
+        "framework": ".NET 10",
+        "description": "Production-ready .NET 10 modular library suite providing reusable infrastructure and domain primitives for SaaS platforms, modular monoliths, and distributed systems. Each module is an independently publishable NuGet package.",
+        "nugetOrg": "https://www.nuget.org/packages?q=MicroKit",
+        "canonicalLayoutReference": "STRUCTURE.md — AI assistants MUST read this file before making any structural changes."
+    },
+    "designPhilosophy": {
+        "packageFirst": "Every module is an independently publishable NuGet package — consumers install only what they need",
+        "abstractionFirst": "Every module ships an Abstractions package with zero third-party dependencies",
+        "zeroVendorLockIn": "Abstractions never reference third-party libraries — integrations live in dedicated packages",
+        "layeredDependencies": "Abstractions ← Core ← Integrations (MediatR, EFCore, Redis, RabbitMQ...)",
+        "noCircularDependencies": true,
+        "dotnet10First": true
+    },
+    "modules": {
+        "core": [
+            {
+                "name": "MicroKit.Abstractions",
+                "purpose": "Shared cross-cutting abstractions — markers, base interfaces, shared contracts",
+                "packages": [
+                    "MicroKit.Abstractions"
+                ],
+                "thirdPartyDeps": "none",
+                "status": "stabilize"
+            },
+            {
+                "name": "MicroKit.Core",
+                "purpose": "Core utilities shared across all modules",
+                "packages": [
+                    "MicroKit.Core"
+                ],
+                "thirdPartyDeps": "minimal",
+                "status": "stabilize"
+            }
+        ],
+        "domain": [
+            {
+                "name": "MicroKit.Domain",
+                "purpose": "Domain primitives — Entity, AggregateRoot, ValueObject, Result, Error, Domain Events",
+                "packages": [
+                    "MicroKit.Domain.Abstractions",
+                    "MicroKit.Domain",
+                    "MicroKit.Domain.Contracts"
+                ],
+                "thirdPartyDeps": "none in Abstractions",
+                "status": "stabilize",
+                "priority": 1
+            }
+        ],
+        "cqrs": [
+            {
+                "name": "MicroKit.Cqrs",
+                "purpose": "CQRS abstractions and MediatR decoupled implementation",
+                "packages": [
+                    "MicroKit.Cqrs.Abstractions",
+                    "MicroKit.Cqrs",
+                    "MicroKit.Cqrs.MediatR",
+                    "MicroKit.Cqrs.MediatR.Abstractions",
+                    "MicroKit.Cqrs.MediatR.Autofac",
+                    "MicroKit.Cqrs.MediatR.Behaviors",
+                    "MicroKit.Cqrs.MediatR.Caching"
+                ],
+                "keyAbstractions": [
+                    "ICommandBus",
+                    "IQueryBus",
+                    "ICommand",
+                    "IQuery",
+                    "ICommandHandler",
+                    "IQueryHandler"
+                ],
+                "mediatRIsImplementationDetail": true,
+                "status": "stabilize",
+                "priority": 2
+            }
+        ],
+        "events": [
+            {
+                "name": "MicroKit.Events",
+                "purpose": "Domain and Integration Event contracts and dispatching",
+                "packages": [
+                    "MicroKit.Events.Contracts",
+                    "MicroKit.Events"
+                ],
+                "status": "stabilize",
+                "priority": 3
+            }
+        ],
+        "messaging": [
+            {
+                "name": "MicroKit.Messaging",
+                "purpose": "Outbox/Inbox pattern — reliable at-least-once message delivery",
+                "packages": [
+                    "MicroKit.Messaging.Abstractions",
+                    "MicroKit.Messaging.Core",
+                    "MicroKit.Messaging.Persistence.EFCore",
+                    "MicroKit.Messaging.Persistence.Dapper",
+                    "MicroKit.Messaging.Publisher.MediatR",
+                    "MicroKit.Messaging.Transport.RabbitMQ",
+                    "MicroKit.Messaging.Transport.AzureSB"
+                ],
+                "guarantee": "at-least-once",
+                "consumersRequire": "idempotency",
+                "status": "stabilize",
+                "priority": 4
+            }
+        ],
+        "idempotency": [
+            {
+                "name": "MicroKit.Idempotency",
+                "purpose": "Idempotency enforcement for reliable message consumption",
+                "packages": [
+                    "MicroKit.Idempotency.Abstractions",
+                    "MicroKit.Idempotency.Core",
+                    "MicroKit.Idempotency.EFCore",
+                    "MicroKit.Idempotency.MediatR",
+                    "MicroKit.Idempotency.Redis"
+                ],
+                "deduplicationKey": "MessageId or RequestId",
+                "status": "stabilize",
+                "priority": 5
+            }
+        ],
+        "data": [
+            {
+                "name": "MicroKit.Data",
+                "purpose": "Data access abstractions and EF Core base implementations",
+                "packages": [
+                    "MicroKit.Data.Abstractions",
+                    "MicroKit.Data",
+                    "MicroKit.Data.EntityFrameworkCore"
+                ],
+                "status": "stabilize",
+                "priority": 6
+            },
+            {
+                "name": "MicroKit.EntityFrameworkCore",
+                "purpose": "EF Core extensions, base DbContext, interceptors, soft delete, audit fields",
+                "packages": [
+                    "MicroKit.EntityFrameworkCore"
+                ],
+                "status": "stabilize",
+                "priority": 6
+            }
+        ],
+        "multiTenancy": [
+            {
+                "name": "MicroKit.MultiTenancy",
+                "purpose": "Multi-tenancy — pluggable tenant resolution, EF Core filters, Redis cache",
+                "packages": [
+                    "MicroKit.MultiTenancy.Abstractions",
+                    "MicroKit.MultiTenancy",
+                    "MicroKit.MultiTenancy.EFCoreStore",
+                    "MicroKit.MultiTenancy.Extensions",
+                    "MicroKit.MultiTenancy.Mvc",
+                    "MicroKit.MultiTenancy.Redis"
+                ],
+                "tenantResolution": "pluggable — header, JWT, subdomain",
+                "status": "stabilize",
+                "priority": 7
+            }
+        ],
+        "caching": [
+            {
+                "name": "MicroKit.Caching",
+                "purpose": "Caching abstractions and distributed cache implementations",
+                "packages": [
+                    "MicroKit.Caching",
+                    "MicroKit.Caching.Distributed",
+                    "MicroKit.Caching.Distributed.Autofac"
+                ],
+                "status": "stabilize",
+                "priority": 8
+            }
+        ],
+        "defer": [
+            {
+                "name": "MicroKit.Resilience",
+                "purpose": "Resilience patterns — retry, circuit breaker, MediatR integration",
+                "status": "defer — stabilize core modules first"
+            },
+            {
+                "name": "MicroKit.Security",
+                "purpose": "Authentication, authorization, API key, multi-tenancy security",
+                "status": "defer — stabilize core modules first"
+            },
+            {
+                "name": "MicroKit.OpenApi",
+                "purpose": "OpenAPI / Scalar configuration helpers",
+                "status": "defer — stabilize core modules first"
+            },
+            {
+                "name": "MicroKit.Payments",
+                "purpose": "Payment abstractions + Stripe implementation",
+                "status": "defer — stabilize core modules first"
+            }
+        ]
+    },
+    "packageDesignRules": {
+        "abstractionsPackage": {
+            "mustContainOnly": [
+                "interfaces",
+                "abstract base classes",
+                "marker interfaces",
+                "enums for contracts",
+                "records/structs for contracts"
+            ],
+            "mustNeverContain": [
+                "concrete implementations",
+                "third-party references",
+                "infrastructure concerns"
+            ]
+        },
+        "implementationPackage": {
+            "dependsOn": [
+                "own Abstractions package",
+                "MicroKit.Core",
+                "MicroKit.Abstractions"
+            ],
+            "mustNotDependOn": "other MicroKit module implementation packages"
+        },
+        "integrationPackage": {
+            "naming": "MicroKit.[Module].[Technology]",
+            "dependsOn": [
+                "module Abstractions package",
+                "third-party library"
+            ],
+            "containsOnly": "adapter/bridge code"
+        }
+    },
+    "stabilizationPlan": {
+        "phase1": {
+            "title": "Foundation",
+            "modules": [
+                "MicroKit.Domain",
+                "MicroKit.Core",
+                "MicroKit.Abstractions"
+            ],
+            "goal": "Solid domain primitives — Result, Error, Entity, AggregateRoot, ValueObject"
+        },
+        "phase2": {
+            "title": "Dispatch",
+            "modules": [
+                "MicroKit.Cqrs",
+                "MicroKit.Events"
+            ],
+            "goal": "Decoupled CQRS — MediatR as implementation detail"
+        },
+        "phase3": {
+            "title": "Reliability",
+            "modules": [
+                "MicroKit.Messaging",
+                "MicroKit.Idempotency"
+            ],
+            "goal": "Reliable message delivery and idempotent consumption"
+        },
+        "phase4": {
+            "title": "Persistence & Tenancy",
+            "modules": [
+                "MicroKit.Data",
+                "MicroKit.EntityFrameworkCore",
+                "MicroKit.MultiTenancy",
+                "MicroKit.Caching"
+            ],
+            "goal": "Production-grade data access and multi-tenant SaaS foundation"
+        },
+        "phase5": {
+            "title": "NuGet Publishing",
+            "goal": "All stabilized modules published to NuGet.org"
+        }
+    },
+    "versioningRules": {
+        "strategy": "semantic-versioning",
+        "major": "breaking public API changes",
+        "minor": "new features — backward compatible",
+        "patch": "bug fixes",
+        "preRelease": "-preview.N suffix for unstable packages"
+    },
+    "codeQuality": {
+        "nullableReferenceTypes": "enabled on all projects",
+        "implicitUsings": "enabled on all projects",
+        "xmlDocumentation": "required on all public APIs",
+        "sealedClasses": "prefer sealed on classes not designed for inheritance",
+        "immutablePublicCollections": "prefer IReadOnlyCollection<T> over List<T> in public APIs",
+        "recordsForDTOs": "prefer records for immutable data transfer types"
+    },
+    "testing": {
+        "unit": {
+            "tool": "xUnit",
+            "rule": "Abstractions packages — zero infrastructure dependencies"
+        },
+        "integration": {
+            "tool": "xUnit + Testcontainers",
+            "rule": "Real infrastructure — no mocks for EFCore, Redis, messaging"
+        },
+        "contract": {
+            "tool": "xUnit",
+            "rule": "Public API surface stability — update on any public API change"
+        }
+    },
+    "aiEnforcement": {
+        "readStructureMdFirst": true,
+        "forbidThirdPartyDepsInAbstractions": true,
+        "forbidCircularDependencies": true,
+        "forbidBusinessLogicInInfrastructurePackages": true,
+        "forbidBreakingChangesWithoutMajorBump": true,
+        "forbidPublishingWithoutXmlDocs": true,
+        "forbidStaticMutableState": true,
+        "forbidConcreteImplementationsInAbstractions": true,
+        "requireTestsForAllPublicApis": true,
+        "preferSealedClasses": true,
+        "preferRecordsForImmutableTypes": true,
+        "deferLowPriorityModulesUntilCoreIsStable": true
+    }
+}

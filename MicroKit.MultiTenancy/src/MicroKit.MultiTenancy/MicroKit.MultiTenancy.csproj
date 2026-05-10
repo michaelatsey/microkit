@@ -1,0 +1,16 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+  </PropertyGroup>
+  <ItemGroup>
+    <FrameworkReference Include="Microsoft.AspNetCore.App" />
+  </ItemGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\..\..\MicroKit.Core\src\MicroKit.Core\MicroKit.Core.csproj" />
+    <ProjectReference Include="..\MicroKit.MultiTenancy.Abstractions\MicroKit.MultiTenancy.Abstractions.csproj" />
+  </ItemGroup>
+
+</Project>

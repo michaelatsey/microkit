@@ -1,0 +1,18 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\..\MicroKit.Caching\src\MicroKit.Caching.Distributed.Autofac\MicroKit.Caching.Distributed.Autofac.csproj" />
+    <ProjectReference Include="..\..\..\MicroKit.Caching\src\MicroKit.Caching\MicroKit.Caching.csproj" />
+    <ProjectReference Include="..\MicroKit.Cqrs.Abstractions\MicroKit.Cqrs.Abstractions.csproj" />
+    <ProjectReference Include="..\MicroKit.Cqrs.MediatR.Abstractions\MicroKit.Cqrs.MediatR.Abstractions.csproj" />
+    <ProjectReference Include="..\MicroKit.Cqrs.MediatR.Autofac\MicroKit.Cqrs.MediatR.Autofac.csproj" />
+    <ProjectReference Include="..\MicroKit.Cqrs\MicroKit.Cqrs.csproj" />
+  </ItemGroup>
+
+</Project>

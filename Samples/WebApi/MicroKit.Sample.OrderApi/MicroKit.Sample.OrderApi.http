@@ -1,0 +1,6 @@
+@MicroKit.Sample.OrderApi_HostAddress = http://localhost:5067
+
+GET {{MicroKit.Sample.OrderApi_HostAddress}}/weatherforecast/
+Accept: application/json
+
+###
