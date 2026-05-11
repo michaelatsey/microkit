@@ -5,35 +5,15 @@
 /// </summary>
 public interface IAuditedEntity
 {
-    /// <summary>
-    /// Gets or sets the created on UTC.
-    /// </summary>
-    /// <value>
-    /// The created on UTC.
-    /// </value>
-    DateTimeOffset CreatedOnUtc { get; set; }
+    /// <summary>Gets the UTC timestamp when this entity was created.</summary>
+    DateTimeOffset CreatedOnUtc { get; }
 
-    /// <summary>
-    /// Gets or sets the created by.
-    /// </summary>
-    /// <value>
-    /// The created by.
-    /// </value>
-    string? CreatedBy { get; set; }
+    /// <summary>Gets the identifier of the actor who created this entity.</summary>
+    string? CreatedBy { get; }
 
-    /// <summary>
-    /// Gets or sets the last modified on UTC.
-    /// </summary>
-    /// <value>
-    /// The last modified on UTC.
-    /// </value>
-    DateTimeOffset? LastModifiedOnUtc { get; set; }
+    /// <summary>Gets the UTC timestamp of the last modification, or <c>null</c> if never modified.</summary>
+    DateTimeOffset? LastModifiedOnUtc { get; }
 
-    /// <summary>
-    /// Gets or sets the last modified by.
-    /// </summary>
-    /// <value>
-    /// The last modified by.
-    /// </value>
-    string? LastModifiedBy { get; set; }
+    /// <summary>Gets the identifier of the actor who last modified this entity.</summary>
+    string? LastModifiedBy { get; }
 }

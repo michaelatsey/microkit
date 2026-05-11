@@ -44,7 +44,9 @@
     <Project Path="MicroKit.Domain/src/MicroKit.Domain.Contracts/MicroKit.Domain.Contracts.csproj" />
     <Project Path="MicroKit.Domain/src/MicroKit.Domain/MicroKit.Domain.csproj" />
   </Folder>
-  <Folder Name="/MicroKit.Domain/tests/" />
+  <Folder Name="/MicroKit.Domain/tests/">
+    <Project Path="MicroKit.Domain/tests/MicroKit.Domain.Tests/MicroKit.Domain.Tests.csproj" />
+  </Folder>
   <Folder Name="/MicroKit.EntityFrameworkCore/" />
   <Folder Name="/MicroKit.EntityFrameworkCore/src/">
     <Project Path="MicroKit.EntityFrameworkCore/src/MicroKit.EntityFrameworkCore/MicroKit.EntityFrameworkCore.csproj" Id="c511a07e-ba93-47fc-a73b-5fbfb8aa049e" />

@@ -9,7 +9,7 @@ namespace MicroKit.Domain.ValueObjects;
 /// 
 /// </summary>
 /// <seealso cref="IEquatable&lt;Money&gt;" />
-public class Money : ValueObject
+public sealed class Money : ValueObject
 {
     // Cache statique pour les formats de devises (Performance)
     private static readonly ConcurrentDictionary<string, NumberFormatInfo> CurrencyCache = new();
@@ -17,7 +17,7 @@ public class Money : ValueObject
     public decimal Amount { get; }
     public string Currency { get; } = null!;
 
-    protected Money() { }
+    private Money() { }
 
     /// <summary>
     /// Initializes a new instance of the <see cref="Money"/> class.
@@ -33,11 +33,16 @@ public class Money : ValueObject
     /// </exception>
     public Money(decimal amount, string currency)
     {
-        if (amount < 0)
-            throw new ArgumentException("Amount cannot be negative", nameof(amount));
+        if (string.IsNullOrWhiteSpace(currency))
+            throw new ArgumentException("Currency cannot be empty.", nameof(currency));
+
+        var upper = currency.Trim().ToUpperInvariant();
+
+        if (upper.Length != 3 || !upper.All(char.IsLetter))
+            throw new ArgumentException("Currency must be a 3-letter ISO 4217 code.", nameof(currency));
 
         Amount = amount;
-        Currency = currency.ToUpperInvariant();
+        Currency = upper;
     }
 
     public static Money Zero(string currency) => new(0, currency);
@@ -274,16 +279,24 @@ public class Money : ValueObject
     /// <exception cref="CurrencyMismatchException">All amounts must have the same currency for summation</exception>
     public static Money Sum(IEnumerable<Money> amounts)
     {
-        var amountsList = amounts.ToList();
-        if (amountsList.Count == 0)
+        string? currency = null;
+        decimal total = 0;
+        bool any = false;
+
+        foreach (var m in amounts)
+        {
+            any = true;
+            if (currency is null)
+                currency = m.Currency;
+            else if (m.Currency != currency)
+                throw new CurrencyMismatchException("All amounts must have the same currency for summation");
+            total += m.Amount;
+        }
+
+        if (!any)
             throw new ArgumentException("Cannot sum empty collection of money amounts");
 
-        var firstCurrency = amountsList.First().Currency;
-        if (amountsList.Any(m => m.Currency != firstCurrency))
-            throw new CurrencyMismatchException("All amounts must have the same currency for summation");
-
-        var totalAmount = amountsList.Sum(m => m.Amount);
-        return new Money(totalAmount, firstCurrency);
+        return new Money(total, currency!);
     }
 
     /// <summary>

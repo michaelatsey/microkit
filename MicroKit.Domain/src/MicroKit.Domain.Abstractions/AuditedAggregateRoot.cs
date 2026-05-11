@@ -15,28 +15,13 @@ public abstract class AuditedAggregateRoot : AggregateRoot, IAuditedEntity
     /// <value>
     /// The created on UTC.
     /// </value>
-    public DateTimeOffset CreatedOnUtc { get; set; } = DateTimeOffset.UtcNow;
-    /// <summary>
-    /// Gets or sets the created by.
-    /// </summary>
-    /// <value>
-    /// The created by.
-    /// </value>
-    public string? CreatedBy { get; set; }
-    /// <summary>
-    /// Gets or sets the last modified on UTC.
-    /// </summary>
-    /// <value>
-    /// The last modified on UTC.
-    /// </value>
-    public DateTimeOffset? LastModifiedOnUtc { get; set; } = DateTimeOffset.UtcNow;
-    /// <summary>
-    /// Gets or sets the last modified by.
-    /// </summary>
-    /// <value>
-    /// The last modified by.
-    /// </value>
-    public string? LastModifiedBy { get; set; }
+    public DateTimeOffset CreatedOnUtc { get; private set; } = DateTimeOffset.UtcNow;
+    /// <summary>Gets the identifier of the actor who created this aggregate.</summary>
+    public string? CreatedBy { get; private set; }
+    /// <summary>Gets the UTC timestamp of the last modification, or <c>null</c> if never modified.</summary>
+    public DateTimeOffset? LastModifiedOnUtc { get; private set; }
+    /// <summary>Gets the identifier of the actor who last modified this aggregate.</summary>
+    public string? LastModifiedBy { get; private set; }
 
     /// <summary>
     /// Initializes a new instance of the <see cref="AuditedAggregateRoot"/> class.
@@ -46,12 +31,11 @@ public abstract class AuditedAggregateRoot : AggregateRoot, IAuditedEntity
     {
     }
 
-    /// <summary>
-    /// Updates the timestamp.
-    /// </summary>
-    protected void UpdateTimestamp()
+    /// <summary>Records a modification timestamp and optional actor. Call from domain methods that change state.</summary>
+    protected void UpdateTimestamp(string? modifiedBy = null)
     {
         LastModifiedOnUtc = DateTimeOffset.UtcNow;
+        LastModifiedBy = modifiedBy;
     }
 }
 
@@ -71,28 +55,13 @@ public abstract class AuditedAggregateRoot<TKey>
     /// <value>
     /// The created on UTC.
     /// </value>
-    public DateTimeOffset CreatedOnUtc { get; set; } = DateTimeOffset.UtcNow;
-    /// <summary>
-    /// Gets or sets the created by.
-    /// </summary>
-    /// <value>
-    /// The created by.
-    /// </value>
-    public string? CreatedBy { get; set; }
-    /// <summary>
-    /// Gets or sets the last modified on UTC.
-    /// </summary>
-    /// <value>
-    /// The last modified on UTC.
-    /// </value>
-    public DateTimeOffset? LastModifiedOnUtc { get; set; } = DateTimeOffset.UtcNow;
-    /// <summary>
-    /// Gets or sets the last modified by.
-    /// </summary>
-    /// <value>
-    /// The last modified by.
-    /// </value>
-    public string? LastModifiedBy { get; set; }
+    public DateTimeOffset CreatedOnUtc { get; private set; } = DateTimeOffset.UtcNow;
+    /// <summary>Gets the identifier of the actor who created this aggregate.</summary>
+    public string? CreatedBy { get; private set; }
+    /// <summary>Gets the UTC timestamp of the last modification, or <c>null</c> if never modified.</summary>
+    public DateTimeOffset? LastModifiedOnUtc { get; private set; }
+    /// <summary>Gets the identifier of the actor who last modified this aggregate.</summary>
+    public string? LastModifiedBy { get; private set; }
 
     /// <summary>
     /// Initializes a new instance of the <see cref="AuditedAggregateRoot{TKey}"/> class.
@@ -100,6 +69,7 @@ public abstract class AuditedAggregateRoot<TKey>
     protected AuditedAggregateRoot()
     {
     }
+
     /// <summary>
     /// Initializes a new instance of the <see cref="AuditedAggregateRoot{TKey}"/> class.
     /// </summary>
@@ -109,12 +79,11 @@ public abstract class AuditedAggregateRoot<TKey>
     {
     }
 
-    /// <summary>
-    /// Updates the timestamp.
-    /// </summary>
-    protected void UpdateTimestamp(DateTimeOffset? date = null)
+    /// <summary>Records a modification timestamp and optional actor. Call from domain methods that change state.</summary>
+    protected void UpdateTimestamp(string? modifiedBy = null)
     {
-        LastModifiedOnUtc = date ?? DateTimeOffset.UtcNow;
+        LastModifiedOnUtc = DateTimeOffset.UtcNow;
+        LastModifiedBy = modifiedBy;
     }
 
 }

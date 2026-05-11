@@ -26,7 +26,7 @@ public abstract class Entity<TKey> : Entity, IEntity<TKey>
     /// <value>
     /// The identifier.
     /// </value>
-    public virtual TKey Id { get; /* protected set;*/ }
+    public virtual TKey Id { get; private set; }
 
     /// <summary>
     /// Initializes a new instance of the <see cref="Entity{TKey}"/> class.
