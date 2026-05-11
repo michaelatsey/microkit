@@ -1,9 +1,7 @@
 ﻿using MicroKit.Abstractions.Serialization;
 using MicroKit.Messaging.Abstractions.Common;
 using MicroKit.Messaging.Abstractions.Outbox;
-using MicroKit.MultiTenancy;
 using Microsoft.Extensions.Logging;
-using System.Collections.Concurrent;
 using System.Text.Json;
 
 namespace MicroKit.Messaging.Core.Outbox;
@@ -71,7 +69,6 @@ public class OutboxService: IOutboxService
             IdempotencyKey = idempotencyKey,
             Metadata = destination.Metadata
         };
-        var df = _serializer.Serialize(payload); 
         // SÉRIALISATION DE L'ENVELOPPE COMPLÈTE
         // Le Payload de la base de données contiendra le JSON de l'enveloppe entière
         var jsonPayload = _serializer.Serialize(envelope);
@@ -130,7 +127,7 @@ public class OutboxService: IOutboxService
             PublishToBroker = destination.PublishToBroker,
             BrokerTopic = destination.BrokerTopic,
             PartitionKey = destination.PartitionKey,
-            DestinationMetadata = destination.Metadata != null
+            Metadata = destination.Metadata != null
             ? JsonSerializer.Serialize(destination.Metadata)
             : null,
 

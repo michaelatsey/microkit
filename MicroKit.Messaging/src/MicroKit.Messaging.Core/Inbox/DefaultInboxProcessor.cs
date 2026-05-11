@@ -1,4 +1,4 @@
-﻿using MicroKit.Messaging.Abstractions.Common;
+using MicroKit.Messaging.Abstractions.Common;
 using MicroKit.Messaging.Abstractions.Inbox;
 using MicroKit.Messaging.Abstractions.Persistence;
 using MicroKit.Messaging.Core.Configuration;
@@ -7,19 +7,26 @@ using Microsoft.Extensions.Options;
 
 namespace MicroKit.Messaging.Core.Inbox;
 
+/// <summary>
+/// Default inbox processor that fetches pending <see cref="InboxState"/> records and publishes them
+/// to the configured <see cref="IInboxPublisher"/>, applying exponential back-off on failure.
+/// </summary>
 public class DefaultInboxProcessor : IInboxProcessor
 {
     private readonly IInboxStateFetcher _fetcher;
     private readonly IInboxStateRepository _repository;
+    private readonly IInboxMessageRepository _messageRepository;
     private readonly IMessagingUnitOfWork _unitOfWork;
-    //private readonly IMessageSerializer _serializer;
     private readonly IInboxPublisher _publisher;
     private readonly InboxOptions _options;
     private readonly ILogger<DefaultInboxProcessor> _logger;
-    private const string ConsumerGroup = "publisher";
+
+    /// <summary>
+    /// Initializes a new instance of <see cref="DefaultInboxProcessor"/>.
+    /// </summary>
     public DefaultInboxProcessor(
         IInboxStateRepository repository,
-        //IMessageSerializer serializer,
+        IInboxMessageRepository messageRepository,
         IOptions<InboxOptions> options,
         ILogger<DefaultInboxProcessor> logger,
         IInboxStateFetcher fetcher,
@@ -27,99 +34,82 @@ public class DefaultInboxProcessor : IInboxProcessor
         IMessagingUnitOfWork unitOfWork)
     {
         _repository = repository;
-        //_serializer = serializer;
+        _messageRepository = messageRepository;
         _options = options.Value;
         _logger = logger;
         _fetcher = fetcher;
         _publisher = publisher;
         _unitOfWork = unitOfWork;
     }
-    /// <summary>
-    /// Processes the batch asynchronous.
-    /// </summary>
+
+    /// <summary>Processes a batch of pending inbox states for the given tenant and consumer.</summary>
     /// <param name="tenantId">The tenant identifier.</param>
-    /// <param name="consumerName">Name of the consumer.</param>
-    /// <param name="batchSize">Size of the batch.</param>
-    /// <param name="cancellationToken">The cancellation token.</param>
+    /// <param name="consumerName">The consumer name.</param>
+    /// <param name="batchSize">Maximum number of states to process.</param>
+    /// <param name="cancellationToken">A token to cancel the operation.</param>
     public async Task ProcessBatchAsync(
         string tenantId,
-        string consumerName, 
-        int batchSize, 
+        string consumerName,
+        int batchSize,
         CancellationToken cancellationToken = default)
     {
-        var messages = await _fetcher.FetchNextBatchAsync(
+        var states = await _fetcher.FetchNextBatchAsync(
             tenantId,
             consumerName,
             batchSize,
             TimeSpan.FromMinutes(5),
             cancellationToken);
 
-        if (!messages.Any())
+        if (!states.Any())
         {
-            _logger.LogTrace("No pending messages found in outbox.");
+            _logger.LogTrace("No pending inbox states found for tenant {TenantId} / consumer {ConsumerName}.", tenantId, consumerName);
             return;
         }
 
         if (_logger.IsEnabled(LogLevel.Debug))
         {
-            _logger.LogDebug("Processing batch of {Count} outbox messages.", messages.Count);
+            _logger.LogDebug("[Tenant:{TenantId}] Processing batch of {Count} inbox states.", tenantId, states.Count);
         }
 
-        foreach (var message in messages)
+        foreach (var state in states)
         {
-            await ProcessMessageInternalAsync(message, cancellationToken);
+            await ProcessStateInternalAsync(state, cancellationToken);
         }
 
         try
         {
             await _unitOfWork.SaveChangesAsync(cancellationToken);
-            _logger.LogInformation("Successfully processed and committed batch of {Count} messages.", messages.Count);
+            _logger.LogInformation("[Tenant:{TenantId}] Successfully committed batch of {Count} inbox states.", tenantId, states.Count);
         }
         catch (Exception ex)
         {
-            _logger.LogCritical(ex, "Failed to commit outbox batch. Database consistency might be at risk.");
-            // Note: Si le commit échoue ici, les messages restent en statut 'Processing' 
-            // ou 'Pending' selon ta stratégie de lock, et seront re-tentés au prochain cycle.
+            _logger.LogCritical(ex, "[Tenant:{TenantId}] Failed to commit inbox batch. States will be retried when their lease expires.", tenantId);
+            throw;
         }
     }
 
-    /// <summary>
-    /// Processes the state asynchronous.
-    /// </summary>
-    /// <param name="state">The state.</param>
-    /// <param name="cancellationToken">The cancellation token.</param>
-    private async Task ProcessMessageInternalAsync(InboxState state,CancellationToken cancellationToken = default)
+    private async Task ProcessStateInternalAsync(InboxState state, CancellationToken cancellationToken)
     {
         try
         {
-            // Mark as processing
-            // ATTENTION : Ici, plus besoin de faire state.Status = Processing 
-            // et UpdateAsync au début, car la stratégie SQL l'a DÉJÀ FAIT !
+            var message = await _messageRepository.GetByIdAsync(state.InboxMessageId, cancellationToken)
+                ?? throw new InvalidOperationException($"InboxMessage '{state.InboxMessageId}' not found for InboxState '{state.Id}'.");
 
             var context = new InboxContext(
                 MessageId: state.InboxMessageId,
-                MessageType: state.Message.MessageType,
-                Payload: state.Message.Payload,
-                Headers: state.Message.Headers // Le correlationId, l' idempotencyKey et autres...
-            );
+                MessageType: message.MessageType,
+                Payload: message.Payload,
+                Headers: message.Headers);
 
+            await _publisher.PublishAsync(context, cancellationToken);
 
-            // Publication  (Mediart par exemple)
-
-            await _publisher.PublishAsync(context,cancellationToken);
-
-            // Mark as published
             state.Status = MessageStatus.Published;
             state.ProcessedAtUtc = DateTimeOffset.UtcNow;
             state.LockedUntilUtc = null;
 
-            // await _repository.UpdateAsync(state, cancellationToken);
-
             if (_logger.IsEnabled(LogLevel.Debug))
             {
-                _logger.LogDebug(
-                    "Message {MessageId} sent to transport successfully",
-                    state.Id);
+                _logger.LogDebug("Inbox state {StateId} for message {MessageId} published successfully.", state.Id, state.InboxMessageId);
             }
         }
         catch (Exception ex)
@@ -128,37 +118,28 @@ public class DefaultInboxProcessor : IInboxProcessor
         }
     }
 
-    /// <summary>
-    /// Handles the failure asynchronous.
-    /// </summary>
-    /// <param name="inboxState">The state.</param>
-    /// <param name="exception">The exception.</param>
-    /// <param name="cancellationToken">The cancellation token.</param>
-    private async Task HandleFailureInternalAsync(
-        InboxState inboxState,
-        Exception exception,
-        CancellationToken cancellationToken)
+    private Task HandleFailureInternalAsync(InboxState state, Exception exception, CancellationToken cancellationToken)
     {
-        inboxState.LastError = exception.Message;
+        state.LastError = exception.Message;
 
-        if (inboxState.AttemptCount >= _options.MaxProcessingAttempts)
+        if (state.AttemptCount >= _options.MaxProcessingAttempts)
         {
-            // Échec définitif : On arrête de s'acharner
-            inboxState.Status = MessageStatus.Failed;
+            state.Status = MessageStatus.Failed;
             _logger.LogError(exception,
-                "Inbox state {MessageId} reached max retries ({MaxCount}) and is marked as Failed.",
-                inboxState.Id, inboxState.AttemptCount);
+                "Inbox state {StateId} reached max retries ({MaxCount}) and is marked as Failed.",
+                state.Id, state.AttemptCount);
         }
         else
         {
-            inboxState.Status = MessageStatus.Pending;
-
-            // Calcul du délai exponentiel : 2, 4, 8, 16... minutes
-            var delayMinutes = Math.Pow(2, inboxState.AttemptCount);
-            inboxState.NextAttemptAtUtc = DateTimeOffset.UtcNow.AddMinutes(delayMinutes);
-            _logger.LogWarning("Failed to publish inbox state {MessageId}. Attempt {Count}/{Max}. Error: {Error}",
-                inboxState.Id, inboxState.AttemptCount, _options.MaxProcessingAttempts, exception.Message);
+            state.Status = MessageStatus.Pending;
+            var delayMinutes = Math.Pow(2, state.AttemptCount);
+            state.NextAttemptAtUtc = DateTimeOffset.UtcNow.AddMinutes(delayMinutes);
+            state.LockedUntilUtc = null;
+            _logger.LogWarning(
+                "Inbox state {StateId} failed. Attempt {Count}/{Max}. Next retry in {Delay}min. Error: {Error}",
+                state.Id, state.AttemptCount, _options.MaxProcessingAttempts, delayMinutes, exception.Message);
         }
+
+        return Task.CompletedTask;
     }
 }
-

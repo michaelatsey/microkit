@@ -93,7 +93,7 @@ public static class OutboxMessageConfigurationPostgreSQL
         builder.Property(x => x.BrokerTopic).HasColumnName("broker_topic").HasMaxLength(250);
         builder.Property(x => x.PartitionKey).HasColumnName("partition_key").HasMaxLength(250);
 
-        builder.Property(x => x.DestinationMetadata)
+        builder.Property(x => x.Metadata)
             .HasColumnName("destination_metadata")
             .HasColumnType("jsonb");
 

@@ -15,7 +15,7 @@
   <ItemGroup>
     <ProjectReference Include="..\..\..\MicroKit.Abstractions\src\MicroKit.Abstractions\MicroKit.Abstractions.csproj" />
     <ProjectReference Include="..\..\..\MicroKit.Core\src\MicroKit.Core\MicroKit.Core.csproj" />
-    <ProjectReference Include="..\..\..\MicroKit.MultiTenancy\src\MicroKit.MultiTenancy\MicroKit.MultiTenancy.csproj" />
+    <ProjectReference Include="..\..\..\MicroKit.MultiTenancy\src\MicroKit.MultiTenancy.Abstractions\MicroKit.MultiTenancy.Abstractions.csproj" />
     <ProjectReference Include="..\MicroKit.Messaging.Abstractions\MicroKit.Messaging.Abstractions.csproj" />
   </ItemGroup>
 

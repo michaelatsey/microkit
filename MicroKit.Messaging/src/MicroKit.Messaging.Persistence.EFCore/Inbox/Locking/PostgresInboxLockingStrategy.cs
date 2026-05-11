@@ -1,15 +1,13 @@
-﻿using MicroKit.Messaging.Abstractions.Common;
+using MicroKit.Messaging.Abstractions.Common;
 using MicroKit.Messaging.Abstractions.Inbox;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Metadata;
 using Npgsql;
-using static Microsoft.EntityFrameworkCore.DbLoggerCategory;
 
 namespace MicroKit.Messaging.Persistence.EFCore.Inbox.Locking;
 
 internal sealed class PostgresInboxLockingStrategy : IInboxLockingStrategy
 {
-
     public async Task<IReadOnlyList<InboxState>> LockNextAsync(
         DbContext dbContext,
         string tenantId,
@@ -21,11 +19,10 @@ internal sealed class PostgresInboxLockingStrategy : IInboxLockingStrategy
         var now = DateTimeOffset.UtcNow;
         var lockUntil = now.Add(lockDuration);
 
-        // 1. Extraction des métadonnées EF Core
         var stateEntityType = dbContext.Model.FindEntityType(typeof(InboxState))
-            ?? throw new InvalidOperationException("InboxState non configuré.");
+            ?? throw new InvalidOperationException("InboxState is not configured in the DbContext model.");
         var messageEntityType = dbContext.Model.FindEntityType(typeof(InboxMessage))
-            ?? throw new InvalidOperationException("InboxMessage non configuré.");
+            ?? throw new InvalidOperationException("InboxMessage is not configured in the DbContext model.");
 
         string GetCol(IEntityType et, string prop) => et.FindProperty(prop)?.GetColumnName() ?? prop;
         string Quote(string ident) => $"\"{ident}\"";
@@ -38,7 +35,6 @@ internal sealed class PostgresInboxLockingStrategy : IInboxLockingStrategy
         var fullStateName = string.IsNullOrEmpty(sSchema) ? Quote(sTable!) : $"{Quote(sSchema)}.{Quote(sTable!)}";
         var fullMsgName = string.IsNullOrEmpty(mSchema) ? Quote(mTable!) : $"{Quote(mSchema)}.{Quote(mTable!)}";
 
-        // Mapping colonnes
         var sc = new
         {
             Id = GetCol(stateEntityType, nameof(InboxState.Id)),
@@ -58,8 +54,7 @@ internal sealed class PostgresInboxLockingStrategy : IInboxLockingStrategy
             OccurredOn = GetCol(messageEntityType, nameof(InboxMessage.OccurredOnUtc))
         };
 
-        // 2. SQL Postgres avec CTE (Common Table Expression) et FOR UPDATE SKIP LOCKED
-        // On joint le message dès le départ pour trier par OccurredOnUtc
+        // FOR UPDATE SKIP LOCKED — join message only for FIFO ordering (no navigation required)
         var sql = $"""
         WITH cte AS (
             SELECT s.{Quote(sc.Id)}
@@ -95,18 +90,14 @@ internal sealed class PostgresInboxLockingStrategy : IInboxLockingStrategy
                 new NpgsqlParameter("@pending", pending),
                 new NpgsqlParameter("@processing", processing),
                 new NpgsqlParameter("@now", now),
-                new NpgsqlParameter("@lockUntil", lockUntil))
-            .Include(x => x.Message);
+                new NpgsqlParameter("@lockUntil", lockUntil));
 
 #if DEBUG
-        Console.WriteLine($"Executing SqlServerSkipOutboxLockedStrategy query: {query.ToQueryString()}");
+        Console.WriteLine($"Executing PostgresInboxLockingStrategy query: {query.ToQueryString()}");
 #endif
 
-        // 3. Exécution avec inclusion de la Payload
-        // .Include(x => x.Message) permet à EF de mapper les colonnes de la table liée 
-        // si elles sont présentes ou via une seconde requête optimisée.
         return await query
-            .AsNoTracking()  //Important car on a déjà fait l'update en SQL, pas besoin de tracking EF
+            .AsNoTracking()
             .ToListAsync(cancellationToken);
     }
 }

@@ -163,9 +163,9 @@ using Microsoft.EntityFrameworkCore.Metadata.Builders;
                 .IsRowVersion()
                 .IsConcurrencyToken();
 
-            // Navigation relationship
-            builder.HasOne(x => x.Message)
-                .WithMany(m => m.InboxStates)
+            // Cascade delete via FK — no navigation properties in Abstractions
+            builder.HasOne<InboxMessage>()
+                .WithMany()
                 .HasForeignKey(x => x.InboxMessageId)
                 .OnDelete(DeleteBehavior.Cascade);
 

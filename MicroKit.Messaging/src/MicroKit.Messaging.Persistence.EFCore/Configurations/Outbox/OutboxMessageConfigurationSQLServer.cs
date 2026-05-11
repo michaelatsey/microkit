@@ -84,7 +84,7 @@ public static class OutboxMessageConfigurationSQLServer
         builder.Property(x => x.PublishToBroker).HasMaxLength(250).HasDefaultValue(true);
         builder.Property(x => x.BrokerTopic).HasMaxLength(250).IsRequired(false);
         builder.Property(x => x.PartitionKey).HasMaxLength(250).IsRequired(false);
-        builder.Property(x => x.DestinationMetadata).HasColumnType("nvarchar(max)").IsRequired(false);
+        builder.Property(x => x.Metadata).HasColumnType("nvarchar(max)").IsRequired(false);
 
         // =========================
         // 🔥 INDEX STRATEGY

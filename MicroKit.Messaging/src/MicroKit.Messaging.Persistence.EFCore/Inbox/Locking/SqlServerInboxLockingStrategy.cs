@@ -1,9 +1,8 @@
-﻿using MicroKit.Messaging.Abstractions.Common;
+using MicroKit.Messaging.Abstractions.Common;
 using MicroKit.Messaging.Abstractions.Inbox;
 using Microsoft.Data.SqlClient;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Metadata;
-using static Microsoft.EntityFrameworkCore.DbLoggerCategory;
 
 namespace MicroKit.Messaging.Persistence.EFCore.Inbox.Locking;
 
@@ -20,11 +19,10 @@ internal sealed class SqlServerInboxLockingStrategy : IInboxLockingStrategy
         var now = DateTimeOffset.UtcNow;
         var lockUntil = now.Add(lockDuration);
 
-        // 1. Mappings EF Core
         var stateEntityType = dbContext.Model.FindEntityType(typeof(InboxState))
-            ?? throw new InvalidOperationException("InboxState non configuré.");
+            ?? throw new InvalidOperationException("InboxState is not configured in the DbContext model.");
         var messageEntityType = dbContext.Model.FindEntityType(typeof(InboxMessage))
-            ?? throw new InvalidOperationException("InboxMessage non configuré.");
+            ?? throw new InvalidOperationException("InboxMessage is not configured in the DbContext model.");
 
         string GetCol(IEntityType et, string prop) => et.FindProperty(prop)?.GetColumnName() ?? prop;
 
@@ -36,7 +34,6 @@ internal sealed class SqlServerInboxLockingStrategy : IInboxLockingStrategy
         var fullStateName = $"[{stateSchema}].[{stateTable}]";
         var fullMsgName = $"[{msgSchema}].[{msgTable}]";
 
-        // Mappings colonnes
         var s = new
         {
             Id = GetCol(stateEntityType, nameof(InboxState.Id)),
@@ -56,9 +53,7 @@ internal sealed class SqlServerInboxLockingStrategy : IInboxLockingStrategy
             OccurredOn = GetCol(messageEntityType, nameof(InboxMessage.OccurredOnUtc))
         };
 
-        // 2. SQL avec CTE + UPDLOCK + READPAST
-        // Note: On utilise une table temporaire variable pour capturer les IDs verrouillés 
-        // afin de pouvoir faire la jointure finale avec la Payload proprement.
+        // UPDLOCK + READPAST for skip-locked semantics; JOIN message only for FIFO ordering
         var sql = $"""
             DECLARE @UpdatedIds TABLE (Id UNIQUEIDENTIFIER);
 
@@ -82,9 +77,8 @@ internal sealed class SqlServerInboxLockingStrategy : IInboxLockingStrategy
             FROM TargetCTE
             WHERE {fullStateName}.[{s.Id}] = TargetCTE.[{s.Id}];
 
-            SELECT s.*, m.*
+            SELECT s.*
             FROM {fullStateName} s
-            INNER JOIN {fullMsgName} m ON s.[{s.MsgId}] = m.[{m.Id}]
             WHERE s.[{s.Id}] IN (SELECT Id FROM @UpdatedIds);
             """;
 
@@ -99,16 +93,13 @@ internal sealed class SqlServerInboxLockingStrategy : IInboxLockingStrategy
                 new SqlParameter("@pending", pending),
                 new SqlParameter("@processing", processing),
                 new SqlParameter("@now", now),
-                new SqlParameter("@lockUntil", lockUntil))
-            .Include(x => x.Message);
-            // Récupère la Payload et le MessageType
+                new SqlParameter("@lockUntil", lockUntil));
 
 #if DEBUG
-        Console.WriteLine($"Executing SqlServerSkipOutboxLockedStrategy query: {query.ToQueryString()}");
+        Console.WriteLine($"Executing SqlServerInboxLockingStrategy query: {query.ToQueryString()}");
 #endif
 
-        // 3. Exécution
-        return await query 
+        return await query
             .AsNoTracking()
             .ToListAsync(cancellationToken);
     }

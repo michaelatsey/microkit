@@ -1,6 +1,7 @@
 ﻿using MicroKit.Abstractions.Configuration;
 using MicroKit.Abstractions.Serialization;
 using MicroKit.Core.Serialization;
+using MicroKit.Messaging.Abstractions.Common;
 using MicroKit.Messaging.Core.Configuration;
 using MicroKit.Messaging.Core.Internal.Validation;
 using Microsoft.Extensions.DependencyInjection;
@@ -17,6 +18,8 @@ public static class ServiceCollectionExtensions
         services
             .AddOptions<MessagingOptions>()
             .ValidateOnStart();
+
+        services.TryAddSingleton<IMessageTypeRegistry, MessageTypeRegistry>();
 
         var messagingBuilder = new MicroKitMessagingBuilder(services);
         configure?.Invoke(messagingBuilder);
