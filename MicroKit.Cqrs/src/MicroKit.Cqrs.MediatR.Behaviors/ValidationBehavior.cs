@@ -1,44 +1,30 @@
-﻿using FluentValidation;
+using FluentValidation;
 using MediatR;
 using ValidationException = FluentValidation.ValidationException;
 
 namespace MicroKit.Cqrs.MediatR.Behaviors;
 
-public class ValidationBehavior<TRequest, TResponse> : IPipelineBehavior<TRequest, TResponse>
+/// <summary>MediatR pipeline behavior that runs FluentValidation validators sequentially and fails on the first error.</summary>
+public sealed class ValidationBehavior<TRequest, TResponse> : IPipelineBehavior<TRequest, TResponse>
     where TRequest : IRequest<TResponse>
 {
     private readonly IEnumerable<IValidator<TRequest>> _validators;
 
     public ValidationBehavior(IEnumerable<IValidator<TRequest>> validators)
-    {
-        _validators = validators;
-    }
+        => _validators = validators;
 
     public async Task<TResponse> Handle(
         TRequest request,
         RequestHandlerDelegate<TResponse> next,
         CancellationToken cancellationToken)
     {
-        if (!_validators.Any())
-        {
-            return await next(cancellationToken);
-        }
-
-        var typeName = request.GetType().FullName;
-
         var context = new ValidationContext<TRequest>(request);
 
-        var validationResults = await Task.WhenAll(
-            _validators.Select(v => v.ValidateAsync(context, cancellationToken)));
-
-        var failures = validationResults
-            .SelectMany(r => r.Errors)
-            .Where(f => f != null)
-            .ToList();
-
-        if (failures.Count != 0)
+        foreach (var validator in _validators)
         {
-            throw new ValidationException($"Validation errors for type {typeName}", failures);
+            var result = await validator.ValidateAsync(context, cancellationToken);
+            if (!result.IsValid)
+                throw new ValidationException(result.Errors);
         }
 
         return await next(cancellationToken);

@@ -1,7 +1,7 @@
 ﻿namespace MicroKit.Cqrs.Abstractions.Cache;
 
-public interface ICacheInvalidatorRequest<in TRequest, in TResponse>
+/// <summary>Marks a command as a cache invalidator — returns the keys to remove after successful execution.</summary>
+public interface ICacheInvalidatorRequest<TRequest, TResponse>
 {
-    // Retourne les clés qu'il faut supprimer après le succès de la commande
     IEnumerable<string> GetCacheKeys(TRequest request, TResponse response);
 }

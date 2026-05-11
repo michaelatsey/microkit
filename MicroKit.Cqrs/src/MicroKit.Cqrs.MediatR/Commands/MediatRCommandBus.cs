@@ -1,4 +1,4 @@
-﻿using MediatR;
+using MediatR;
 using MicroKit.Cqrs.Abstractions.Commands;
 
 namespace MicroKit.Cqrs.MediatR.Commands;
@@ -10,29 +10,25 @@ public sealed class MediatRCommandBus : ICommandBus
     public MediatRCommandBus(ISender mediator) => _mediator = mediator;
 
     /// <inheritdoc/>
-    public async Task SendAsync<TCommand>(TCommand command, CancellationToken ct = default)
+    public Task SendAsync<TCommand>(TCommand command, CancellationToken ct = default)
         where TCommand : ICommand
     {
-        if (command is IRequest<Unit> unitRequest)
-        {
-            await _mediator.Send(unitRequest, ct);
-            return;
-        }
+        if (command is not IRequest<Unit> unitRequest)
+            throw new InvalidOperationException(
+                $"Command '{typeof(TCommand).Name}' must implement IRequest<Unit> to be dispatched via MediatR. " +
+                "Inherit from CommandHandler<TCommand> in your handler.");
 
-        // Fallback: dynamic dispatch for commands not using the Unit return convention.
-        await _mediator.Send((object)command!, ct);
+        return _mediator.Send(unitRequest, ct);
     }
 
     /// <inheritdoc/>
-    public async Task<TResponse> SendAsync<TResponse>(ICommand<TResponse> command, CancellationToken cancellationToken = default)
+    public Task<TResponse> SendAsync<TResponse>(ICommand<TResponse> command, CancellationToken ct = default)
     {
-        if (command is IRequest<TResponse> typedRequest)
-            return await _mediator.Send(typedRequest, cancellationToken);
+        if (command is not IRequest<TResponse> typedRequest)
+            throw new InvalidOperationException(
+                $"Command '{command.GetType().Name}' must implement IRequest<{typeof(TResponse).Name}> to be dispatched via MediatR. " +
+                "Inherit from CommandHandler<TCommand, TResponse> in your handler.");
 
-        var result = await _mediator.Send((object)command!, cancellationToken);
-        return result is TResponse response
-            ? response
-            : throw new InvalidOperationException(
-                $"MediatR returned '{result?.GetType().Name ?? "null"}' but expected '{typeof(TResponse).Name}'.");
+        return _mediator.Send(typedRequest, ct);
     }
 }

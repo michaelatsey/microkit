@@ -8,12 +8,10 @@
 
   <ItemGroup>
     <PackageReference Include="FluentValidation" Version="12.1.1" />
-    <PackageReference Include="Polly" Version="8.6.5" />
   </ItemGroup>
 
   <ItemGroup>
     <ProjectReference Include="..\..\..\MicroKit.Abstractions\src\MicroKit.Abstractions\MicroKit.Abstractions.csproj" />
-    <ProjectReference Include="..\..\..\MicroKit.Data\src\MicroKit.Data.Abstractions\MicroKit.Data.Abstractions.csproj" />
     <ProjectReference Include="..\MicroKit.Cqrs.MediatR.Abstractions\MicroKit.Cqrs.MediatR.Abstractions.csproj" />
   </ItemGroup>
 
