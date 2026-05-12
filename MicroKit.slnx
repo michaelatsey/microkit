@@ -7,6 +7,7 @@
   <Folder Name="/MicroKit.Abstractions/tests/" />
   <Folder Name="/MicroKit.Caching/" />
   <Folder Name="/MicroKit.Caching/src/">
+    <Project Path="MicroKit.Caching/src/MicroKit.Caching.Abstractions/MicroKit.Caching.Abstractions.csproj" Id="a1b2c3d4-e5f6-7890-abcd-ef1234567890" />
     <Project Path="MicroKit.Caching/src/MicroKit.Caching.Distributed.Autofac/MicroKit.Caching.Distributed.Autofac.csproj" Id="3825b810-ef5a-43c9-bfec-6167d911d0e0" />
     <Project Path="MicroKit.Caching/src/MicroKit.Caching.Distributed/MicroKit.Caching.Distributed.csproj" Id="e4d4998f-17e7-443f-9df4-f331d9743f5e" />
     <Project Path="MicroKit.Caching/src/MicroKit.Caching/MicroKit.Caching.csproj" Id="561eb436-c06e-4c46-9821-eaf39b709f3c" />

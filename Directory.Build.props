@@ -21,8 +21,7 @@
     <PackageLicenseExpression>MIT</PackageLicenseExpression>
     <Version>1.0.0-preview.1</Version>
     <PackageReadmeFile>docs/Readme.md</PackageReadmeFile>
-    <PackageIcon>icon.png</PackageIcon>
-    <Trademark>$(Company)</Trademark>
+<Trademark>$(Company)</Trademark>
     <Product>$(Company) Projects</Product>
 
     <!-- XML documentation — enforced, no suppressions -->
