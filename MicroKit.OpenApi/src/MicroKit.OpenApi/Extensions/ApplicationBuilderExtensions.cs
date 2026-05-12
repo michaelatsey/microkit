@@ -163,7 +163,7 @@ public static class ApplicationBuilderExtensions
     {
         var preferredSchemes = new List<string>();
 
-        foreach (var security in microKitOptions.Securities)
+        foreach (var security in microKitOptions.Securities ?? [])
         {
             switch (security)
             {

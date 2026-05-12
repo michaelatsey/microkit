@@ -15,10 +15,12 @@ public interface IInboxCleanupService
     /// <summary>
     /// Supprime les messages de la boîte d'envoi (Outbox) qui sont plus anciens que la date spécifiée
     /// </summary>
-    /// <param name="olderThan">The older than.</param>
-    /// <param name="status">The status.</param>
-    /// <param name="batchSize">Size of the batch.</param>
-    /// <param name="cancellationToken">The cancellation token.</param>
+    /// <param name="tenantId">The tenant identifier whose inbox entries to clean up.</param>
+    /// <param name="consumerGroup">The consumer group whose processed entries to clean up.</param>
+    /// <param name="olderThan">Only entries older than this timestamp are eligible for deletion.</param>
+    /// <param name="status">The message status that entries must have to be eligible.</param>
+    /// <param name="batchSize">Maximum number of entries to delete per invocation.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
     /// <returns>
     /// Le nombre de messages supprimés de la boîte d'envoi (Outbox) qui sont plus anciens que la date spécifiée 
     /// et qui ont le statut spécifié.

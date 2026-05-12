@@ -4,8 +4,12 @@ using Microsoft.EntityFrameworkCore.Metadata.Builders;
 
 namespace MicroKit.Messaging.Persistence.EFCore.Configurations.Inbox;
 
-public static class InboxPostgreSQLConfiguration 
+/// <summary>PostgreSQL-specific EF Core entity type configuration extensions for inbox entities.</summary>
+public static class InboxPostgreSQLConfiguration
 {
+    /// <summary>Applies PostgreSQL-specific column types and indexes to the inbox message entity.</summary>
+    /// <param name="builder">The entity type builder for <see cref="InboxMessage"/>.</param>
+    /// <returns>The same <paramref name="builder"/> for chaining.</returns>
     public static EntityTypeBuilder<InboxMessage> ConfigurePostgreSQLInboxMessage(this EntityTypeBuilder<InboxMessage> builder)
     {
         builder.ToTable("microkit_inbox_messages", "messaging");
@@ -46,6 +50,9 @@ public static class InboxPostgreSQLConfiguration
         return builder;
     }
 
+    /// <summary>Applies PostgreSQL-specific column types and indexes to the inbox state entity.</summary>
+    /// <param name="builder">The entity type builder for <see cref="InboxState"/>.</param>
+    /// <returns>The same <paramref name="builder"/> for chaining.</returns>
     public static EntityTypeBuilder<InboxState> ConfigurePostgreSQInboxState(this EntityTypeBuilder<InboxState> builder)
     {
         builder.ToTable("microkit_inbox_states", "messaging");

@@ -8,6 +8,7 @@ using MicroKit.Security.Core.Utilities;
 using MicroKit.Security.Abstractions.Enums;
 
 namespace MicroKit.Security.ApiKey.Services;
+/// <summary>Service for creating, validating, rotating, and revoking API keys.</summary>
 public sealed class ApiKeyService(
     IApiKeyStore store,
     IOptions<ApiKeyOptions> options,
@@ -16,6 +17,7 @@ public sealed class ApiKeyService(
 {
     private readonly ApiKeyOptions _options = options.Value;
 
+    /// <inheritdoc/>
     public async ValueTask<ApiKeyCreationResult> CreateKeyAsync(
         CreateApiKeyRequest request,
         CancellationToken cancellationToken = default)

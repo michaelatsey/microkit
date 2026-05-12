@@ -4,6 +4,7 @@ using Microsoft.Extensions.Logging;
 
 namespace MicroKit.Messaging.Persistence.EFCore.Inbox;
 
+/// <summary>EF Core implementation of <see cref="IInboxStateFetcher"/> that locks the next batch of pending inbox states.</summary>
 public class EfInboxStateFetcher<TContext> : IInboxStateFetcher
     where TContext : DbContext
 {
@@ -11,12 +12,17 @@ public class EfInboxStateFetcher<TContext> : IInboxStateFetcher
     private readonly IDbContextFactory<TContext> _factory;
     private readonly ILogger<EfInboxStateFetcher<TContext>> _logger;
 
+    /// <summary>Initializes a new instance.</summary>
+    /// <param name="lockingStrategy">The strategy for atomically locking inbox states.</param>
+    /// <param name="logger">Logger instance.</param>
+    /// <param name="factory">Factory for creating short-lived <typeparamref name="TContext"/> instances.</param>
     public EfInboxStateFetcher(IInboxLockingStrategy lockingStrategy, ILogger<EfInboxStateFetcher<TContext>> logger, IDbContextFactory<TContext> factory)
     {
         _lockingStrategy = lockingStrategy;
         _logger = logger;
         _factory = factory;
     }
+    /// <inheritdoc/>
     public async Task<IReadOnlyList<InboxState>> FetchNextBatchAsync(
         string tenantId,
         string consumerName,

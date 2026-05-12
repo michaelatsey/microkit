@@ -8,15 +8,19 @@ namespace MicroKit.Messaging.Publisher.MediatR;
 
 
 
+/// <summary>MediatR implementation of <see cref="IInboxPublisher"/> that dispatches inbox contexts as MediatR commands or notifications.</summary>
 public class MediatRInboxPublisher : IInboxPublisher
 {
     private readonly IPublisher _publisher;
 
+    /// <summary>Initializes a new instance.</summary>
+    /// <param name="publisher">The MediatR publisher used to dispatch commands and notifications.</param>
     public MediatRInboxPublisher(IPublisher publisher)
     {
         _publisher = publisher;
     }
 
+    /// <inheritdoc/>
     public async Task PublishAsync(InboxContext context, CancellationToken cancellationToken = default)
     {
         // Create a MediatR command based on the InboxContext

@@ -59,6 +59,8 @@ public sealed class Error : IEquatable<Error>
     /// <inheritdoc/>
     public override string ToString() => string.IsNullOrEmpty(Code) ? "None" : $"{Code}: {Message}";
 
+    /// <summary>Returns <see langword="true"/> when <paramref name="left"/> and <paramref name="right"/> represent the same error.</summary>
     public static bool operator ==(Error left, Error right) => left.Equals(right);
+    /// <summary>Returns <see langword="true"/> when <paramref name="left"/> and <paramref name="right"/> represent different errors.</summary>
     public static bool operator !=(Error left, Error right) => !left.Equals(right);
 }

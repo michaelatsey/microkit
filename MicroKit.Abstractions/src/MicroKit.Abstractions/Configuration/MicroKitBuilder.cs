@@ -7,9 +7,12 @@ namespace MicroKit.Abstractions.Configuration;
 /// </summary>
 public class MicroKitBuilder
 {
+    /// <summary>Gets the underlying DI service collection.</summary>
     public IServiceCollection Services { get; }
     private readonly MicroKitOptions _options;
 
+    /// <summary>Initializes a new <see cref="MicroKitBuilder"/> with the given service collection.</summary>
+    /// <param name="services">The DI service collection to configure.</param>
     public MicroKitBuilder(IServiceCollection services)
     {
         Services = services;
@@ -17,6 +20,9 @@ public class MicroKitBuilder
 
     }
 
+    /// <summary>Applies an optional configuration action to <see cref="MicroKitOptions"/>.</summary>
+    /// <param name="configure">Optional delegate that configures the options; may be <see langword="null"/>.</param>
+    /// <returns>This builder instance for fluent chaining.</returns>
     public MicroKitBuilder Configure(Action<MicroKitOptions>? configure = null)
     {
         configure?.Invoke(_options);

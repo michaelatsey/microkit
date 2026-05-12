@@ -9,8 +9,12 @@ using Microsoft.Extensions.DependencyInjection.Extensions;
 
 namespace MicroKit.Messaging.Core.Extensions;
 
+/// <summary>Extension methods for registering MicroKit Messaging services.</summary>
 public static class ServiceCollectionExtensions
 {
+    /// <summary>Adds messaging infrastructure services to the MicroKit builder.</summary>
+    /// <param name="builder">The MicroKit builder.</param>
+    /// <param name="configure">Delegate to configure the messaging builder (inbox, outbox, transport).</param>
     public static MicroKitBuilder AddMicroKitMessaging(this MicroKitBuilder builder, Action<MicroKitMessagingBuilder>? configure )
     {
         var services = builder.Services;

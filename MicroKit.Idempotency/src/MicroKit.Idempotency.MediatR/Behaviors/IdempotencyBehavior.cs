@@ -10,6 +10,7 @@ using Microsoft.Extensions.Options;
 
 namespace MicroKit.Idempotency.MediatR.Behaviors;
 
+/// <summary>MediatR pipeline behavior that enforces idempotency for requests implementing <see cref="IIdempotentRequest{TResponse}"/>.</summary>
 public class IdempotencyBehavior<TRequest, TResponse> : IPipelineBehavior<TRequest, TResponse>
     where TRequest : IIdempotentRequest<TResponse>
 {
@@ -22,6 +23,15 @@ public class IdempotencyBehavior<TRequest, TResponse> : IPipelineBehavior<TReque
     private readonly IIdempotencyManager _manager;
     private readonly ITenantContext? _tenantContext;
 
+    /// <summary>Initializes a new instance.</summary>
+    /// <param name="store">The idempotency store used to persist and look up request state.</param>
+    /// <param name="serializer">Serializer for caching response payloads.</param>
+    /// <param name="idempotencyContext">Ambient idempotency scope context.</param>
+    /// <param name="requestHasher">Computes a hash of the incoming request for conflict detection.</param>
+    /// <param name="options">Idempotency configuration options.</param>
+    /// <param name="logger">Logger instance.</param>
+    /// <param name="manager">Manages the current idempotency key.</param>
+    /// <param name="tenantContext">Optional tenant context for multi-tenant isolation.</param>
     public IdempotencyBehavior(
         IIdempotencyStore store,
         IMicroKitSerializer serializer,
@@ -42,6 +52,7 @@ public class IdempotencyBehavior<TRequest, TResponse> : IPipelineBehavior<TReque
         _tenantContext = tenantContext;
     }
 
+    /// <inheritdoc/>
     public async Task<TResponse> Handle(
         TRequest request,
         RequestHandlerDelegate<TResponse> next,

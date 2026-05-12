@@ -12,6 +12,10 @@ using System.Collections.Concurrent;
 using System.Security.Cryptography;
 using System.Text;
 
+/// <summary>
+/// Two-level (L1 memory + L2 distributed) caching decorator for an <see cref="IAuthenticationProvider"/>.
+/// Implements SingleFlight to prevent cache stampedes under bursts of concurrent requests.
+/// </summary>
 public sealed class CachedAuthenticationProvider(
     IAuthenticationProvider innerProvider,
     IMemoryCache memoryCache,
@@ -25,8 +29,10 @@ public sealed class CachedAuthenticationProvider(
     // Protection anti-stampede (SingleFlight)
     private static readonly ConcurrentDictionary<string, Lazy<Task<AuthenticationResult>>> _inflight = new();
 
+    /// <inheritdoc />
     public AuthenticationScheme Scheme => innerProvider.Scheme;
 
+    /// <inheritdoc />
     public async ValueTask<AuthenticationResult> AuthenticateAsync(
         ReadOnlyMemory<char> credentials,
         CancellationToken cancellationToken = default)

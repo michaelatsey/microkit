@@ -4,10 +4,7 @@ using System.Globalization;
 
 namespace MicroKit.Domain.ValueObjects;
 
-/// <summary>
-/// 
-/// </summary>
-/// <seealso cref="IEquatable&lt;Money&gt;" />
+/// <summary>Immutable value object representing a monetary amount with an ISO 4217 currency code.</summary>
 public sealed class Money : ValueObject
 {
     // Built once at class initialisation — O(n) culture scan happens exactly once for the process lifetime.
@@ -28,7 +25,9 @@ public sealed class Money : ValueObject
         return result;
     }
 
+    /// <summary>Gets the monetary amount.</summary>
     public decimal Amount { get; }
+    /// <summary>Gets the ISO 4217 currency code (e.g. <c>EUR</c>).</summary>
     public string Currency { get; } = null!;
 
     private Money() { }
@@ -59,7 +58,9 @@ public sealed class Money : ValueObject
         Currency = upper;
     }
 
+    /// <summary>Returns a zero-amount money instance for <paramref name="currency"/>.</summary>
     public static Money Zero(string currency) => new(0, currency);
+    /// <summary>Creates a new <see cref="Money"/> instance.</summary>
     public static Money Create(decimal amount, string currency) => new(amount, currency);
 
     // --- LOGIQUE DE PRÉCISION (LE CŒUR FINANCIER) ---
@@ -102,22 +103,25 @@ public sealed class Money : ValueObject
 
     // Opérateurs arithmétiques
 
+    /// <summary>Adds two monetary amounts. Both operands must share the same currency.</summary>
     public static Money operator +(Money left, Money right)
     {
         EnsureSameCurrency(left, right);
         return new Money(left.Amount + right.Amount, left.Currency);
     }
+    /// <summary>Subtracts the right amount from the left. Both operands must share the same currency.</summary>
     public static Money operator -(Money left, Money right)
     {
         EnsureSameCurrency(left, right);
         return new Money(left.Amount - right.Amount, left.Currency);
     }
-    
+    /// <summary>Multiplies the monetary amount by a scalar <paramref name="multiplier"/>.</summary>
     public static Money operator *(Money money, decimal multiplier)
     {
         return new Money(money.Amount * multiplier, money.Currency);
     }
 
+    /// <summary>Divides the monetary amount by a scalar <paramref name="divisor"/>.</summary>
     public static Money operator /(Money money, decimal divisor)
     {
         if (divisor == 0)
@@ -127,22 +131,26 @@ public sealed class Money : ValueObject
     }
 
     // Opérateurs de comparaison
+    /// <summary>Returns <see langword="true"/> when <paramref name="left"/> is greater than <paramref name="right"/>.</summary>
     public static bool operator >(Money left, Money right)
     {
         EnsureSameCurrency(left, right);
         return left.Amount > right.Amount;
     }
+    /// <summary>Returns <see langword="true"/> when <paramref name="left"/> is less than <paramref name="right"/>.</summary>
     public static bool operator <(Money left, Money right)
     {
         EnsureSameCurrency(left, right);
         return left.Amount < right.Amount;
     }
+    /// <summary>Returns <see langword="true"/> when <paramref name="left"/> is greater than or equal to <paramref name="right"/>.</summary>
     public static bool operator >=(Money left, Money right)
     {
         EnsureSameCurrency(left, right);
         return left.Amount >= right.Amount;
     }
 
+    /// <summary>Returns <see langword="true"/> when <paramref name="left"/> is less than or equal to <paramref name="right"/>.</summary>
     public static bool operator <=(Money left, Money right)
     {
         EnsureSameCurrency(left, right);
@@ -150,16 +158,25 @@ public sealed class Money : ValueObject
     }
 
     // Méthodes utilitaires
+    /// <summary>Returns <see langword="true"/> when the amount is zero.</summary>
     public bool IsZero() => Amount == 0;
+    /// <summary>Returns <see langword="true"/> when the amount is greater than zero.</summary>
     public bool IsPositive() => Amount > 0;
+    /// <summary>Returns <see langword="true"/> when the amount is less than zero.</summary>
     public bool IsNegative() => Amount < 0;
+    /// <summary>Returns the absolute value of this money.</summary>
     public Money Abs() => new(Math.Abs(Amount), Currency);
+    /// <summary>Returns the negated value of this money.</summary>
     public Money Negate() => new(-Amount, Currency);
+    /// <summary>Returns a rounded copy of this money using accounting rounding (AwayFromZero).</summary>
     public Money Round(int decimals = 2) =>
         new(Math.Round(Amount, decimals, MidpointRounding.AwayFromZero), Currency);
 
     // Conversion vers d'autres devises (nécessiterait un service de taux de change)
 
+    /// <summary>Converts this money to another currency using the specified exchange rate.</summary>
+    /// <param name="targetCurrency">ISO 4217 target currency code.</param>
+    /// <param name="exchangeRate">Positive exchange rate (1 unit of this currency = <paramref name="exchangeRate"/> units of the target).</param>
     public Money ConvertTo(string targetCurrency, decimal exchangeRate)
     {
         if (string.IsNullOrWhiteSpace(targetCurrency))
@@ -172,8 +189,10 @@ public sealed class Money : ValueObject
     }
 
     // Méthodes de formatage
+    /// <inheritdoc/>
     public override string ToString() => RoundedAmount.ToString($"C{DecimalDigits}", GetFormatInfo(Currency));
-    
+
+    /// <summary>Returns a human-readable string with the currency symbol prefix.</summary>
     public string ToDisplayString()
     {
         string format = $"F{DecimalDigits}"; // Donne F0, F2 ou F3 selon la devise
@@ -348,15 +367,24 @@ public sealed class Money : ValueObject
             : CultureInfo.InvariantCulture.NumberFormat;
     }
 
+    /// <summary>Commonly used ISO 4217 currency codes.</summary>
     public static class Currencies
     {
+        /// <summary>United States Dollar.</summary>
         public const string USD = "USD";
+        /// <summary>Euro.</summary>
         public const string EUR = "EUR";
+        /// <summary>British Pound Sterling.</summary>
         public const string GBP = "GBP";
+        /// <summary>Japanese Yen.</summary>
         public const string JPY = "JPY";
+        /// <summary>Canadian Dollar.</summary>
         public const string CAD = "CAD";
+        /// <summary>Australian Dollar.</summary>
         public const string AUD = "AUD";
+        /// <summary>Swiss Franc.</summary>
         public const string CHF = "CHF";
+        /// <summary>Chinese Yuan Renminbi.</summary>
         public const string CNY = "CNY";
     }
 }

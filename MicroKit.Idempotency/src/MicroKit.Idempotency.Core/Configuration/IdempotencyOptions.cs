@@ -5,18 +5,26 @@
 /// </summary>
 public sealed class IdempotencyOptions
 {
+    /// <summary>Gets or sets how long an idempotency record is retained before it expires.</summary>
     public TimeSpan DefaultExpiration { get; set; } = TimeSpan.FromHours(24);
+    /// <summary>Gets or sets whether request payloads are hashed to detect duplicate submissions with different keys.</summary>
     public bool VerifyRequestHashes { get; set; } = true;
+    /// <summary>Gets or sets whether idempotency operations are logged.</summary>
     public bool EnableLogging { get; set; } = true;
 
     // Multi-tenancy options
+    /// <summary>Gets or sets whether idempotency keys are scoped per tenant.</summary>
     public bool IsMultiTenant { get; set; } = false;
 
     // Cleanup options
+    /// <summary>Gets or sets how often the cleanup worker runs. Set to <see langword="null"/> to disable automatic cleanup.</summary>
     public TimeSpan? CleanupRunInterval { get; set; } = TimeSpan.FromHours(1);
+    /// <summary>Gets or sets how long completed records are retained before deletion.</summary>
     public TimeSpan RetentionPeriod { get; set; } = TimeSpan.FromDays(7);
+    /// <summary>Gets or sets how long failed records are retained before deletion.</summary>
     public TimeSpan FailedRetentionPeriod { get; set; } = TimeSpan.FromDays(30);
 
+    /// <summary>Gets or sets the maximum number of records deleted per cleanup iteration.</summary>
     public int CleanupBatchSize { get; set; } = 1000;
 
     ///// <summary>

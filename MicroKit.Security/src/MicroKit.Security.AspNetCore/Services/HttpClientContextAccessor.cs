@@ -14,6 +14,7 @@ public sealed class HttpClientContextAccessor(IHttpContextAccessor httpContextAc
     private const string ContextKey = "MicroKit.Security.Context";
 
     // Implémentation de ITenantIdAccessor
+    /// <inheritdoc/>
     public string? TenantId => Context?.TenantId;
     /// <inheritdoc />
     public IClientContext? Context

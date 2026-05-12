@@ -1,10 +1,12 @@
-﻿using MicroKit.Cqrs.Abstractions.Events;
+using MicroKit.Cqrs.Abstractions.Events;
 using MicroKit.Domain.Contracts.Events;
 
 namespace MicroKit.Cqrs.Abstractions.Notifications;
 
+/// <summary>Marker interface for all notification events dispatched through the MediatR pipeline.</summary>
 public interface INotificationEvent
 {
+    /// <summary>Gets the unique identifier of this notification event.</summary>
     Guid Id { get; }
 }
 

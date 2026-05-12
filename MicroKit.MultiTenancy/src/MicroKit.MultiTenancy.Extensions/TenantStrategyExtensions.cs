@@ -7,6 +7,7 @@ using Microsoft.Extensions.Options;
 
 namespace MicroKit.MultiTenancy.Extensions;
 
+/// <summary>Extension methods for configuring the HTTP tenant resolution strategy.</summary>
 public static class TenantStrategyExtensions
 {
     /// <summary>

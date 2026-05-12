@@ -8,9 +8,9 @@ public interface IOutboxProcessor
     /// <summary>
     /// Processes the batch asynchronous.
     /// </summary>
-    /// <param name="batchSize">Size of the batch.</param>
-    /// <param name="cancellationToken">The cancellation token.</param>
-    /// <returns></returns>
+    /// <param name="tenantId">The tenant identifier whose outbox to process.</param>
+    /// <param name="batchSize">Maximum number of messages to process in this batch.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
     Task ProcessBatchAsync(
         string tenantId,
         int batchSize,

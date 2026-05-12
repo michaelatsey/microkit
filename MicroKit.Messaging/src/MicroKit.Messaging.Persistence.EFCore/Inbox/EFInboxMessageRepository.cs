@@ -4,6 +4,7 @@ using Microsoft.Extensions.Logging;
 
 namespace MicroKit.Messaging.Persistence.EFCore.Inbox;
 
+/// <summary>EF Core implementation of <see cref="IInboxMessageRepository"/> for persisting and querying inbox messages.</summary>
 public class EFInboxMessageRepository<TContext> : IInboxMessageRepository
     where TContext : DbContext
 {
@@ -11,6 +12,9 @@ public class EFInboxMessageRepository<TContext> : IInboxMessageRepository
     private readonly ILogger<EFInboxMessageRepository<TContext>> _logger;
     private readonly SemaphoreSlim _semaphore = new(1, 1);
 
+    /// <summary>Initializes a new instance.</summary>
+    /// <param name="context">The EF Core <see cref="DbContext"/> that owns the inbox tables.</param>
+    /// <param name="logger">Logger instance.</param>
     public EFInboxMessageRepository(
         TContext context,
         ILogger<EFInboxMessageRepository<TContext>> logger)
@@ -20,6 +24,7 @@ public class EFInboxMessageRepository<TContext> : IInboxMessageRepository
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
     }
     
+    /// <inheritdoc/>
     public async Task<bool> ExistsAsync(string tenantId, string messageId, CancellationToken cancellationToken = default)
     {
         if(string.IsNullOrWhiteSpace(tenantId))
@@ -51,6 +56,7 @@ public class EFInboxMessageRepository<TContext> : IInboxMessageRepository
         }
     }
 
+    /// <inheritdoc/>
     public async Task<InboxMessage?> GetByIdAsync(string id, CancellationToken ct = default)
     {
         var entity = await _dbSet
@@ -59,6 +65,7 @@ public class EFInboxMessageRepository<TContext> : IInboxMessageRepository
         return entity;
     }
 
+    /// <inheritdoc/>
     public async Task<InboxMessage?> GetAsync(string tenantId, string messageId, CancellationToken cancellationToken = default)
     {
         if (string.IsNullOrWhiteSpace(tenantId))
@@ -88,6 +95,7 @@ public class EFInboxMessageRepository<TContext> : IInboxMessageRepository
         }
     }
 
+    /// <inheritdoc/>
     public async Task AddAsync(InboxMessage message, CancellationToken cancellationToken = default)
     {
         await _dbSet.AddAsync(message, cancellationToken);

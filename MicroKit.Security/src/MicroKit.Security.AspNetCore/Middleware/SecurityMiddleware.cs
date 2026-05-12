@@ -13,6 +13,7 @@ using Microsoft.Extensions.Options;
 using System.IO;
 
 namespace MicroKit.Security.AspNetCore.Middleware;
+/// <summary>ASP.NET Core middleware that authenticates each request, populates <see cref="IClientContextAccessor"/>, and sets <see cref="Microsoft.AspNetCore.Http.HttpContext.User"/>.</summary>
 public sealed class SecurityMiddleware(
     RequestDelegate next,
     IEnumerable<IAuthenticationExtractor> extractors, // Injection de TOUS les extracteurs
@@ -25,6 +26,12 @@ public sealed class SecurityMiddleware(
     private readonly IReadOnlyList<IAuthenticationExtractor> _sortedExtractors =
         [.. extractors.OrderByDescending(x => x.Priority)];
 
+    /// <summary>Processes the HTTP request through the security pipeline.</summary>
+    /// <param name="httpContext">The current HTTP context.</param>
+    /// <param name="authenticationService">Authentication service for validating extracted credentials.</param>
+    /// <param name="securityContextFactory">Factory that builds the client security context.</param>
+    /// <param name="clientContextAccessor">Accessor where the resolved context is stored.</param>
+    /// <param name="timeProvider">Time provider for timestamping anonymous contexts.</param>
     public async Task InvokeAsync(
         HttpContext httpContext,
         IAuthenticationService authenticationService,

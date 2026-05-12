@@ -8,12 +8,17 @@ using Microsoft.Extensions.Options;
 
 namespace MicroKit.Idempotency.Core;
 
+/// <summary>Background worker that periodically purges expired idempotency records from the store.</summary>
 public class IdempotencyCleanupWorker: BackgroundService
 {
     private readonly IServiceScopeFactory _scopeFactory;
     private readonly IdempotencyOptions _options;
     private readonly ILogger<IdempotencyCleanupWorker> _logger;
 
+    /// <summary>Initializes a new instance.</summary>
+    /// <param name="scopeFactory">Factory for creating DI scopes during cleanup.</param>
+    /// <param name="options">Idempotency configuration.</param>
+    /// <param name="logger">Logger.</param>
     public IdempotencyCleanupWorker(
         IServiceScopeFactory scopeFactory,
         IOptions<IdempotencyOptions> options,
@@ -24,6 +29,7 @@ public class IdempotencyCleanupWorker: BackgroundService
         _logger = logger;
     }
 
+    /// <inheritdoc/>
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
         if (!_options.CleanupRunInterval.HasValue)

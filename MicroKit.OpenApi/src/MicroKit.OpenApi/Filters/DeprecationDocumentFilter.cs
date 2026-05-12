@@ -26,7 +26,8 @@ public sealed class DeprecationDocumentFilter : IOpenApiDocumentFilter
             document.Info.Description = $"⚠️ **DEPRECATED VERSION** - This API version ({version}) is deprecated and will be removed in a future release.\n\n{document.Info.Description}";
 
             // TODO: fix it
-            foreach (var operation in path?.Operations?.Values)
+            if (path.Operations is not null)
+            foreach (var operation in path.Operations.Values)
             {
                 operation.Deprecated = true;
 

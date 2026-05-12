@@ -7,6 +7,7 @@ using MicroKit.Caching;
 
 namespace MicroKit.Cqrs.MediatR.Caching.Pipelines;
 
+/// <summary>MediatR pipeline behavior that caches query responses using the distributed cache.</summary>
 public class CachingBehavior<TRequest, TResponse>
     : IPipelineBehavior<TRequest, TResponse>
     where TRequest : IRequest<TResponse>, ICacheableRequest
@@ -17,6 +18,11 @@ public class CachingBehavior<TRequest, TResponse>
     private readonly ICacheEligibilityChecker _eligibilityChecker;
     private readonly ILogger<CachingBehavior<TRequest, TResponse>> _logger;
 
+    /// <summary>Initializes a new instance.</summary>
+    /// <param name="cache">The cache service for storing and retrieving responses.</param>
+    /// <param name="logger">Logger instance.</param>
+    /// <param name="keyService">Service for building full cache key strings.</param>
+    /// <param name="eligibilityChecker">Determines whether a response is eligible for caching.</param>
     public CachingBehavior(
         ICacheService cache,
         ILogger<CachingBehavior<TRequest, TResponse>> logger,
@@ -29,6 +35,7 @@ public class CachingBehavior<TRequest, TResponse>
         _eligibilityChecker = eligibilityChecker;
     }
 
+    /// <inheritdoc/>
     public async Task<TResponse> Handle(
         TRequest request,
         RequestHandlerDelegate<TResponse> next,

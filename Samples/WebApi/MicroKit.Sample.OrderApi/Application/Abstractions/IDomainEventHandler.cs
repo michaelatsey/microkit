@@ -2,7 +2,7 @@
 
 namespace MicroKit.Sample.OrderApi.Application.Abstractions;
 
-// Le Handler : le traitement à exécuter suite à l'événement
+/// <summary>MediatR notification handler interface for domain events.</summary>
 public interface IDomainEventHandler<in TEvent> : INotificationHandler<TEvent>
     where TEvent : IDomainEvent
 {

@@ -1,35 +1,46 @@
 <Project>
 
   <PropertyGroup>
-    <!-- Paramètres communs pour tous les projets -->
     <TargetFramework>net10.0</TargetFramework>
-    <!--<Nullable>enable</Nullable>
+    <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
     <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
-    <EnforceCodeStyleInBuild>true</EnforceCodeStyleInBuild> -->
-    
+    <EnforceCodeStyleInBuild>true</EnforceCodeStyleInBuild>
+
     <!-- AOT et Trimming
     <IsAotCompatible>true</IsAotCompatible>
     <IsTrimmable>true</IsTrimmable>
     <EnableTrimAnalyzer>true</EnableTrimAnalyzer>-->
-    
-    <!-- Informations du package -->
-    <Authors>MicroKit Team</Authors>
+
+    <!-- Package metadata -->
+    <Authors>Ange Michael Atsé</Authors>
     <Company>MicroKit</Company>
     <Copyright>Copyright © $(Company) $([System.DateTime]::Now.Year)</Copyright>
     <RepositoryType>git</RepositoryType>
+    <RepositoryUrl>https://github.com/michaelatsey/microkit</RepositoryUrl>
+    <PackageLicenseExpression>MIT</PackageLicenseExpression>
+    <Version>1.0.0-preview.1</Version>
+    <PackageReadmeFile>docs/Readme.md</PackageReadmeFile>
+    <PackageIcon>icon.png</PackageIcon>
     <Trademark>$(Company)</Trademark>
     <Product>$(Company) Projects</Product>
 
-
-    <!-- Génération de documentation XML -->
+    <!-- XML documentation — enforced, no suppressions -->
     <GenerateDocumentationFile>true</GenerateDocumentationFile>
-    <NoWarn>$(NoWarn);CS1591</NoWarn>
+
+    <!-- Never emit .nupkg during dotnet build; use dotnet pack explicitly -->
+    <GeneratePackageOnBuild>false</GeneratePackageOnBuild>
+  </PropertyGroup>
+
+  <!-- Test and sample projects: not packable, no XML doc enforcement -->
+  <PropertyGroup Condition="$(MSBuildProjectName.EndsWith('.Tests')) or $(MSBuildProjectName.EndsWith('.Integration.Tests')) or $(MSBuildProjectName.Contains('.Sample.'))">
+    <IsPackable>false</IsPackable>
+    <GenerateDocumentationFile>false</GenerateDocumentationFile>
+    <TreatWarningsAsErrors>false</TreatWarningsAsErrors>
   </PropertyGroup>
 
   <ItemGroup>
-    <!-- Analyseurs communs -->
-    <PackageReference Include="Microsoft.CodeAnalysis.NetAnalyzers" Version="9.*" PrivateAssets="All" />
+    <PackageReference Include="Microsoft.CodeAnalysis.NetAnalyzers" Version="10.0.203" PrivateAssets="All" />
   </ItemGroup>
 
 </Project>

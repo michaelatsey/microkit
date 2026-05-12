@@ -1,9 +1,10 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.Text;
 
 namespace MicroKit.MultiTenancy.Abstractions;
 
+/// <summary>Provides a two-level cache (L1 memory + L2 distributed) scoped to tenant data.</summary>
 public interface ITenantCache
 {
     /// <summary>Gets a cached value by key, or <see langword="null"/> if not found.</summary>

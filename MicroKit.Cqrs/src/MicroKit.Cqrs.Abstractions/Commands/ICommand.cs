@@ -1,9 +1,8 @@
 namespace MicroKit.Cqrs.Abstractions.Commands;
 
-// Interface marqueur pour identifier une commande
+/// <summary>Marker interface for commands that produce no response value.</summary>
 public interface ICommand { }
 
-// Pour les commandes retournant une réponse (ex: un ID ou un Result)
+/// <summary>Marker interface for commands that produce a response value of type <typeparamref name="TResponse"/>.</summary>
+/// <typeparam name="TResponse">The type returned by the command handler.</typeparam>
 public interface ICommand<out TResponse> : ICommand { }
-
-

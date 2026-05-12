@@ -14,8 +14,12 @@ using System.Text;
 
 namespace MicroKit.Messaging.Core.Extensions.Outbox;
 
+/// <summary>Extension methods for enabling the Outbox pattern on a <see cref="MicroKitMessagingBuilder"/>.</summary>
 public static class MicroKitOutboxExtensions
 {
+    /// <summary>Enables outbox processing and registers the publisher and cleanup background workers.</summary>
+    /// <param name="builder">The messaging builder.</param>
+    /// <param name="configure">Optional outbox configuration delegate.</param>
     public static MicroKitMessagingBuilder UseOutbox(
         this MicroKitMessagingBuilder builder,
         Action<OutboxOptions>? configure = null)

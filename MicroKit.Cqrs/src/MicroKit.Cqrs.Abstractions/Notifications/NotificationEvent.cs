@@ -15,6 +15,9 @@ public class NotificationEvent<TDomainEvent> : INotificationEvent<TDomainEvent>
     /// <inheritdoc/>
     public TDomainEvent DomainEvent { get; }
 
+    /// <summary>Deserialisation constructor.</summary>
+    /// <param name="id">The notification identifier.</param>
+    /// <param name="domainEvent">The domain event wrapped by this notification.</param>
     [JsonConstructor]
     protected NotificationEvent(Guid id, TDomainEvent domainEvent)
     {

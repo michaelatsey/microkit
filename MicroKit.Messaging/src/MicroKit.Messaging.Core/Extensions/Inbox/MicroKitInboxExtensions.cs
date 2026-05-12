@@ -14,8 +14,13 @@ using System.Text;
 
 namespace MicroKit.Messaging.Core.Extensions.Inbox;
 
+/// <summary>Extension methods for enabling the Inbox pattern on a <see cref="MicroKitMessagingBuilder"/>.</summary>
 public static class MicroKitInboxExtensions
 {
+    /// <summary>Enables inbox processing, auto-discovers <see cref="IInboxHandler{T}"/> implementations, and registers background workers.</summary>
+    /// <param name="builder">The messaging builder.</param>
+    /// <param name="configure">Optional inbox configuration delegate.</param>
+    /// <param name="assembliesToScan">Assemblies to scan for handler implementations. Defaults to the calling assembly.</param>
     public static MicroKitMessagingBuilder UseInbox(
         this MicroKitMessagingBuilder builder,
         Action<InboxOptions>? configure = null,

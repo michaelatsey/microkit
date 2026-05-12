@@ -12,6 +12,7 @@ using Stripe;
 
 namespace MicroKit.Payments.Stripe;
 
+/// <summary>Extension methods for registering Stripe payment services into <see cref="IServiceCollection"/>.</summary>
 public static class ServiceCollectionExtensions
 {
     //public static IServiceCollection AddStripePayments(this IServiceCollection services, string apiKey)
@@ -21,6 +22,10 @@ public static class ServiceCollectionExtensions
     //    return services;
     //}
 
+    /// <summary>Registers Stripe payment services and configuration into the service collection.</summary>
+    /// <param name="services">The service collection to configure.</param>
+    /// <param name="configuration">The application configuration used to bind <see cref="StripeOptions"/>.</param>
+    /// <returns>The same <paramref name="services"/> instance for fluent chaining.</returns>
     public static IServiceCollection AddStripePaymentGateway(
         this IServiceCollection services,
         IConfiguration configuration)

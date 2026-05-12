@@ -28,6 +28,10 @@ public sealed class JwtTokenService : IJwtTokenService
     // Ajout du manager pour la validation
     private readonly ConfigurationManager<OpenIdConnectConfiguration>? _configManager;
 
+    /// <summary>Initializes a new instance and builds signing credentials from <paramref name="options"/>.</summary>
+    /// <param name="options">JWT configuration.</param>
+    /// <param name="timeProvider">Time provider for token generation timestamps.</param>
+    /// <param name="logger">Logger.</param>
     public JwtTokenService(
         IOptions<JwtOptions> options,
         TimeProvider timeProvider,
@@ -168,6 +172,7 @@ public sealed class JwtTokenService : IJwtTokenService
         }
     }
 
+    /// <inheritdoc/>
     public TokenMetadata? GetTokenMetadata(string token)
     {
         try

@@ -6,8 +6,12 @@ using Microsoft.Extensions.DependencyInjection;
 
 namespace MicroKit.MultiTenancy.Extensions;
 
+/// <summary>Extension methods for configuring the tenant endpoint provider.</summary>
 public static class TenantEndpointProviderExtensions
 {
+    /// <summary>Replaces the default endpoint provider with a region-aware implementation.</summary>
+    /// <param name="builder">The multi-tenancy builder.</param>
+    /// <returns>The same <paramref name="builder"/> for chaining.</returns>
     public static MicroKitMultiTenantBuilder WithRegionAwareEndpointProvider(this MicroKitMultiTenantBuilder builder)
     {
         ReplaceResolver<RegionAwareTenantEndpointProvider>(builder);

@@ -6,6 +6,7 @@ namespace MicroKit.Domain.Contracts.Events;
 /// </summary>
 public interface IDomainEvent
 {
+    /// <summary>Gets the unique identifier for this domain event.</summary>
     Guid Id { get; }
     /// <summary>
     /// Moment métier où l'événement s’est produit

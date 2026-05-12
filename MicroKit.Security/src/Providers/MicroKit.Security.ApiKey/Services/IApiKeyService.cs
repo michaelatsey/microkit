@@ -97,8 +97,10 @@ public sealed record CreateApiKeyRequest
     /// </summary>
     public DateTimeOffset? ExpiresAt { get; init; }
 
+    /// <summary>Optional per-key rate limit (requests per window). Defaults to the global setting.</summary>
     public int? RateLimit { get; init; }
 
+    /// <summary>Optional per-key rate limit window. Defaults to the global setting.</summary>
     public TimeSpan? RateLimitWindow { get; init; }
 
     /// <summary>
@@ -112,9 +114,12 @@ public sealed record CreateApiKeyRequest
     public IReadOnlyDictionary<string, string>? Metadata { get; init; }
 }
 
-/// <summary>
-/// Result of API key creation.
-/// </summary>
+/// <summary>Result of API key creation.</summary>
+/// <param name="Id">The gateway-assigned key identifier.</param>
+/// <param name="PlainTextKey">The full plain-text key (only available at creation time).</param>
+/// <param name="Prefix">The displayable key prefix (safe to store and show).</param>
+/// <param name="CreatedAt">UTC timestamp when the key was created.</param>
+/// <param name="ExpiresAt">UTC timestamp when the key expires, or <see langword="null"/> if it does not expire.</param>
 public sealed record ApiKeyCreationResult(
     string Id,
     string PlainTextKey,
@@ -122,9 +127,15 @@ public sealed record ApiKeyCreationResult(
     DateTimeOffset CreatedAt,
     DateTimeOffset? ExpiresAt);
 
-/// <summary>
-/// API key information (without secrets).
-/// </summary>
+/// <summary>API key information (without secrets).</summary>
+/// <param name="Id">The key identifier.</param>
+/// <param name="Prefix">The displayable key prefix.</param>
+/// <param name="Name">Optional display name.</param>
+/// <param name="IsActive">Whether the key is currently active.</param>
+/// <param name="CreatedAt">UTC creation timestamp.</param>
+/// <param name="ExpiresAt">UTC expiry timestamp, or <see langword="null"/> for non-expiring keys.</param>
+/// <param name="LastUsedAt">UTC timestamp of the last successful validation, or <see langword="null"/> if never used.</param>
+/// <param name="Scopes">Scopes granted to this key.</param>
 public sealed record ApiKeyInfo(
     string Id,
     string Prefix,

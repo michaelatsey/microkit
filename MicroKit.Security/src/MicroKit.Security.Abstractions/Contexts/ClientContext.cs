@@ -9,7 +9,6 @@ namespace MicroKit.Security.Abstractions.Contexts;
 /// Record scellé pour garantir l'immuabilité et optimiser la performance.
 /// </summary>
 /// <seealso cref="MicroKit.Security.Abstractions.Contexts.IClientContext" />
-/// <seealso cref="System.IEquatable&lt;MicroKit.Security.Abstractions.Contexts.ClientContext&gt;" />
 /// <param name="CorrelationId">Identifiant de corrélation unique.</param>
 /// <param name="Principal">Principal de sécurité.</param>
 /// <param name="Scheme">Schéma d'authentification utilisé.</param>

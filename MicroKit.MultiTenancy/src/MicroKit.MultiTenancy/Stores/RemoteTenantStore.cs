@@ -7,6 +7,7 @@ using System.Net.Http.Json;
 
 namespace MicroKit.MultiTenancy.Stores;
 
+/// <summary>Tenant store that fetches tenant data from a remote HTTP service, with a configurable cache layer.</summary>
 public class RemoteTenantStore : ITenantStore, ITenantRegistry
 {
     private readonly IHttpClientFactory _clientFactory;
@@ -21,6 +22,13 @@ public class RemoteTenantStore : ITenantStore, ITenantRegistry
     private const string CachePrefix = "tenant:";
     private const string ListCacheKey = "tenants:all_ids";
 
+    /// <summary>Initializes a new instance.</summary>
+    /// <param name="clientFactory">HTTP client factory used to call the remote tenant service.</param>
+    /// <param name="cache">Cache for storing resolved tenant data.</param>
+    /// <param name="logger">Logger.</param>
+    /// <param name="options">Remote store configuration.</param>
+    /// <param name="endpointProvider">Builds the HTTP endpoint URI for a given tenant identifier.</param>
+    /// <param name="serialiser">Serializer for cache payloads.</param>
     public RemoteTenantStore(
         IHttpClientFactory clientFactory,
         ITenantCache cache,
@@ -38,6 +46,7 @@ public class RemoteTenantStore : ITenantStore, ITenantRegistry
         _serialiser = serialiser;
     }
 
+    /// <inheritdoc/>
     public async Task<ITenant?> GetTenantAsync(string identifier, CancellationToken cancellationToken = default)
     {
         var cacheKey = $"{CachePrefix}{identifier}";
@@ -85,6 +94,7 @@ public class RemoteTenantStore : ITenantStore, ITenantRegistry
         
     }
 
+    /// <inheritdoc/>
     public async Task<ReadOnlyCollection<string>> GetAllTenantsAsync(CancellationToken cancellationToken = default)
     {
         // Si aucun pattern n'est configuré, ce store ne supporte pas le listing
@@ -142,17 +152,22 @@ public class RemoteTenantStore : ITenantStore, ITenantRegistry
     }
 }
 
+/// <summary>Configuration options for the remote tenant HTTP store.</summary>
 public class RemoteTenantOptions
 {
+    /// <summary>The configuration section name.</summary>
     public const string SectionName = "MicroKit:MultiTenancy:Store:RemoteTenants";
+    /// <summary>Gets or sets the base address of the remote tenant service.</summary>
     public Uri BaseAddress { get; set; } = default!;
-    // Exemple : "api/tenants/{0}" ou "internal/clients/get?id={0}"
+    /// <summary>Gets or sets the route pattern for individual tenant lookups (e.g. <c>api/tenants/{0}</c>).</summary>
     public string RoutePattern { get; set; } = "api/tenants/{0}";
-    // Pattern pour lister TOUS les tenants (utilisé par ITenantRegistry)
-    // Si null, le registry sera considéré comme désactivé pour ce store.
+    /// <summary>Gets or sets the route pattern for listing all tenants. Set to <see langword="null"/> to disable registry functionality.</summary>
     public string? ListRoutePattern { get; set; } = "api/tenants";
+    /// <summary>Gets or sets the HTTP timeout for remote calls.</summary>
     public TimeSpan Timeout { get; set; } = TimeSpan.FromSeconds(5);
+    /// <summary>Gets or sets how long tenant data is cached after retrieval.</summary>
     public TimeSpan CacheExpirationMinutes { get; set; } = TimeSpan.FromMinutes(30);
 
+    /// <summary>Gets or sets the maximum number of tenants returned by the registry listing call.</summary>
     public int MaxTenantsToFetch { get; set; } = 1000;
 }

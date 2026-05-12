@@ -1,13 +1,12 @@
-﻿
+
 using MicroKit.Events.Contracts;
 
 namespace MicroKit.Messaging.Abstractions.Common;
 
-/// <summary>
-/// Interface de base pour tous les messages
-/// </summary>
+/// <summary>Base contract for all serialized messages flowing through the outbox/inbox pipeline.</summary>
 public interface IMessage //: IEvent
 {
+    /// <summary>Gets the serialized JSON payload of the message.</summary>
     string Payload { get; }
-    
+
 }

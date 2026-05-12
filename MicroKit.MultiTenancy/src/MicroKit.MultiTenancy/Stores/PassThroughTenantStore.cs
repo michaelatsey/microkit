@@ -6,6 +6,7 @@ using System.Collections.ObjectModel;
 
 namespace MicroKit.MultiTenancy.Stores;
 
+/// <summary>Tenant store that creates virtual tenants on the fly for every identifier, using a configurable list of known tenants for registry operations.</summary>
 public class PassThroughTenantStore : ITenantStore, ITenantRegistry, IDisposable
 {
     private readonly PassThroughTenantOptions _options;
@@ -18,6 +19,9 @@ public class PassThroughTenantStore : ITenantStore, ITenantRegistry, IDisposable
     private readonly TimeSpan _cacheDuration = TimeSpan.FromMinutes(5);
     private Timer? _cacheCleanupTimer;
 
+    /// <summary>Initializes a new instance.</summary>
+    /// <param name="options">Pass-through store configuration.</param>
+    /// <param name="logger">Logger.</param>
     public PassThroughTenantStore(
         IOptions<PassThroughTenantOptions> options,
         ILogger<PassThroughTenantStore> logger)
@@ -32,6 +36,7 @@ public class PassThroughTenantStore : ITenantStore, ITenantRegistry, IDisposable
         _cacheCleanupTimer = new Timer(CleanupCache, null, _cacheDuration, _cacheDuration);
     }
 
+    /// <inheritdoc/>
     public Task<ITenant?> GetTenantAsync(string tenantId, CancellationToken cancellationToken = default)
     {
         if (string.IsNullOrWhiteSpace(tenantId))
@@ -55,10 +60,7 @@ public class PassThroughTenantStore : ITenantStore, ITenantRegistry, IDisposable
 
 
 
-    /// <summary>
-    /// Implémentation de ITenantRegistry pour le PassThrough.
-    /// Comme il n'y a pas de DB, on se base sur la liste fournie en configuration.
-    /// </summary>
+    /// <inheritdoc/>
     public Task<ReadOnlyCollection<string>> GetAllTenantsAsync(CancellationToken cancellationToken = default)
     {
         ReadOnlyCollection<string> tenants = _options.StaticTenants.AsReadOnly();
@@ -120,6 +122,7 @@ public class PassThroughTenantStore : ITenantStore, ITenantRegistry, IDisposable
         }
     }
 
+    /// <inheritdoc/>
     public void Dispose()
     {
         _cacheCleanupTimer?.Dispose();
@@ -144,6 +147,7 @@ public class PassThroughTenantStore : ITenantStore, ITenantRegistry, IDisposable
     }
 }
 
+/// <summary>Configuration options for <see cref="PassThroughTenantStore"/>.</summary>
 public class PassThroughTenantOptions
 {
     /// <summary>

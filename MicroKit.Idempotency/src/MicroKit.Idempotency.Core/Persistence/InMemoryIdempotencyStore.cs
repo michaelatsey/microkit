@@ -4,6 +4,7 @@ using System.Collections.Concurrent;
 
 namespace MicroKit.Idempotency.Core.Persistence;
 
+/// <summary>In-memory <see cref="IIdempotencyStore"/> implementation. Not suitable for distributed or durable deployments.</summary>
 public class InMemoryIdempotencyStore : IIdempotencyStore
 {
     private readonly ConcurrentDictionary<string, CacheEntry> _store = new();
@@ -11,6 +12,7 @@ public class InMemoryIdempotencyStore : IIdempotencyStore
     private record CacheEntry(IdempotencyState State, DateTimeOffset? ExpiresAt);
 
 
+    /// <inheritdoc/>
     public Task CompleteAsync(string key, string response, IdempotencyStatus status, CancellationToken cancellationToken = default)
     {
         if (_store.TryGetValue(key, out var entry))
@@ -28,6 +30,7 @@ public class InMemoryIdempotencyStore : IIdempotencyStore
         return Task.CompletedTask;
     }
 
+    /// <inheritdoc/>
     public Task CreateAsync(IdempotencyState state, TimeSpan? ttl, CancellationToken cancellationToken = default)
     {
         var expiresAt = ttl.HasValue ? DateTimeOffset.UtcNow.Add(ttl.Value) : (DateTimeOffset?)null;
@@ -41,12 +44,14 @@ public class InMemoryIdempotencyStore : IIdempotencyStore
         return Task.CompletedTask;
     }
 
+    /// <inheritdoc/>
     public Task DeleteAsync(string key, CancellationToken cancellationToken = default)
     {
         _store.TryRemove(key, out _);
         return Task.CompletedTask;
     }
 
+    /// <inheritdoc/>
     public Task FailAsync(string key, IdempotencyStatus status, CancellationToken cancellationToken = default)
     {
         if (_store.TryGetValue(key, out var entry))
@@ -58,6 +63,7 @@ public class InMemoryIdempotencyStore : IIdempotencyStore
 
     }
 
+    /// <inheritdoc/>
     public Task<IdempotencyState?> GetAsync(string key, CancellationToken cancellationToken = default)
     {
         if (_store.TryGetValue(key, out var entry))
@@ -74,6 +80,7 @@ public class InMemoryIdempotencyStore : IIdempotencyStore
         return Task.FromResult<IdempotencyState?>(null);
     }
 
+    /// <inheritdoc/>
     public Task RenewExpirationAsync(string key, TimeSpan ttl, CancellationToken cancellationToken = default)
     {
         if (_store.TryGetValue(key, out var entry))

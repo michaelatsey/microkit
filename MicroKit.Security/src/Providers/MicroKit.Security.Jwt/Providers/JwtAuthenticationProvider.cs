@@ -25,6 +25,10 @@ public sealed class JwtAuthenticationProvider : IAuthenticationProvider
     // Gestionnaire de configuration pour les clés distantes (JWKS)
     private readonly IConfigurationManager<OpenIdConnectConfiguration>? _configManager;
 
+    /// <summary>Initializes a new instance and builds token validation parameters from <paramref name="options"/>.</summary>
+    /// <param name="options">JWT configuration.</param>
+    /// <param name="timeProvider">Time provider for token lifetime calculations.</param>
+    /// <param name="logger">Logger.</param>
     public JwtAuthenticationProvider(
         IOptions<JwtOptions> options,
         TimeProvider timeProvider,

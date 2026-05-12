@@ -11,6 +11,7 @@ using Microsoft.EntityFrameworkCore;
 
 namespace MicroKit.Sample.OrderApi.Application.CreateOrder;
 
+/// <summary>Handles the <see cref="CreateOrderCommand"/> by persisting the order and enqueuing an outbox message atomically.</summary>
 public class CreateOrderHandler : ICommandHandler<CreateOrderCommand, Order>
 {
     private readonly ApplicationDbContext _dbContext;
@@ -18,6 +19,11 @@ public class CreateOrderHandler : ICommandHandler<CreateOrderCommand, Order>
     private readonly IMicroKitSerializer _serializer;
     private readonly ITenantContext _tenantContext;
 
+    /// <summary>Initializes a new instance.</summary>
+    /// <param name="context">The application EF Core database context.</param>
+    /// <param name="outboxService">Service for enqueuing outbox messages.</param>
+    /// <param name="serializer">Serializer for domain events.</param>
+    /// <param name="tenantContext">Provides the current tenant identity.</param>
     public CreateOrderHandler(ApplicationDbContext context, IOutboxService outboxService, IMicroKitSerializer serializer, ITenantContext tenantContext)
     {
         _dbContext = context;
@@ -26,6 +32,7 @@ public class CreateOrderHandler : ICommandHandler<CreateOrderCommand, Order>
         _tenantContext = tenantContext;
     }
 
+    /// <inheritdoc/>
     public async Task<Order> Handle(CreateOrderCommand command, CancellationToken cancellationToken)
     {
         var order = Order.Create(command.ProductId, 19.99m) 
@@ -57,9 +64,12 @@ public class CreateOrderHandler : ICommandHandler<CreateOrderCommand, Order>
         return order;
     }
 
+    /// <summary>Executes an operation within a database transaction, using the current transaction if one is already active.</summary>
+    /// <param name="operation">The async operation to execute.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
     public async Task ExecuteAsync(
         Func<CancellationToken, Task> operation,
-        CancellationToken cancellationToken =default)
+        CancellationToken cancellationToken = default)
     {
         var strategy = _dbContext.Database.CreateExecutionStrategy();
 

@@ -2,6 +2,7 @@
 
 namespace MicroKit.MultiTenancy.RegionResolvers;
 
+/// <summary>Resolves tenant regions from a metadata repository, with an in-process cache to reduce database load.</summary>
 public class DatabaseTenantRegionResolver : ITenantRegionResolver
 {
     private readonly ITenantMetadataRepository _repository;
@@ -9,6 +10,9 @@ public class DatabaseTenantRegionResolver : ITenantRegionResolver
 
     private const string CachePrefix = "tenant-region:";
 
+    /// <summary>Initializes a new instance.</summary>
+    /// <param name="repository">Repository for loading tenant metadata.</param>
+    /// <param name="cache">Cache for storing resolved regions.</param>
     public DatabaseTenantRegionResolver(
         ITenantMetadataRepository repository,
         ITenantCache cache)
@@ -17,6 +21,7 @@ public class DatabaseTenantRegionResolver : ITenantRegionResolver
         _cache = cache;
     }
 
+    /// <inheritdoc/>
     public async ValueTask<string> ResolveAsync(string tenantIdentifier,CancellationToken cancellationToken = default)
     {
         var cacheKey = $"{CachePrefix}{tenantIdentifier}";

@@ -1,5 +1,6 @@
 ﻿namespace MicroKit.Idempotency.EFCore.Configurations;
 
+/// <summary>Configuration options for the EF Core idempotency store.</summary>
 public class EFCoreIdempotencyOptions
 {
     /// <summary>

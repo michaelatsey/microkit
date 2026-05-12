@@ -8,6 +8,9 @@ public sealed class JwtClaimResolutionStrategy : IHttpTenantResolutionStrategy
     private readonly string _claimName;
     private readonly IHttpContextAccessor _httpContextAccessor;
 
+    /// <summary>Initializes a new instance.</summary>
+    /// <param name="claimName">The JWT claim name to read the tenant identifier from.</param>
+    /// <param name="httpContextAccessor">Provides access to the current HTTP context.</param>
     public JwtClaimResolutionStrategy(string claimName, IHttpContextAccessor httpContextAccessor)
     {
         _claimName = claimName;

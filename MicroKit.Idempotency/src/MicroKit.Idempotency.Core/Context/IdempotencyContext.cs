@@ -7,20 +7,25 @@ using System.Text;
 
 namespace MicroKit.Idempotency.Core.Context;
 
+/// <summary>Async-local idempotency context tracking the active key and its state within the current execution scope.</summary>
 public class IdempotencyContext: IIdempotencyContext
 {
     private readonly AsyncLocal<ContextHolder> _currentContext = new();
     private readonly ConcurrentDictionary<string, IdempotencyState> _stateCache = new();
 
+    /// <inheritdoc/>
     public string? CurrentKey => _currentContext.Value?.Key;
 
+    /// <inheritdoc/>
     public bool IsIdempotent => !string.IsNullOrWhiteSpace(CurrentKey);
 
+    /// <inheritdoc/>
     public IdempotencyStatus? CurrentStatus =>
         CurrentKey != null && _stateCache.TryGetValue(CurrentKey, out var state)
             ? state.Status
             : null;
 
+    /// <inheritdoc/>
     public IDisposable BeginScope(string key)
     {
         if (_currentContext.Value != null)

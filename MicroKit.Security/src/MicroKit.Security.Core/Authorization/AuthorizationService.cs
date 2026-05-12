@@ -7,6 +7,8 @@ using Microsoft.Extensions.Options;
 using System.Runtime.CompilerServices;
 
 namespace MicroKit.Security.Core.Authorization;
+
+/// <summary>Default <see cref="IAuthorizationService"/> implementation that evaluates claims from configured claim-type mappings.</summary>
 public sealed class AuthorizationService(
     IOptions<SecurityOptions> options,
     ILogger<AuthorizationService> logger) : IAuthorizationService

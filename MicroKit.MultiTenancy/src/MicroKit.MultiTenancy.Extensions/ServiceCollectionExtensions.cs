@@ -12,8 +12,13 @@ using Microsoft.Extensions.Hosting;
 
 namespace MicroKit.MultiTenancy.Extensions;
 
+/// <summary>Extension methods for registering MicroKit multi-tenancy services.</summary>
 public static class ServiceCollectionExtensions
 {
+    /// <summary>Registers core multi-tenancy services including cache, endpoint provider, resolution strategy, and tenant store.</summary>
+    /// <param name="services">The service collection.</param>
+    /// <param name="configure">Optional callback to configure <see cref="MicroKitMultiTenancyOptions"/>.</param>
+    /// <returns>A <see cref="MicroKitMultiTenantBuilder"/> for further configuration.</returns>
     public static MicroKitMultiTenantBuilder AddMicroKitMultiTenancy(
         this IServiceCollection services,
         Action<MicroKitMultiTenancyOptions>? configure = null

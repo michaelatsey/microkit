@@ -6,8 +6,12 @@ using System.Text.Json;
 
 namespace MicroKit.Messaging.Persistence.EFCore.Configurations.Outbox;
 
+/// <summary>SQL Server-specific EF Core entity type configuration extensions for <see cref="OutboxMessage"/>.</summary>
 public static class OutboxMessageConfigurationSQLServer
 {
+    /// <summary>Applies SQL Server-specific column types, indexes, and constraints to the outbox message entity.</summary>
+    /// <param name="builder">The entity type builder for <see cref="OutboxMessage"/>.</param>
+    /// <returns>The same <paramref name="builder"/> for chaining.</returns>
     public static EntityTypeBuilder<OutboxMessage> SQLServerConfigure(this EntityTypeBuilder<OutboxMessage> builder)
     {
         builder.ToTable("MicroKit_OutboxMessages", "messaging");

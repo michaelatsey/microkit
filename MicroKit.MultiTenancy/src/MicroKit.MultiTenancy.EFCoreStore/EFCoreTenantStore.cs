@@ -8,6 +8,7 @@ using System.Collections.ObjectModel;
 
 namespace MicroKit.MultiTenancy.EFCoreStore;
 
+/// <summary>EF Core-backed implementation of <see cref="ITenantStore"/> and <see cref="ITenantRegistry"/> with integrated caching.</summary>
 public class EFCoreTenantStore<TContext> : ITenantStore, ITenantRegistry
     where TContext : DbContext
 {
@@ -19,6 +20,12 @@ public class EFCoreTenantStore<TContext> : ITenantStore, ITenantRegistry
 
     private const string CachePrefix = "tenant:db:";
 
+    /// <summary>Initializes a new instance.</summary>
+    /// <param name="scopeFactory">Factory for creating dependency injection scopes.</param>
+    /// <param name="cache">Tenant cache for reducing database lookups.</param>
+    /// <param name="serializer">Serializer used to cache tenant data.</param>
+    /// <param name="options">Database tenant store options.</param>
+    /// <param name="logger">Logger instance.</param>
     public EFCoreTenantStore(
         IServiceScopeFactory scopeFactory,
         ITenantCache cache,
@@ -33,6 +40,7 @@ public class EFCoreTenantStore<TContext> : ITenantStore, ITenantRegistry
         _logger = logger;
     }
 
+    /// <inheritdoc/>
     public async Task<ITenant?> GetTenantAsync(string tenantId, CancellationToken ct = default)
     {
         var cacheKey = $"{CachePrefix}{tenantId}";
@@ -62,6 +70,7 @@ public class EFCoreTenantStore<TContext> : ITenantStore, ITenantRegistry
         return tenantEntity;
     }
 
+    /// <inheritdoc/>
     public async Task<ReadOnlyCollection<string>> GetAllTenantsAsync(CancellationToken ct = default)
     {
         if (!_options.EnableRegistry) return [];
@@ -80,11 +89,12 @@ public class EFCoreTenantStore<TContext> : ITenantStore, ITenantRegistry
     }
 }
 
+/// <summary>Options for the EF Core-backed tenant store.</summary>
 public class DatabaseTenantOptions
 {
-    // Durée de vie du cache pour éviter de requêter la DB à chaque appel
+    /// <summary>Gets or sets the cache time-to-live for tenant lookups.</summary>
     public TimeSpan CacheExpirationMinutes { get; set; } = TimeSpan.FromMinutes(60);
 
-    // Possibilité de désactiver le listing si la table est trop énorme (cas rares)
+    /// <summary>Gets or sets whether the tenant registry listing is enabled.</summary>
     public bool EnableRegistry { get; set; } = true;
 }

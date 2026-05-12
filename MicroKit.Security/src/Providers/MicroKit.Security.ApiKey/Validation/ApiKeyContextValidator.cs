@@ -7,12 +7,15 @@ using Microsoft.Extensions.Logging;
 
 namespace MicroKit.Security.ApiKey.Validation;
 
+/// <summary>Secondary validator that checks API key ownership against the already-authenticated primary principal to prevent cross-tenant shadowing.</summary>
 public sealed class ApiKeyContextValidator(
     IApiKeyValidator internalValidator,
     ILogger<ApiKeyContextValidator> logger) : ISecurityValidator
 {
+    /// <inheritdoc/>
     public AuthenticationScheme TargetScheme => AuthenticationScheme.ApiKey;
 
+    /// <inheritdoc/>
     public async ValueTask<ApiKeyValidationResult> ValidateAsync(
         ISecurityPrincipal primaryPrincipal,
         ExtractionResult secondaryCredential,

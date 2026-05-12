@@ -13,6 +13,7 @@ using Moq;
 
 namespace MicroKit.Idempotency.Tests;
 
+/// <summary>Unit tests for <see cref="IdempotencyBehavior{TRequest,TResponse}"/>.</summary>
 public class IdempotencyBehaviorTests
 {
     private readonly Mock<IIdempotencyStore> _storeMock;
@@ -21,6 +22,8 @@ public class IdempotencyBehaviorTests
     private readonly IdempotencyOptions _options;
     private readonly IdempotencyBehavior<TestCommand, TestResponse> _behavior;
     private const string TenantId = "tenant-id-456";
+
+    /// <summary>Initializes a new instance.</summary>
     public IdempotencyBehaviorTests()
     {
         _storeMock = new Mock<IIdempotencyStore>();
@@ -47,6 +50,7 @@ public class IdempotencyBehaviorTests
             .Returns(Mock.Of<IDisposable>());
     }
 
+    /// <summary>Verifies that a new request creates a store entry and returns the handler response.</summary>
     [Fact]
     public async Task Handle_NewRequest_CreatesStoreEntryAndReturnsResponse()
     {
@@ -92,6 +96,7 @@ public class IdempotencyBehaviorTests
             Times.Once);
     }
 
+    /// <summary>Verifies that a completed duplicate request returns the cached response without re-executing the handler.</summary>
     [Fact]
     public async Task Handle_ExistingCompletedRequest_ReturnsCachedResponse()
     {
@@ -125,6 +130,7 @@ public class IdempotencyBehaviorTests
         _serializerMock.Verify(x => x.Deserialize<TestResponse>(serializedResponse), Times.Once);
     }
 
+    /// <summary>Verifies that a request with a processing duplicate throws an idempotency in-progress exception.</summary>
     [Fact]
     public async Task Handle_ExistingInProgressRequest_ThrowsIdempotencyInProgressException()
     {
@@ -145,6 +151,7 @@ public class IdempotencyBehaviorTests
                 CancellationToken.None));
     }
 
+    /// <summary>Verifies that a request with a mismatched hash throws an idempotency conflict exception.</summary>
     [Fact]
     public async Task Handle_RequestHashMismatch_ThrowsIdempotencyConflictException()
     {
@@ -170,6 +177,7 @@ public class IdempotencyBehaviorTests
                 CancellationToken.None));
     }
 
+    /// <summary>Verifies that an empty idempotency key bypasses idempotency processing.</summary>
     [Fact]
     public async Task Handle_EmptyIdempotencyKey_SkipsProcessing()
     {
@@ -189,6 +197,7 @@ public class IdempotencyBehaviorTests
         _storeMock.Verify(x => x.CreateAsync(It.IsAny<IdempotencyState>(), It.IsAny<TimeSpan?>(), It.IsAny<CancellationToken>()), Times.Never);
     }
 
+    /// <summary>Verifies that a null idempotency key bypasses idempotency processing.</summary>
     [Fact]
     public async Task Handle_NullIdempotencyKey_SkipsProcessing()
     {
@@ -207,6 +216,7 @@ public class IdempotencyBehaviorTests
         _storeMock.Verify(x => x.GetAsync(It.IsAny<string>(), It.IsAny<CancellationToken>()), Times.Never);
     }
 
+    /// <summary>Verifies that a failed handler execution marks the idempotency record as failed.</summary>
     [Fact]
     public async Task Handle_FailedOperation_MarksAsFailed()
     {
@@ -245,6 +255,7 @@ public class IdempotencyBehaviorTests
             Times.Once);
             }
 
+    /// <summary>Verifies that a cancelled operation marks the idempotency record as cancelled.</summary>
     [Fact]
     public async Task Handle_CancelledOperation_MarksAsCancelled()
     {

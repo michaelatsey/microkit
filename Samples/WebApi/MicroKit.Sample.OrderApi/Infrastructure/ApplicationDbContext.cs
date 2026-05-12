@@ -5,13 +5,18 @@ using MicroKit.Idempotency.EFCore;
 
 namespace MicroKit.Sample.OrderApi.Infrastructure;
 
+/// <summary>Application EF Core database context for the sample Order API.</summary>
 public class ApplicationDbContext : DbContext
 {
+    /// <summary>Initializes a new instance.</summary>
+    /// <param name="options">The database context options.</param>
     public ApplicationDbContext(DbContextOptions<ApplicationDbContext> options) : base(options)
     {
     }
+    /// <summary>Gets the orders dataset.</summary>
     public DbSet<Order> Orders => Set<Order>();
 
+    /// <inheritdoc/>
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
         base.OnModelCreating(modelBuilder);

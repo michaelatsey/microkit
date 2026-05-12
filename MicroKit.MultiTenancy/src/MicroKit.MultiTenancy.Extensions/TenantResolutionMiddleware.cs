@@ -11,11 +11,17 @@ using Microsoft.Extensions.Options;
 
 namespace MicroKit.MultiTenancy.Extensions;
 
+/// <summary>ASP.NET Core middleware that resolves the current tenant and sets the tenant context for each request.</summary>
 public sealed class TenantResolutionMiddleware
 {
     private readonly RequestDelegate _next;
     private readonly ILogger<TenantResolutionMiddleware> _logger;
     private readonly MicroKitMultiTenancyOptions _options;
+
+    /// <summary>Initializes a new instance.</summary>
+    /// <param name="next">The next middleware in the pipeline.</param>
+    /// <param name="logger">Logger instance.</param>
+    /// <param name="options">Multi-tenancy configuration options.</param>
     public TenantResolutionMiddleware(
         RequestDelegate next,
         ILogger<TenantResolutionMiddleware> logger,
@@ -26,6 +32,12 @@ public sealed class TenantResolutionMiddleware
         _options = options.Value;
     }
 
+    /// <summary>Invokes the tenant resolution middleware.</summary>
+    /// <param name="context">The current HTTP context.</param>
+    /// <param name="strategy">The strategy for extracting the tenant identifier from the request.</param>
+    /// <param name="store">The store used to look up tenant details by identifier.</param>
+    /// <param name="contextSetter">Sets the resolved tenant on the ambient tenant context.</param>
+    /// <param name="tenantIdAccessor">Provides the tenant ID from the security identity.</param>
     public async Task InvokeAsync(
         HttpContext context,
         IHttpTenantResolutionStrategy strategy,
@@ -159,8 +171,12 @@ public sealed class TenantResolutionMiddleware
     }
 }
 
+/// <summary>Extension methods for adding the tenant resolution middleware to the ASP.NET Core pipeline.</summary>
 public static class TenantResolutionMiddlewareExtensions
 {
+    /// <summary>Adds the <see cref="TenantResolutionMiddleware"/> to the request pipeline.</summary>
+    /// <param name="builder">The application builder.</param>
+    /// <returns>The same <paramref name="builder"/> for chaining.</returns>
     public static IApplicationBuilder UseMicroKitMultiTenancy(this IApplicationBuilder builder)
     {
         return builder.UseMiddleware<TenantResolutionMiddleware>();

@@ -10,9 +10,12 @@ public sealed class ValidationBehavior<TRequest, TResponse> : IPipelineBehavior<
 {
     private readonly IEnumerable<IValidator<TRequest>> _validators;
 
+    /// <summary>Initializes a new instance.</summary>
+    /// <param name="validators">The FluentValidation validators to run.</param>
     public ValidationBehavior(IEnumerable<IValidator<TRequest>> validators)
         => _validators = validators;
 
+    /// <inheritdoc/>
     public async Task<TResponse> Handle(
         TRequest request,
         RequestHandlerDelegate<TResponse> next,

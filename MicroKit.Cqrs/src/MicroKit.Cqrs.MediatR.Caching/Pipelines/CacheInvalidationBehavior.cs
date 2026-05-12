@@ -5,19 +5,25 @@ using Microsoft.Extensions.Logging;
 
 namespace MicroKit.Cqrs.MediatR.Caching.Pipelines;
 
+/// <summary>MediatR pipeline behavior that invalidates cache entries after a successful command execution.</summary>
 public class CacheInvalidationBehavior<TRequest, TResponse>
     : IPipelineBehavior<TRequest, TResponse>
     where TRequest : notnull, IRequest<TResponse>, ICacheInvalidatorRequest<TRequest, TResponse>
 {
     private readonly ICacheService _cache;
-    private readonly ICacheKeyService _keyService; // <--- Stratégie de clé
-    private readonly ICacheEligibilityChecker _eligibilityChecker; // <--- Stratégie de succès
+    private readonly ICacheKeyService _keyService;
+    private readonly ICacheEligibilityChecker _eligibilityChecker;
     private readonly ILogger<CacheInvalidationBehavior<TRequest, TResponse>> _logger;
 
+    /// <summary>Initializes a new instance.</summary>
+    /// <param name="cache">The cache service used to remove invalidated entries.</param>
+    /// <param name="logger">Logger instance.</param>
+    /// <param name="keyService">Service for building full cache key strings.</param>
+    /// <param name="eligibilityChecker">Determines whether a response warrants cache invalidation.</param>
     public CacheInvalidationBehavior(
-        ICacheService cache, 
+        ICacheService cache,
         ILogger<CacheInvalidationBehavior<TRequest, TResponse>> logger,
-        ICacheKeyService keyService, 
+        ICacheKeyService keyService,
         ICacheEligibilityChecker eligibilityChecker)
     {
         _cache = cache;
@@ -26,6 +32,7 @@ public class CacheInvalidationBehavior<TRequest, TResponse>
         _eligibilityChecker = eligibilityChecker;
     }
 
+    /// <inheritdoc/>
     public async Task<TResponse> Handle(
         TRequest request,
         RequestHandlerDelegate<TResponse> next,

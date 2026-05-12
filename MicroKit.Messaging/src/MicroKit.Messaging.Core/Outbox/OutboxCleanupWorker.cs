@@ -9,12 +9,17 @@ using Microsoft.Extensions.Options;
 
 namespace MicroKit.Messaging.Core.Outbox;
 
+/// <summary>Background worker that periodically purges published and failed outbox messages across all active tenants.</summary>
 public class OutboxCleanupWorker: BackgroundService
 {
     private readonly IServiceScopeFactory _scopeFactory;
     private readonly OutboxOptions _options;
     private readonly ILogger<OutboxCleanupWorker> _logger;
 
+    /// <summary>Initializes a new instance.</summary>
+    /// <param name="scopeFactory">Factory for creating DI scopes during cleanup.</param>
+    /// <param name="options">Outbox configuration.</param>
+    /// <param name="logger">Logger.</param>
     public OutboxCleanupWorker(
         IServiceScopeFactory scopeFactory,
         IOptions<OutboxOptions> options,
@@ -25,6 +30,7 @@ public class OutboxCleanupWorker: BackgroundService
         _logger = logger;
     }
 
+    /// <inheritdoc/>
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
         if (!_options.CleanupRunInterval.HasValue)

@@ -24,6 +24,8 @@ public sealed class RequirePermissionAttribute(params string[] permissions)
     /// </summary>
     public bool RequireAll { get; set; }
 
+    /// <summary>Evaluates the permission requirements and returns 401/403 if the caller does not qualify.</summary>
+    /// <param name="context">The authorization filter context.</param>
     public async Task OnAuthorizationAsync(AuthorizationFilterContext context)
     {
         var authService = context.HttpContext.RequestServices.GetRequiredService<IAuthorizationService>();

@@ -5,8 +5,10 @@ using MicroKit.Sample.OrderApi.Infrastructure.Caching;
 
 namespace MicroKit.Sample.OrderApi.Infrastructure.Modules
 {
+    /// <summary>Autofac module that registers caching infrastructure services.</summary>
     public class CachingModule : Module
     {
+        /// <inheritdoc/>
         protected override void Load(ContainerBuilder builder)
         {
             // 1. Enregistrement de la stratégie de clé (connaît le Tenant)

@@ -9,8 +9,12 @@ using Microsoft.Extensions.DependencyInjection.Extensions;
 
 namespace MicroKit.Idempotency.Core;
 
+/// <summary>Extension methods for registering MicroKit Idempotency services.</summary>
 public static class ServiceCollectionExtensions
 {
+    /// <summary>Adds idempotency services to the MicroKit builder.</summary>
+    /// <param name="builder">The MicroKit builder.</param>
+    /// <param name="configure">Optional delegate to further configure idempotency.</param>
     public static MicroKitBuilder AddMicroKitIdempotency(
         this MicroKitBuilder builder,
         Action<MicroKitIdempotencyBuilder>? configure = null)

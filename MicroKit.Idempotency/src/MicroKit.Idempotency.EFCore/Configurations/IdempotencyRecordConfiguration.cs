@@ -4,14 +4,19 @@ using Microsoft.EntityFrameworkCore.Metadata.Builders;
 
 namespace MicroKit.Idempotency.EFCore.Configurations;
 
+/// <summary>EF Core entity type configuration for <see cref="IdempotencyRecord"/>.</summary>
 public class IdempotencyRecordConfiguration : IEntityTypeConfiguration<IdempotencyRecord>
 {
     private readonly string? _providerName;
 
+    /// <summary>Initializes a new instance.</summary>
+    /// <param name="providerName">The EF Core provider name used to select provider-specific column types.</param>
     public IdempotencyRecordConfiguration(string? providerName)
     {
         _providerName = providerName;
     }
+
+    /// <inheritdoc/>
     public void Configure(EntityTypeBuilder<IdempotencyRecord> builder)
     {
         builder.ToTable("MicroKit_IdempotencyRecords");

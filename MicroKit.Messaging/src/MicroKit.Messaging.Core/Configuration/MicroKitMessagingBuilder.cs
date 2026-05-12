@@ -7,14 +7,19 @@ namespace MicroKit.Messaging.Core.Configuration;
 /// </summary>
 public class MicroKitMessagingBuilder
 {
+    /// <summary>Gets the underlying service collection.</summary>
     public IServiceCollection Services { get; }
     private readonly MessagingOptions _options;
+    /// <summary>Initializes a new instance.</summary>
+    /// <param name="services">The service collection to configure.</param>
     public MicroKitMessagingBuilder(IServiceCollection services)
     {
         Services = services;
         _options = new MessagingOptions();
     }
 
+    /// <summary>Applies additional <see cref="MessagingOptions"/> configuration.</summary>
+    /// <param name="configure">Configuration delegate.</param>
     public void Configure(Action<MessagingOptions> configure)
     {
         configure(_options);

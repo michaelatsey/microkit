@@ -12,8 +12,13 @@ using Microsoft.Extensions.DependencyInjection.Extensions;
 
 namespace MicroKit.Messaging.Persistence.EFCore.Extensions;
 
+/// <summary>Extension methods for registering EF Core messaging persistence services.</summary>
 public static class EFCoreRegistrationExtensions
 {
+    /// <summary>Registers all EF Core-backed messaging repositories, fetchers, cleanup services, and locking strategies.</summary>
+    /// <typeparam name="TContext">The <see cref="DbContext"/> that owns the messaging tables.</typeparam>
+    /// <param name="builder">The messaging builder.</param>
+    /// <returns>The same <paramref name="builder"/> for chaining.</returns>
     public static MicroKitMessagingBuilder UseEfCorePersistence<TContext>(
         this MicroKitMessagingBuilder builder
         //,

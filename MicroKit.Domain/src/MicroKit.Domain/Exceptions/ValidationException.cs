@@ -25,9 +25,8 @@ public class ValidationException : DomainException
     }
 }
 
-/// <summary>
-/// Représente une erreur de validation individuelle.
-/// </summary>
-/// <seealso cref="IEquatable&lt;ValidationError&gt;" />
+/// <summary>Represents a single validation failure for a specific property.</summary>
+/// <param name="PropertyName">The name of the property that failed validation.</param>
+/// <param name="ErrorMessage">The validation error message.</param>
 public record ValidationError(string PropertyName, string ErrorMessage);
 

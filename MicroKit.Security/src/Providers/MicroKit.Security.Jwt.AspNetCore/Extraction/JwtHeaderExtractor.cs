@@ -8,16 +8,20 @@ using Microsoft.Net.Http.Headers;
 
 namespace MicroKit.Security.Jwt.AspNetCore.Extraction;
 
+/// <summary>Extracts a JWT Bearer token from the HTTP Authorization header.</summary>
+/// <param name="options">JWT authentication options.</param>
 public sealed class JwtHeaderExtractor(IOptions<JwtOptions> options) : IAuthenticationExtractor
 {
     private readonly ExtractionResult _nullCredentials = new (string.Empty, AuthenticationScheme.None, false);
     private readonly JwtOptions _options = options.Value;
 
-    // Le schéma est maintenant dynamique, basé sur la config (ex: "Bearer")
+    /// <summary>Gets the authorization scheme (e.g., "Bearer") used to identify JWT tokens.</summary>
     public string Scheme => _options.Extraction.AuthorizationScheme;
-    // Haute priorité : si un JWT est présent, on le traite souvent avant l'API Key
+
+    /// <inheritdoc/>
     public int Priority => 100;
 
+    /// <inheritdoc/>
     public ValueTask<ExtractionResult> ExtractCredentialsAsync(HttpContext context)
     {
         // 1. Récupération sécurisée du header Authorization

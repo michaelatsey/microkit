@@ -7,8 +7,12 @@ using Microsoft.Extensions.DependencyInjection;
 
 namespace MicroKit.MultiTenancy.Extensions;
 
+/// <summary>Extension methods for configuring the tenant region resolver.</summary>
 public static class TenantRegionResolverExtensions
 {
+    /// <summary>Registers <see cref="ClaimsTenantRegionResolver"/> as the active region resolver.</summary>
+    /// <param name="builder">The multi-tenancy builder.</param>
+    /// <returns>The same <paramref name="builder"/> for chaining.</returns>
     public static MicroKitMultiTenantBuilder WithClaimsTenantRegionResolver(
         this MicroKitMultiTenantBuilder builder)
     {
@@ -16,6 +20,9 @@ public static class TenantRegionResolverExtensions
 
         return builder;
     }
+    /// <summary>Registers <c>DatabaseTenantRegionResolver</c> as the active region resolver.</summary>
+    /// <param name="builder">The multi-tenancy builder.</param>
+    /// <returns>The same <paramref name="builder"/> for chaining.</returns>
     public static MicroKitMultiTenantBuilder WithDatabaseTenantRegionResolver(
         this MicroKitMultiTenantBuilder builder)
     {
@@ -24,6 +31,10 @@ public static class TenantRegionResolverExtensions
         return builder;
     }
 
+    /// <summary>Registers <c>ConfigurationTenantRegionResolver</c> as the active region resolver with optional options.</summary>
+    /// <param name="builder">The multi-tenancy builder.</param>
+    /// <param name="configuration">Optional callback to configure <see cref="TenantRegionOptions"/>.</param>
+    /// <returns>The same <paramref name="builder"/> for chaining.</returns>
     public static MicroKitMultiTenantBuilder WithConfigurationTenantRegionResolver(
         this MicroKitMultiTenantBuilder builder, Action<TenantRegionOptions>? configuration = null)
     {
@@ -38,6 +49,10 @@ public static class TenantRegionResolverExtensions
         return builder;
     }
 
+    /// <summary>Registers a composite region resolver that chains the specified resolver types in order.</summary>
+    /// <param name="builder">The multi-tenancy builder.</param>
+    /// <param name="resolvers">The region resolver types to compose.</param>
+    /// <returns>The same <paramref name="builder"/> for chaining.</returns>
     public static MicroKitMultiTenantBuilder WithCompositeTenantRegionResolver(
         this MicroKitMultiTenantBuilder builder,
         params Type[] resolvers)

@@ -1,6 +1,4 @@
-﻿Voici une version du **README.md** calibrée pour un usage professionnel, mettant l'accent sur les capacités de configuration (Fluent + `appsettings.json`) et les fonctionnalités avancées de la bibliothèque.
-
----
+﻿
 
 # MicroKit.Messaging
 
@@ -126,8 +124,6 @@ Pour éviter les données périmées ou les fuites mémoire dans les workers de 
 * **MessagingModuleValidator** : Vérifie au démarrage que toutes les dépendances critiques (comme un `IOutboxPublisher`) sont correctement enregistrées avant de lancer les Background Workers.
 
 ---
-
-**Voulez-vous que je génère le code du `OutboxOptionsValidator` pour compléter l'implémentation de la validation ?**
 
 # Interceptors
 

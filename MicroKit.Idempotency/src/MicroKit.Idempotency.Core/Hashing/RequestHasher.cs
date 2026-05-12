@@ -5,10 +5,13 @@ using System.Text;
 
 namespace MicroKit.Idempotency.Core.Hashing;
 
+/// <summary>Computes SHA-256 hashes of request objects to detect duplicate submissions.</summary>
 public sealed class RequestHasher : IRequestHasher
 {
     private readonly IMicroKitSerializer _serializer;
 
+    /// <summary>Initializes a new instance.</summary>
+    /// <param name="serializer">Serializer used to normalize requests before hashing.</param>
     public RequestHasher(IMicroKitSerializer serializer)
     {
         _serializer = serializer;

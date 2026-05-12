@@ -8,11 +8,14 @@ public sealed class ClaimsTenantRegionResolver : ITenantRegionResolver
 {
     private readonly IHttpContextAccessor _httpContextAccessor;
 
+    /// <summary>Initializes a new instance.</summary>
+    /// <param name="httpContextAccessor">Provides access to the current HTTP context.</param>
     public ClaimsTenantRegionResolver(IHttpContextAccessor httpContextAccessor)
     {
         _httpContextAccessor = httpContextAccessor;
     }
 
+    /// <inheritdoc/>
     public ValueTask<string> ResolveAsync(
         string tenantIdentifier,
         CancellationToken cancellationToken = default)

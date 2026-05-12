@@ -17,8 +17,9 @@ public interface IOutboxService
     /// <param name="destination">The destination.</param>
     /// <param name="correlationId">The correlation identifier.</param>
     /// <param name="causationId">The causation identifier.</param>
-    /// <param name="cancellationToken">The cancellationToken.</param>
-    /// <returns></returns>
+    /// <param name="idempotencyKey">Optional idempotency key for deduplication.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns>The generated message identifier.</returns>
     Task<string> EnqueueAsync<T>(
         string tenantId,
         string messageId,
@@ -39,8 +40,9 @@ public interface IOutboxService
     /// <param name="destination">The destination.</param>
     /// <param name="correlationId">The correlation identifier.</param>
     /// <param name="causationId">The causation identifier.</param>
-    /// <param name="cancellationToken">The cancellation token.</param>
-    /// <returns></returns>
+    /// <param name="idempotencyKey">Optional idempotency key for deduplication.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns>The generated message identifier.</returns>
     Task<string> EnqueueAsync(
         string messageId,
         string tenantId,

@@ -10,6 +10,8 @@ public sealed class AuthenticationProviderFactory : IAuthenticationProviderFacto
 {
     private readonly FrozenDictionary<AuthenticationScheme, IAuthenticationProvider> _providers;
 
+    /// <summary>Initializes a new factory by indexing the supplied providers by their authentication scheme.</summary>
+    /// <param name="providers">All registered <see cref="IAuthenticationProvider"/> instances.</param>
     public AuthenticationProviderFactory(IEnumerable<IAuthenticationProvider> providers)
     {
         _providers = providers.ToFrozenDictionary(p => p.Scheme);

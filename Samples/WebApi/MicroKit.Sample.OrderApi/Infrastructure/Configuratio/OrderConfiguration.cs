@@ -5,8 +5,10 @@ using System.Text.Json;
 
 namespace MicroKit.Sample.OrderApi.Infrastructure.Configuratio;
 
+/// <summary>EF Core entity type configuration for <see cref="Order"/>.</summary>
 public class OrderConfiguration : IEntityTypeConfiguration<Order>
 {
+    /// <inheritdoc/>
     public void Configure(EntityTypeBuilder<Order> builder)
     {
         builder.ToTable("Orders");

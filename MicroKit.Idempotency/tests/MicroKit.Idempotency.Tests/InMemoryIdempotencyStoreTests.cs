@@ -3,11 +3,13 @@ using MicroKit.Idempotency.Core.Persistence;
 
 namespace MicroKit.Idempotency.Tests;
 
+/// <summary>Unit tests for <see cref="InMemoryIdempotencyStore"/>.</summary>
 public class InMemoryIdempotencyStoreTests
 {
     private readonly InMemoryIdempotencyStore _store = new();
     private const string _tenantId = "tenant-id-456";
 
+    /// <summary>Verifies that a created state can be retrieved by key.</summary>
     [Fact]
     public async Task CreateAndGet_ValidState_ReturnsState()
     {
@@ -25,6 +27,7 @@ public class InMemoryIdempotencyStoreTests
         Assert.Equal(IdempotencyStatus.Processing, result.Status);
     }
 
+    /// <summary>Verifies that creating a duplicate key throws.</summary>
     [Fact]
     public async Task Create_DuplicateKey_ThrowsInvalidOperationException()
     {
@@ -38,6 +41,7 @@ public class InMemoryIdempotencyStoreTests
             _store.CreateAsync(state, null, CancellationToken.None));
     }
 
+    /// <summary>Verifies that completing a state updates status and response.</summary>
     [Fact]
     public async Task Complete_ExistingState_UpdatesStatusAndResponse()
     {
@@ -57,6 +61,7 @@ public class InMemoryIdempotencyStoreTests
         Assert.NotNull(result.CompletedAtUtc);
     }
 
+    /// <summary>Verifies that deleting a state removes it from the store.</summary>
     [Fact]
     public async Task Delete_ExistingState_RemovesState()
     {
@@ -73,6 +78,7 @@ public class InMemoryIdempotencyStoreTests
         Assert.Null(result);
     }
 
+    /// <summary>Verifies that a get on an expired entry returns null and purges the entry.</summary>
     [Fact]
     public async Task Get_ExpiredEntry_ReturnsNullAndRemovesEntry()
     {

@@ -3,9 +3,10 @@ using MicroKit.Sample.OrderApi.Domain.Events;
 
 namespace MicroKit.Sample.OrderApi.Application.CreateOrder;
 
-// Deuxième handler : Stock
+/// <summary>Decrements inventory when an order is created.</summary>
 public class UpdateStockOrderHandler : IDomainEventHandler<OrderCreatedEvent>
 {
+    /// <inheritdoc/>
     public async Task Handle(OrderCreatedEvent notification, CancellationToken ct)
     {
         // Logique de décrémentation du stock

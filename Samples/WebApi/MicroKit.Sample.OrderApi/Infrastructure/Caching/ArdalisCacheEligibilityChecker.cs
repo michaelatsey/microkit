@@ -2,8 +2,10 @@
 
 namespace MicroKit.Sample.OrderApi.Infrastructure.Caching;
 
+/// <summary>Cache eligibility checker that integrates with Ardalis Result types.</summary>
 public class ArdalisCacheEligibilityChecker : ICacheEligibilityChecker
 {
+    /// <inheritdoc/>
     public bool IsEligible(object? result)
     {
         if (result is null) return false;

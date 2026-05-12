@@ -5,6 +5,7 @@ using Microsoft.Extensions.Options;
 
 namespace MicroKit.MultiTenancy.Workers;
 
+/// <summary>Hosted service that runs all registered <see cref="IModuleValidator"/> instances at application startup.</summary>
 public class MultiTenantValidationService(
     IEnumerable<IModuleValidator> validators,
     IOptions<MicroKitMultiTenancyOptions> options) : IHostedService
@@ -12,6 +13,7 @@ public class MultiTenantValidationService(
     private readonly IEnumerable<IModuleValidator> _validators = validators;
     private readonly MicroKitMultiTenancyOptions _options = options.Value;
 
+    /// <inheritdoc/>
     public Task StartAsync(CancellationToken cancellationToken)
     {
         if (!_options.EnableValidationWorker)
@@ -24,5 +26,6 @@ public class MultiTenantValidationService(
         return Task.CompletedTask;
     }
 
+    /// <inheritdoc/>
     public Task StopAsync(CancellationToken cancellationToken) => Task.CompletedTask;
 }

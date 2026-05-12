@@ -1,5 +1,6 @@
 ﻿namespace MicroKit.Idempotency.Abstractions.Models;
 
+/// <summary>Represents the lifecycle state of an idempotency record from creation to terminal outcome.</summary>
 public enum IdempotencyStatus
 {
     /// <summary>

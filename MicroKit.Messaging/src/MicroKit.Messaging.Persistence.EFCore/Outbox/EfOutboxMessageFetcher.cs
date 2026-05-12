@@ -4,6 +4,7 @@ using Microsoft.Extensions.Logging;
 
 namespace MicroKit.Messaging.Persistence.EFCore.Outbox;
 
+/// <summary>EF Core implementation of <see cref="IOutboxMessageFetcher"/> that locks the next batch of outbox messages using the configured strategy.</summary>
 public class EfOutboxMessageFetcher<TContext> : IOutboxMessageFetcher
     where TContext : DbContext
 {
@@ -11,6 +12,10 @@ public class EfOutboxMessageFetcher<TContext> : IOutboxMessageFetcher
     private readonly IDbContextFactory<TContext> _factory;
     private readonly ILogger<EfOutboxMessageFetcher<TContext>> _logger;
 
+    /// <summary>Initializes a new instance.</summary>
+    /// <param name="lockingStrategy">The strategy used to atomically lock outbox messages.</param>
+    /// <param name="logger">Logger instance.</param>
+    /// <param name="factory">Factory for creating short-lived <typeparamref name="TContext"/> instances.</param>
     public EfOutboxMessageFetcher(IOutboxLockingStrategy lockingStrategy, ILogger<EfOutboxMessageFetcher<TContext>> logger, IDbContextFactory<TContext> factory)
     {
         _lockingStrategy = lockingStrategy;
@@ -18,6 +23,7 @@ public class EfOutboxMessageFetcher<TContext> : IOutboxMessageFetcher
         _factory = factory;
     }
 
+    /// <inheritdoc/>
     public async Task<IReadOnlyList<OutboxMessage>> FetchNextBatchAsync(
         string tenantId,
         int batchSize,

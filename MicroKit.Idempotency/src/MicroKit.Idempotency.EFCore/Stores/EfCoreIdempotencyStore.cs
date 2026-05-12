@@ -19,6 +19,10 @@ public class EfCoreIdempotencyStore<TContext> : IIdempotencyStore
 {
     private readonly TContext _dbContext;
     private readonly EFCoreIdempotencyOptions _storeOptions;
+
+    /// <summary>Initializes a new instance.</summary>
+    /// <param name="context">The EF Core <see cref="DbContext"/> that owns the idempotency table.</param>
+    /// <param name="storeOptions">EF Core idempotency store options.</param>
     public EfCoreIdempotencyStore(
         TContext context,
         IOptions<EFCoreIdempotencyOptions> storeOptions)
@@ -27,6 +31,7 @@ public class EfCoreIdempotencyStore<TContext> : IIdempotencyStore
         _storeOptions = storeOptions.Value;
     }
 
+    /// <inheritdoc/>
     public async Task CompleteAsync(string key, string response, IdempotencyStatus status, CancellationToken cancellationToken = default)
     {
         var record = await _dbContext.Set<IdempotencyRecord>()
@@ -46,6 +51,7 @@ public class EfCoreIdempotencyStore<TContext> : IIdempotencyStore
         }
     }
 
+    /// <inheritdoc/>
     public async Task CreateAsync(IdempotencyState state, TimeSpan? ttl, CancellationToken cancellationToken = default)
     {
         var entry = new IdempotencyRecord
@@ -63,6 +69,7 @@ public class EfCoreIdempotencyStore<TContext> : IIdempotencyStore
         await _dbContext.Set<IdempotencyRecord>().AddAsync(entry, cancellationToken);
     }
 
+    /// <inheritdoc/>
     public async Task DeleteAsync(string key, CancellationToken cancellationToken = default)
     {
         var record = await _dbContext.Set<IdempotencyRecord>()
@@ -74,6 +81,7 @@ public class EfCoreIdempotencyStore<TContext> : IIdempotencyStore
         }
     }
 
+    /// <inheritdoc/>
     public async Task FailAsync(string key, IdempotencyStatus status, CancellationToken cancellationToken = default)
     {
         var record = await _dbContext.Set<IdempotencyRecord>()
@@ -85,6 +93,7 @@ public class EfCoreIdempotencyStore<TContext> : IIdempotencyStore
         }
     }
 
+    /// <inheritdoc/>
     public async Task<IdempotencyState?> GetAsync(string key, CancellationToken cancellationToken = default)
     {
         var entry = await _dbContext.Set<IdempotencyRecord>()
@@ -102,6 +111,7 @@ public class EfCoreIdempotencyStore<TContext> : IIdempotencyStore
 
     }
 
+    /// <inheritdoc/>
     public async Task RenewExpirationAsync(string key, TimeSpan ttl, CancellationToken cancellationToken = default)
     {
         var entry = await _dbContext.Set<IdempotencyRecord>()

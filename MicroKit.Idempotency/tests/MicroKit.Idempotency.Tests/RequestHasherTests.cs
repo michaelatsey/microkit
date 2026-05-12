@@ -7,11 +7,13 @@ using Moq;
 
 namespace MicroKit.Idempotency.Tests;
 
+/// <summary>Unit tests for <see cref="RequestHasher"/>.</summary>
 public sealed class RequestHasherTests
 {
     private readonly Mock<IMicroKitSerializer> _serializerMock = new();
     private readonly IRequestHasher _hasher;
 
+    /// <summary>Initializes a new instance.</summary>
     public RequestHasherTests()
     {
         _serializerMock.Setup(s => s.Serialize(It.IsAny<TestCommand>()))
@@ -20,6 +22,7 @@ public sealed class RequestHasherTests
         _hasher = new RequestHasher(_serializerMock.Object);
     }
 
+    /// <summary>Verifies that hashing the same input twice yields identical results.</summary>
     [Fact]
     public void ComputeHash_SameInput_ReturnsSameHash()
     {
@@ -31,6 +34,7 @@ public sealed class RequestHasherTests
         Assert.Equal(hash1, hash2);
     }
 
+    /// <summary>Verifies that different inputs produce different hashes.</summary>
     [Fact]
     public void ComputeHash_DifferentInputs_ReturnsDifferentHashes()
     {
@@ -43,6 +47,7 @@ public sealed class RequestHasherTests
         Assert.NotEqual(hash1, hash2);
     }
 
+    /// <summary>Verifies that the hash output is a valid Base64-encoded SHA-256 value.</summary>
     [Fact]
     public void ComputeHash_ReturnsBase64String()
     {
@@ -54,6 +59,7 @@ public sealed class RequestHasherTests
         Assert.Equal(32, bytes.Length); // SHA-256 = 32 bytes
     }
 
+    /// <summary>Verifies that the normalizer function output is used as the hash input.</summary>
     [Fact]
     public void ComputeHash_WithNormalizer_UsesNormalizerOutput()
     {

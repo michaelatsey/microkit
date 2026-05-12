@@ -6,8 +6,15 @@ using Microsoft.Extensions.DependencyInjection.Extensions;
 
 namespace MicroKit.MultiTenancy.EFCoreStore;
 
+/// <summary>Extension methods for registering the EF Core-backed tenant store.</summary>
 public static class TenantStoreExtensions
 {
+    /// <summary>Registers <see cref="EFCoreTenantStore{TContext}"/> as the active <see cref="ITenantStore"/> and <see cref="ITenantRegistry"/>.</summary>
+    /// <typeparam name="TContext">The <see cref="DbContext"/> that contains the <c>Tenant</c> entity.</typeparam>
+    /// <param name="builder">The multi-tenancy builder.</param>
+    /// <param name="configureOptions">Optional callback to configure database tenant options.</param>
+    /// <param name="services">Optional callback to override service registrations after the defaults are applied.</param>
+    /// <returns>The same <paramref name="builder"/> for chaining.</returns>
     public static MicroKitMultiTenantBuilder WithDatabaseStore<TContext>(
         this MicroKitMultiTenantBuilder builder,
         Action<DatabaseTenantOptions>? configureOptions = null,

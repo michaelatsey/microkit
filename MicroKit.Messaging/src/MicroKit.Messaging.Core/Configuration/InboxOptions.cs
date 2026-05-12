@@ -81,8 +81,9 @@ public class InboxOptions
     /// Nombre de messages supprimés à chaque itération du nettoyage.
     /// Évite de verrouiller la table trop longtemps.
     /// </summary>
+    /// <summary>Gets or sets the maximum number of records deleted per cleanup iteration.</summary>
     public int CleanupBatchSize { get; set; } = 1000;
 
-    // Si vide, on utilise la détection automatique
+    /// <summary>Gets or sets explicit consumer type names to register. When empty, assemblies are scanned automatically.</summary>
     public List<string> CustomConsumers { get; set; } = [];
 }

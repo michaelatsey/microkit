@@ -9,9 +9,14 @@ using Microsoft.Extensions.Options;
 
 namespace MicroKit.MultiTenancy.Extensions;
 
+/// <summary>Extension methods for configuring the tenant store implementation.</summary>
 public static class TenantStoreExtensions
 {
-
+    /// <summary>Registers the pass-through tenant store that resolves tenants from a static list.</summary>
+    /// <param name="builder">The multi-tenancy builder.</param>
+    /// <param name="configureOptions">Optional callback to configure <see cref="PassThroughTenantOptions"/>.</param>
+    /// <param name="configSectionPath">The configuration section path to bind options from.</param>
+    /// <returns>The same <paramref name="builder"/> for chaining.</returns>
     public static MicroKitMultiTenantBuilder WithPassThroughTenantStore(
         this MicroKitMultiTenantBuilder builder,
         Action<PassThroughTenantOptions>? configureOptions = null,
@@ -55,6 +60,11 @@ public static class TenantStoreExtensions
     }
     
 
+    /// <summary>Registers the remote HTTP tenant store.</summary>
+    /// <param name="builder">The multi-tenancy builder.</param>
+    /// <param name="configureOptions">Optional callback to configure <see cref="RemoteTenantOptions"/>.</param>
+    /// <param name="configSectionPath">The configuration section path to bind options from.</param>
+    /// <returns>The same <paramref name="builder"/> for chaining.</returns>
     public static MicroKitMultiTenantBuilder WithRemoteStore(
         this MicroKitMultiTenantBuilder builder,
         Action<RemoteTenantOptions>? configureOptions = null,

@@ -5,6 +5,10 @@ using System.Diagnostics;
 
 namespace MicroKit.Cqrs.MediatR.Behaviors;
 
+/// <summary>MediatR pipeline behavior that logs request handling time and outcome, including correlation and tenant context.</summary>
+/// <param name="logger">Logger for this behavior.</param>
+/// <param name="correlationContext">Provides the current correlation ID.</param>
+/// <param name="tenantContext">Provides the current tenant ID.</param>
 public sealed class LoggingBehavior<TRequest, TResponse>(
     ILogger<LoggingBehavior<TRequest, TResponse>> logger,
     ICorrelationContext correlationContext,
@@ -12,6 +16,7 @@ public sealed class LoggingBehavior<TRequest, TResponse>(
     : IPipelineBehavior<TRequest, TResponse>
 where TRequest : IRequest<TResponse>
 {
+    /// <inheritdoc/>
     public async Task<TResponse> Handle(TRequest request, RequestHandlerDelegate<TResponse> next, CancellationToken ct)
     {
         var requestName = typeof(TRequest).Name;

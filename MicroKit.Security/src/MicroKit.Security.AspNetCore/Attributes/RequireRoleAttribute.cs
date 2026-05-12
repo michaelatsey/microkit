@@ -10,11 +10,15 @@ using System.Text;
 
 namespace MicroKit.Security.AspNetCore.Attributes;
 
+/// <summary>Requires the caller to hold at least one of the specified roles.</summary>
 [AttributeUsage(AttributeTargets.Class | AttributeTargets.Method, AllowMultiple = true)]
 public sealed class RequireRoleAttribute(params string[] roles)
     : Attribute, IAsyncAuthorizationFilter
 {
+    /// <summary>Gets the roles that grant access.</summary>
     public string[] Roles { get; } = roles;
+    /// <summary>Evaluates role requirements and returns 401/403 if the caller does not qualify.</summary>
+    /// <param name="context">The authorization filter context.</param>
     public async Task OnAuthorizationAsync(AuthorizationFilterContext context)
     {
         var authService = context.HttpContext.RequestServices.GetRequiredService<IAuthorizationService>();

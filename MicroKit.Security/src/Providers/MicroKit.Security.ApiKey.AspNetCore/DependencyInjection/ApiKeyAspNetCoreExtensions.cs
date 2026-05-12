@@ -15,8 +15,15 @@ using Microsoft.Extensions.DependencyInjection;
 using System.ComponentModel.DataAnnotations;
 namespace MicroKit.Security.ApiKey.AspNetCore.DependencyInjection;
 
+/// <summary>Extension methods for registering API key authentication with ASP.NET Core.</summary>
 public static class ApiKeyAspNetCoreExtensions
 {
+    /// <summary>Registers API key authentication using the default in-memory store.</summary>
+    /// <param name="builder">The security builder.</param>
+    /// <param name="configuration">The application configuration used to bind API key options.</param>
+    /// <param name="optionsConfigure">Optional callback to configure <see cref="ApiKeyOptions"/>.</param>
+    /// <param name="useCache">When <see langword="true"/>, enables caching for authentication results.</param>
+    /// <returns>The same <paramref name="builder"/> for chaining.</returns>
     public static SecurityBuilder AddApiKeyAspNetCore(
         this SecurityBuilder builder,
         IConfiguration configuration,
@@ -42,6 +49,13 @@ public static class ApiKeyAspNetCoreExtensions
         return builder.AddProvider<ApiKeyAuthenticationProvider, ApiKeyOptions>(scheme,enableCache: useCache);
     }
 
+    /// <summary>Registers API key authentication using a custom <typeparamref name="TStore"/> implementation.</summary>
+    /// <typeparam name="TStore">The custom <see cref="IApiKeyStore"/> implementation.</typeparam>
+    /// <param name="builder">The security builder.</param>
+    /// <param name="configuration">The application configuration used to bind API key options.</param>
+    /// <param name="optionsConfigure">Optional callback to configure <see cref="ApiKeyOptions"/>.</param>
+    /// <param name="useCache">When <see langword="true"/>, enables caching for authentication results.</param>
+    /// <returns>The same <paramref name="builder"/> for chaining.</returns>
     public static SecurityBuilder AddApiKeyAspNetCore<TStore>(
         this SecurityBuilder builder,
         IConfiguration configuration,

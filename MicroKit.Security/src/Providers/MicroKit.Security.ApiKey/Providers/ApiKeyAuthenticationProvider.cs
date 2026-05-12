@@ -5,13 +5,15 @@ using MicroKit.Security.Core.Providers;
 using Microsoft.Extensions.Logging;
 
 namespace MicroKit.Security.ApiKey.Providers;
+/// <summary>Authentication provider that validates API keys via <see cref="IApiKeyValidator"/>.</summary>
 public sealed class ApiKeyAuthenticationProvider(
     IApiKeyValidator validator,
     ILogger<ApiKeyAuthenticationProvider> logger) : IAuthenticationProvider
 {
-
+    /// <inheritdoc/>
     public AuthenticationScheme Scheme => AuthenticationScheme.ApiKey;
 
+    /// <inheritdoc/>
     public async ValueTask<AuthenticationResult> AuthenticateAsync(
         ReadOnlyMemory<char> credentials,
         CancellationToken cancellationToken = default)

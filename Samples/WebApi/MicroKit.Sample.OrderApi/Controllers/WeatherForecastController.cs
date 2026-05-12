@@ -2,6 +2,7 @@ using Microsoft.AspNetCore.Mvc;
 
 namespace MicroKit.Sample.OrderApi.Controllers
 {
+    /// <summary>Sample controller returning weather forecast data.</summary>
     [ApiController]
     [Route("[controller]")]
     public class WeatherForecastController : ControllerBase
@@ -11,6 +12,8 @@ namespace MicroKit.Sample.OrderApi.Controllers
             "Freezing", "Bracing", "Chilly", "Cool", "Mild", "Warm", "Balmy", "Hot", "Sweltering", "Scorching"
         ];
 
+        /// <summary>Returns a sample weather forecast.</summary>
+        /// <returns>A collection of weather forecasts.</returns>
         [HttpGet(Name = "GetWeatherForecast")]
         public IEnumerable<WeatherForecast> Get()
         {

@@ -3,10 +3,13 @@ using MicroKit.Cqrs.Abstractions.Queries;
 
 namespace MicroKit.Cqrs.MediatR.Queries;
 
+/// <summary>MediatR-backed implementation of <see cref="IQueryBus"/>.</summary>
 public sealed class MediatRQueryBus : IQueryBus
 {
     private readonly ISender _mediator;
 
+    /// <summary>Initializes a new instance.</summary>
+    /// <param name="mediator">The MediatR sender used to dispatch queries.</param>
     public MediatRQueryBus(ISender mediator) => _mediator = mediator;
 
     /// <inheritdoc/>

@@ -8,6 +8,9 @@ public sealed class HeaderResolutionStrategy : IHttpTenantResolutionStrategy
     private readonly string _headerName;
     private readonly IHttpContextAccessor _httpContextAccessor;
 
+    /// <summary>Initializes a new instance.</summary>
+    /// <param name="headerName">The HTTP request header to read the tenant identifier from.</param>
+    /// <param name="httpContextAccessor">Provides access to the current HTTP context.</param>
     public HeaderResolutionStrategy(string headerName, IHttpContextAccessor httpContextAccessor)
     {
         _headerName = headerName;

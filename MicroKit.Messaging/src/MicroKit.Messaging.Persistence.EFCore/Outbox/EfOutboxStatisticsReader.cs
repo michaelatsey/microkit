@@ -4,14 +4,18 @@ using Microsoft.EntityFrameworkCore;
 
 namespace MicroKit.Messaging.Persistence.EFCore.Outbox;
 
+/// <summary>EF Core implementation of <see cref="IOutboxStatisticsReader"/> that queries outbox message counts per status.</summary>
+/// <param name="context">The EF Core <see cref="DbContext"/> containing the outbox table.</param>
 public sealed class EfOutboxStatisticsReader<TContext>(TContext context) : IOutboxStatisticsReader
     where TContext : DbContext
 {
+    /// <inheritdoc/>
     public async Task<OutboxStatistics> GetStatisticsAsync(CancellationToken ct = default)
     {
         return await ExecuteStatsQueryAsync(null, ct);
     }
 
+    /// <inheritdoc/>
     public async Task<OutboxStatistics> GetStatisticsByTenantAsync(string tenantId, CancellationToken ct = default)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(tenantId);

@@ -3,10 +3,13 @@ using MicroKit.Cqrs.Abstractions.Commands;
 
 namespace MicroKit.Cqrs.MediatR.Commands;
 
+/// <summary>MediatR-backed implementation of <see cref="ICommandBus"/>.</summary>
 public sealed class MediatRCommandBus : ICommandBus
 {
     private readonly ISender _mediator;
 
+    /// <summary>Initializes a new instance.</summary>
+    /// <param name="mediator">The MediatR sender used to dispatch commands.</param>
     public MediatRCommandBus(ISender mediator) => _mediator = mediator;
 
     /// <inheritdoc/>

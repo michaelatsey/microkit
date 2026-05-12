@@ -3,8 +3,10 @@ using Microsoft.EntityFrameworkCore.Design;
 
 namespace MicroKit.Sample.OrderApi.Infrastructure;
 
+/// <summary>Design-time factory for creating <see cref="ApplicationDbContext"/> during EF Core migrations.</summary>
 public class DesignTimeDbContextFactory : IDesignTimeDbContextFactory<ApplicationDbContext>
 {
+    /// <inheritdoc/>
     public ApplicationDbContext CreateDbContext(string[] args)
     {
         var environment = Environment.GetEnvironmentVariable("ASPNETCORE_ENVIRONMENT") ?? "Development";

@@ -2,8 +2,12 @@
 
 namespace MicroKit.Messaging.Persistence.EFCore.Extensions;
 
+/// <summary>Extension methods for detecting specific EF Core database update exception types.</summary>
 public static class DbUpdateExceptionExtensions
 {
+    /// <summary>Returns <see langword="true"/> when the exception represents a unique constraint violation on SQL Server or PostgreSQL.</summary>
+    /// <param name="ex">The <see cref="DbUpdateException"/> to inspect.</param>
+    /// <returns><see langword="true"/> if this is a unique/duplicate key violation; otherwise <see langword="false"/>.</returns>
     public static bool IsUniqueConstraintViolation(this DbUpdateException ex)
     {
         // PostgreSQL (Npgsql)

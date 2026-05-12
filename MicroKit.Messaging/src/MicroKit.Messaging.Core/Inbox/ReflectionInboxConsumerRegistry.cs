@@ -3,10 +3,13 @@ using System.Reflection;
 
 namespace MicroKit.Messaging.Core.Inbox;
 
+/// <summary>Discovers inbox consumer names by scanning assemblies for <see cref="IInboxHandler{T}"/> implementations at startup.</summary>
 public class ReflectionInboxConsumerRegistry : IInboxConsumerRegistry
 {
     private readonly List<string> _consumerNames;
 
+    /// <summary>Initializes a new instance and scans the specified assemblies for handler types.</summary>
+    /// <param name="assembliesToScan">Assemblies to scan.</param>
     public ReflectionInboxConsumerRegistry(IEnumerable<Assembly> assembliesToScan)
     {
         // On scanne les assemblies pour trouver les implémentations de IInboxHandler<>
@@ -28,5 +31,6 @@ public class ReflectionInboxConsumerRegistry : IInboxConsumerRegistry
         return messageType.Name.ToLowerInvariant();
     }
 
+    /// <inheritdoc/>
     public IReadOnlyList<string> GetConsumerNames() => _consumerNames;
 }

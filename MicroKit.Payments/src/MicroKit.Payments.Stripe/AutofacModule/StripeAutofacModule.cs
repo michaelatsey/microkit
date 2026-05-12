@@ -13,15 +13,19 @@ using Stripe;
 
 namespace MicroKit.Payments.Stripe.AutofacModule;
 
+/// <summary>Autofac module that registers all Stripe payment services.</summary>
 public sealed class StripeAutofacModule : Module
 {
     private readonly IConfiguration _configuration;
 
+    /// <summary>Initializes a new instance with the application configuration.</summary>
+    /// <param name="configuration">The application configuration used to bind <see cref="StripeOptions"/>.</param>
     public StripeAutofacModule(IConfiguration configuration)
     {
         _configuration = configuration;
     }
 
+    /// <inheritdoc/>
     protected override void Load(ContainerBuilder builder)
     {
         // 1️⃣ Bind StripeOptions via Microsoft Options

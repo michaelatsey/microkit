@@ -9,6 +9,7 @@ using System.Text;
 
 namespace MicroKit.Security.ApiKey.Validation;
 
+/// <summary>Default <see cref="IApiKeyValidator"/> that validates keys against the configured <see cref="IApiKeyStore"/> with optional hashing and expiry grace-period support.</summary>
 public sealed class DefaultApiKeyValidator(
     IApiKeyStore store,
     IOptions<ApiKeyOptions> options,
@@ -20,10 +21,12 @@ public sealed class DefaultApiKeyValidator(
     #region IApiKeyValidator Implementation
 
     // Surcharge String : Délègue au Span (zéro allocation supplémentaire)
+    /// <inheritdoc/>
     public ValueTask<ApiKeyValidationResult> ValidateAsync(string apiKey, CancellationToken ct = default)
         => ValidateAsync(apiKey.AsSpan(), ct);
 
     // Surcharge UTF-8 : Convertit en Char via un buffer de stack (Performance maximale)
+    /// <inheritdoc/>
     public ValueTask<ApiKeyValidationResult> ValidateAsync(ReadOnlySpan<byte> apiKeyUtf8, CancellationToken ct = default)
     {
         if (apiKeyUtf8.Length > 256) // Sécurité contre stack overflow
@@ -37,6 +40,7 @@ public sealed class DefaultApiKeyValidator(
     }
 
     // MÉTHODE PRINCIPALE (Logic Engine)
+    /// <inheritdoc/>
     public  ValueTask<ApiKeyValidationResult> ValidateAsync(ReadOnlySpan<char> apiKey, CancellationToken ct = default)
     {
         // On effectue les validations synchrones sur le Span ici

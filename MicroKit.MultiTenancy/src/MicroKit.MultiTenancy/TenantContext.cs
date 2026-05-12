@@ -2,12 +2,16 @@
 
 namespace MicroKit.MultiTenancy;
 
+/// <summary>Scoped tenant context that holds the resolved tenant for the current request.</summary>
 public class TenantContext : ITenantContext, ITenantContextSetter
 {
+    /// <inheritdoc/>
     public ITenant? Tenant { get; private set; }
 
+    /// <inheritdoc/>
     public bool IsResolved { get; private set; }
 
+    /// <inheritdoc/>
     public void SetTenant(ITenant tenant)
     {
         if (IsResolved)
@@ -18,6 +22,7 @@ public class TenantContext : ITenantContext, ITenantContextSetter
         IsResolved = true;
     }
 
+    /// <inheritdoc/>
     public void EnsureResolved()
     {
         if (!IsResolved)

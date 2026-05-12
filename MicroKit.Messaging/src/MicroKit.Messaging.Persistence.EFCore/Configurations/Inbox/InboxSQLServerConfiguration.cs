@@ -7,9 +7,12 @@ using Microsoft.EntityFrameworkCore.Metadata.Builders;
     namespace MicroKit.Messaging.Persistence.EFCore.Configurations.Inbox;
 
 
-    public static class InboxSQLServerConfiguration 
+    /// <summary>SQL Server-specific EF Core entity type configuration extensions for inbox entities.</summary>
+    public static class InboxSQLServerConfiguration
     {
-
+        /// <summary>Applies SQL Server-specific column types and indexes to the inbox message entity.</summary>
+        /// <param name="builder">The entity type builder for <see cref="InboxMessage"/>.</param>
+        /// <returns>The same <paramref name="builder"/> for chaining.</returns>
         public static EntityTypeBuilder<InboxMessage> ConfigureSQLServerInboxMessage(this EntityTypeBuilder<InboxMessage> builder)
         {
 
@@ -73,6 +76,9 @@ using Microsoft.EntityFrameworkCore.Metadata.Builders;
             return builder;
         }
 
+        /// <summary>Applies SQL Server-specific column types and indexes to the inbox state entity.</summary>
+        /// <param name="builder">The entity type builder for <see cref="InboxState"/>.</param>
+        /// <returns>The same <paramref name="builder"/> for chaining.</returns>
         public static EntityTypeBuilder<InboxState> ConfigureSQLServerInboxState(this EntityTypeBuilder<InboxState> builder)
         {
             builder.ToTable("MicroKit_InboxStates", "messaging");

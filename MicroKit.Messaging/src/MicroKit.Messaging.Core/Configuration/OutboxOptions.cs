@@ -67,6 +67,7 @@ public class OutboxOptions
     /// </value>
     public TimeSpan MessageExpiration { get; set; } = TimeSpan.FromDays(7);
 
+    /// <summary>Gets or sets whether the cleanup background worker is enabled.</summary>
     public bool CleanupEnabled { get; set; } = true;
 
     /// <summary>

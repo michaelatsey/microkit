@@ -4,6 +4,7 @@ using System.Text;
 
 namespace MicroKit.Idempotency.Abstractions.Contracts;
 
+/// <summary>Marks a request as idempotent, carrying the key and optional expiry for deduplication.</summary>
 public interface IIdempotentRequest
 {
     /// <summary>

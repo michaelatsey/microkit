@@ -2,10 +2,7 @@
 
 namespace MicroKit.Domain.ValueObjects.Exceptions;
 
-/// <summary>
-/// 
-/// </summary>
-/// <seealso cref="DomainException" />
+/// <summary>Thrown when an arithmetic operation involves monetary amounts with mismatched currencies.</summary>
 public class CurrencyMismatchException : DomainException
 {
     /// <summary>
@@ -44,10 +41,7 @@ public class CurrencyMismatchException : DomainException
     }
 }
 
-/// <summary>
-/// 
-/// </summary>
-/// <seealso cref="DomainException" />
+/// <summary>Thrown when a currency code is not recognized or supported.</summary>
 public class UnsupportedCurrencyException : DomainException
 {
     /// <summary>
@@ -69,10 +63,7 @@ public class UnsupportedCurrencyException : DomainException
     }
 }
 
-/// <summary>
-/// 
-/// </summary>
-/// <seealso cref="DomainException" />
+/// <summary>Thrown when a monetary operation cannot be performed (e.g. division by zero).</summary>
 public class InvalidMoneyOperationException : DomainException
 {
     /// <summary>

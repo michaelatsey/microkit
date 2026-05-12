@@ -44,9 +44,13 @@ public static class ServiceCollectionExtensions
         return builder;
     }
 
+    /// <summary>Adds MicroKit.Security ASP.NET Core integration with configuration binding.</summary>
+    /// <param name="services">The service collection.</param>
+    /// <param name="configuration">Application configuration used to bind <see cref="SecurityOptions"/>.</param>
+    /// <param name="configure">Optional additional configuration delegate.</param>
     public static SecurityBuilder AddMicroKitSecurity(
         this IServiceCollection services,
-        IConfiguration configuration, 
+        IConfiguration configuration,
         Action<SecurityOptions>? configure = null)
     {
 

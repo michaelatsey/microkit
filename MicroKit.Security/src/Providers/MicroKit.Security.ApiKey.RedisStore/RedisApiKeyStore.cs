@@ -8,6 +8,7 @@ using MicroKit.Security.ApiKey.Models;
 
 namespace MicroKit.Security.ApiKey.RedisStore;
 
+/// <summary>Redis-backed implementation of <see cref="IApiKeyStore"/> using StackExchange.Redis.</summary>
 public sealed class RedisApiKeyStore : IApiKeyStore
 {
     private readonly IDatabase _db;
@@ -24,6 +25,8 @@ public sealed class RedisApiKeyStore : IApiKeyStore
         PropertyNameCaseInsensitive = true,
         DefaultIgnoreCondition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull
     };
+    /// <summary>Initializes a new instance.</summary>
+    /// <param name="redis">The Redis connection multiplexer.</param>
     public RedisApiKeyStore(IConnectionMultiplexer redis)
     {
         _db = redis.GetDatabase();

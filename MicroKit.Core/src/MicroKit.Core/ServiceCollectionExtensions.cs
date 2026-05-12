@@ -1,4 +1,4 @@
-﻿using MicroKit.Abstractions.Configuration;
+using MicroKit.Abstractions.Configuration;
 using MicroKit.Abstractions.Serialization;
 using MicroKit.Abstractions.Services;
 using MicroKit.Core.Serialization;
@@ -8,21 +8,27 @@ using Microsoft.Extensions.DependencyInjection.Extensions;
 
 namespace MicroKit.Core;
 
+/// <summary>Extension methods for registering core MicroKit services into an <see cref="IServiceCollection"/>.</summary>
 public static class ServiceCollectionExtensions
 {
-    public static MicroKitBuilder AddMicroKit(this IServiceCollection services, Action<MicroKitOptions>? configure = null )
+    /// <summary>
+    /// Registers the core MicroKit infrastructure: default serializer, date-time provider,
+    /// and returns a <see cref="MicroKitBuilder"/> for further configuration.
+    /// </summary>
+    /// <param name="services">The DI service collection.</param>
+    /// <param name="configure">Optional delegate to configure <see cref="MicroKitOptions"/>.</param>
+    /// <returns>A <see cref="MicroKitBuilder"/> for fluent chaining.</returns>
+    public static MicroKitBuilder AddMicroKit(this IServiceCollection services, Action<MicroKitOptions>? configure = null)
     {
         services
             .AddOptions<MicroKitOptions>()
             .ValidateOnStart();
 
-        // Register the default serializer. This can be overridden by the user if they want to use a different serializer.
         services.TryAddSingleton<IDateTimeProvider, DateTimeProvider>();
         services.TryAddSingleton<IMicroKitSerializer, SystemTextJsonSerializer>();
-        
+
         var builder = new MicroKitBuilder(services);
         builder.Configure(configure);
-        
 
         return builder;
     }
