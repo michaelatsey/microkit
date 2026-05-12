@@ -5,6 +5,10 @@ using Microsoft.Extensions.DependencyInjection.Extensions;
 
 namespace MicroKit.Caching.Distributed;
 
+/// <summary>
+/// Extension methods for registering <see cref="DistributedCacheService"/> via Microsoft DI or
+/// the MicroKit builder.
+/// </summary>
 public static class MicroKitCachingBuilderExtensions
 {
     /// <summary>

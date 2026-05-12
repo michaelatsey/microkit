@@ -13,6 +13,11 @@ public sealed class DistributedCacheService : ICacheService
     private readonly IDistributedCache _distributedCache;
     private readonly JsonSerializerOptions _serializerOptions;
 
+    /// <summary>
+    /// Initialises a new instance of <see cref="DistributedCacheService"/>.
+    /// </summary>
+    /// <param name="distributedCache">The underlying distributed cache provider.</param>
+    /// <param name="options">Configuration options for serialisation and cache behaviour.</param>
     public DistributedCacheService(
         IDistributedCache distributedCache,
         IOptions<DistributedCacheOptions> options)
@@ -21,12 +26,14 @@ public sealed class DistributedCacheService : ICacheService
         _serializerOptions = options.Value.SerializerOptions;
     }
 
+    /// <inheritdoc/>
     public async Task<T?> GetAsync<T>(string key, CancellationToken cancellationToken = default)
     {
         var json = await _distributedCache.GetStringAsync(key, cancellationToken);
         return json is null ? default : JsonSerializer.Deserialize<T>(json, _serializerOptions);
     }
 
+    /// <inheritdoc/>
     public async Task SetAsync<T>(string key, T value, CacheOptions? options = null, CancellationToken cancellationToken = default) where T : class
     {
         var json = JsonSerializer.Serialize(value, _serializerOptions);
@@ -46,6 +53,7 @@ public sealed class DistributedCacheService : ICacheService
         await _distributedCache.SetStringAsync(key, json, distributedOptions, cancellationToken);
     }
 
+    /// <inheritdoc/>
     public async Task RemoveAsync(string key, CancellationToken cancellationToken = default)
     {
         await _distributedCache.RemoveAsync(key, cancellationToken);

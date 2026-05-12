@@ -4,7 +4,6 @@ using MicroKit.Domain.Contracts;
 namespace MicroKit.Domain.Abstractions;
 
 /// <summary>Base class for all entities. Identity is defined by <see cref="GetKeys"/>.</summary>
-[Serializable]
 public abstract class Entity : IEntity
 {
     /// <summary>
@@ -16,7 +15,6 @@ public abstract class Entity : IEntity
 
 /// <summary>Base class for entities with a strongly-typed identity key.</summary>
 /// <typeparam name="TKey">The type of the primary key.</typeparam>
-[Serializable]
 public abstract class Entity<TKey> : Entity, IEntity<TKey>
     where TKey : notnull
 {

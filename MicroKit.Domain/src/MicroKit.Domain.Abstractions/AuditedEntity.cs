@@ -2,7 +2,7 @@
 
 namespace MicroKit.Domain.Abstractions;
 
-[Serializable]
+/// <summary>Base class for entities with audit fields (creator, creation time, last modification).</summary>
 public abstract class AuditedEntity : IAuditedEntity
 {
     public DateTimeOffset CreatedOnUtc { get; private set; } = DateTimeOffset.UtcNow;
@@ -28,7 +28,8 @@ public abstract class AuditedEntity : IAuditedEntity
     }
 }
 
-[Serializable]
+/// <summary>Base class for entities with a strongly-typed key and audit fields.</summary>
+/// <typeparam name="TKey">The type of the primary key.</typeparam>
 public abstract class AuditedEntity<TKey>
     : Entity<TKey>, IAuditedEntity
     where TKey : notnull

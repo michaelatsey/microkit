@@ -7,7 +7,7 @@ namespace MicroKit.Cqrs.MediatR.Caching.Pipelines;
 
 public class CacheInvalidationBehavior<TRequest, TResponse>
     : IPipelineBehavior<TRequest, TResponse>
-    where TRequest : ICacheInvalidatorRequest<TRequest, TResponse> // S'applique uniquement aux requêtes marquées
+    where TRequest : notnull, IRequest<TResponse>, ICacheInvalidatorRequest<TRequest, TResponse>
 {
     private readonly ICacheService _cache;
     private readonly ICacheKeyService _keyService; // <--- Stratégie de clé

@@ -8,7 +8,6 @@ namespace MicroKit.Domain.Abstractions;
 /// optimistic concurrency versioning, and row-version support. Extend
 /// <see cref="AggregateRootBase{TKey}"/> when a typed identity is needed.
 /// </summary>
-[Serializable]
 public abstract class AggregateRootBase
     : Entity,
     IAggregateRoot,
@@ -44,7 +43,6 @@ public abstract class AggregateRootBase
 /// live in exactly one place.
 /// </summary>
 /// <typeparam name="TKey">The type of the aggregate identity key.</typeparam>
-[Serializable]
 public abstract class AggregateRootBase<TKey>
     : AggregateRootBase,
     IAggregateRoot<TKey>

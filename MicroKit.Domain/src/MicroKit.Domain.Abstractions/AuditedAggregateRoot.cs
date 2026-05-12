@@ -6,7 +6,6 @@ namespace MicroKit.Domain.Abstractions;
 /// Represents an aggregate root that is audited.
 /// </summary>
 /// <seealso cref="IAuditedEntity" />
-[Serializable]
 public abstract class AuditedAggregateRoot : AggregateRoot, IAuditedEntity
 {
     /// <summary>
@@ -44,7 +43,6 @@ public abstract class AuditedAggregateRoot : AggregateRoot, IAuditedEntity
 /// </summary>
 /// <typeparam name="TKey">The type of the key.</typeparam>
 /// <seealso cref="IAuditedEntity" />
-[Serializable]
 public abstract class AuditedAggregateRoot<TKey>
     : AggregateRoot<TKey>, IAuditedEntity
     where TKey : notnull

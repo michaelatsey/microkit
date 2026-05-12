@@ -5,7 +5,6 @@ namespace MicroKit.Domain.Abstractions;
 /// Delegates all domain event management and versioning to <see cref="AggregateRootBase"/>.
 /// </summary>
 /// <seealso cref="AggregateRootBase" />
-[Serializable]
 public abstract class AggregateRoot : AggregateRootBase
 {
     /// <summary>
@@ -20,7 +19,6 @@ public abstract class AggregateRoot : AggregateRootBase
 /// </summary>
 /// <typeparam name="TKey">The type of the primary key.</typeparam>
 /// <seealso cref="AggregateRootBase{TKey}" />
-[Serializable]
 public abstract class AggregateRoot<TKey> : AggregateRootBase<TKey>
     where TKey : notnull
 {
