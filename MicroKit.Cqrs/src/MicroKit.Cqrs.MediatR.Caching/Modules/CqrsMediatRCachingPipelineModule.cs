@@ -4,15 +4,15 @@ using MicroKit.Cqrs.MediatR.Caching.Pipelines;
 
 namespace MicroKit.Cqrs.MediatR.Caching.Modules;
 
-public class CqrsMediatRChachingPipelineModule : Module
+public class CqrsMediatRCachingPipelineModule : Module
 {
     private readonly IEnumerable<Type> _middlePipelines;
 
     /// <summary>
-    /// Initializes a new instance of the <see cref="CqrsMediatRChachingPipelineModule"/> class.
+    /// Initializes a new instance of the <see cref="CqrsMediatRCachingPipelineModule"/> class.
     /// </summary>
     /// <param name="customBehaviors">The custom behaviors.</param>
-    public CqrsMediatRChachingPipelineModule(IEnumerable<Type>? customBehaviors = null)
+    public CqrsMediatRCachingPipelineModule(IEnumerable<Type>? customBehaviors = null)
     {
         _middlePipelines = customBehaviors ?? [];
     }

@@ -47,7 +47,7 @@ internal sealed class EfInboxCleanupService<TContext>(
         Console.WriteLine(states.ToQueryString());
 #endif
 
-        // 1️⃣ Suppression batchée des InboxStates
+        // Step 1: Batch-delete matched InboxState records.
         var deletedStates =
             await states.ExecuteDeleteAsync(cancellationToken);
 

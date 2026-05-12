@@ -2,7 +2,6 @@
 using MicroKit.Messaging.Abstractions.Common;
 using MicroKit.Messaging.Abstractions.Outbox;
 using Microsoft.Extensions.Logging;
-using System.Text.Json;
 
 namespace MicroKit.Messaging.Core.Outbox;
 
@@ -128,7 +127,7 @@ public class OutboxService: IOutboxService
             BrokerTopic = destination.BrokerTopic,
             PartitionKey = destination.PartitionKey,
             Metadata = destination.Metadata != null
-            ? JsonSerializer.Serialize(destination.Metadata)
+            ? _serializer.Serialize(destination.Metadata)
             : null,
 
             CorrelationId = correlationId,

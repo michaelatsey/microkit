@@ -1,14 +1,9 @@
-﻿// -----------------------------------------------------------------------
-// <copyright file="ValueObject.cs" company="Coreal">
-// Copyright (c) Coreal. All rights reserved.All rights reserved.
-// Licensed under the MIT license. See LICENSE file in the project root for full license information.
-// </copyright>
-// -----------------------------------------------------------------------
-
 namespace MicroKit.Domain.Abstractions;
 
 /// <summary>
-/// 
+/// Base class for domain value objects. Equality is determined by value, not identity.
+/// Subclasses must implement <see cref="GetAtomicValues"/> to enumerate all constituent
+/// values that define equality.
 /// </summary>
 public abstract class ValueObject
 {
@@ -39,7 +34,7 @@ public abstract class ValueObject
     }
 
     /// <summary>
-    /// Gets the atomic values.
+    /// Returns the ordered sequence of constituent values that define equality for this value object.
     /// </summary>
     /// <returns></returns>
     protected abstract IEnumerable<object> GetAtomicValues();
@@ -85,14 +80,5 @@ public abstract class ValueObject
         return GetAtomicValues()
             .Select(x => x.GetHashCode())
             .Aggregate((x, y) => x ^ y);
-    }
-
-    /// <summary>
-    /// Gets the copy.
-    /// </summary>
-    /// <returns></returns>
-    public ValueObject? GetCopy()
-    {
-        return MemberwiseClone() as ValueObject;
     }
 }

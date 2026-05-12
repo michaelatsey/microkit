@@ -3,7 +3,8 @@
 namespace MicroKit.Domain.Abstractions;
 
 /// <summary>
-/// 
+/// Base class for rich enumeration types that extend the standard <see langword="enum"/> with
+/// additional behaviour such as display names, descriptions, and type-safe lookup by id or name.
 /// </summary>
 /// <seealso cref="IComparable" />
 public abstract class Enumeration : IComparable
@@ -28,7 +29,7 @@ public abstract class Enumeration : IComparable
     /// <value>
     /// The description.
     /// </value>
-    public string? Description { get; set; }
+    public string? Description { get; private set; }
 
     /// <summary>
     /// Gets the identifier.

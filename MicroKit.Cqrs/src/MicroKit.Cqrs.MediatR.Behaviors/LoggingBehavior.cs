@@ -16,13 +16,9 @@ where TRequest : IRequest<TResponse>
     {
         var requestName = typeof(TRequest).Name;
 
-        // On utilise des "Scopes" de log. Serilog les transforme en propriétés JSON.
-        using (logger.BeginScope(new Dictionary<string, object>
-        {
-            ["CorrelationId"] = correlationContext.CorrelationId,
-            ["TenantId"] = tenantContext.TenantId ?? string.Empty ,
-            ["RequestName"] = requestName
-        }))
+        using (logger.BeginScope(
+            "RequestName={RequestName} CorrelationId={CorrelationId} TenantId={TenantId}",
+            requestName, correlationContext.CorrelationId, tenantContext.TenantId ?? string.Empty))
         {
             if (logger.IsEnabled(LogLevel.Information))
             {

@@ -51,13 +51,4 @@ public sealed class ValueObjectTests
         Assert.NotEqual(a.GetHashCode(), b.GetHashCode());
     }
 
-    [Fact]
-    public void GetCopy_ReturnsDifferentInstance_WithSameValues()
-    {
-        var original = new Address("123 Main St", "Springfield");
-        var copy = original.GetCopy() as Address;
-        Assert.NotNull(copy);
-        Assert.NotSame(original, copy);
-        Assert.Equal(original, copy);
-    }
 }

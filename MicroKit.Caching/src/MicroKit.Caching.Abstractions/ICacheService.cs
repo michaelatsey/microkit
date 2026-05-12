@@ -11,7 +11,7 @@ public interface ICacheService
     /// <typeparam name="T">The type of the cached value</typeparam>
     /// <param name="key">The cache key</param>
     /// <param name="cancellationToken">Cancellation token</param>
-    Task<T?> GetAsync<T>(string key, CancellationToken cancellationToken = default) where T : class;
+    Task<T?> GetAsync<T>(string key, CancellationToken cancellationToken = default);
 
     /// <summary>
     /// Stores a value in the cache.

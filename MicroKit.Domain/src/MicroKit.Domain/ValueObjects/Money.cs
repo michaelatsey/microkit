@@ -1,6 +1,5 @@
 ﻿using MicroKit.Domain.Abstractions;
 using MicroKit.Domain.ValueObjects.Exceptions;
-using System.Collections.Concurrent;
 using System.Globalization;
 
 namespace MicroKit.Domain.ValueObjects;
@@ -11,8 +10,23 @@ namespace MicroKit.Domain.ValueObjects;
 /// <seealso cref="IEquatable&lt;Money&gt;" />
 public sealed class Money : ValueObject
 {
-    // Cache statique pour les formats de devises (Performance)
-    private static readonly ConcurrentDictionary<string, NumberFormatInfo> CurrencyCache = new();
+    // Built once at class initialisation — O(n) culture scan happens exactly once for the process lifetime.
+    private static readonly IReadOnlyDictionary<string, NumberFormatInfo> CurrencyFormatCache = BuildCurrencyFormatCache();
+
+    private static IReadOnlyDictionary<string, NumberFormatInfo> BuildCurrencyFormatCache()
+    {
+        var result = new Dictionary<string, NumberFormatInfo>(StringComparer.OrdinalIgnoreCase);
+        foreach (var culture in CultureInfo.GetCultures(CultureTypes.SpecificCultures))
+        {
+            try
+            {
+                var region = new RegionInfo(culture.Name);
+                result.TryAdd(region.ISOCurrencySymbol, culture.NumberFormat);
+            }
+            catch (ArgumentException) { /* skip cultures without a valid region */ }
+        }
+        return result;
+    }
 
     public decimal Amount { get; }
     public string Currency { get; } = null!;
@@ -329,15 +343,9 @@ public sealed class Money : ValueObject
 
     private static NumberFormatInfo GetFormatInfo(string currencyCode)
     {
-        return CurrencyCache.GetOrAdd(currencyCode, code =>
-        {
-            // On cherche une culture correspondant à la devise ISO
-            var culture = CultureInfo.GetCultures(CultureTypes.SpecificCultures)
-                .Select(c => new { Culture = c, Region = new RegionInfo(c.Name) })
-                .FirstOrDefault(x => x.Region.ISOCurrencySymbol == code);
-
-            return culture?.Culture.NumberFormat ?? CultureInfo.InvariantCulture.NumberFormat;
-        });
+        return CurrencyFormatCache.TryGetValue(currencyCode, out var info)
+            ? info
+            : CultureInfo.InvariantCulture.NumberFormat;
     }
 
     public static class Currencies

@@ -13,7 +13,10 @@ public sealed class RedisTenantCacheTests : IDisposable
     private readonly RedisTenantCache _cache;
 
     public RedisTenantCacheTests() =>
-        _cache = new RedisTenantCache(_distributedMock.Object, _memoryCache);
+        _cache = new RedisTenantCache(
+            _distributedMock.Object,
+            _memoryCache,
+            Options.Create(new RedisTenantCacheOptions()));
 
     public void Dispose() => _memoryCache.Dispose();
 

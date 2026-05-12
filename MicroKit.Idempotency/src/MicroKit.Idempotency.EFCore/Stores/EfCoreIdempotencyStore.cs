@@ -7,6 +7,13 @@ using Microsoft.Extensions.Options;
 
 namespace MicroKit.Idempotency.EFCore.Stores;
 
+/// <summary>
+/// EF Core-backed <see cref="IIdempotencyStore"/> that stages idempotency record changes in the
+/// provided <typeparamref name="TContext"/> without calling <c>SaveChangesAsync</c>.
+/// The caller's Unit of Work (e.g. the wrapping command handler transaction) is responsible for
+/// persisting the staged changes atomically together with the business operation.
+/// </summary>
+/// <typeparam name="TContext">The EF Core <see cref="DbContext"/> that owns the idempotency table.</typeparam>
 public class EfCoreIdempotencyStore<TContext> : IIdempotencyStore
     where TContext : DbContext
 {

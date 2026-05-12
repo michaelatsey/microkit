@@ -19,10 +19,10 @@ internal class DistributedCacheService : ICacheService
         _distributedCache = distributedCache;
     }
 
-    public async Task<T?> GetAsync<T>(string key, CancellationToken cancellationToken = default) where T : class
+    public async Task<T?> GetAsync<T>(string key, CancellationToken cancellationToken = default)
     {
         var json = await _distributedCache.GetStringAsync(key, cancellationToken);
-        return json is null ? null : JsonSerializer.Deserialize<T>(json, SerializerOptions);
+        return json is null ? default : JsonSerializer.Deserialize<T>(json, SerializerOptions);
     }
 
 

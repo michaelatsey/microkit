@@ -21,10 +21,10 @@ public sealed class DistributedCacheService : ICacheService
         _serializerOptions = options.Value.SerializerOptions;
     }
 
-    public async Task<T?> GetAsync<T>(string key, CancellationToken cancellationToken = default) where T : class
+    public async Task<T?> GetAsync<T>(string key, CancellationToken cancellationToken = default)
     {
         var json = await _distributedCache.GetStringAsync(key, cancellationToken);
-        return json is null ? null : JsonSerializer.Deserialize<T>(json, _serializerOptions);
+        return json is null ? default : JsonSerializer.Deserialize<T>(json, _serializerOptions);
     }
 
     public async Task SetAsync<T>(string key, T value, CacheOptions? options = null, CancellationToken cancellationToken = default) where T : class
