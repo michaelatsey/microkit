@@ -107,12 +107,6 @@
     <Project Path="MicroKit.Payments/src/MicroKit.Payments/MicroKit.Payments.csproj" Id="b7b38c4c-7249-4679-b477-78f46b0a23b8" />
   </Folder>
   <Folder Name="/MicroKit.Payments/tests/" />
-  <Folder Name="/MicroKit.Resilience/" />
-  <Folder Name="/MicroKit.Resilience/src/">
-    <Project Path="MicroKit.Resilience/src/MicroKit.Resilience/MicroKit.Resilience.csproj" />
-    <Project Path="MicroKit.Resilience\src\MicroKit.Resilience.MediatR\MicroKit.Resilience.MediatR.csproj" />
-  </Folder>
-  <Folder Name="/MicroKit.Resilience/tests/" />
   <Folder Name="/MicroKit.Security/">
     <Project Path="MicroKit.Security/src/MicroKit.Security.AspNetCore/MicroKit.Security.AspNetCore.csproj" Id="7a39dfff-b6fd-4435-a8e9-8105247ee071" />
   </Folder>
