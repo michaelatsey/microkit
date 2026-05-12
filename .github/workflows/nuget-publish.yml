@@ -1,0 +1,47 @@
+name: NuGet Publish
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+jobs:
+  publish:
+    name: Build, Test & Publish to NuGet
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup .NET 10
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: Restore & Build
+        run: dotnet build MicroKit.slnx -c Release --no-incremental
+
+      - name: Test
+        run: dotnet test MicroKit.slnx -c Release --no-build --verbosity normal
+
+      - name: Pack stable modules
+        run: |
+          mkdir -p ./artifacts
+          find . -name "*.csproj" -path "*/src/*" \
+            ! -path "*/tests/*" \
+            ! -path "*Tests*" \
+            ! -path "*/Samples/*" \
+            ! -path "*/MicroKit.Payments/*" \
+            ! -path "*/MicroKit.Resilience/*" \
+            ! -path "*/MicroKit.Security/*" \
+            ! -path "*/MicroKit.OpenApi/*" \
+            | sort \
+            | xargs -I{} dotnet pack {} --no-build -c Release --output ./artifacts/
+
+      - name: Push to NuGet.org
+        run: |
+          dotnet nuget push "./artifacts/*.nupkg" \
+            --api-key ${{ secrets.NUGET_API_KEY }} \
+            --source https://api.nuget.org/v3/index.json \
+            --skip-duplicate

@@ -1,13 +1,15 @@
 # Changelog
 
-All notable changes to MicroKit will be documented here.
+All notable changes to MicroKit will be documented in this file.
 
-Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
-Versioning follows [Semantic Versioning](https://semver.org/).
+The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
+and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ---
 
-## [1.0.0-preview.1] — 2026-05-12
+## [Unreleased]
+
+## [1.0.0-preview.1] - 2026-05-12
 
 ### Added
 
@@ -39,3 +41,6 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 - `MicroKit.Caching.Abstractions` — `ICacheService`, `CacheOptions`
 - `MicroKit.Caching.Distributed` — `DistributedCacheService`, `AddMicroKitDistributedCache`
 - `MicroKit.Caching.Distributed.Autofac` — Autofac registration extension
+
+[Unreleased]: https://github.com/michaelatse/microkit/compare/v1.0.0-preview.1...HEAD
+[1.0.0-preview.1]: https://github.com/michaelatse/microkit/releases/tag/v1.0.0-preview.1
