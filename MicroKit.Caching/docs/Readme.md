@@ -1,80 +1,199 @@
-﻿# MicroKit.Cqrs
+# MicroKit.Caching
 
-`MicroKit.Cqrs` est un écosystème modulaire pour bâtir des applications CQRS robustes avec MediatR et Autofac. Son architecture découpée permet de n'embarquer que le strict nécessaire.
+Distributed cache abstraction for .NET 10. Provider-agnostic `ICacheService` over `IDistributedCache`, with per-call bypass, sliding/absolute expiration control, configurable JSON serialization, and idempotent DI registration.
 
-## Structure des Packages
+---
 
-| Package | Description |
-| --- | --- |
-| **MicroKit.Cqrs.Abstractions** | Contrats de base pour le CQRS (ICommand, IQuery). |
-| **MicroKit.Cqrs.MediatR.Abstractions** | Interfaces spécifiques à MediatR (ICacheableRequest, etc.). |
-| **MicroKit.Cqrs.MediatR.Behaviors** | Implémentations standard des Behaviors (Logging, Validation, etc.). |
-| **MicroKit.Cqrs.MediatR.Caching** | Pipelines MediatR dédiés à la gestion du cache. |
-| **MicroKit.Cqrs.MediatR.Autofac** | Moteur d'enregistrement et Fluent Builder pour Autofac. |
+## What makes this production-grade
 
-## Installation & Setup
+**Sliding vs. absolute expiration per call, not per configuration.** The `CacheOptions` record carries a `SlidingExpiration` bool alongside `Duration`. `DistributedCacheService` maps this to `DistributedCacheEntryOptions.SlidingExpiration` or `AbsoluteExpirationRelativeToNow` accordingly. Most distributed cache wrappers require a global configuration choice; this one lets each `SetAsync` call decide.
 
-Pour utiliser la stack complète avec le caching, assurez-vous de référencer les packages correspondants.
+**`BypassCache` flag for per-call opt-out.** When `CacheOptions.BypassCache = true`, the caller signals that this specific operation should read from and write to the source regardless of what is in the cache. The `CachingBehavior` in `MicroKit.Cqrs.MediatR.Caching` checks this flag before touching the cache at all, without the handler needing any conditional logic.
 
-### Configuration du Container (Autofac)
+**Configurable `JsonSerializerOptions` without changing the abstraction.** `DistributedCacheOptions.SerializerOptions` accepts any `JsonSerializerOptions` instance. The default is `PropertyNameCaseInsensitive = true`. Pass camelCase, snake_case, or polymorphic type handling via DI configuration — the `ICacheService` interface is unchanged.
 
-```csharp
-builder.Host.ConfigureContainer<ContainerBuilder>(container =>
-{
-    container.AddMicroKitCqrs(builder =>
-    {
-        // Configuration globale (Scan des assemblies)
-        builder.Configure(options =>
-        {
-            var assemblies = AppDomain.CurrentDomain.GetAssemblies();
-            options.AddAssemblies([.. assemblies]);
-        });
+**Idempotent registration.** `AddMicroKitDistributedCache` checks whether `ICacheService` is already registered before adding `DistributedCacheService`. Multiple modules calling this method during startup produce exactly one registered implementation. There is no double-registration or ordering requirement.
 
-        // Configuration du Pipeline MediatR
-        builder.UseMediatRModule(mediatrCfg =>
-        {
-            // Requis pour utiliser le CachingBehavior
-            // Provient de MicroKit.Cqrs.MediatR.Caching
-            mediatrCfg.UseDistributedCache();
+**Default TTL of 30 minutes applies only when no duration is specified.** When `CacheOptions.Duration` is null, `DistributedCacheService` uses 30 minutes as an absolute expiration. Pass an explicit `TimeSpan` to override it per call.
 
-            // Enregistrement des Behaviors avec gestion de l'ordre
-            // Les types proviennent de MicroKit.Cqrs.MediatR.Behaviors
-            mediatrCfg.AddPipeline(typeof(SecurityContextBehavior<,>), -200);
-            mediatrCfg.AddPipeline(typeof(ValidationBehavior<,>), -150);
-            mediatrCfg.AddPipeline(typeof(LoggingBehavior<,>), -100);
-            mediatrCfg.AddPipeline(typeof(ResilienceBehavior<,>), 10);
-            
-            // Comportements de Cache (MicroKit.Cqrs.MediatR.Caching)
-            mediatrCfg.AddPipeline(typeof(CachingBehavior<,>), 20); 
-            
-            mediatrCfg.AddPipeline(typeof(TransactionBehavior<,>), 30);
-            mediatrCfg.AddPipeline(typeof(IdempotencyBehavior<,>), 500);
-            
-            // Invalidation finale
-            mediatrCfg.AddPipeline(typeof(CacheInvalidationBehavior<,>), 1000);
-        });
-    });
-});
+---
 
+## Installation
+
+```shell
+# Contracts — ICacheService, CacheOptions — zero deps
+dotnet add package MicroKit.Caching.Abstractions
+
+# DistributedCacheService backed by IDistributedCache (Redis, SQL, memory)
+dotnet add package MicroKit.Caching.Distributed
+
+# Autofac registration extension (optional)
+dotnet add package MicroKit.Caching.Distributed.Autofac
 ```
 
-## Détails du Pipeline (Ordre d'exécution)
+---
 
-Le système utilise un tri numérique pour orchestrer les Behaviors :
+## Usage
 
-1. **Sécurité (-200)** : Première barrière à l'entrée.
-2. **Validation (-150)** : Vérifie l'intégrité du message.
-3. **Logging (-100)** : Enregistre la commande (uniquement si valide/autorisée).
-4. **Résilience (10)** : Gère les politiques de retry.
-5. **Caching Read (20)** : Court-circuite le Handler si la donnée est en cache.
-6. **Transaction (30)** : Démarre le scope de persistance.
-7. **Idempotence (500)** : Vérifie les doublons au sein de la transaction.
-8. **Cache Invalidation (1000)** : Nettoie les entrées obsolètes en cas de succès.
+### Inject ICacheService directly
 
-## Pourquoi ce découpage ?
+```csharp
+using MicroKit.Caching.Abstractions;
 
-Cette séparation en plusieurs packages vous permet de :
+public sealed class ProductQueryService
+{
+    private readonly IReadRepository<Product> _products;
+    private readonly ICacheService _cache;
 
-* Utiliser les **Abstractions** dans vos couches de Domain/Application sans dépendre d'Autofac ou de l'implémentation des Behaviors.
-* Remplacer le module **Autofac** par un autre moteur sans impacter vos Behaviors.
-* Ne pas inclure la logique de **Caching** si votre microservice n'en a pas l'utilité.
+    public ProductQueryService(IReadRepository<Product> products, ICacheService cache) =>
+        (_products, _cache) = (products, cache);
+
+    public async Task<ProductDto?> GetByIdAsync(Guid id, CancellationToken ct)
+    {
+        var key = $"product:{id}";
+
+        var cached = await _cache.GetAsync<ProductDto>(key, ct);
+        if (cached is not null) return cached;
+
+        var product = await _products.FindByIdAsync(id, ct);
+        if (product is null) return null;
+
+        var dto = new ProductDto(product);
+
+        await _cache.SetAsync(
+            key,
+            dto,
+            new CacheOptions(duration: TimeSpan.FromMinutes(10)),   // absolute expiration
+            ct);
+
+        return dto;
+    }
+
+    public Task InvalidateAsync(Guid id, CancellationToken ct) =>
+        _cache.RemoveAsync($"product:{id}", ct);
+}
+```
+
+### CacheOptions combinations
+
+```csharp
+// Absolute expiration — entry removed after exactly 5 minutes
+new CacheOptions(duration: TimeSpan.FromMinutes(5))
+
+// Sliding expiration — resets on each access; removed after 5 minutes of inactivity
+new CacheOptions(duration: TimeSpan.FromMinutes(5), slidingExpiration: true)
+
+// Default TTL (30 minutes, absolute)
+await _cache.SetAsync(key, value, options: null, ct);
+
+// Bypass — read from source, skip read and write to cache
+new CacheOptions(bypassCache: true)
+```
+
+### Pipeline-level caching via MicroKit.Cqrs.MediatR.Caching
+
+For query-level caching without manual `ICacheService` calls in handlers, implement `ICacheableRequest` on the query. `CachingBehavior` handles the get/set lifecycle automatically. See [MicroKit.Cqrs](../MicroKit.Cqrs/docs/Readme.md) for details.
+
+```csharp
+public record GetProductByIdQuery(Guid ProductId)
+    : IQuery<ProductDto?>, ICacheableRequest
+{
+    public string CacheKey     => $"product:{ProductId}";
+    public TimeSpan? CacheDuration => TimeSpan.FromMinutes(10);
+    public CacheRequestOptions? Options => null;
+}
+```
+
+---
+
+## Configuration
+
+### Microsoft DI — with Redis
+
+```csharp
+using MicroKit.Caching.Distributed;
+
+// Register the IDistributedCache provider first
+builder.Services.AddStackExchangeRedisCache(options =>
+{
+    options.Configuration = builder.Configuration.GetConnectionString("Redis");
+    options.InstanceName  = "myapp:";
+});
+
+// Register DistributedCacheService as ICacheService
+builder.Services
+    .AddMicroKit()
+    .AddMicroKitDistributedCache(options =>
+    {
+        options.SerializerOptions = new System.Text.Json.JsonSerializerOptions
+        {
+            PropertyNamingPolicy        = System.Text.Json.JsonNamingPolicy.CamelCase,
+            PropertyNameCaseInsensitive = true
+        };
+    });
+```
+
+### Microsoft DI — in-memory (development and tests)
+
+```csharp
+builder.Services.AddDistributedMemoryCache();
+
+builder.Services
+    .AddMicroKit()
+    .AddMicroKitDistributedCache();   // default JsonSerializerOptions applied
+```
+
+`AddMicroKitDistributedCache` is idempotent: if `ICacheService` is already registered (e.g. by another module), the call is a no-op.
+
+### Autofac
+
+```csharp
+using MicroKit.Caching.Distributed.Autofac;
+
+containerBuilder.AddMicroKitDistributedCache(options =>
+{
+    options.SerializerOptions = new System.Text.Json.JsonSerializerOptions
+    {
+        PropertyNameCaseInsensitive = true
+    };
+});
+```
+
+### Registration via IServiceCollection directly
+
+```csharp
+using MicroKit.Caching.Distributed;
+
+// Bypasses the MicroKitBuilder — useful in test projects
+services.AddDistributedMemoryCache();
+services.AddMicroKitDistributedCache();
+```
+
+---
+
+## Key types
+
+| Type | Package | Role |
+|---|---|---|
+| `ICacheService` | Abstractions | `GetAsync<T>`, `SetAsync<T>`, `RemoveAsync` |
+| `CacheOptions` | Abstractions | `Duration`, `BypassCache`, `SlidingExpiration` per-call config |
+| `DistributedCacheService` | Distributed | `IDistributedCache`-backed implementation with JSON serialization |
+| `DistributedCacheOptions` | Distributed | `SerializerOptions: JsonSerializerOptions` — defaults to case-insensitive |
+
+---
+
+## Package dependency graph
+
+```
+MicroKit.Caching.Abstractions
+    (no NuGet dependencies)
+
+MicroKit.Caching.Distributed
+    MicroKit.Caching.Abstractions
+    MicroKit.Abstractions
+    Microsoft.Extensions.Caching.Abstractions
+
+MicroKit.Caching.Distributed.Autofac
+    MicroKit.Caching.Distributed
+    Autofac
+```

@@ -1,80 +1,286 @@
-﻿# MicroKit.Cqrs
+# MicroKit.Cqrs
 
-`MicroKit.Cqrs` est un écosystème modulaire pour bâtir des applications CQRS robustes avec MediatR et Autofac. Son architecture découpée permet de n'embarquer que le strict nécessaire.
+CQRS dispatch infrastructure for .NET 10. `ICommandBus` and `IQueryBus` are the only types your application layer ever touches — MediatR is an implementation detail confined to integration packages.
 
-## Structure des Packages
+---
 
-| Package | Description |
-| --- | --- |
-| **MicroKit.Cqrs.Abstractions** | Contrats de base pour le CQRS (ICommand, IQuery). |
-| **MicroKit.Cqrs.MediatR.Abstractions** | Interfaces spécifiques à MediatR (ICacheableRequest, etc.). |
-| **MicroKit.Cqrs.MediatR.Behaviors** | Implémentations standard des Behaviors (Logging, Validation, etc.). |
-| **MicroKit.Cqrs.MediatR.Caching** | Pipelines MediatR dédiés à la gestion du cache. |
-| **MicroKit.Cqrs.MediatR.Autofac** | Moteur d'enregistrement et Fluent Builder pour Autofac. |
+## What makes this production-grade
 
-## Installation & Setup
+**MediatR decoupled by design, not convention.** `ICommand`, `IQuery`, `ICommandHandler`, and `IQueryHandler` are defined in `MicroKit.Cqrs.Abstractions` with zero third-party references. Your handlers implement these interfaces. `MediatRCommandBus` and `MediatRQueryBus` bridge them to MediatR internally. Swapping MediatR for a different dispatcher requires no changes to handlers or callers.
 
-Pour utiliser la stack complète avec le caching, assurez-vous de référencer les packages correspondants.
+**Runtime type guard with actionable error messages.** `MediatRCommandBus.SendAsync` checks that the dispatched command also implements `IRequest<Unit>` or `IRequest<TResponse>` and throws `InvalidOperationException` with an exact message naming the command type and the concrete base class to inherit from. Dispatching a misconfigured command fails loudly at the call site, not deep in a pipeline behavior.
 
-### Configuration du Container (Autofac)
+**Eligibility-gated cache writes.** `CachingBehavior` delegates the write decision to `ICacheEligibilityChecker.IsEligible(result)`. The default implementation skips null responses. Replace `DefaultCacheEligibilityChecker` in DI to suppress caching for failure `Result<T>` objects, empty collections, or any other application-specific non-cacheable response — without modifying the behavior.
 
-```csharp
-builder.Host.ConfigureContainer<ContainerBuilder>(container =>
-{
-    container.AddMicroKitCqrs(builder =>
-    {
-        // Configuration globale (Scan des assemblies)
-        builder.Configure(options =>
-        {
-            var assemblies = AppDomain.CurrentDomain.GetAssemblies();
-            options.AddAssemblies([.. assemblies]);
-        });
+**Externalized key construction.** `ICacheKeyService.BuildKey(customKey)` is the single point where a tenant ID prefix, environment namespace, or version token is appended. Inject a custom `ICacheKeyService` and every cached query in the application inherits the scoping automatically.
 
-        // Configuration du Pipeline MediatR
-        builder.UseMediatRModule(mediatrCfg =>
-        {
-            // Requis pour utiliser le CachingBehavior
-            // Provient de MicroKit.Cqrs.MediatR.Caching
-            mediatrCfg.UseDistributedCache();
+**Invalidation only on success.** `CacheInvalidationBehavior` executes the handler first, then calls `ICacheEligibilityChecker.IsEligible(response)` before touching the cache. If the command fails, stale cache entries are retained rather than removed — which is correct: a failed write should not produce a cache miss on the next read.
 
-            // Enregistrement des Behaviors avec gestion de l'ordre
-            // Les types proviennent de MicroKit.Cqrs.MediatR.Behaviors
-            mediatrCfg.AddPipeline(typeof(SecurityContextBehavior<,>), -200);
-            mediatrCfg.AddPipeline(typeof(ValidationBehavior<,>), -150);
-            mediatrCfg.AddPipeline(typeof(LoggingBehavior<,>), -100);
-            mediatrCfg.AddPipeline(typeof(ResilienceBehavior<,>), 10);
-            
-            // Comportements de Cache (MicroKit.Cqrs.MediatR.Caching)
-            mediatrCfg.AddPipeline(typeof(CachingBehavior<,>), 20); 
-            
-            mediatrCfg.AddPipeline(typeof(TransactionBehavior<,>), 30);
-            mediatrCfg.AddPipeline(typeof(IdempotencyBehavior<,>), 500);
-            
-            // Invalidation finale
-            mediatrCfg.AddPipeline(typeof(CacheInvalidationBehavior<,>), 1000);
-        });
-    });
-});
+**IsEnabled guard before string formatting.** Both behaviors check `_logger.IsEnabled(LogLevel.Debug)` before constructing any log-argument strings. In production where Debug logging is disabled, the cache key string is never allocated.
 
+**Fail-fast sequential validation.** `ValidationBehavior` runs `IValidator<TRequest>` instances one by one and throws `FluentValidation.ValidationException` on the first failure. Validators do not accumulate errors across each other — a broken precondition stops the pipeline immediately.
+
+---
+
+## Installation
+
+```shell
+# Abstractions — ICommand, IQuery, ICommandBus, IQueryBus, handlers, cache interfaces
+dotnet add package MicroKit.Cqrs.Abstractions
+
+# Autofac DI wiring, default cache key and eligibility services
+dotnet add package MicroKit.Cqrs
+
+# MediatR-backed bus implementations
+dotnet add package MicroKit.Cqrs.MediatR
+
+# Optional: LoggingBehavior, ValidationBehavior (FluentValidation)
+dotnet add package MicroKit.Cqrs.MediatR.Behaviors
+
+# Optional: CachingBehavior, CacheInvalidationBehavior
+dotnet add package MicroKit.Cqrs.MediatR.Caching
 ```
 
-## Détails du Pipeline (Ordre d'exécution)
+---
 
-Le système utilise un tri numérique pour orchestrer les Behaviors :
+## Usage
 
-1. **Sécurité (-200)** : Première barrière à l'entrée.
-2. **Validation (-150)** : Vérifie l'intégrité du message.
-3. **Logging (-100)** : Enregistre la commande (uniquement si valide/autorisée).
-4. **Résilience (10)** : Gère les politiques de retry.
-5. **Caching Read (20)** : Court-circuite le Handler si la donnée est en cache.
-6. **Transaction (30)** : Démarre le scope de persistance.
-7. **Idempotence (500)** : Vérifie les doublons au sein de la transaction.
-8. **Cache Invalidation (1000)** : Nettoie les entrées obsolètes en cas de succès.
+### Command with a typed response
 
-## Pourquoi ce découpage ?
+```csharp
+using MicroKit.Cqrs.Abstractions.Commands;
+using MicroKit.Domain.Primitives;
 
-Cette séparation en plusieurs packages vous permet de :
+// Marker: ICommand<TResponse> — no MediatR reference
+public record CreateOrderCommand(Guid OrderId, string CustomerId) : ICommand<Result<Guid>>;
 
-* Utiliser les **Abstractions** dans vos couches de Domain/Application sans dépendre d'Autofac ou de l'implémentation des Behaviors.
-* Remplacer le module **Autofac** par un autre moteur sans impacter vos Behaviors.
-* Ne pas inclure la logique de **Caching** si votre microservice n'en a pas l'utilité.
+public sealed class CreateOrderHandler : ICommandHandler<CreateOrderCommand, Result<Guid>>
+{
+    private readonly IRepository<Order> _orders;
+    private readonly IUnitOfWork _uow;
+
+    public CreateOrderHandler(IRepository<Order> orders, IUnitOfWork uow) =>
+        (_orders, _uow) = (orders, uow);
+
+    public async Task<Result<Guid>> HandleAsync(CreateOrderCommand cmd, CancellationToken ct)
+    {
+        var order = Order.Place(cmd.OrderId, cmd.CustomerId);
+        await _orders.AddAsync(order, ct);
+        await _uow.SaveChangesAsync(ct);
+        return Result.Success(order.Id);
+    }
+}
+```
+
+### Fire-and-forget command
+
+```csharp
+// ICommand with no type parameter — no response
+public record ArchiveOrderCommand(Guid OrderId) : ICommand;
+
+public sealed class ArchiveOrderHandler : ICommandHandler<ArchiveOrderCommand>
+{
+    private readonly IRepository<Order> _orders;
+    private readonly IUnitOfWork _uow;
+
+    public ArchiveOrderHandler(IRepository<Order> orders, IUnitOfWork uow) =>
+        (_orders, _uow) = (orders, uow);
+
+    public async Task HandleAsync(ArchiveOrderCommand cmd, CancellationToken ct)
+    {
+        var order = await _orders.FindByIdAsync(cmd.OrderId, ct)
+            ?? throw new NotFoundException($"Order {cmd.OrderId} not found.");
+        order.Archive();
+        _orders.Update(order);
+        await _uow.SaveChangesAsync(ct);
+    }
+}
+
+// Dispatch — no return value
+await commandBus.SendAsync(new ArchiveOrderCommand(orderId), ct);
+```
+
+### Query
+
+```csharp
+using MicroKit.Cqrs.Abstractions.Queries;
+
+public record GetOrderByIdQuery(Guid OrderId) : IQuery<OrderDto?>;
+
+public sealed class GetOrderByIdHandler : IQueryHandler<GetOrderByIdQuery, OrderDto?>
+{
+    private readonly IReadRepository<Order> _orders;
+
+    public GetOrderByIdHandler(IReadRepository<Order> orders) => _orders = orders;
+
+    public async Task<OrderDto?> HandleAsync(GetOrderByIdQuery query, CancellationToken ct)
+    {
+        var order = await _orders.FindByIdAsync(query.OrderId, ct);
+        return order is null ? null : new OrderDto(order);
+    }
+}
+
+// Dispatch
+var dto = await queryBus.AskAsync<OrderDto?>(new GetOrderByIdQuery(id), ct);
+```
+
+### Dispatch from an ASP.NET Core endpoint
+
+```csharp
+// ICommandBus and IQueryBus are injected — no MediatR, no ISender in the API layer
+app.MapPost("/orders", async (CreateOrderCommand cmd, ICommandBus bus, CancellationToken ct) =>
+{
+    var result = await bus.SendAsync<Result<Guid>>(cmd, ct);
+    return result.IsSuccess
+        ? Results.Created($"/orders/{result.Value}", null)
+        : Results.UnprocessableEntity(result.Error.Message);
+});
+
+app.MapGet("/orders/{id:guid}", async (Guid id, IQueryBus bus, CancellationToken ct) =>
+{
+    var dto = await bus.AskAsync<OrderDto?>(new GetOrderByIdQuery(id), ct);
+    return dto is null ? Results.NotFound() : Results.Ok(dto);
+});
+```
+
+### Cacheable query
+
+Implement `ICacheableRequest` on any query. `CachingBehavior` intercepts it automatically.
+
+```csharp
+using MicroKit.Cqrs.Abstractions.Cache;
+
+public record GetOrderByIdQuery(Guid OrderId)
+    : IQuery<OrderDto?>, ICacheableRequest
+{
+    public string CacheKey => $"order:{OrderId}";
+    public TimeSpan? CacheDuration => TimeSpan.FromMinutes(10);
+    public CacheRequestOptions? Options => null;      // absolute expiration, no bypass
+}
+```
+
+Override per-call:
+
+```csharp
+// Skip the cache for this specific call
+public CacheRequestOptions? Options => new() { BypassCache = true };
+
+// Use sliding expiration
+public CacheRequestOptions? Options => new() { SlidingExpiration = true };
+```
+
+`CacheDuration` defaults to 15 minutes when null. `ICacheEligibilityChecker` (default: skip null) gates cache writes — replace it in DI to add custom rules.
+
+### Cache invalidation on write
+
+Implement `ICacheInvalidatorRequest<TRequest, TResponse>` on a command. After the handler succeeds, `CacheInvalidationBehavior` removes the returned keys.
+
+```csharp
+using MicroKit.Cqrs.Abstractions.Cache;
+
+public record UpdateOrderCommand(Guid OrderId, string NewStatus)
+    : ICommand<Result>, ICacheInvalidatorRequest<UpdateOrderCommand, Result>
+{
+    public IEnumerable<string> GetCacheKeys(UpdateOrderCommand request, Result response) =>
+        [$"order:{request.OrderId}"];
+}
+```
+
+The behavior runs the handler first. If the handler returns a non-eligible response (e.g. a failure `Result`), the cache keys are left intact.
+
+### FluentValidation integration
+
+Register validators as usual. `ValidationBehavior` picks them up from DI and runs them sequentially, throwing `FluentValidation.ValidationException` on the first invalid result.
+
+```csharp
+public class CreateOrderCommandValidator : AbstractValidator<CreateOrderCommand>
+{
+    public CreateOrderCommandValidator()
+    {
+        RuleFor(x => x.OrderId).NotEmpty();
+        RuleFor(x => x.CustomerId).NotEmpty().MaximumLength(100);
+    }
+}
+
+// Registration (example with MediatR DI extension)
+services.AddValidatorsFromAssemblyContaining<CreateOrderCommandValidator>();
+```
+
+---
+
+## Configuration
+
+### Autofac
+
+```csharp
+using Autofac;
+using MicroKit.Cqrs;
+
+// In your Autofac ContainerBuilder setup
+containerBuilder.AddMicroKitCqrs();
+
+// Register MediatR and the MediatR-backed buses from MicroKit.Cqrs.MediatR.Autofac
+containerBuilder.AddCqrsMediatR(cfg =>
+{
+    cfg.RegisterHandlersFromAssemblyContaining<CreateOrderHandler>();
+});
+```
+
+### Microsoft DI (without Autofac)
+
+```csharp
+using MicroKit.Cqrs.Abstractions.Commands;
+using MicroKit.Cqrs.Abstractions.Queries;
+using MicroKit.Cqrs.MediatR.Commands;
+using MicroKit.Cqrs.MediatR.Queries;
+
+services.AddMediatR(cfg =>
+    cfg.RegisterServicesFromAssemblyContaining<CreateOrderHandler>());
+
+services.AddScoped<ICommandBus, MediatRCommandBus>();
+services.AddScoped<IQueryBus, MediatRQueryBus>();
+
+// Cache services (required by CachingBehavior)
+services.AddScoped<ICacheKeyService, DefaultCacheKeyService>();
+services.AddScoped<ICacheEligibilityChecker, DefaultCacheEligibilityChecker>();
+
+// Behaviors — order matters in MediatR pipeline
+services.AddTransient(typeof(IPipelineBehavior<,>), typeof(LoggingBehavior<,>));
+services.AddTransient(typeof(IPipelineBehavior<,>), typeof(ValidationBehavior<,>));
+services.AddTransient(typeof(IPipelineBehavior<,>), typeof(CachingBehavior<,>));
+services.AddTransient(typeof(IPipelineBehavior<,>), typeof(CacheInvalidationBehavior<,>));
+```
+
+---
+
+## Package dependency graph
+
+```
+MicroKit.Cqrs.Abstractions
+    (no NuGet dependencies)
+
+MicroKit.Cqrs
+    MicroKit.Cqrs.Abstractions
+    Autofac
+
+MicroKit.Cqrs.MediatR.Abstractions
+    MicroKit.Cqrs.Abstractions
+    MediatR.Contracts
+
+MicroKit.Cqrs.MediatR
+    MicroKit.Cqrs.Abstractions
+    MicroKit.Cqrs.MediatR.Abstractions
+    MediatR
+
+MicroKit.Cqrs.MediatR.Behaviors
+    MicroKit.Cqrs.MediatR.Abstractions
+    MediatR
+    FluentValidation
+
+MicroKit.Cqrs.MediatR.Caching
+    MicroKit.Cqrs.Abstractions
+    MicroKit.Cqrs.MediatR.Abstractions
+    MicroKit.Caching.Abstractions
+    MediatR
+    Autofac
+```

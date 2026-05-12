@@ -1,80 +1,178 @@
-﻿# MicroKit.Cqrs
+# MicroKit.Events
 
-`MicroKit.Cqrs` est un écosystème modulaire pour bâtir des applications CQRS robustes avec MediatR et Autofac. Son architecture découpée permet de n'embarquer que le strict nécessaire.
+Domain and integration event contracts for .NET 10. Full distributed tracing context — CorrelationId, CausationId, RequestId, IdempotencyKey, and a metadata dictionary — built into every event, with zero third-party dependencies in the contracts package.
 
-## Structure des Packages
+---
 
-| Package | Description |
-| --- | --- |
-| **MicroKit.Cqrs.Abstractions** | Contrats de base pour le CQRS (ICommand, IQuery). |
-| **MicroKit.Cqrs.MediatR.Abstractions** | Interfaces spécifiques à MediatR (ICacheableRequest, etc.). |
-| **MicroKit.Cqrs.MediatR.Behaviors** | Implémentations standard des Behaviors (Logging, Validation, etc.). |
-| **MicroKit.Cqrs.MediatR.Caching** | Pipelines MediatR dédiés à la gestion du cache. |
-| **MicroKit.Cqrs.MediatR.Autofac** | Moteur d'enregistrement et Fluent Builder pour Autofac. |
+## What makes this production-grade
 
-## Installation & Setup
+**Richer tracing contract than most event libraries.** `IEvent` carries six tracing fields: `CorrelationId`, `CausationId`, `RequestId`, `IdempotencyKey`, a free-form `IReadOnlyDictionary<string, string>? Metadata`, and both `TimestampUtc` (when the event object was created) and `OccurredOnUtc` (when the business fact occurred — settable for event sourcing replay). A naive implementation has one or none of these.
 
-Pour utiliser la stack complète avec le caching, assurez-vous de référencer les packages correspondants.
+**`MessageType` is computed, not declared.** `EventBase.MessageType` returns `GetType().FullName!`. There is no string property to keep in sync with the class name. Rename the class and the routing key updates automatically everywhere.
 
-### Configuration du Container (Autofac)
+**`protected init` for tracing fields.** Subclasses pass tracing context through the constructor using C# init-only setters, keeping the properties immutable after construction. The compiler enforces this — there is no `set` to call later.
 
-```csharp
-builder.Host.ConfigureContainer<ContainerBuilder>(container =>
-{
-    container.AddMicroKitCqrs(builder =>
-    {
-        // Configuration globale (Scan des assemblies)
-        builder.Configure(options =>
-        {
-            var assemblies = AppDomain.CurrentDomain.GetAssemblies();
-            options.AddAssemblies([.. assemblies]);
-        });
+**Two distinct contracts by deployment boundary.** `IEvent` (domain events, in-process) carries the full six-field tracing surface. `IIntegrationEvent` (cross-service events) carries only `Id`, `OccurredOnUtc`, `MessageType`, and `CorrelationId` — the minimal contract needed across a service boundary without leaking internal request context.
 
-        // Configuration du Pipeline MediatR
-        builder.UseMediatRModule(mediatrCfg =>
-        {
-            // Requis pour utiliser le CachingBehavior
-            // Provient de MicroKit.Cqrs.MediatR.Caching
-            mediatrCfg.UseDistributedCache();
+---
 
-            // Enregistrement des Behaviors avec gestion de l'ordre
-            // Les types proviennent de MicroKit.Cqrs.MediatR.Behaviors
-            mediatrCfg.AddPipeline(typeof(SecurityContextBehavior<,>), -200);
-            mediatrCfg.AddPipeline(typeof(ValidationBehavior<,>), -150);
-            mediatrCfg.AddPipeline(typeof(LoggingBehavior<,>), -100);
-            mediatrCfg.AddPipeline(typeof(ResilienceBehavior<,>), 10);
-            
-            // Comportements de Cache (MicroKit.Cqrs.MediatR.Caching)
-            mediatrCfg.AddPipeline(typeof(CachingBehavior<,>), 20); 
-            
-            mediatrCfg.AddPipeline(typeof(TransactionBehavior<,>), 30);
-            mediatrCfg.AddPipeline(typeof(IdempotencyBehavior<,>), 500);
-            
-            // Invalidation finale
-            mediatrCfg.AddPipeline(typeof(CacheInvalidationBehavior<,>), 1000);
-        });
-    });
-});
+## Installation
 
+```shell
+# Contracts — IEvent, IIntegrationEvent, IEventBase, IEventPublisher — zero deps
+dotnet add package MicroKit.Events.Contracts
+
+# EventBase, IntegrationEventBase concrete base classes
+dotnet add package MicroKit.Events
 ```
 
-## Détails du Pipeline (Ordre d'exécution)
+---
 
-Le système utilise un tri numérique pour orchestrer les Behaviors :
+## Usage
 
-1. **Sécurité (-200)** : Première barrière à l'entrée.
-2. **Validation (-150)** : Vérifie l'intégrité du message.
-3. **Logging (-100)** : Enregistre la commande (uniquement si valide/autorisée).
-4. **Résilience (10)** : Gère les politiques de retry.
-5. **Caching Read (20)** : Court-circuite le Handler si la donnée est en cache.
-6. **Transaction (30)** : Démarre le scope de persistance.
-7. **Idempotence (500)** : Vérifie les doublons au sein de la transaction.
-8. **Cache Invalidation (1000)** : Nettoie les entrées obsolètes en cas de succès.
+### Domain event (in-process)
 
-## Pourquoi ce découpage ?
+Inherit from `EventBase` to get all tracing fields automatically.
 
-Cette séparation en plusieurs packages vous permet de :
+```csharp
+using MicroKit.Events;
 
-* Utiliser les **Abstractions** dans vos couches de Domain/Application sans dépendre d'Autofac ou de l'implémentation des Behaviors.
-* Remplacer le module **Autofac** par un autre moteur sans impacter vos Behaviors.
-* Ne pas inclure la logique de **Caching** si votre microservice n'en a pas l'utilité.
+public sealed class OrderShippedEvent : EventBase
+{
+    public Guid OrderId { get; }
+    public string TrackingNumber { get; }
+
+    public OrderShippedEvent(
+        Guid orderId,
+        string trackingNumber,
+        string? correlationId = null,
+        string? causationId = null)
+    {
+        OrderId = orderId;
+        TrackingNumber = trackingNumber;
+        CorrelationId = correlationId;   // protected init — set once, immutable
+        CausationId = causationId;
+    }
+}
+```
+
+`EventBase` members supplied automatically:
+
+| Member | Value |
+|---|---|
+| `Id` | `Guid.NewGuid()` — generated at construction |
+| `TimestampUtc` | `DateTimeOffset.UtcNow` — when the object was created |
+| `OccurredOnUtc` | `DateTimeOffset.UtcNow` — overridable via `protected init` for replay |
+| `MessageType` | `GetType().FullName!` — computed, never declared |
+| `CorrelationId` | `null` unless passed via `protected init` |
+| `CausationId` | `null` unless passed via `protected init` |
+| `RequestId` | `null` unless passed via `protected init` |
+| `IdempotencyKey` | `null` unless passed via `protected init` |
+| `Metadata` | `null` unless passed via `protected init` |
+
+### Integration event (cross-service)
+
+Use `IntegrationEventBase` for events published to the message broker. The contract is intentionally narrower — only what the receiving service needs.
+
+```csharp
+using MicroKit.Events;
+
+public sealed class OrderConfirmedIntegrationEvent : IntegrationEventBase
+{
+    public Guid OrderId { get; }
+    public string CustomerId { get; }
+    public decimal TotalAmount { get; }
+
+    public OrderConfirmedIntegrationEvent(
+        Guid orderId,
+        string customerId,
+        decimal totalAmount,
+        string? correlationId = null)
+    {
+        OrderId = orderId;
+        CustomerId = customerId;
+        TotalAmount = totalAmount;
+        CorrelationId = correlationId;
+    }
+}
+```
+
+`IntegrationEventBase` supplies: `Id`, `OccurredOnUtc`, `MessageType` (`GetType().FullName!`), and `CorrelationId`. There is no `IdempotencyKey` or `RequestId` — those are internal concerns.
+
+### Publishing via IEventPublisher
+
+`IEventPublisher` is the in-process publishing contract. Wire an implementation (e.g. MediatR-backed) in your composition root.
+
+```csharp
+using MicroKit.Events.Contracts;
+
+public sealed class DomainEventDispatcher
+{
+    private readonly IEventPublisher _publisher;
+
+    public DomainEventDispatcher(IEventPublisher publisher) => _publisher = publisher;
+
+    // Called after the unit of work commits — domain events carry aggregates' side effects
+    public Task DispatchAsync(IEnumerable<IDomainEvent> events, CancellationToken ct) =>
+        _publisher.PublishRangeAsync(events.Cast<IEvent>(), ct);
+}
+```
+
+For integration events, enqueue them into the Outbox rather than publishing directly:
+
+```csharp
+// Inside a command handler — written atomically with the aggregate save
+var evt = new OrderConfirmedIntegrationEvent(order.Id, order.CustomerId, order.Total, correlationId);
+
+await _outboxService.EnqueueAsync(
+    tenantId: _tenant.Tenant!.Id,
+    messageId: evt.Id.ToString(),
+    payload: evt,
+    destination: new OutboxDestination { PublishToBroker = true, BrokerTopic = "orders.confirmed" },
+    correlationId: evt.CorrelationId,
+    cancellationToken: ct);
+```
+
+See [MicroKit.Messaging](../MicroKit.Messaging/docs/Readme.md) for outbox setup.
+
+### Event sourcing: override OccurredOnUtc
+
+For replay scenarios where the business timestamp must differ from the object creation time:
+
+```csharp
+public sealed class OrderPlacedEvent : EventBase
+{
+    public Guid OrderId { get; }
+
+    public OrderPlacedEvent(Guid orderId, DateTimeOffset occurredAt)
+    {
+        OrderId = orderId;
+        OccurredOnUtc = occurredAt;   // protected init — set to historical timestamp
+    }
+}
+```
+
+---
+
+## Configuration
+
+No DI registration is required for either package. They are pure base classes and interfaces.
+
+Register `IEventPublisher` implementations in the DI container of your composition root:
+
+```csharp
+// Example: MediatR-backed domain event publisher
+services.AddScoped<IEventPublisher, MediatREventPublisher>();
+```
+
+---
+
+## Package dependency graph
+
+```
+MicroKit.Events.Contracts
+    (no NuGet dependencies)
+
+MicroKit.Events
+    MicroKit.Events.Contracts
+```

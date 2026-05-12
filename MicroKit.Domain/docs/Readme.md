@@ -1,80 +1,293 @@
-﻿# MicroKit.Cqrs
+# MicroKit.Domain
 
-`MicroKit.Cqrs` est un écosystème modulaire pour bâtir des applications CQRS robustes avec MediatR et Autofac. Son architecture découpée permet de n'embarquer que le strict nécessaire.
+Domain primitives for .NET 10. Entity, AggregateRoot, ValueObject, Result, Error, Money, and Enumeration — all zero third-party dependencies.
 
-## Structure des Packages
+---
 
-| Package | Description |
-| --- | --- |
-| **MicroKit.Cqrs.Abstractions** | Contrats de base pour le CQRS (ICommand, IQuery). |
-| **MicroKit.Cqrs.MediatR.Abstractions** | Interfaces spécifiques à MediatR (ICacheableRequest, etc.). |
-| **MicroKit.Cqrs.MediatR.Behaviors** | Implémentations standard des Behaviors (Logging, Validation, etc.). |
-| **MicroKit.Cqrs.MediatR.Caching** | Pipelines MediatR dédiés à la gestion du cache. |
-| **MicroKit.Cqrs.MediatR.Autofac** | Moteur d'enregistrement et Fluent Builder pour Autofac. |
+## What makes this production-grade
 
-## Installation & Setup
+**Identity guards at construction time.** `Entity<TKey>` uses `EqualityComparer<TKey>.Default.Equals(id, default!)` to reject `Guid.Empty`, `0`, and null before the object is created. There is no separate validation step, no convention, and no chance of a default-keyed entity being persisted.
 
-Pour utiliser la stack complète avec le caching, assurez-vous de référencer les packages correspondants.
+**Dual optimistic concurrency on aggregates.** `AggregateRootBase` carries two independent concurrency tokens. `Version` is an int incremented by domain methods via `IncrementVersion()` — it tracks logical mutations and is meaningful at the domain layer. `RowVersion` is a `byte[]` set by the EF Core persistence layer — it is the database-level CAS token. Both exist because they address different failure modes: `Version` detects in-memory mutation order; `RowVersion` enforces database-level last-writer-wins.
 
-### Configuration du Container (Autofac)
+**Domain event encapsulation.** The event list is a private `List<IDomainEvent>` exposed only as `IReadOnlyCollection<IDomainEvent>`. Events are added and removed exclusively through `protected` aggregate methods. The persistence layer calls `ClearDomainEvents()` after dispatch. External code cannot mutate the event queue.
 
-```csharp
-builder.Host.ConfigureContainer<ContainerBuilder>(container =>
-{
-    container.AddMicroKitCqrs(builder =>
-    {
-        // Configuration globale (Scan des assemblies)
-        builder.Configure(options =>
-        {
-            var assemblies = AppDomain.CurrentDomain.GetAssemblies();
-            options.AddAssemblies([.. assemblies]);
-        });
+**Result invariants enforced at construction.** `Result` and `Result<T>` throw `InvalidOperationException` in the constructor if `isSuccess && error != Error.None` or `!isSuccess && error == Error.None`. These are illegal states; the library makes them impossible to construct accidentally. `Error.None` is a sentinel value — there is no null-checking on the error field.
 
-        // Configuration du Pipeline MediatR
-        builder.UseMediatRModule(mediatrCfg =>
-        {
-            // Requis pour utiliser le CachingBehavior
-            // Provient de MicroKit.Cqrs.MediatR.Caching
-            mediatrCfg.UseDistributedCache();
+**ISO 4217 currency precision without a lookup table.** `Money.DecimalDigits` reads the decimal digit count dynamically from the .NET culture registry via `NumberFormatInfo.CurrencyDecimalDigits`. The culture scan happens once at class initialization via a static `IReadOnlyDictionary<string, NumberFormatInfo>`. JPY returns 0 digits; EUR and USD return 2; KWD returns 3. No hardcoded switch statement.
 
-            // Enregistrement des Behaviors avec gestion de l'ordre
-            // Les types proviennent de MicroKit.Cqrs.MediatR.Behaviors
-            mediatrCfg.AddPipeline(typeof(SecurityContextBehavior<,>), -200);
-            mediatrCfg.AddPipeline(typeof(ValidationBehavior<,>), -150);
-            mediatrCfg.AddPipeline(typeof(LoggingBehavior<,>), -100);
-            mediatrCfg.AddPipeline(typeof(ResilienceBehavior<,>), 10);
-            
-            // Comportements de Cache (MicroKit.Cqrs.MediatR.Caching)
-            mediatrCfg.AddPipeline(typeof(CachingBehavior<,>), 20); 
-            
-            mediatrCfg.AddPipeline(typeof(TransactionBehavior<,>), 30);
-            mediatrCfg.AddPipeline(typeof(IdempotencyBehavior<,>), 500);
-            
-            // Invalidation finale
-            mediatrCfg.AddPipeline(typeof(CacheInvalidationBehavior<,>), 1000);
-        });
-    });
-});
+**Accounting rounding on every monetary operation.** `Money.RoundedAmount` uses `MidpointRounding.AwayFromZero` — the accounting standard — not banker's rounding (which .NET defaults to). `ToSmallestUnit()` applies the same rounding before converting to cents/yen/fils for payment processor integration. Cross-currency arithmetic throws a typed `CurrencyMismatchException` before any calculation occurs.
 
+**Rich Enumeration replaces fragile C# enums.** `Enumeration` provides `Id`, `Name`, `DisplayName`, and `Description`. Lookup is available by id (`FromId<T>`), name (`FromName<T>` — case-insensitive), or display name (`FromDisplayName<T>`). The lookup throws `InvalidOperationException` with a precise message; it never returns null.
+
+**Audited base classes with interceptor-only setters.** `AuditedEntity` exposes `CreatedOnUtc`, `CreatedBy`, `LastModifiedOnUtc`, and `LastModifiedBy` with `private set`. The `SetAuditFields(...)` method is `internal` — only EF Core interceptors in the same assembly can call it. Application code cannot accidentally overwrite audit timestamps.
+
+---
+
+## Installation
+
+```shell
+# Contracts — IEntity, IDomainEvent, IAggregateRoot — zero deps
+dotnet add package MicroKit.Domain.Contracts
+
+# Base classes — Entity<TKey>, AggregateRoot<TKey>, ValueObject, DomainEvent, Enumeration, AuditedAggregateRoot<TKey>
+dotnet add package MicroKit.Domain.Abstractions
+
+# Result<T>, Error, Money, typed domain exceptions
+dotnet add package MicroKit.Domain
 ```
 
-## Détails du Pipeline (Ordre d'exécution)
+---
 
-Le système utilise un tri numérique pour orchestrer les Behaviors :
+## Usage
 
-1. **Sécurité (-200)** : Première barrière à l'entrée.
-2. **Validation (-150)** : Vérifie l'intégrité du message.
-3. **Logging (-100)** : Enregistre la commande (uniquement si valide/autorisée).
-4. **Résilience (10)** : Gère les politiques de retry.
-5. **Caching Read (20)** : Court-circuite le Handler si la donnée est en cache.
-6. **Transaction (30)** : Démarre le scope de persistance.
-7. **Idempotence (500)** : Vérifie les doublons au sein de la transaction.
-8. **Cache Invalidation (1000)** : Nettoie les entrées obsolètes en cas de succès.
+### Entity with identity guard
 
-## Pourquoi ce découpage ?
+```csharp
+using MicroKit.Domain.Abstractions;
 
-Cette séparation en plusieurs packages vous permet de :
+public sealed class Product : Entity<Guid>
+{
+    public string Name { get; private set; } = null!;
+    public decimal Price { get; private set; }
 
-* Utiliser les **Abstractions** dans vos couches de Domain/Application sans dépendre d'Autofac ou de l'implémentation des Behaviors.
-* Remplacer le module **Autofac** par un autre moteur sans impacter vos Behaviors.
-* Ne pas inclure la logique de **Caching** si votre microservice n'en a pas l'utilité.
+    private Product() { }
+
+    public Product(Guid id, string name, decimal price) : base(id)
+    {
+        // base(id) throws ArgumentException if id == Guid.Empty
+        Name = name;
+        Price = price;
+    }
+}
+```
+
+### AggregateRoot — domain events and optimistic concurrency
+
+```csharp
+using MicroKit.Domain.Abstractions;
+
+public sealed record OrderPlacedEvent(Guid OrderId, string CustomerId) : DomainEvent;
+public sealed record OrderCancelledEvent(Guid OrderId) : DomainEvent;
+
+public sealed class Order : AggregateRoot<Guid>
+{
+    public string CustomerId { get; private set; } = null!;
+    public OrderStatus Status { get; private set; }
+
+    private Order() { }
+
+    public static Order Place(Guid id, string customerId)
+    {
+        var order = new Order { Status = OrderStatus.Pending };
+        order.AddDomainEvent(new OrderPlacedEvent(id, customerId));
+        order.IncrementVersion();   // Version becomes 1
+        return order;
+    }
+
+    public void Cancel()
+    {
+        if (Status != OrderStatus.Pending)
+            throw new DomainException("Only pending orders can be cancelled.");
+
+        Status = OrderStatus.Cancelled;
+        AddDomainEvent(new OrderCancelledEvent(Id));
+        IncrementVersion();         // Version becomes 2
+    }
+}
+
+// After SaveChanges, the persistence layer calls:
+// order.ClearDomainEvents();
+```
+
+`AggregateRootBase` members:
+
+| Member | Purpose |
+|---|---|
+| `Version` | Int incremented by `IncrementVersion()` inside domain methods |
+| `RowVersion` | `byte[]` set by EF Core; used as database concurrency token |
+| `DomainEvents` | `IReadOnlyCollection<IDomainEvent>` — externally read-only |
+| `AddDomainEvent(IDomainEvent)` | `protected` — only callable from within the aggregate |
+| `RemoveDomainEvent(IDomainEvent)` | `protected` — for intra-aggregate corrections |
+| `ClearDomainEvents()` | `public` — called by the persistence layer after dispatch |
+| `IncrementVersion()` | `protected` — call once per state-changing domain method |
+
+### Audited aggregate
+
+```csharp
+public sealed class Invoice : AuditedAggregateRoot<Guid>
+{
+    public decimal Total { get; private set; }
+
+    private Invoice() { }
+
+    public Invoice(Guid id, decimal total) : base(id)
+    {
+        Total = total;
+    }
+
+    public void Adjust(decimal newTotal, string adjustedBy)
+    {
+        Total = newTotal;
+        UpdateTimestamp(adjustedBy);   // sets LastModifiedOnUtc and LastModifiedBy
+        IncrementVersion();
+    }
+
+    // CreatedOnUtc, CreatedBy are set by the EF Core interceptor at first save.
+    // SetAuditFields() is internal — application code cannot call it.
+}
+```
+
+### ValueObject
+
+```csharp
+using MicroKit.Domain.Abstractions;
+
+public sealed class Address : ValueObject
+{
+    public string Street { get; }
+    public string City { get; }
+    public string PostalCode { get; }
+
+    public Address(string street, string city, string postalCode)
+    {
+        Street = street;
+        City = city;
+        PostalCode = postalCode;
+    }
+
+    protected override IEnumerable<object> GetAtomicValues()
+    {
+        yield return Street;
+        yield return City;
+        yield return PostalCode;
+    }
+}
+
+// Equality is structural — no identity involved
+var a = new Address("1 Main St", "Paris", "75001");
+var b = new Address("1 Main St", "Paris", "75001");
+Console.WriteLine(a == b);   // true
+Console.WriteLine(a.Equals(b)); // true
+```
+
+### Result and Error
+
+```csharp
+using MicroKit.Domain.Primitives;
+
+public static class OrderErrors
+{
+    public static readonly Error NotFound =
+        Error.NotFound("Order.NotFound", "The requested order does not exist.");
+
+    public static readonly Error AlreadyCancelled =
+        Error.Conflict("Order.AlreadyCancelled", "The order has already been cancelled.");
+}
+
+// Return Result<T> — no exceptions for expected business outcomes
+public async Task<Result<OrderDto>> FindAsync(Guid id, CancellationToken ct)
+{
+    var order = await _orders.FindByIdAsync(id, ct);
+    return order is null
+        ? Result.Failure<OrderDto>(OrderErrors.NotFound)
+        : Result.Success(new OrderDto(order));
+}
+
+// Implicit conversion: Error → Result<T>
+public Result<Order> Get(Guid id) =>
+    _cache.TryGet(id, out var o) ? o : OrderErrors.NotFound;
+
+// Call site
+var result = await FindAsync(id, ct);
+if (result.IsFailure)
+    return Problem(result.Error.Message, statusCode: 404);
+
+var dto = result.Value; // safe — IsSuccess guarantees Value is non-null
+```
+
+`Error` factory methods:
+
+| Method | `ErrorType` |
+|---|---|
+| `Error.Failure(code, message)` | `Failure` |
+| `Error.NotFound(code, message)` | `NotFound` |
+| `Error.Conflict(code, message)` | `Conflict` |
+| `Error.Validation(code, message)` | `Validation` |
+| `Error.Unauthorized(code, message)` | `Unauthorized` |
+| `Error.Forbidden(code, message)` | `Forbidden` |
+
+### Money
+
+```csharp
+using MicroKit.Domain.ValueObjects;
+
+// ISO 4217 validation — 3-letter alphabetic code only
+var price = new Money(99.99m, "EUR");    // ok
+var jpy   = new Money(1500m, "JPY");     // ok; DecimalDigits == 0
+// new Money(10m, "XX") throws ArgumentException — not a valid ISO code
+
+// Arithmetic — cross-currency throws CurrencyMismatchException
+var tax       = price.CalculateTax(0.20m);   // Money(19.998, EUR)
+var total     = price.AddTax(0.20m);          // Money(119.988, EUR)
+var rounded   = total.RoundedAmount;          // 119.99 — AwayFromZero
+
+// Payment processor integration
+long cents = new Money(9.995m, "USD").ToSmallestUnit(); // 1000 (rounded away from zero)
+var back   = Money.FromSmallestUnit(1000L, "USD");       // Money(10.00, USD)
+
+// Proration for billing cycles
+var monthly = new Money(30m, "USD");
+var prorated = monthly.CalculateProration(
+    fromDate:             DateTimeOffset.UtcNow.AddDays(-10),
+    toDate:               DateTimeOffset.UtcNow,
+    billingPeriodStart:   DateTimeOffset.UtcNow.AddDays(-30),
+    billingPeriodEnd:     DateTimeOffset.UtcNow);
+// prorated.Amount ≈ 10.00
+
+// Collection aggregation — currency-homogeneous
+var total2 = Money.Sum([new Money(10m, "EUR"), new Money(5m, "EUR")]); // 15 EUR
+```
+
+### Enumeration
+
+```csharp
+using MicroKit.Domain.Abstractions;
+
+public sealed class OrderStatus : Enumeration
+{
+    public static readonly OrderStatus Pending   = new(1, nameof(Pending),   "Pending payment");
+    public static readonly OrderStatus Confirmed = new(2, nameof(Confirmed), "Payment confirmed");
+    public static readonly OrderStatus Shipped   = new(3, nameof(Shipped),   "Shipped to customer");
+
+    private OrderStatus(int id, string name, string? displayName = null)
+        : base(id, name, displayName) { }
+}
+
+// Type-safe lookup — throws InvalidOperationException on no match, never returns null
+var status = Enumeration.FromId<OrderStatus>(2);        // Confirmed
+var same   = Enumeration.FromName<OrderStatus>("shipped"); // Shipped (case-insensitive)
+var all    = Enumeration.GetAll<OrderStatus>();          // all three instances
+```
+
+---
+
+## Configuration
+
+No DI registration is required for any package in this module. These are pure types — base classes, records, and sealed classes. Plug them into your domain layer and reference them from any package tier.
+
+---
+
+## Package dependency graph
+
+```
+MicroKit.Domain.Contracts
+    (no NuGet dependencies)
+
+MicroKit.Domain.Abstractions
+    MicroKit.Domain.Contracts
+
+MicroKit.Domain
+    MicroKit.Domain.Abstractions
+    MicroKit.Domain.Contracts
+```
