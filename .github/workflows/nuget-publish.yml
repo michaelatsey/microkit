@@ -25,6 +25,10 @@ jobs:
       - name: Test
         run: dotnet test MicroKit.slnx -c Release --no-build --verbosity normal
 
+      - name: Resolve version from tag
+        id: version
+        run: echo "VERSION=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+
       - name: Pack stable modules
         run: |
           mkdir -p ./artifacts
@@ -37,7 +41,9 @@ jobs:
             ! -path "*/MicroKit.Security/*" \
             ! -path "*/MicroKit.OpenApi/*" \
             | sort \
-            | xargs -I{} dotnet pack {} --no-build -c Release --output ./artifacts/
+            | xargs -I{} dotnet pack {} --no-build -c Release \
+                -p:Version=${{ steps.version.outputs.VERSION }} \
+                --output ./artifacts/
 
       - name: Push to NuGet.org
         run: |
