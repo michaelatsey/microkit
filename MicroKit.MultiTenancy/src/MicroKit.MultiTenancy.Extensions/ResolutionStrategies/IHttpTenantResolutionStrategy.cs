@@ -9,5 +9,5 @@ namespace MicroKit.MultiTenancy.ResolutionStrategies;
 public interface IHttpTenantResolutionStrategy : Abstractions.ITenantResolutionStrategy
 {
     /// <summary>Resolves the tenant identifier from the given <paramref name="context"/>.</summary>
-    Task<string?> GetTenantIdentifierAsync(HttpContext context);
+    ValueTask<string?> GetTenantIdentifierAsync(HttpContext context);
 }

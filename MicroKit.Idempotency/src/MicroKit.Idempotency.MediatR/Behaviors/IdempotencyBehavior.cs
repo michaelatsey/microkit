@@ -1,11 +1,9 @@
-﻿using MediatR;
+using MediatR;
 using MicroKit.Abstractions.Serialization;
 using MicroKit.Idempotency.Abstractions.Contracts;
 using MicroKit.Idempotency.Abstractions.Models;
 using MicroKit.Idempotency.Core.Configuration;
-using MicroKit.Idempotency.Core.Context;
 using MicroKit.Idempotency.Core.Exceptions;
-using MicroKit.Idempotency.Core.Hashing;
 using MicroKit.MultiTenancy.Abstractions;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
@@ -17,7 +15,7 @@ public class IdempotencyBehavior<TRequest, TResponse> : IPipelineBehavior<TReque
 {
     private readonly IIdempotencyStore _store;
     private readonly IMicroKitSerializer _serializer;
-    private readonly RequestHasher _requestHasher;
+    private readonly IRequestHasher _requestHasher;
     private readonly ILogger<IdempotencyBehavior<TRequest, TResponse>> _logger;
     private readonly IdempotencyOptions _options;
     private readonly IIdempotencyContext _idempotencyContext;
@@ -28,12 +26,11 @@ public class IdempotencyBehavior<TRequest, TResponse> : IPipelineBehavior<TReque
         IIdempotencyStore store,
         IMicroKitSerializer serializer,
         IIdempotencyContext idempotencyContext,
-        RequestHasher requestHasher,
+        IRequestHasher requestHasher,
         IOptions<IdempotencyOptions> options,
         ILogger<IdempotencyBehavior<TRequest, TResponse>> logger,
         IIdempotencyManager manager,
-        ITenantContext? tenantContext = null
-        )
+        ITenantContext? tenantContext = null)
     {
         _store = store;
         _serializer = serializer;
@@ -50,11 +47,6 @@ public class IdempotencyBehavior<TRequest, TResponse> : IPipelineBehavior<TReque
         RequestHandlerDelegate<TResponse> next,
         CancellationToken cancellationToken)
     {
-        if (request is not IIdempotentRequest<TResponse> idemRequest)
-        {
-            // Ceci n'est pas un request idempotent, continuer normalement
-            return await next(cancellationToken);
-        }
         var key = request.IdempotencyKey;
         var tenantId = GetTenantId();
 
@@ -64,7 +56,7 @@ public class IdempotencyBehavior<TRequest, TResponse> : IPipelineBehavior<TReque
             return await next(cancellationToken);
         }
 
-        if(_logger.IsEnabled(LogLevel.Information))
+        if (_logger.IsEnabled(LogLevel.Information))
         {
             _logger.LogInformation("Received idempotent request with key: {Key}", key);
         }
@@ -76,7 +68,7 @@ public class IdempotencyBehavior<TRequest, TResponse> : IPipelineBehavior<TReque
 
         if (existingState is not null)
         {
-            (_idempotencyContext as IdempotencyContext)?.UpdateState(existingState);
+            _idempotencyContext.UpdateState(existingState);
             return await HandleExistingState(existingState, request, next, tenantId, cancellationToken);
         }
 
@@ -85,7 +77,7 @@ public class IdempotencyBehavior<TRequest, TResponse> : IPipelineBehavior<TReque
 
     private string GetTenantId()
     {
-        if (_tenantContext is null || _tenantContext?.Tenant is null)
+        if (_tenantContext is null || _tenantContext.Tenant is null)
         {
             return "single";
         }
@@ -154,7 +146,6 @@ public class IdempotencyBehavior<TRequest, TResponse> : IPipelineBehavior<TReque
     {
         var ttl = request.IdempotencyExpiration ?? _options.DefaultExpiration;
         var requestHash = _options.VerifyRequestHashes ? _requestHasher.ComputeHash(request) : null;
-        // TODO: Consider tenant key if multi-tenancy is supported
         var initialState = new IdempotencyState(key, tenantId, IdempotencyStatus.Processing)
         {
             RequestHash = requestHash
@@ -187,5 +178,3 @@ public class IdempotencyBehavior<TRequest, TResponse> : IPipelineBehavior<TReque
     private static IdempotencyStatus DetermineErrorStatus(Exception ex) =>
         ex is OperationCanceledException ? IdempotencyStatus.Cancelled : IdempotencyStatus.Failed;
 }
-
-

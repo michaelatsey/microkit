@@ -33,8 +33,8 @@ public static class ServiceCollectionExtensions
 
     private static IServiceCollection AddCoreServices(this IServiceCollection services)
     {
-        services.TryAddScoped<IIdempotencyContext, IdempotencyContext>(); // Ajout du contexte
-        services.TryAddSingleton<RequestHasher>();
+        services.TryAddScoped<IIdempotencyContext, IdempotencyContext>();
+        services.TryAddSingleton<IRequestHasher, RequestHasher>();
         // 1. Enregistrer l'implémentation concrète en Scoped
         services.AddScoped<IdempotencyProvider>();
 

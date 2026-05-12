@@ -29,4 +29,10 @@ public class DefaultTenantCache : ITenantCache
         _memoryCache.Set(key, value, ttl);
         return Task.CompletedTask;
     }
+
+    public Task RemoveAsync(string key, CancellationToken cancellationToken = default)
+    {
+        _memoryCache.Remove(key);
+        return Task.CompletedTask;
+    }
 }

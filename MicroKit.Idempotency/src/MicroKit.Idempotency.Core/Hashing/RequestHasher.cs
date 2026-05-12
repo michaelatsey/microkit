@@ -1,10 +1,11 @@
 ﻿using MicroKit.Abstractions.Serialization;
+using MicroKit.Idempotency.Abstractions.Contracts;
 using System.Security.Cryptography;
 using System.Text;
 
 namespace MicroKit.Idempotency.Core.Hashing;
 
-public class RequestHasher
+public sealed class RequestHasher : IRequestHasher
 {
     private readonly IMicroKitSerializer _serializer;
 

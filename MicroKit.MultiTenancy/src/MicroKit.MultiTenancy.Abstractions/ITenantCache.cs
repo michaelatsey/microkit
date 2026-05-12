@@ -6,7 +6,12 @@ namespace MicroKit.MultiTenancy.Abstractions;
 
 public interface ITenantCache
 {
-    Task<string?> GetAsync( string key, CancellationToken cancellationToken = default);
+    /// <summary>Gets a cached value by key, or <see langword="null"/> if not found.</summary>
+    Task<string?> GetAsync(string key, CancellationToken cancellationToken = default);
 
+    /// <summary>Stores a value with the given time-to-live.</summary>
     Task SetAsync(string key, string value, TimeSpan ttl, CancellationToken cancellationToken = default);
+
+    /// <summary>Removes a cached value, invalidating both L1 and L2 caches if applicable.</summary>
+    Task RemoveAsync(string key, CancellationToken cancellationToken = default);
 }

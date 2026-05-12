@@ -8,5 +8,5 @@
 public interface ITenantResolutionStrategy
 {
     /// <summary>Resolves the tenant identifier, or <see langword="null"/> if unresolvable.</summary>
-    Task<string?> ResolveAsync(CancellationToken cancellationToken = default);
+    ValueTask<string?> ResolveAsync(CancellationToken cancellationToken = default);
 }

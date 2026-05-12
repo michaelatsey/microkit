@@ -42,7 +42,7 @@ public sealed class TenantResolutionMiddleware
         // 1. On récupère l'ID via la sécurité (La source de confiance)
         var identityTenantId = tenantIdAccessor.TenantId;
 
-        var strategyTenantId = await strategy.GetTenantIdentifierAsync(context);
+        var strategyTenantId = await strategy.GetTenantIdentifierAsync(context).ConfigureAwait(false);
 
         // 3. Logique de validation croisée
         string? finalIdentifier = null;

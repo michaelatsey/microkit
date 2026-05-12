@@ -31,4 +31,10 @@ public interface IIdempotencyContext
     /// <returns>A disposable that ends the scope when disposed</returns>
     /// <exception cref="InvalidOperationException">Thrown when a scope is already active</exception>
     IDisposable BeginScope(string key);
+
+    /// <summary>
+    /// Updates the cached state for the current scope.
+    /// </summary>
+    /// <param name="state">The state to cache for the current key</param>
+    void UpdateState(IdempotencyState state);
 }

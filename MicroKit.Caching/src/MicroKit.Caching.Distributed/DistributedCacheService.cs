@@ -1,33 +1,35 @@
-﻿using MicroKit.Caching.Abstractions;
+using MicroKit.Caching.Abstractions;
 using Microsoft.Extensions.Caching.Distributed;
+using Microsoft.Extensions.Options;
 using System.Text.Json;
 
 namespace MicroKit.Caching.Distributed;
 
-public class DistributedCacheService : ICacheService
+/// <summary>
+/// <see cref="ICacheService"/> implementation backed by <see cref="IDistributedCache"/>.
+/// </summary>
+public sealed class DistributedCacheService : ICacheService
 {
     private readonly IDistributedCache _distributedCache;
+    private readonly JsonSerializerOptions _serializerOptions;
 
-    private static readonly JsonSerializerOptions SerializerOptions = new()
-    {
-        PropertyNameCaseInsensitive = true
-    };
-
-    public DistributedCacheService(IDistributedCache distributedCache)
+    public DistributedCacheService(
+        IDistributedCache distributedCache,
+        IOptions<DistributedCacheOptions> options)
     {
         _distributedCache = distributedCache;
+        _serializerOptions = options.Value.SerializerOptions;
     }
 
     public async Task<T?> GetAsync<T>(string key, CancellationToken cancellationToken = default) where T : class
     {
         var json = await _distributedCache.GetStringAsync(key, cancellationToken);
-        return json is null ? null : JsonSerializer.Deserialize<T>(json, SerializerOptions);
+        return json is null ? null : JsonSerializer.Deserialize<T>(json, _serializerOptions);
     }
-
 
     public async Task SetAsync<T>(string key, T value, CacheOptions? options = null, CancellationToken cancellationToken = default) where T : class
     {
-        var json = JsonSerializer.Serialize(value, SerializerOptions);
+        var json = JsonSerializer.Serialize(value, _serializerOptions);
 
         var distributedOptions = new DistributedCacheEntryOptions();
         var duration = options?.Duration ?? TimeSpan.FromMinutes(30);

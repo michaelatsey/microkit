@@ -54,4 +54,10 @@ public class RedisTenantCache : ITenantCache
 
         _memoryCache.Set(key, value, TimeSpan.FromMinutes(5));
     }
+
+    public async Task RemoveAsync(string key, CancellationToken cancellationToken = default)
+    {
+        await _distributedCache.RemoveAsync(key, cancellationToken);
+        _memoryCache.Remove(key);
+    }
 }

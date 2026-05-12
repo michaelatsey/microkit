@@ -17,7 +17,7 @@ public class IdempotencyBehaviorTests
 {
     private readonly Mock<IIdempotencyStore> _storeMock;
     private readonly Mock<IMicroKitSerializer> _serializerMock;
-    private readonly RequestHasher _hasher;
+    private readonly IRequestHasher _hasher;
     private readonly IdempotencyOptions _options;
     private readonly IdempotencyBehavior<TestCommand, TestResponse> _behavior;
     private const string TenantId = "tenant-id-456";
