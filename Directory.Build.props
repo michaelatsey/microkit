@@ -20,7 +20,6 @@
     <RepositoryUrl>https://github.com/michaelatsey/microkit</RepositoryUrl>
     <PackageLicenseExpression>MIT</PackageLicenseExpression>
     <Version>1.0.0-preview.1</Version>
-    <PackageReadmeFile>docs/Readme.md</PackageReadmeFile>
 <Trademark>$(Company)</Trademark>
     <Product>$(Company) Projects</Product>
 
