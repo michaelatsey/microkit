@@ -25,16 +25,12 @@ public sealed class ApiKeyService(
         var now = timeProvider.GetUtcNow();
         var keyId = Guid.NewGuid().ToString("N");
 
-        // 1. Génération de la clé brute
         var plainTextKey = SecureTokenGenerator.GenerateApiKey(
             _options.Validation.KeyPrefix,
             _options.Validation.MinKeyLength);
 
-        // 2. Préparation du Hash (Zero-GC sur le calcul)
-        // 2. Hachage centralisé
         var hashedKey = HashKeyIfEnabled(plainTextKey);
 
-        // 3. Extraction sécurisée du préfixe d'affichage
         int prefixLen = _options.Validation.KeyPrefix.Length;
         int displayLen = Math.Min(plainTextKey.Length, prefixLen + 8);
         var displayPrefix = plainTextKey[..displayLen];
@@ -85,7 +81,6 @@ public sealed class ApiKeyService(
 
         var now = timeProvider.GetUtcNow();
 
-        // Calcul de l'expiration avec période de grâce
         if (record.ExpiresAt.HasValue)
         {
             var expiryWithGrace = record.ExpiresAt.Value.Add(_options.Validation.AllowExpiredKeyGracePeriod);
@@ -109,7 +104,6 @@ public sealed class ApiKeyService(
     {
         var records = await store.GetByOwnerAsync(ownerId, cancellationToken);
 
-        // Mapping haute performance via Array.ConvertAll ou Select/ToList avec capacité
         return [.. records.Select(r => new ApiKeyInfo(
             r.Id, r.Prefix, r.Name, r.IsActive, r.CreatedAt, r.ExpiresAt, r.LastUsedAt, r.Scopes
         ))];
@@ -131,7 +125,6 @@ public sealed class ApiKeyService(
         var existingKey = await store.GetByIdAsync(keyId, cancellationToken)
             ?? throw new KeyNotFoundException($"API key '{keyId}' not found");
 
-        // Création de la nouvelle clé à partir de l'existante
         var result = await CreateKeyAsync(MapToRequest(existingKey), cancellationToken);
 
         var now = timeProvider.GetUtcNow();

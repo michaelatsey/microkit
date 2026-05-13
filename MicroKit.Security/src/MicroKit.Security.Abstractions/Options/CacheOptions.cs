@@ -5,11 +5,6 @@
 /// </summary>
 public sealed class CacheOptions
 {
-    ///// <summary>
-    ///// Configuration section name.
-    ///// </summary>
-    //public const string SectionName = "MicroKit:Security:Cache";
-
     /// <summary>
     /// Enable caching of validation results.
     /// </summary>

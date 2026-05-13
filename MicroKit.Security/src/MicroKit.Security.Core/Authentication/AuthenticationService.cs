@@ -1,4 +1,4 @@
-﻿
+
 using MicroKit.Security.Abstractions.Authentication;
 using MicroKit.Security.Abstractions.Enums;
 using MicroKit.Security.Abstractions.Extraction;
@@ -15,7 +15,7 @@ namespace MicroKit.Security.Core.Authentication;
 /// </summary>
 public sealed class AuthenticationService(
     IAuthenticationProviderFactory providerFactory,
-    IEnumerable<ISecurityValidator> validators, // Injection des validateurs
+    IEnumerable<ISecurityValidator> validators,
     IOptions<SecurityOptions> options,
     ILogger<AuthenticationService> logger) : IAuthenticationService
 {
@@ -32,7 +32,6 @@ public sealed class AuthenticationService(
     {
         var extractionList = extractions as IList<ExtractionResult> ?? [.. extractions];
 
-        // Application de la règle Strict (Point 2)
         if (_options.AuthenticationMode == AuthenticationMode.StrictSingleCredential
             && extractionList.Count > 1)
         {
@@ -40,10 +39,9 @@ public sealed class AuthenticationService(
             return SecurityAuthResult.Failure("Multiple credentials detected while in Strict mode.");
         }
 
-        // 1. RÉSOLUTION DE L'IDENTITÉ PRIMAIRE
-        // On cherche le premier candidat primaire valide (souvent JWT ou ApiKey)
+        // Resolve the primary identity — prefer JWT when present.
         var primaryCandidate = extractionList
-            .OrderByDescending(x => x.Scheme == AuthenticationScheme.Jwt) // Priorité au JWT si présent
+            .OrderByDescending(x => x.Scheme == AuthenticationScheme.Jwt)
             .FirstOrDefault(x => x.IsPrimaryCandidate);
 
         if (primaryCandidate == null)
@@ -52,7 +50,6 @@ public sealed class AuthenticationService(
         var provider = providerFactory.GetProvider(primaryCandidate.Scheme);
         if (provider == null) return SecurityAuthResult.Failure($"No provider for {primaryCandidate.Scheme}");
 
-        // Authentification de la base (Identity)
         var authResult = await provider.AuthenticateAsync(primaryCandidate.Value.AsMemory(), cancellationToken);
 
         if (!authResult.IsSuccess)
@@ -63,8 +60,7 @@ public sealed class AuthenticationService(
             provider.Scheme,
             authResult.Principal?.Identifier);
 
-        // 2. VALIDATION CONTEXTUELLE (Le "Plus" 2026)
-        // On valide tous les AUTRES signaux par rapport à cette identité
+        // Validate all secondary signals against the resolved identity to detect shadowing attempts.
         var secondarySignals = extractionList.Where(x => x != primaryCandidate);
 
         foreach (var signal in secondarySignals)
@@ -83,7 +79,6 @@ public sealed class AuthenticationService(
             }
         }
 
-        // 3. SUCCÈS : Identité validée + Contexte cohérent
         return new SecurityAuthResult(
             true,
             authResult.Principal,

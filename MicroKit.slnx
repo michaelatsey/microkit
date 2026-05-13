@@ -108,14 +108,13 @@
     <Project Path="MicroKit.Payments/src/MicroKit.Payments/MicroKit.Payments.csproj" Id="b7b38c4c-7249-4679-b477-78f46b0a23b8" />
   </Folder>
   <Folder Name="/MicroKit.Payments/tests/" />
-  <Folder Name="/MicroKit.Security/">
-    <Project Path="MicroKit.Security/src/MicroKit.Security.AspNetCore/MicroKit.Security.AspNetCore.csproj" Id="7a39dfff-b6fd-4435-a8e9-8105247ee071" />
-  </Folder>
+  <Folder Name="/MicroKit.Security/" />
   <Folder Name="/MicroKit.Security/docs/">
     <File Path="MicroKit.Security/docs/Readme.md" />
   </Folder>
   <Folder Name="/MicroKit.Security/src/">
     <Project Path="MicroKit.Security/src/MicroKit.Security.Abstractions/MicroKit.Security.Abstractions.csproj" Id="3894cfae-b5ed-434d-a1dc-d4b552c2ff50" />
+    <Project Path="MicroKit.Security/src/MicroKit.Security.AspNetCore/MicroKit.Security.AspNetCore.csproj" Id="7a39dfff-b6fd-4435-a8e9-8105247ee071" />
     <Project Path="MicroKit.Security/src/MicroKit.Security.Core/MicroKit.Security.Core.csproj" Id="46f9c8cd-0f95-468b-a047-512cb306686a" />
     <Project Path="MicroKit.Security/src/MicroKit.Security.MultiTenancy/MicroKit.Security.MultiTenancy.csproj" Id="f7d1aff6-b5f0-4f5f-b12f-82d54f832576" />
   </Folder>
@@ -128,7 +127,9 @@
     <Project Path="MicroKit.Security/src/Providers/MicroKit.Security.Jwt.AspNetCore/MicroKit.Security.Jwt.AspNetCore.csproj" Id="a4b2816e-b0ad-4752-8dd6-e3bb623050ce" />
     <Project Path="MicroKit.Security/src/Providers/MicroKit.Security.Jwt/MicroKit.Security.Jwt.csproj" Id="25efdbdf-1b67-4874-88b4-f54a040b6a9b" />
   </Folder>
-  <Folder Name="/MicroKit.Security/tests/" />
+  <Folder Name="/MicroKit.Security/tests/">
+    <Project Path="MicroKit.Security/tests/MicroKit.Security.Tests/MicroKit.Security.Tests.csproj" Id="c4fafea7-bca5-411d-8209-5841fbbf64af" />
+  </Folder>
   <Folder Name="/Samples/" />
   <Folder Name="/Samples/WebApi/">
     <Project Path="Samples/WebApi/MicroKit.Sample.OrderApi/MicroKit.Sample.OrderApi.csproj" />

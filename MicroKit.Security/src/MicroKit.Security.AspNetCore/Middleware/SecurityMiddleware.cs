@@ -1,11 +1,11 @@
-﻿
+
 using MicroKit.Security.Abstractions.Authentication;
 using MicroKit.Security.Abstractions.Contexts;
 using MicroKit.Security.Abstractions.Extraction;
 using MicroKit.Security.Abstractions.Identity;
 using MicroKit.Security.Abstractions.Options;
 using MicroKit.Security.AspNetCore.Extensions;
-using MicroKit.Security.AspNetCore.Extraction; // Interface d'extraction
+using MicroKit.Security.AspNetCore.Extraction;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Http;
 using Microsoft.Extensions.Logging;
@@ -16,13 +16,13 @@ namespace MicroKit.Security.AspNetCore.Middleware;
 /// <summary>ASP.NET Core middleware that authenticates each request, populates <see cref="IClientContextAccessor"/>, and sets <see cref="Microsoft.AspNetCore.Http.HttpContext.User"/>.</summary>
 public sealed class SecurityMiddleware(
     RequestDelegate next,
-    IEnumerable<IAuthenticationExtractor> extractors, // Injection de TOUS les extracteurs
+    IEnumerable<IAuthenticationExtractor> extractors,
     IOptions<SecurityOptions> coreOptions,
     ILogger<SecurityMiddleware> logger)
 {
     private readonly SecurityOptions _securityOptions = coreOptions.Value;
 
-    // On trie les extracteurs une seule fois par priorité
+    // Extractors are sorted once by priority to avoid per-request overhead.
     private readonly IReadOnlyList<IAuthenticationExtractor> _sortedExtractors =
         [.. extractors.OrderByDescending(x => x.Priority)];
 
@@ -40,7 +40,6 @@ public sealed class SecurityMiddleware(
         TimeProvider timeProvider)
     {
 
-        // 1. Correlation ID
         var correlationId = GetOrCreateCorrelationId(httpContext);
         httpContext.Response.Headers[_securityOptions.CorrelationIdHeader] = correlationId;
 
@@ -50,14 +49,11 @@ public sealed class SecurityMiddleware(
         bool bypassSecurity = IsPathExempted(path) ||
                      (endpoint is not null && _securityOptions.RespectAllowAnonymous && IsAnonymousAllowed(endpoint));
 
-        // 2. On vérifie d'abord les segments de route (plus rapide que les métadonnées)
         if (bypassSecurity)
         {
             await ProceedAnonymously(httpContext, clientContextAccessor, timeProvider);
             return;
         }
-              
-        // 3. Extraction dynamique (Mode Expert : Agnostique du schéma)
 
         var extractions = new List<ExtractionResult>();
         foreach (var extractor in _sortedExtractors)
@@ -66,16 +62,14 @@ public sealed class SecurityMiddleware(
             if (extraction is not null) extractions.Add(extraction);
         }
 
-        // 4. Fallback DefaultScheme
+        // Fall back to the configured default scheme when no extractor produced a result.
         if (extractions.Count == 0 && _securityOptions.DefaultScheme is not null)
         {
             extractions.Add(new ExtractionResult(null,_securityOptions.DefaultScheme.Value));
         }
 
-        // 4. Gestion si aucun credential n'est trouvé
         if (extractions.Count == 0)
         {
-            // Si on arrive ici, c'est que ce n'est pas une route exemptée
             if (!_securityOptions.RequireAuthenticatedUser)
             {
                 clientContextAccessor.Context = ClientContext.Anonymous(timeProvider);
@@ -86,7 +80,6 @@ public sealed class SecurityMiddleware(
             return;
         }
 
-        // 5. Authentification via le Service dédié
         var authResult = await authenticationService.AuthenticateAsync(extractions, httpContext.RequestAborted);
 
         if (!authResult.IsAuthenticated)
@@ -96,10 +89,8 @@ public sealed class SecurityMiddleware(
             return;
         }
 
-        // 5. Création du contexte (La logique de Tenant est DANS le service maintenant)
         var headerTenantId = httpContext.Request.Headers[_securityOptions.TenantIdHeader].FirstOrDefault();
 
-        // 5. Création du contexte final
         clientContextAccessor.Context = securityContextFactory.CreateContext(
             authResult.Principal!,
             authResult.Scheme,
@@ -107,7 +98,6 @@ public sealed class SecurityMiddleware(
             correlationId,
             authResult.Metadata);
 
-        // 6. Injection dans l'Accessor ET dans ASP.NET User (Le Pont)
         httpContext.User = MapToClaimsPrincipal(clientContextAccessor.Context.Principal, clientContextAccessor.Context.Scheme.ToString());
 
         await next(httpContext);
@@ -121,7 +111,7 @@ public sealed class SecurityMiddleware(
 
     private bool IsPathExempted(PathString path)
     {
-        // On évite LINQ ici pour la performance sur chaque requête
+        // Avoid LINQ here — this executes on every request.
         for (int i = 0; i < _securityOptions.ExemptedPaths.Count; i++)
         {
             if (path.StartsWithSegments(_securityOptions.ExemptedPaths[i], StringComparison.OrdinalIgnoreCase))

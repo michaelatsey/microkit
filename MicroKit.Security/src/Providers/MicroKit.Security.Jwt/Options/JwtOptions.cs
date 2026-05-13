@@ -13,44 +13,30 @@ public sealed class JwtOptions: ICacheableOptions
     /// <summary>The configuration section name for JWT options.</summary>
     public const string SectionName = "MicroKit:Security:Jwt";
 
-    /// <summary>
-    /// Configuration de l'extraction (Header, Scheme).
-    /// </summary>
+    /// <summary>Gets or sets options governing how JWT tokens are extracted from HTTP requests.</summary>
     public JwtExtractionOptions Extraction { get; init; } = new();
 
-    /// <summary>
-    /// Configuration des contraintes de validation (Issuer, Audience, Keys).
-    /// </summary>
+    /// <summary>Gets or sets options governing issuer, audience, lifetime, and key validation.</summary>
     public JwtValidationOptions Validation { get; init; } = new();
 
-    /// <summary>
-    /// Configuration des mappings de claims (Sub, Roles, TenantId).
-    /// </summary>
+    /// <summary>Gets or sets options mapping JWT claim names to MicroKit principal properties.</summary>
     public JwtClaimsMappingOptions ClaimsMapping { get; init; } = new();
 
-    /// <summary>
-    /// Configuration des clés et de la signature.
-    /// </summary>
+    /// <summary>Gets or sets options governing JWT signing key material and algorithm selection.</summary>
     public JwtSigningOptions Signing { get; init; } = new();
 
-    /// <summary>
-    /// Configuration unifiée du cache pour le schéma JWT.
-    /// </summary>
+    /// <summary>Gets or sets the unified cache configuration for JWT validation results.</summary>
     public CacheOptions Cache { get; init; } = new();
 }
 
 /// <summary>Options governing JWT token extraction from the HTTP Authorization header.</summary>
 public sealed class JwtExtractionOptions
 {
-    /// <summary>
-    /// Nom du schéma dans le header Authorization. Par défaut "Bearer".
-    /// </summary>
+    /// <summary>Gets or sets the scheme prefix expected in the <c>Authorization</c> header (default: <c>Bearer</c>).</summary>
     [Required]
     public string AuthorizationScheme { get; set; } = "Bearer";
 
-    /// <summary>
-    /// Si vrai, le middleware tente d'extraire le TenantId du token.
-    /// </summary>
+    /// <summary>Gets or sets whether the middleware attempts to extract a tenant identifier from the token.</summary>
     public bool ExtractTenantFromToken { get; set; } = true;
 }
 
@@ -81,7 +67,7 @@ public sealed class JwtValidationOptions
     public int ClockSkewMinutes { get; set; } = 5;
 
     /// <summary>Gets or sets the access token expiration in minutes.</summary>
-    [Range(1, 1440)] // Max 24h pour un Access Token par défaut
+    [Range(1, 1440)]
     public int AccessTokenExpirationMinutes { get; set; } = 60;
 
     /// <summary>Gets or sets the refresh token expiration in days.</summary>
@@ -113,21 +99,18 @@ public sealed class JwtSigningOptions
     /// <summary>Gets or sets the signing algorithm (e.g. <c>HS256</c>, <c>RS256</c>).</summary>
     public string Algorithm { get; set; } = SecurityAlgorithms.HmacSha256;
 
-    // Pour HMAC
     /// <summary>Gets or sets the HMAC secret key (symmetric signing).</summary>
     public string? SecretKey { get; set; }
 
-    // Pour RSA / Asymétrique
     /// <summary>Gets or sets the PEM-encoded RSA public key (used for token validation).</summary>
     public string? PublicKey { get; set; }
     /// <summary>Gets or sets the PEM-encoded RSA private key (used for token generation).</summary>
     public string? PrivateKey { get; set; }
 
-    // Pour JWKS externe
     /// <summary>Gets or sets the JWKS endpoint URI for remote key discovery.</summary>
     public string? JwksUri { get; set; }
     /// <summary>Gets or sets how often (in minutes) the JWKS keys are refreshed.</summary>
-    public int JwksKeyRefreshMinutes { get; set; } = 24; // Par défaut 24h, car une clé change rarement
+    public int JwksKeyRefreshMinutes { get; set; } = 24;
 
     /// <summary>Gets a value indicating whether asymmetric (RSA/PS) signing is configured.</summary>
     public bool IsAsymmetric => !string.IsNullOrEmpty(PublicKey) ||

@@ -1,4 +1,4 @@
-﻿using MicroKit.Security.Abstractions.Enums;
+using MicroKit.Security.Abstractions.Enums;
 using MicroKit.Security.Abstractions.Validation;
 using MicroKit.Security.ApiKey.Options;
 using MicroKit.Security.ApiKey.Stores;
@@ -18,46 +18,30 @@ public sealed class DefaultApiKeyValidator(
 {
     private readonly ApiKeyOptions _options = options.Value;
 
-    #region IApiKeyValidator Implementation
-
-    // Surcharge String : Délègue au Span (zéro allocation supplémentaire)
     /// <inheritdoc/>
     public ValueTask<ApiKeyValidationResult> ValidateAsync(string apiKey, CancellationToken ct = default)
         => ValidateAsync(apiKey.AsSpan(), ct);
 
-    // Surcharge UTF-8 : Convertit en Char via un buffer de stack (Performance maximale)
     /// <inheritdoc/>
     public ValueTask<ApiKeyValidationResult> ValidateAsync(ReadOnlySpan<byte> apiKeyUtf8, CancellationToken ct = default)
     {
-        if (apiKeyUtf8.Length > 256) // Sécurité contre stack overflow
+        if (apiKeyUtf8.Length > 256)
             return ValidateAsync(Encoding.UTF8.GetString(apiKeyUtf8), ct);
 
         Span<char> charBuffer = stackalloc char[apiKeyUtf8.Length];
         int written = Encoding.UTF8.GetChars(apiKeyUtf8, charBuffer);
-
-        // On passe la main à la méthode async avec une string
         return ValidateAsync(charBuffer[..written], ct);
     }
 
-    // MÉTHODE PRINCIPALE (Logic Engine)
     /// <inheritdoc/>
-    public  ValueTask<ApiKeyValidationResult> ValidateAsync(ReadOnlySpan<char> apiKey, CancellationToken ct = default)
+    public ValueTask<ApiKeyValidationResult> ValidateAsync(ReadOnlySpan<char> apiKey, CancellationToken ct = default)
     {
-        // On effectue les validations synchrones sur le Span ici
         if (!ValidateFormat(apiKey)) return ValueTask.FromResult(ApiKeyValidationResult.Invalid());
 
-        // On calcule le hash de manière synchrone (stackalloc autorisé ici)
         string lookupKey = ComputeHashIfRequired(apiKey);
-
-        // On passe la main à la méthode async avec une string
         return ValidateInternalAsync(lookupKey, ct);
     }
 
-    #endregion
-
-    #region Private Helpers
-
-    // LE CŒUR ASYNCHRONE (Ne manipule que des types autorisés : string)
     private async ValueTask<ApiKeyValidationResult> ValidateInternalAsync(string lookupKey, CancellationToken ct)
     {
         var record = await store.GetByHashedKeyAsync(lookupKey, ct);
@@ -67,7 +51,6 @@ public sealed class DefaultApiKeyValidator(
         var now = timeProvider.GetUtcNow();
         if (!record.IsActive) return ApiKeyValidationResult.Revoked();
 
-        // Logique d'expiration...
         if (record.ExpiresAt.HasValue && record.ExpiresAt.Value <= now)
         {
             var graceLimit = record.ExpiresAt.Value.Add(_options.Validation.AllowExpiredKeyGracePeriod);
@@ -96,16 +79,14 @@ public sealed class DefaultApiKeyValidator(
         Span<char> hashBuffer = stackalloc char[bufferSize];
 
         if (SecureHasher.TryComputeHash(apiKey, hashBuffer, _options.Security.HashAlgorithm))
-        {
             return new string(hashBuffer);
-        }
 
         throw new InvalidOperationException("Critical error during API key hashing.");
     }
 
     private void UpdateLastUsed(Models.ApiKeyRecord record, DateTimeOffset now)
     {
-        // On ne met à jour que toutes les 5 minutes pour préserver la DB
+        // Debounce: skip update if last-used was recorded within the past 5 minutes
         if (now - record.LastUsedAt > TimeSpan.FromMinutes(5))
         {
             _ = Task.Run(async () =>
@@ -125,6 +106,4 @@ public sealed class DefaultApiKeyValidator(
             ["is_grace_period"] = record.ExpiresAt.HasValue && record.ExpiresAt.Value <= now
         };
     }
-
-    #endregion
 }

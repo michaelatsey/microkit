@@ -1,8 +1,8 @@
-﻿# 🛡️ MicroKit.Resilience
+﻿# MicroKit.Resilience
 
 **MicroKit.Resilience** est une bibliothèque de résilience robuste et modulaire pour .NET 9+, basée sur **Polly**. Elle permet de protéger vos microservices contre les pannes transitoires (SQL, Réseau, Timeouts) en utilisant des stratégies de Retry, Circuit Breaker et Fallback, tout en restant parfaitement intégrée à **MediatR**.
 
-## ✨ Caractéristiques
+## Caractéristiques
 
 * **Multi-Détecteurs** : Identification intelligente des erreurs "retryable" pour SQL Server et HTTP.
 * **Pipeline Natif Polly v9+** : Utilisation des dernières API de Polly pour des performances optimales.
@@ -12,7 +12,7 @@
 
 ---
 
-## 🚀 Installation
+## Installation
 
 Référencez les projets suivants dans votre solution :
 
@@ -22,7 +22,7 @@ Référencez les projets suivants dans votre solution :
 
 ---
 
-## ⚙️ Configuration
+## Configuration
 
 Dans votre `Program.cs`, configurez la résilience en quelques lignes :
 
@@ -42,7 +42,7 @@ builder.Services.AddMicroKitResilience()
 
 ---
 
-## 📖 Utilisation avec MediatR
+## Utilisation avec MediatR
 
 ### 1. Mode Automatique
 
@@ -63,7 +63,7 @@ public record SyncExternalDataCommand(int Id) : ICommand, IResilientRequest
 
 ---
 
-## 🏗️ Architecture du Pipeline
+## Architecture du Pipeline
 
 L'ordre d'exécution est crucial pour garantir une protection maximale :
 
@@ -73,7 +73,7 @@ L'ordre d'exécution est crucial pour garantir une protection maximale :
 
 ---
 
-## 🛠️ Extension du Framework
+## Extension du Framework
 
 Vous pouvez créer vos propres détecteurs d'erreurs en implémentant `IResilienceStrategyDetector` :
 
@@ -91,7 +91,7 @@ builder.Services.AddMicroKitResilience().AddDetector<MyCustomDetector>();
 
 ---
 
-## 📝 Bonnes Pratiques
+## Bonnes Pratiques
 
 * **Idempotence** : Assurez-vous que vos Handlers sont idempotents, car ils peuvent être exécutés plusieurs fois en cas de retry.
 * **Monitoring** : Surveillez les logs pour identifier si le Circuit Breaker s'ouvre fréquemment, ce qui indique un problème structurel chez un fournisseur.

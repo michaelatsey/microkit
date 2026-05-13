@@ -1,59 +1,58 @@
-﻿namespace MicroKit.Security.Abstractions.Identity;
+namespace MicroKit.Security.Abstractions.Identity;
 
 /// <summary>
-/// Représente l'identité authentifiée d'un principal de sécurité.
-/// Interface principale pour accéder aux informations d'identité dans l'écosystème MicroKit.
+/// Represents the authenticated identity of a security principal.
+/// Primary interface for accessing identity information within MicroKit.
 /// </summary>
 public interface ISecurityPrincipal
 {
     /// <summary>
-    /// Identifiant unique du principal (ex: user ID, client ID).
-    /// Peut être null pour les principaux anonymes.
+    /// Unique identifier of the principal (e.g. user ID, client ID).
+    /// Null for anonymous principals.
     /// </summary>
     string? Identifier { get; }
 
     /// <summary>
-    /// Nom d'affichage du principal.
+    /// Display name of the principal.
     /// </summary>
     string? DisplayName { get; }
 
     /// <summary>
-    /// Identifiant du tenant présent dans le JWT auquel appartient ce principal.
-    /// Null si le principal n'est pas associé à un tenant spécifique
-    /// ou si le multi-tenancy n'est pas utilisé.
+    /// Tenant identifier from the JWT the principal belongs to.
+    /// Null if the principal is not associated with a specific tenant
+    /// or if multi-tenancy is not in use.
     /// </summary>
-    string? TenantId { get; } 
+    string? TenantId { get; }
 
     /// <summary>
-    /// Indique si le principal est authentifié.
+    /// Indicates whether the principal is authenticated.
     /// </summary>
     bool IsAuthenticated { get; }
 
     /// <summary>
-    /// Collection des claims associés au principal.
+    /// Claims associated with the principal.
     /// </summary>
     IReadOnlyList<SecurityClaim> Claims { get; }
 
     /// <summary>
-    /// Vérifie si le principal possède un claim du type spécifié.
+    /// Returns true if the principal has a claim of the specified type.
     /// </summary>
-    /// <param name="type">Le type du claim à rechercher.</param>
-    /// <returns>True si un claim de ce type existe, false sinon.</returns>
+    /// <param name="type">The claim type to search for.</param>
+    /// <returns>True if a claim of this type exists, false otherwise.</returns>
     bool HasClaim(string type);
 
     /// <summary>
-    /// Vérifie si le principal possède un claim avec le type et la valeur spécifiés.
+    /// Returns true if the principal has a claim matching both the specified type and value.
     /// </summary>
-    /// <param name="type">Le type du claim.</param>
-    /// <param name="value">La valeur du claim.</param>
-    /// <returns>True si le claim exact existe, false sinon.</returns>
+    /// <param name="type">The claim type.</param>
+    /// <param name="value">The claim value.</param>
+    /// <returns>True if the exact claim exists, false otherwise.</returns>
     bool HasClaim(string type, string value);
 
     /// <summary>
-    /// Récupère la valeur du premier claim correspondant au type spécifié.
+    /// Returns the value of the first claim matching the specified type.
     /// </summary>
-    /// <param name="type">Le type du claim à rechercher.</param>
-    /// <returns>La valeur du claim ou null si non trouvé.</returns>
+    /// <param name="type">The claim type to search for.</param>
+    /// <returns>The claim value, or null if not found.</returns>
     string? GetClaimValue(string type);
 }
-

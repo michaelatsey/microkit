@@ -1,4 +1,4 @@
-﻿namespace MicroKit.Security.AspNetCore.Extensions;
+namespace MicroKit.Security.AspNetCore.Extensions;
 
 using MicroKit.Security.Abstractions.Authorization;
 using MicroKit.Security.Abstractions.Contexts;
@@ -10,12 +10,12 @@ using Microsoft.Extensions.DependencyInjection;
 using IAuthorizationService = Abstractions.Authorization.IAuthorizationService;
 
 /// <summary>
-/// Extensions pour sécuriser les endpoints Minimal APIs avec le framework MicroKit.
+/// Extension methods for securing Minimal API endpoints with the MicroKit framework.
 /// </summary>
 public static class EndpointExtensions
 {
     /// <summary>
-    /// Exige que l'utilisateur soit authentifié.
+    /// Requires the user to be authenticated.
     /// </summary>
     public static TBuilder RequireAuthentication<TBuilder>(this TBuilder builder)
         where TBuilder : IEndpointConventionBuilder
@@ -36,7 +36,7 @@ public static class EndpointExtensions
     }
 
     /// <summary>
-    /// Exige des permissions spécifiques (logique OR par défaut).
+    /// Requires the user to hold at least one of the specified permissions (OR logic).
     /// </summary>
     public static TBuilder RequirePermissions<TBuilder>(
         this TBuilder builder,
@@ -53,7 +53,6 @@ public static class EndpointExtensions
                 return Results.Unauthorized();
             }
 
-            // Utilisation du service d'autorisation harmonisé
             if (!authService.IsAuthorized(contextAccessor.Context.Principal, permissions))
             {
                 return Results.Forbid();
@@ -66,7 +65,7 @@ public static class EndpointExtensions
     }
 
     /// <summary>
-    /// Exige des rôles spécifiques.
+    /// Requires the user to hold at least one of the specified roles.
     /// </summary>
     public static TBuilder RequireRoles<TBuilder>(
         this TBuilder builder,
@@ -83,7 +82,6 @@ public static class EndpointExtensions
                 return Results.Unauthorized();
             }
 
-            // On utilise IsAuthorized qui mappe déjà vers RoleClaim dans les options
             if (!authService.IsAuthorized(contextAccessor.Context.Principal, roles))
             {
                 return Results.Forbid();

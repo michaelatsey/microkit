@@ -2,7 +2,6 @@
 
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Mvc.Filters;
-using MicroKit.Security.Core.Services;
 using MicroKit.Security.Abstractions.Authorization;
 using Microsoft.Extensions.DependencyInjection;
 using MicroKit.Security.Abstractions.Contexts;

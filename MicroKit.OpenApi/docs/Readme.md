@@ -1,15 +1,11 @@
-﻿Bien sûr 😄 — voici une version **professionnelle du README.md en français**, adaptée pour un package NuGet MicroKit.ApiVersioning.
-
----
-
-# MicroKit.ApiVersioning
+﻿# MicroKit.ApiVersioning
 
 > Gestion avancée des versions d’API pour ASP.NET Core (.NET 9 / .NET 10)
 > Conçu pour les microservices, Clean Architecture, DDD et systèmes modulaires.
 
 ---
 
-## 🚀 Présentation
+## Présentation
 
 **MicroKit.ApiVersioning** fournit une couche d’intégration propre et validée sur [`Asp.Versioning`](https://github.com/dotnet/aspnet-api-versioning) pour :
 
@@ -26,7 +22,7 @@ Elle impose une configuration fortement typée, élimine les valeurs par défaut
 
 ---
 
-## 📦 Installation
+## Installation
 
 ```bash
 dotnet add package MicroKit.ApiVersioning
@@ -40,7 +36,7 @@ dotnet add package MicroKit.ApiVersioning.Autofac
 
 ---
 
-## ⚙️ Configuration
+## Configuration
 
 Ajouter la section suivante dans `appsettings.json` :
 
@@ -61,7 +57,7 @@ Ajouter la section suivante dans `appsettings.json` :
 
 ---
 
-## 🧠 Fonctionnalités
+## Fonctionnalités
 
 * Options fortement typées
 * Validation au démarrage (`ValidateOnStart`)
@@ -78,7 +74,7 @@ Ajouter la section suivante dans `appsettings.json` :
 
 ---
 
-## 🏗 Enregistrement dans Microsoft DI
+## Enregistrement dans Microsoft DI
 
 ```csharp
 var builder = WebApplication.CreateBuilder(args);
@@ -122,7 +118,7 @@ public class ProductsController : ControllerBase
 
 ---
 
-## 🧩 Intégration Autofac
+## Intégration Autofac
 
 MicroKit fournit un module Autofac propre, **sans couplage avec `IServiceCollection`**.
 
@@ -147,7 +143,7 @@ builder.Host.ConfigureContainer<ContainerBuilder>(container =>
 
 ---
 
-## 🔎 Support OpenAPI / Swagger
+## Support OpenAPI / Swagger
 
 Le package expose :
 
@@ -175,7 +171,7 @@ public class SwaggerHeaderFilter
 
 ---
 
-## 🛡 Validation de configuration
+## Validation de configuration
 
 Le package utilise :
 
@@ -198,7 +194,7 @@ Parfait pour :
 
 ---
 
-## 🧱 Principes d’architecture
+## Principes d’architecture
 
 * Clean Architecture
 * Respect des principes SOLID
@@ -208,7 +204,7 @@ Parfait pour :
 
 ---
 
-## 🔬 Tests
+## Tests
 
 Vous pouvez tester facilement vos options :
 
@@ -227,7 +223,7 @@ Ou tester la validation via `IValidateOptions`.
 
 ---
 
-## 🌍 Conçu pour les microservices
+## Conçu pour les microservices
 
 Idéal pour :
 
@@ -239,7 +235,7 @@ Idéal pour :
 
 ---
 
-## 🔮 Roadmap
+## Roadmap
 
 * Support multi-tenant
 * Automation Swagger multi-version
@@ -248,36 +244,30 @@ Idéal pour :
 
 ---
 
-## 📌 Prérequis
+## Prérequis
 
 * .NET 9 ou .NET 10
 * [Asp.Versioning](https://github.com/dotnet/aspnet-api-versioning)
 
 ---
 
-## 📜 Licence
+## Licence
 
 MIT
 
 ---
 
-## 🤝 Contribution
+## Contribution
 
 Les PR sont bienvenues.
 Les discussions architecturales encouragées.
 
 ---
 
-## 🧠 Philosophie
+## Philosophie
 
 > Fail fast.
 > Valider tôt.
 > Éviter les valeurs par défaut silencieuses.
 > Séparer les conteneurs DI.
 > Construire d’abord pour la production.
-
----
-
-Si tu veux, je peux maintenant te rédiger **la section Multi-Tenant avancée** et **Swagger multi-version** pour ce README en français, prête à mettre directement dans le package NuGet.
-
-Veux-tu que je fasse ça ?

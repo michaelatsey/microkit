@@ -1,44 +1,43 @@
-﻿using MicroKit.Security.Abstractions.Enums;
+using MicroKit.Security.Abstractions.Enums;
 using MicroKit.Security.Abstractions.Identity;
 
 namespace MicroKit.Security.Abstractions.Validation;
 
 /// <summary>
-/// Résultat immuable de la validation d'une clé API.
-/// Utilise required init pour garantir l'initialisation correcte.
+/// Immutable result of an API key validation attempt.
 /// </summary>
 public sealed record ApiKeyValidationResult
 {
     /// <summary>
-    /// Statut de la validation.
+    /// Validation status.
     /// </summary>
     public required ValidationStatus Status { get; init; }
 
     /// <summary>
-    /// Principal de sécurité associé à la clé (null si validation échouée).
+    /// Security principal associated with the key, or null when validation failed.
     /// </summary>
     public required ISecurityPrincipal? Principal { get; init; }
 
     /// <summary>
-    /// Message d'erreur en cas d'échec de validation.
+    /// Error message when validation fails.
     /// </summary>
     public string? ErrorMessage { get; init; }
 
     /// <summary>
-    /// Métadonnées additionnelles associées à la validation.
+    /// Additional metadata associated with the validation result.
     /// </summary>
     public IReadOnlyDictionary<string, object>? Metadata { get; init; }
 
     /// <summary>
-    /// Indique si la validation a réussi.
+    /// Indicates whether validation succeeded.
     /// </summary>
     public bool IsValid => Status == ValidationStatus.Valid && Principal is not null;
 
     /// <summary>
-    /// Crée un résultat de validation réussie.
+    /// Creates a successful validation result.
     /// </summary>
-    /// <param name="principal">Le principal authentifié.</param>
-    /// <returns>Résultat de succès.</returns>
+    /// <param name="principal">The authenticated principal.</param>
+    /// <returns>Success result.</returns>
     public static ApiKeyValidationResult Success(ISecurityPrincipal principal) => new()
     {
         Status = ValidationStatus.Valid,
@@ -46,11 +45,11 @@ public sealed record ApiKeyValidationResult
     };
 
     /// <summary>
-    /// Crée un résultat de validation réussie avec métadonnées.
+    /// Creates a successful validation result with metadata.
     /// </summary>
-    /// <param name="principal">Le principal authentifié.</param>
-    /// <param name="metadata">Métadonnées additionnelles.</param>
-    /// <returns>Résultat de succès avec métadonnées.</returns>
+    /// <param name="principal">The authenticated principal.</param>
+    /// <param name="metadata">Additional metadata.</param>
+    /// <returns>Success result with metadata.</returns>
     public static ApiKeyValidationResult Success(
         ISecurityPrincipal principal,
         IReadOnlyDictionary<string, object> metadata) => new()
@@ -61,11 +60,11 @@ public sealed record ApiKeyValidationResult
         };
 
     /// <summary>
-    /// Crée un résultat d'échec de validation.
+    /// Creates a failed validation result.
     /// </summary>
-    /// <param name="status">Le statut d'échec.</param>
-    /// <param name="message">Message d'erreur optionnel.</param>
-    /// <returns>Résultat d'échec.</returns>
+    /// <param name="status">The failure status.</param>
+    /// <param name="message">Optional error message.</param>
+    /// <returns>Failure result.</returns>
     public static ApiKeyValidationResult Failure(ValidationStatus status, string? message = null) => new()
     {
         Status = status,
@@ -74,34 +73,34 @@ public sealed record ApiKeyValidationResult
     };
 
     /// <summary>
-    /// Crée un résultat pour une clé invalide.
+    /// Creates a result for an invalid key.
     /// </summary>
-    /// <param name="message">Message d'erreur optionnel.</param>
-    /// <returns>Résultat d'invalidité.</returns>
+    /// <param name="message">Optional error message.</param>
+    /// <returns>Invalid result.</returns>
     public static ApiKeyValidationResult Invalid(string? message = null) =>
         Failure(ValidationStatus.Invalid, message ?? "The API key is invalid.");
 
     /// <summary>
-    /// Crée un résultat pour une clé expirée.
+    /// Creates a result for an expired key.
     /// </summary>
-    /// <param name="message">Message d'erreur optionnel.</param>
-    /// <returns>Résultat d'expiration.</returns>
+    /// <param name="message">Optional error message.</param>
+    /// <returns>Expired result.</returns>
     public static ApiKeyValidationResult Expired(string? message = null) =>
         Failure(ValidationStatus.Expired, message ?? "The API key has expired.");
 
     /// <summary>
-    /// Crée un résultat pour une clé révoquée.
+    /// Creates a result for a revoked key.
     /// </summary>
-    /// <param name="message">Message d'erreur optionnel.</param>
-    /// <returns>Résultat de révocation.</returns>
+    /// <param name="message">Optional error message.</param>
+    /// <returns>Revoked result.</returns>
     public static ApiKeyValidationResult Revoked(string? message = null) =>
         Failure(ValidationStatus.Revoked, message ?? "The API key has been revoked.");
 
     /// <summary>
-    /// Crée un résultat pour une limite de taux atteinte.
+    /// Creates a result for a rate-limited key.
     /// </summary>
-    /// <param name="message">Message d'erreur optionnel.</param>
-    /// <returns>Résultat de limitation.</returns>
+    /// <param name="message">Optional error message.</param>
+    /// <returns>Rate-limited result.</returns>
     public static ApiKeyValidationResult RateLimited(string? message = null) =>
         Failure(ValidationStatus.RateLimited, message ?? "Rate limit exceeded.");
 }

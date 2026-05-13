@@ -1,4 +1,4 @@
-﻿namespace MicroKit.Security.AspNetCore.Services;
+namespace MicroKit.Security.AspNetCore.Services;
 
 using Microsoft.AspNetCore.Http;
 using MicroKit.Security.Abstractions.Contexts;
@@ -13,7 +13,6 @@ public sealed class HttpClientContextAccessor(IHttpContextAccessor httpContextAc
 {
     private const string ContextKey = "MicroKit.Security.Context";
 
-    // Implémentation de ITenantIdAccessor
     /// <inheritdoc/>
     public string? TenantId => Context?.TenantId;
     /// <inheritdoc />

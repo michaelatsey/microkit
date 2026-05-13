@@ -12,24 +12,16 @@ public sealed class ApiKeyOptions: ICacheableOptions
     /// <summary>The configuration section name for API key options.</summary>
     public const string SectionName = "MicroKit:Security:ApiKey";
 
-    /// <summary>
-    /// Configuration de l'extraction de la clé depuis la requête HTTP.
-    /// </summary>
+    /// <summary>Gets or sets options governing how API keys are extracted from HTTP requests.</summary>
     public ExtractionOptions Extraction { get; init; } = new();
 
-    /// <summary>
-    /// Configuration des contraintes de format de la clé.
-    /// </summary>
+    /// <summary>Gets or sets options governing API key format and lifetime constraints.</summary>
     public ValidationOptions Validation { get; init; } = new();
 
-    /// <summary>
-    /// Configuration de la sécurité (Hachage, Rotation).
-    /// </summary>
+    /// <summary>Gets or sets options governing API key hashing and rotation security policies.</summary>
     public SecurityOptions Security { get; init; } = new();
 
-    /// <summary>
-    /// Configuration de la performance (Cache, Rate Limiting).
-    /// </summary>
+    /// <summary>Gets or sets options governing rate limiting and caching performance policies.</summary>
     public PerformanceOptions Performance { get; init; } = new();
 
     /// <summary>Gets or sets the unified cache configuration for API key validation results.</summary>
@@ -39,21 +31,14 @@ public sealed class ApiKeyOptions: ICacheableOptions
 /// <summary>Options governing how API keys are extracted from HTTP requests.</summary>
 public sealed class ExtractionOptions
 {
-    /// <summary>
-    /// Nom du header HTTP personnalisé. Ex: "X-API-Key"
-    /// </summary>
+    /// <summary>Gets or sets the HTTP header name used to pass API keys (e.g. <c>X-API-Key</c>).</summary>
     [Required]
     public string HeaderName { get; set; } = "X-API-Key";
 
-    /// <summary>
-    /// Nom du paramètre dans l'URL. Ex: "?api_key=..."
-    /// </summary>
+    /// <summary>Gets or sets the query string parameter name used to pass API keys (e.g. <c>api_key</c>).</summary>
     public string? QueryParameterName { get; set; } = "api_key";
 
-    /// <summary>
-    /// Le schéma utilisé dans le header standard 'Authorization'. 
-    /// Exemple : "Authorization: ApiKey mk_123..." -> ici le scheme est "ApiKey"
-    /// </summary>
+    /// <summary>Gets or sets the scheme prefix expected in the <c>Authorization</c> header (e.g. <c>ApiKey mk_…</c>).</summary>
     public string AuthorizationScheme { get; set; } = "ApiKey";
 }
 
@@ -67,13 +52,8 @@ public sealed class ValidationOptions
     /// <summary>Gets or sets the default lifetime of a newly created API key.</summary>
     public TimeSpan DefaultKeyLifetime { get; init; } = TimeSpan.FromDays(365);
 
-    /// <summary>
-    /// Durée de tolérance après l'expiration de la clé.
-    /// </summary>
-    /// <value>
-    /// The allow expired key grace period.
-    /// </value>
-    public TimeSpan AllowExpiredKeyGracePeriod { get; init; } = TimeSpan.Zero; // Par défaut à 0 pour être strict
+    /// <summary>Gets or sets the grace period after key expiry during which the key is still accepted.</summary>
+    public TimeSpan AllowExpiredKeyGracePeriod { get; init; } = TimeSpan.Zero;
 }
 
 /// <summary>Options governing API key hashing and rotation security policies.</summary>
@@ -98,5 +78,4 @@ public sealed class PerformanceOptions
     /// <summary>Gets or sets the sliding time window for rate limiting.</summary>
     public TimeSpan RateLimitWindow { get; set; } = TimeSpan.FromMinutes(1);
 
-    //public TimeSpan RateLimitPerMinute { get; init; } = TimeSpan.FromMinutes(1000);
 }

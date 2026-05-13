@@ -1,13 +1,13 @@
-﻿namespace MicroKit.Security.Abstractions.Identity;
+namespace MicroKit.Security.Abstractions.Identity;
 
 /// <summary>
-/// Implémentation standard d'un principal de sécurité authentifié.
-/// Record immuable optimisé pour la performance et la compatibilité AOT.
+/// Standard implementation of an authenticated security principal.
+/// Immutable record optimised for performance and AOT compatibility.
 /// </summary>
-/// <param name="Identifier">Identifiant unique du principal.</param>
-/// <param name="DisplayName">Nom d'affichage du principal.</param>
-/// <param name="TenantId">Identifiant unique du tenant du principal.</param>
-/// <param name="Claims">Collection des claims associés.</param>
+/// <param name="Identifier">Unique identifier of the principal.</param>
+/// <param name="DisplayName">Display name of the principal.</param>
+/// <param name="TenantId">Tenant identifier of the principal.</param>
+/// <param name="Claims">Claims associated with the principal.</param>
 public sealed record SecurityPrincipal(
     string? Identifier,
     string? DisplayName,
@@ -21,13 +21,11 @@ public sealed record SecurityPrincipal(
     string? ISecurityPrincipal.Identifier => Identifier;
 
     /// <inheritdoc />
-    string? ISecurityPrincipal.TenantId => TenantId; 
+    string? ISecurityPrincipal.TenantId => TenantId;
 
     /// <inheritdoc />
     public bool HasClaim(string type)
     {
-        // On vérifie d'abord si le type correspond au TenantId pour plus de cohérence, 
-        // bien qu'il soit déjà dans la propriété dédiée.
         foreach (var claim in Claims)
         {
             if (claim.IsType(type))
@@ -59,10 +57,10 @@ public sealed record SecurityPrincipal(
     }
 
     /// <summary>
-    /// Crée un nouveau principal avec des claims additionnels.
+    /// Returns a new principal with additional claims appended.
     /// </summary>
-    /// <param name="additionalClaims">Claims à ajouter.</param>
-    /// <returns>Nouveau principal avec les claims combinés.</returns>
+    /// <param name="additionalClaims">Claims to add.</param>
+    /// <returns>New principal with the combined claims.</returns>
     public SecurityPrincipal WithClaims(params SecurityClaim[] additionalClaims)
     {
         if (additionalClaims.Length == 0) return this;
@@ -75,9 +73,8 @@ public sealed record SecurityPrincipal(
     }
 
     /// <summary>
-    /// Crée un nouveau principal associé à un tenant spécifique.
-    /// Mais attention : dans un flux sécurisé, on ne devrait changer le TenantId de l'identité que si on est en train de "switcher" de contexte <br/>
-    /// Exemple: un admin qui change de tenant
+    /// Returns a new principal associated with the specified tenant.
+    /// Only use this when intentionally switching tenant context (e.g. admin impersonation).
     /// </summary>
     public SecurityPrincipal WithTenant(string? identityTenantId)
     {

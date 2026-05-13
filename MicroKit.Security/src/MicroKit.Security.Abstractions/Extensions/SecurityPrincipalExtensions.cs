@@ -1,46 +1,46 @@
-﻿using MicroKit.Security.Abstractions.Constants;
+using MicroKit.Security.Abstractions.Constants;
 using MicroKit.Security.Abstractions.Identity;
 
 namespace MicroKit.Security.Abstractions.Extensions;
 
 /// <summary>
-/// Extensions pour ISecurityPrincipal fournissant des méthodes d'accès pratiques.
+/// Extension methods for <see cref="ISecurityPrincipal"/> providing convenient claim accessors.
 /// </summary>
 public static class SecurityPrincipalExtensions
 {
     /// <summary>
-    /// Récupère l'adresse email du principal.
+    /// Returns the principal's email address.
     /// </summary>
     public static string? GetEmail(this ISecurityPrincipal principal) =>
         principal.GetClaimValue(ClaimTypes.Email);
 
     /// <summary>
-    /// Récupère l'identifiant du tenant.
+    /// Returns the principal's tenant identifier.
     /// </summary>
     public static string? GetTenantId(this ISecurityPrincipal principal) =>
         principal.GetClaimValue(ClaimTypes.TenantId);
 
     /// <summary>
-    /// Récupère l'identifiant du client.
+    /// Returns the principal's client identifier.
     /// </summary>
     public static string? GetClientId(this ISecurityPrincipal principal) =>
         principal.GetClaimValue(ClaimTypes.ClientId);
 
     /// <summary>
-    /// Vérifie si le principal possède un rôle spécifique.
+    /// Returns true if the principal holds the specified role.
     /// </summary>
     public static bool HasRole(this ISecurityPrincipal principal, string role) =>
         principal.HasClaim(ClaimTypes.Role, role) ||
         principal.HasClaim(ClaimTypes.Roles, role);
 
     /// <summary>
-    /// Vérifie si le principal possède une permission spécifique.
+    /// Returns true if the principal holds the specified permission.
     /// </summary>
     public static bool HasPermission(this ISecurityPrincipal principal, string permission) =>
         principal.HasClaim(ClaimTypes.Permissions, permission);
 
     /// <summary>
-    /// Récupère tous les rôles du principal.
+    /// Returns all roles held by the principal.
     /// </summary>
     public static IEnumerable<string> GetRoles(this ISecurityPrincipal principal)
     {
@@ -54,7 +54,7 @@ public static class SecurityPrincipalExtensions
     }
 
     /// <summary>
-    /// Récupère toutes les permissions du principal.
+    /// Returns all permissions held by the principal.
     /// </summary>
     public static IEnumerable<string> GetPermissions(this ISecurityPrincipal principal)
     {
@@ -68,7 +68,7 @@ public static class SecurityPrincipalExtensions
     }
 
     /// <summary>
-    /// Vérifie si le principal possède au moins un des rôles spécifiés.
+    /// Returns true if the principal holds at least one of the specified roles.
     /// </summary>
     public static bool HasAnyRole(this ISecurityPrincipal principal, params string[] roles)
     {
@@ -81,7 +81,7 @@ public static class SecurityPrincipalExtensions
     }
 
     /// <summary>
-    /// Vérifie si le principal possède tous les rôles spécifiés.
+    /// Returns true if the principal holds all of the specified roles.
     /// </summary>
     public static bool HasAllRoles(this ISecurityPrincipal principal, params string[] roles)
     {

@@ -1,4 +1,4 @@
-﻿
+
 using MicroKit.Security.Abstractions.Authorization;
 using MicroKit.Security.Abstractions.Identity;
 using MicroKit.Security.Abstractions.Options;
@@ -20,11 +20,10 @@ public sealed class AuthorizationService(
     {
         if (!principal.IsAuthenticated) return false;
 
-        // Pattern 2026 : Utiliser Span pour éviter les allocations de boucle si possible
         ReadOnlySpan<string> permsSpan = permissions;
         if (permsSpan.IsEmpty) return true;
 
-        // Logique "OR" : au moins une permission doit correspondre
+        // OR logic: at least one permission must match.
         foreach (var permission in permissions)
         {
             if (HasPermission(principal, permission))
@@ -47,7 +46,7 @@ public sealed class AuthorizationService(
         ReadOnlySpan<string> permsSpan = permissions;
         if (permsSpan.IsEmpty) return true;
 
-        // Logique "AND" : toutes les permissions sont requises
+        // AND logic: every permission must match.
         foreach (var permission in permsSpan)
         {
             if (!HasPermission(principal, permission))
@@ -63,10 +62,7 @@ public sealed class AuthorizationService(
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private bool HasPermission(ISecurityPrincipal principal, string permission)
     {
-        // On récupère les noms de claims une seule fois pour éviter les accès répétitifs aux options
         var mapping = _options.ClaimsMapping;
-        // On vérifie dans les types de claims configurés dans tes SecurityOptions
-        // Typiquement : "permission", "scope", et le "role"
         return principal.HasClaim(mapping.PermissionClaim, permission) ||
                principal.HasClaim(mapping.ScopeClaim, permission) ||
                principal.HasClaim(mapping.RoleClaim, permission);

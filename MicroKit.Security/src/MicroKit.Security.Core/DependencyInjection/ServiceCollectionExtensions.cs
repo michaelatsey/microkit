@@ -1,4 +1,4 @@
-﻿
+
 using MicroKit.Security.Abstractions.Authentication;
 using MicroKit.Security.Abstractions.Authorization;
 using MicroKit.Security.Abstractions.Contexts;
@@ -30,24 +30,18 @@ public static class ServiceCollectionExtensions
         this IServiceCollection services,
         Action<SecurityOptions>? configure = null)
     {
-        // Configure options
         if (configure is not null)
         {
             services.Configure(configure);
         }
 
-        // Register core services
-        // On enregistre la Factory pour qu'elle puisse être injectée
         services.TryAddSingleton<IAuthenticationProviderFactory, AuthenticationProviderFactory>();
-
-        // 2. Les 3 Piliers Core
         services.TryAddScoped<IAuthenticationService, AuthenticationService>();
         services.TryAddSingleton<IAuthorizationService, AuthorizationService>();
         services.TryAddSingleton<ISecurityContextFactory, SecurityContextFactory>();
 
         services.TryAddEnumerable(ServiceDescriptor.Transient<ISecurityValidator, NoOpSecurityValidator>());
 
-        // 3. Infrastructure
         services.TryAddScoped<IClientContextAccessor, ClientContextAccessor>();
         services.TryAddSingleton(TimeProvider.System);
 
@@ -64,10 +58,6 @@ public static class ServiceCollectionExtensions
         Action<CacheOptions>? configure = null)
     {
         if (configure != null) builder.Services.Configure(configure);
-
-        // On décore tous les IAuthenticationProvider enregistrés
-        // Note : Cette approche nécessite souvent une factory ou un enregistrement spécifique 
-        // pour ne pas créer de boucle infinie. Voici la version simplifiée :
 
         builder.Services.Decorate<IAuthenticationProvider, CachedAuthenticationProvider>();
 

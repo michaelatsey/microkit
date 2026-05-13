@@ -1,25 +1,25 @@
-﻿namespace MicroKit.Security.Abstractions.Enums;
+namespace MicroKit.Security.Abstractions.Enums;
 
 /// <summary>
-/// Statuts possibles pour la validation d'authentification.
+/// Possible statuses for an authentication validation attempt.
 /// </summary>
 public enum ValidationStatus : byte
 {
-    /// <summary>Statut inconnu ou non déterminé.</summary>
+    /// <summary>Unknown or undetermined status.</summary>
     Unknown = 0,
 
-    /// <summary>Validation réussie.</summary>
+    /// <summary>Validation succeeded.</summary>
     Valid = 1,
 
-    /// <summary>Le token ou la clé a expiré.</summary>
+    /// <summary>The token or key has expired.</summary>
     Expired = 2,
 
-    /// <summary>Le token ou la clé a été révoqué.</summary>
+    /// <summary>The token or key has been revoked.</summary>
     Revoked = 3,
 
-    /// <summary>Le token ou la clé est invalide.</summary>
+    /// <summary>The token or key is invalid.</summary>
     Invalid = 4,
 
-    /// <summary>Limite de taux atteinte.</summary>
+    /// <summary>Rate limit exceeded.</summary>
     RateLimited = 5
 }

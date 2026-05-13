@@ -1,21 +1,19 @@
-﻿using MicroKit.Security.Abstractions.Identity;
-using System;
-using System.Collections.Generic;
-using System.Text;
+using MicroKit.Security.Abstractions.Identity;
 
 namespace MicroKit.Security.Abstractions.Authorization;
 
+/// <summary>Evaluates role and permission grants for an authenticated principal.</summary>
 public interface IAuthorizationService
 {
     /// <summary>
-    /// Vérifie si le principal possède les permissions nécessaires.
+    /// Returns true if the principal holds at least one of the specified permissions (OR logic).
     /// </summary>
-    /// <param name="principal">L'identité à vérifier.</param>
-    /// <param name="permissions">Liste des permissions (OR logic : au moins une requise).</param>
+    /// <param name="principal">The identity to evaluate.</param>
+    /// <param name="permissions">Permissions to check — at least one must be present.</param>
     bool IsAuthorized(ISecurityPrincipal principal, params string[] permissions);
 
     /// <summary>
-    /// Vérifie si le principal possède TOUTES les permissions spécifiées.
+    /// Returns true if the principal holds ALL of the specified permissions.
     /// </summary>
     bool HasAllPermissions(ISecurityPrincipal principal, params string[] permissions);
 }

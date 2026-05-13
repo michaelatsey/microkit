@@ -1,4 +1,4 @@
-﻿using MicroKit.Security.Abstractions.Enums;
+using MicroKit.Security.Abstractions.Enums;
 using MicroKit.Security.Abstractions.Options;
 using MicroKit.Security.Abstractions.Validator;
 using MicroKit.Security.ApiKey.AspNetCore.Extraction;
@@ -30,18 +30,9 @@ public static class ApiKeyAspNetCoreExtensions
         Action<ApiKeyOptions>? optionsConfigure = null,
         bool useCache = false)
     {
-        // 1. Appel au code métier existant (Projet .ApiKey)
-        // Cela enregistre ApiKeyOptions, IApiKeyService, IApiKeyStore, etc.
         builder.AddApiKey(configuration, optionsConfigure);
 
         builder.Services.AddSingleton<IAuthenticationExtractor, ApiKeyExtractor>();
-
-        // 3. NOUVEAUTÉ 2026 : Enregistre le Validateur de Contexte
-        // Cela permet au AuthenticationService de valider l'API Key par rapport au JWT
-        builder.Services.AddSingleton<ISecurityValidator, ApiKeyContextValidator>();
-
-        // 3.NOUVEAUTÉ 2026 : Enregistre le Validateur de Contexte
-        // Cela permet au AuthenticationService de valider l'API Key par rapport au JWT
         builder.Services.AddSingleton<ISecurityValidator, ApiKeyContextValidator>();
 
         var scheme = AuthenticationScheme.ApiKey.ToString();
@@ -64,14 +55,9 @@ public static class ApiKeyAspNetCoreExtensions
         where TStore : class, IApiKeyStore
 
     {
-        // 1. Appel au code métier existant (Projet .ApiKey)
-        // Cela enregistre ApiKeyOptions, IApiKeyService, IApiKeyStore, etc.
         builder.AddApiKey<TStore>(configuration, optionsConfigure);
 
         builder.Services.AddSingleton<IAuthenticationExtractor, ApiKeyExtractor>();
-
-        // 3. NOUVEAUTÉ 2026 : Enregistre le Validateur de Contexte
-        // Cela permet au AuthenticationService de valider l'API Key par rapport au JWT
         builder.Services.AddSingleton<ISecurityValidator, ApiKeyContextValidator>();
 
         var scheme = AuthenticationScheme.ApiKey.ToString();

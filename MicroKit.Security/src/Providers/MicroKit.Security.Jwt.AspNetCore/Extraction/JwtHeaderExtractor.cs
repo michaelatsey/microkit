@@ -1,4 +1,4 @@
-﻿using MicroKit.Security.Abstractions.Enums;
+using MicroKit.Security.Abstractions.Enums;
 using MicroKit.Security.Abstractions.Extraction;
 using MicroKit.Security.AspNetCore.Extraction;
 using MicroKit.Security.Jwt.Options;
@@ -24,7 +24,6 @@ public sealed class JwtHeaderExtractor(IOptions<JwtOptions> options) : IAuthenti
     /// <inheritdoc/>
     public ValueTask<ExtractionResult> ExtractCredentialsAsync(HttpContext context)
     {
-        // 1. Récupération sécurisée du header Authorization
         string authHeader = context.Request.Headers[HeaderNames.Authorization].ToString();
 
         if (string.IsNullOrEmpty(authHeader))
@@ -32,7 +31,6 @@ public sealed class JwtHeaderExtractor(IOptions<JwtOptions> options) : IAuthenti
             return ValueTask.FromResult(_nullCredentials);
         }
 
-        // 2. Vérification dynamique du schéma (ex: "Bearer ")
         var schemePrefix = $"{_options.Extraction.AuthorizationScheme} ";
 
         if (!authHeader.StartsWith(schemePrefix, StringComparison.OrdinalIgnoreCase))
@@ -40,7 +38,6 @@ public sealed class JwtHeaderExtractor(IOptions<JwtOptions> options) : IAuthenti
             return ValueTask.FromResult(_nullCredentials);
         }
 
-        // 3. Extraction de la valeur brute
         var token = authHeader[schemePrefix.Length..].Trim();
 
         if (string.IsNullOrEmpty(token))
@@ -51,7 +48,7 @@ public sealed class JwtHeaderExtractor(IOptions<JwtOptions> options) : IAuthenti
         var result = new ExtractionResult(
             Scheme: AuthenticationScheme.Jwt,
             Value: token,
-            IsPrimaryCandidate: true 
+            IsPrimaryCandidate: true
         );
 
         return ValueTask.FromResult(result);

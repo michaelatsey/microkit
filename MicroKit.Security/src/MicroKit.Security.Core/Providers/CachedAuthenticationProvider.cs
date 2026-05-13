@@ -1,4 +1,4 @@
-﻿namespace MicroKit.Security.Core.Providers;
+namespace MicroKit.Security.Core.Providers;
 
 using MicroKit.Security.Abstractions.Enums;
 using MicroKit.Security.Abstractions.Identity;
@@ -26,7 +26,7 @@ public sealed class CachedAuthenticationProvider(
     private const byte SerializationVersion = 1;
     private readonly CacheOptions _cacheOptions = options.Value;
 
-    // Protection anti-stampede (SingleFlight)
+    // SingleFlight: prevents multiple concurrent requests from hitting the backing store simultaneously.
     private static readonly ConcurrentDictionary<string, Lazy<Task<AuthenticationResult>>> _inflight = new();
 
     /// <inheritdoc />
@@ -42,7 +42,7 @@ public sealed class CachedAuthenticationProvider(
 
         var cacheKey = GenerateCacheKey(credentials.Span);
 
-        // --- NIVEAU 1 : MEMORY CACHE (L1) ---
+        // L1: memory cache
         if (memoryCache.TryGetValue(cacheKey, out AuthenticationResult? memoryResult))
         {
             logger.LogDebug("L1 cache hit for {Scheme}", Scheme);
@@ -52,8 +52,7 @@ public sealed class CachedAuthenticationProvider(
             };
         }
 
-        // --- NIVEAU 2 : DISTRIBUTED CACHE (L2) ---
-        // On utilise SingleFlight même pour la lecture L2 pour éviter de saturer Redis en cas de pic
+        // L2: distributed cache, also guarded by SingleFlight to avoid Redis saturation on spikes.
         var lazyTask = _inflight.GetOrAdd(cacheKey, _ =>
             new Lazy<Task<AuthenticationResult>>(() => ExecuteFullResolutionAsync(cacheKey, credentials, cancellationToken)));
 
@@ -72,7 +71,7 @@ public sealed class CachedAuthenticationProvider(
         ReadOnlyMemory<char> credentials,
         CancellationToken ct)
     {
-        // 1. Tentative L2
+        // 1. Try L2
         try
         {
             var cachedBytes = await distributedCache.GetAsync(cacheKey, ct);
@@ -82,7 +81,7 @@ public sealed class CachedAuthenticationProvider(
                 if (result != null)
                 {
                     logger.LogDebug("L2 cache hit for {Scheme}", Scheme);
-                    SetMemoryCache(cacheKey, result); // On remonte en L1
+                    SetMemoryCache(cacheKey, result);
                     return result with { Metadata = Enrich(result.Metadata, "DistributedCache_L2") };
                 }
             }
@@ -92,10 +91,10 @@ public sealed class CachedAuthenticationProvider(
             logger.LogWarning(ex, "L2 cache read failed for {Scheme}", Scheme);
         }
 
-        // 2. Appel au Provider Réel (Source of Truth)
+        // 2. Call the real provider (source of truth)
         var freshResult = await innerProvider.AuthenticateAsync(credentials, ct);
 
-        // 3. Mise en cache si éligible
+        // 3. Cache if eligible
         if (ShouldCache(freshResult))
         {
             await CacheResultAsync(cacheKey, freshResult, ct);
@@ -106,13 +105,12 @@ public sealed class CachedAuthenticationProvider(
 
     private void SetMemoryCache(string key, AuthenticationResult result)
     {
-        // Suggestion appliquée : Le L1 est plus court (50% du temps L2 ou max 5 min)
-        // pour éviter la pollution mémoire sur le serveur Web.
+        // L1 lifetime is capped at 50% of the L2 duration (max 5 min) to limit memory pressure on the web server.
         var totalSeconds = result.IsSuccess
             ? _cacheOptions.SuccessDurationSeconds
             : _cacheOptions.FailureDurationSeconds;
 
-        var l1Seconds = Math.Min(totalSeconds / 2, 300); // Max 5 minutes en RAM
+        var l1Seconds = Math.Min(totalSeconds / 2, 300);
 
         if (l1Seconds > 0)
         {
@@ -128,14 +126,12 @@ public sealed class CachedAuthenticationProvider(
                 ? TimeSpan.FromSeconds(_cacheOptions.SuccessDurationSeconds)
                 : TimeSpan.FromSeconds(_cacheOptions.FailureDurationSeconds);
 
-            // Mise en cache L2 (Binaire)
             var bytes = SerializeResult(result);
             await distributedCache.SetAsync(key, bytes, new DistributedCacheEntryOptions
             {
                 AbsoluteExpirationRelativeToNow = duration
             }, ct);
 
-            // Mise en cache L1 (Objet)
             SetMemoryCache(key, result);
         }
         catch (Exception ex)
@@ -166,11 +162,7 @@ public sealed class CachedAuthenticationProvider(
             Span<byte> hash = stackalloc byte[32];
             SHA256.HashData(buffer[..byteCount], hash);
 
-            // SÉCURITÉ : On s'assure qu'il y a toujours un préfixe valide et on inclut le Scheme
-            // Exemple : "mk_ApiKey:A1B2C3..." ou "mk_Jwt:F9E8D7..."
             var prefix = string.IsNullOrWhiteSpace(_cacheOptions.KeyPrefix) ? "auth_" : _cacheOptions.KeyPrefix;
-
-            // string.Concat est plus performant ici pour la clé
             return $"{prefix}{Scheme}:{Convert.ToHexString(hash)}";
         }
         finally
@@ -254,9 +246,10 @@ public sealed class CachedAuthenticationProvider(
 
     private IReadOnlyDictionary<string, object> Enrich(IReadOnlyDictionary<string, object>? original, string source)
     {
+        // auth_source is never stored in cache; it is derived here to reflect the actual data origin.
         var copy = new Dictionary<string, object>(original ?? new Dictionary<string, object>())
         {
-            ["auth_source"] = source, // La source n'est jamais stockée en cache, elle est déduite ici
+            ["auth_source"] = source,
             ["cache_enabled"] = _cacheOptions.Enabled,
             ["authenticated_at"] = DateTimeOffset.UtcNow
         };

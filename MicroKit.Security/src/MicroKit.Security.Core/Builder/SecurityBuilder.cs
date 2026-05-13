@@ -1,4 +1,4 @@
-﻿
+
 using MicroKit.Security.Abstractions.Cache;
 using MicroKit.Security.Abstractions.Enums;
 using MicroKit.Security.Abstractions.Options;
@@ -28,27 +28,23 @@ public sealed class SecurityBuilder(IServiceCollection services)
     public AuthenticationScheme DefaultScheme { get; set; } = AuthenticationScheme.ApiKey;
 
     /// <summary>
-    /// Enregistre un fournisseur d'authentification avec option de cache.
+    /// Registers an authentication provider with optional caching.
     /// </summary>
     public SecurityBuilder AddProvider<[DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.PublicConstructors)] TProvider, [DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.PublicParameterlessConstructor)] TOptions>(
-        string schemeName, // <-- AJOUT DU NOM DU SCHEME
+        string schemeName,
         bool enableCache = false)
         where TProvider : class, IAuthenticationProvider
         where TOptions : class, ICacheableOptions
     {
-        // 1. Enregistrement de l'implémentation concrète
         Services.TryAddScoped<TProvider>();
 
-        // 2. Enregistrement du service en tant que IAuthenticationProvider
         if (enableCache)
         {
-            // On lie les CacheOptions NOMMÉES aux options PARENTES
-            // C'est ici que la magie opère : pas de PostConfigure manuel
+            // Bind named CacheOptions to the parent options so each scheme's cache settings are isolated.
             Services.AddOptions<CacheOptions>(schemeName)
                 .Configure<IOptionsMonitor<TOptions>>((cacheOpt, parentMonitor) =>
                 {
                     var source = parentMonitor.Get(schemeName).Cache;
-                    // On copie les valeurs proprement
                     cacheOpt.Enabled = source.Enabled;
                     cacheOpt.KeyPrefix = source.KeyPrefix;
                     cacheOpt.SuccessDurationSeconds = source.SuccessDurationSeconds;
@@ -60,18 +56,14 @@ public sealed class SecurityBuilder(IServiceCollection services)
             Services.AddScoped<IAuthenticationProvider>(sp =>
             {
                 var inner = sp.GetRequiredService<TProvider>();
-
-                // 1. On récupère le moniteur d'options
                 var optionsMonitor = sp.GetRequiredService<IOptionsMonitor<CacheOptions>>();
-
-                // 2. On extrait UNIQUEMENT les options liées à ce Scheme (ex: "ApiKey" ou "Jwt")
                 var specificCacheOptions = optionsMonitor.Get(schemeName);
 
                 return new CachedAuthenticationProvider(
                     inner,
                     sp.GetRequiredService<IMemoryCache>(),
                     sp.GetRequiredService<IDistributedCache>(),
-                    // 3. L'ASTUCE : On wrappe ces options spécifiques dans un IOptions classique
+                    // Wrap the scheme-specific options in a plain IOptions so CachedAuthenticationProvider stays decoupled.
                     Microsoft.Extensions.Options.Options.Create(specificCacheOptions),
                     sp.GetRequiredService<ILogger<CachedAuthenticationProvider>>()
                 );
@@ -85,5 +77,5 @@ public sealed class SecurityBuilder(IServiceCollection services)
         return this;
     }
 
-    
+
 }

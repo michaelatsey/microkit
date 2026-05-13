@@ -25,7 +25,6 @@ public sealed class JwtTokenService : IJwtTokenService
     private readonly TimeProvider _timeProvider;
     private readonly ILogger<JwtTokenService> _logger;
 
-    // Ajout du manager pour la validation
     private readonly ConfigurationManager<OpenIdConnectConfiguration>? _configManager;
 
     /// <summary>Initializes a new instance and builds signing credentials from <paramref name="options"/>.</summary>
@@ -42,7 +41,6 @@ public sealed class JwtTokenService : IJwtTokenService
         _logger = logger;
         _tokenHandler = new JsonWebTokenHandler();
 
-        // 1. Initialisation du Manager (comme dans le Provider)
         if (!string.IsNullOrEmpty(_options.Signing.JwksUri))
         {
             _configManager = new ConfigurationManager<OpenIdConnectConfiguration>(
@@ -116,7 +114,6 @@ public sealed class JwtTokenService : IJwtTokenService
             }
         }
 
-        //if (principal is ITenantIdAccessor tenantAccessor && !string.IsNullOrEmpty(tenantAccessor.TenantId))
         if (!string.IsNullOrEmpty(principal.TenantId))
         {
             claims[_options.ClaimsMapping.TenantIdClaim] = principal.TenantId;
@@ -240,11 +237,9 @@ public sealed class JwtTokenService : IJwtTokenService
             ValidAudience = _options.Validation.Audience,
             ClockSkew = TimeSpan.FromMinutes(_options.Validation.ClockSkewMinutes),
 
-            // On lie le manager ici aussi !
             ConfigurationManager = _configManager as BaseConfigurationManager
         };
 
-        // Fallback local si pas de JWKS (pour les tests ou clés symétriques)
         if (_configManager == null)
         {
             if (!string.IsNullOrEmpty(_options.Signing.SecretKey))
@@ -268,7 +263,7 @@ public sealed class JwtTokenService : IJwtTokenService
         var claims = new List<SecurityClaim>();
         string? identifier = null;
         string? displayName = null;
-        string? tenantId = null; // 1. Déclarer la variable
+        string? tenantId = null;
 
         foreach (var claim in result.Claims)
         {
@@ -282,7 +277,7 @@ public sealed class JwtTokenService : IJwtTokenService
             {
                 displayName = value;
             }
-            else if (claim.Key == _options.ClaimsMapping.TenantIdClaim) // 2. Extraire le claim tenant
+            else if (claim.Key == _options.ClaimsMapping.TenantIdClaim)
             {
                 tenantId = value;
             }
@@ -290,7 +285,6 @@ public sealed class JwtTokenService : IJwtTokenService
             claims.Add(new SecurityClaim(claim.Key, value));
         }
 
-        // 3. Passer le tenantId au constructeur
         return new SecurityPrincipal(identifier, displayName, tenantId, claims);
     }
 }

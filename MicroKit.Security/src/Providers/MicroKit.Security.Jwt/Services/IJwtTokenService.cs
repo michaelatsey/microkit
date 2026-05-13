@@ -1,4 +1,4 @@
-﻿namespace MicroKit.Security.Jwt.Services;
+namespace MicroKit.Security.Jwt.Services;
 
 using MicroKit.Security.Abstractions.Identity;
 using System.Collections.Generic;
@@ -6,69 +6,54 @@ using System.Threading;
 using System.Threading.Tasks;
 using System;
 
-/// <summary>
-/// Service central pour la génération, la gestion et la validation des jetons JWT.
-/// </summary>
+/// <summary>Central service for generating, managing, and validating JWT tokens.</summary>
 public interface IJwtTokenService
 {
-    /// <summary>
-    /// Génère un jeton d'accès (Access Token) pour un principal donné.
-    /// L'implémentation doit inclure le TenantId du principal dans les claims.
-    /// </summary>
-    /// <param name="principal">Le principal de sécurité authentifié.</param>
-    /// <param name="additionalClaims">Claims optionnels à ajouter au jeton.</param>
-    /// <returns>Le JWT sous forme de chaîne de caractères.</returns>
+    /// <summary>Generates an access token for the given principal.</summary>
+    /// <param name="principal">The authenticated security principal.</param>
+    /// <param name="additionalClaims">Optional additional claims to embed in the token.</param>
+    /// <returns>The signed JWT as a compact string.</returns>
     string GenerateAccessToken(
         ISecurityPrincipal principal,
         IEnumerable<SecurityClaim>? additionalClaims = null);
 
-    /// <summary>
-    /// Génère un jeton de rafraîchissement (Refresh Token) opaque ou auto-porté.
-    /// </summary>
-    /// <returns>Le jeton de rafraîchissement.</returns>
+    /// <summary>Generates an opaque refresh token.</summary>
+    /// <returns>A cryptographically random refresh token string.</returns>
     string GenerateRefreshToken();
 
-    /// <summary>
-    /// Génère simultanément une paire de jetons (Access + Refresh).
-    /// </summary>
-    /// <param name="principal">Le principal de sécurité authentifié.</param>
-    /// <param name="additionalClaims">Claims optionnels à ajouter.</param>
-    /// <returns>Un enregistrement TokenPair contenant les jetons et leurs dates d'expiration.</returns>
+    /// <summary>Generates an access/refresh token pair in a single call.</summary>
+    /// <param name="principal">The authenticated security principal.</param>
+    /// <param name="additionalClaims">Optional additional claims to embed in the access token.</param>
+    /// <returns>A <see cref="TokenPair"/> containing both tokens and their expiry times.</returns>
     TokenPair GenerateTokenPair(
         ISecurityPrincipal principal,
         IEnumerable<SecurityClaim>? additionalClaims = null);
 
-    /// <summary>
-    /// Valide la signature et l'intégrité d'un jeton, puis extrait le principal.
-    /// </summary>
-    /// <param name="token">Le JWT à valider.</param>
-    /// <param name="cancellationToken">Jeton d'annulation (utile pour les appels JWKS).</param>
-    /// <returns>Le principal de sécurité si le jeton est valide, sinon null.</returns>
+    /// <summary>Validates the signature and integrity of a token, then extracts the principal.</summary>
+    /// <param name="token">The JWT to validate.</param>
+    /// <param name="cancellationToken">Cancellation token (used for JWKS key fetches).</param>
+    /// <returns>The security principal if the token is valid; otherwise <c>null</c>.</returns>
     ValueTask<ISecurityPrincipal?> ValidateTokenAsync(
         string token,
         CancellationToken cancellationToken = default);
 
     /// <summary>
-    /// Extrait les métadonnées d'un jeton (expiration, émetteur) sans nécessairement valider la signature.
-    /// Utile pour les indices d'interface utilisateur ou les vérifications de pré-validation.
+    /// Reads token metadata (expiry, issuer) without validating the signature.
+    /// Useful for UI hints or pre-validation checks.
     /// </summary>
-    /// <param name="token">Le JWT à analyser.</param>
-    /// <returns>Les métadonnées du jeton ou null si le format est invalide.</returns>
+    /// <param name="token">The JWT to read.</param>
+    /// <returns>The token metadata, or <c>null</c> if the format is invalid.</returns>
     TokenMetadata? GetTokenMetadata(string token);
 }
 
-/// <summary>
-/// Représente une paire de jetons d'authentification.
-/// </summary>
+/// <summary>Represents an access/refresh token pair.</summary>
 public sealed record TokenPair(
     string AccessToken,
     string RefreshToken,
     DateTimeOffset AccessTokenExpires,
     DateTimeOffset RefreshTokenExpires);
 
-/// <summary>
-/// Contient les informations descriptives extraites d'un jeton.
-/// </summary>
+/// <summary>Descriptive metadata extracted from a JWT without full validation.</summary>
 public sealed record TokenMetadata(
     DateTimeOffset ExpiresAt,
     string Issuer,

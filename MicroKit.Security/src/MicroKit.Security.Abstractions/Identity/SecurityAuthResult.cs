@@ -1,15 +1,15 @@
-﻿using MicroKit.Security.Abstractions.Enums;
+using MicroKit.Security.Abstractions.Enums;
 
 namespace MicroKit.Security.Abstractions.Identity;
 
 /// <summary>
-/// Représente le résultat d'une tentative d'authentification globale.
+/// Represents the outcome of an authentication attempt.
 /// </summary>
-/// <param name="IsAuthenticated">Indique si l'authentification a réussi pour au moins un schéma.</param>
-/// <param name="Principal">Le principal authentifié (ou null en cas d'échec).</param>
-/// <param name="Scheme">Le schéma spécifique qui a validé l'identité (ex: Jwt, ApiKey).</param>
-/// <param name="Metadata"></param>
-/// <param name="FailureMessage">Message d'erreur optionnel pour le logging.</param>
+/// <param name="IsAuthenticated">Indicates whether at least one scheme authenticated successfully.</param>
+/// <param name="Principal">The authenticated principal, or null on failure.</param>
+/// <param name="Scheme">The specific scheme that validated the identity (e.g. Jwt, ApiKey).</param>
+/// <param name="Metadata">Optional metadata attached to the authentication result.</param>
+/// <param name="FailureMessage">Optional error message for logging purposes.</param>
 public record SecurityAuthResult(
     bool IsAuthenticated,
     ISecurityPrincipal? Principal = null,
@@ -18,10 +18,11 @@ public record SecurityAuthResult(
     string? FailureMessage = null
     )
 {
-    // Helpers statiques pour faciliter l'usage dans le SecurityService
+    /// <summary>Creates a successful authentication result.</summary>
     public static SecurityAuthResult Success(ISecurityPrincipal principal, AuthenticationScheme scheme, IReadOnlyDictionary<string, object>? metadata = null)
         => new(true, principal, scheme, Metadata: metadata);
 
+    /// <summary>Creates a failed authentication result.</summary>
     public static SecurityAuthResult Failure(string message = "Invalid credentials")
         => new(false, FailureMessage: message);
 }

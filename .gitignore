@@ -480,3 +480,7 @@ $RECYCLE.BIN/
 
 # Vim temporary swap files
 *.swp
+
+ApiKeyReadMe.md
+MicroKit.Resilience/src/MicroKit.Resilience/Usecases.md
+MicroKit.Security/docs/ApiKeyReadMe.md

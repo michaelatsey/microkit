@@ -26,12 +26,10 @@ public static class ServiceCollectionExtensions
         IConfiguration configuration,
         Action<JwtOptions>? configure = null)
     {
-        // 1. Liaison avec la section de configuration (appsettings.json)
         var optionsBuilder = builder.Services.AddOptions<JwtOptions>()
             .Bind(configuration.GetSection(JwtOptions.SectionName))
             .Validate(o =>
             {
-                // Utilisation du nouveau modèle d'options (o.Signing...)
                 if (o.Signing.Algorithm.StartsWith("HS"))
                     return !string.IsNullOrEmpty(o.Signing.SecretKey);
 
@@ -42,27 +40,16 @@ public static class ServiceCollectionExtensions
             }, "MicroKit.Security.Jwt: The configured algorithm requires a matching SecretKey or RSA Key in 'Signing' section.")
             .ValidateOnStart();
 
-        // 2. Application de la configuration manuelle via Action (surcharge le JSON)
-        if (configure != null)
-        {
+        if (configure is not null)
             builder.Services.Configure(configure);
-        }
 
         AddJwtCore(builder.Services);
         return builder;
     }
 
-    
-    /// <summary>
-    /// Centralizes service registration to ensure consistency.
-    /// </summary>
     private static void AddJwtCore(IServiceCollection services)
     {
-        // Nécessaire pour les tests et la gestion du temps dans JwtTokenService
         services.TryAddSingleton(TimeProvider.System);
-
-        // Service de haut niveau pour générer/gérer les tokens
         services.TryAddSingleton<IJwtTokenService, JwtTokenService>();
-
     }
 }

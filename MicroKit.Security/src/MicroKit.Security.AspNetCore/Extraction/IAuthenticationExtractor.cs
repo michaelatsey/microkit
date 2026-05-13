@@ -1,20 +1,20 @@
-﻿using MicroKit.Security.Abstractions.Extraction;
+using MicroKit.Security.Abstractions.Extraction;
 using Microsoft.AspNetCore.Http;
 
 namespace MicroKit.Security.AspNetCore.Extraction;
 
 /// <summary>
-/// Contrat pour extraire des credentials depuis le transport HTTP.
+/// Contract for extracting credentials from an HTTP transport.
 /// </summary>
 public interface IAuthenticationExtractor
 {
     /// <summary>
-    /// Priorité d'exécution (plus le chiffre est haut, plus il passe tôt).
+    /// Execution priority — higher values run first.
     /// </summary>
     int Priority { get; }
 
     /// <summary>
-    /// Tente d'extraire les informations de la requête.
+    /// Attempts to extract credentials from the current HTTP request.
     /// </summary>
     ValueTask<ExtractionResult> ExtractCredentialsAsync(HttpContext context);
 }

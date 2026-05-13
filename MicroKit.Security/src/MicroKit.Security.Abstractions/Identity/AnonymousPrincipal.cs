@@ -1,19 +1,16 @@
-﻿namespace MicroKit.Security.Abstractions.Identity;
+namespace MicroKit.Security.Abstractions.Identity;
 
 /// <summary>
-/// Principal anonyme singleton pour les contextes non authentifiés.
-/// Implémentation thread-safe utilisant le pattern singleton.
+/// Singleton anonymous principal for unauthenticated contexts.
+/// Thread-safe singleton implementation.
 /// </summary>
 public sealed class AnonymousPrincipal : ISecurityPrincipal
 {
     /// <summary>
-    /// Instance singleton du principal anonyme.
+    /// Singleton instance of the anonymous principal.
     /// </summary>
     public static readonly AnonymousPrincipal Instance = new();
 
-    /// <summary>
-    /// Constructeur privé pour garantir le pattern singleton.
-    /// </summary>
     private AnonymousPrincipal() { }
 
     /// <inheritdoc />
@@ -22,9 +19,7 @@ public sealed class AnonymousPrincipal : ISecurityPrincipal
     /// <inheritdoc />
     public string? DisplayName => "Anonymous";
 
-    /// <summary>
-    /// Un utilisateur anonyme n'a pas de TenantId par défaut.
-    /// </summary>
+    /// <inheritdoc />
     public string? TenantId => null;
 
     /// <inheritdoc />

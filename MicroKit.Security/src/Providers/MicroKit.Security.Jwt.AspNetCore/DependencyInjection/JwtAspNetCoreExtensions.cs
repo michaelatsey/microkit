@@ -1,4 +1,4 @@
-﻿
+
 using MicroKit.Security.Abstractions.Enums;
 using MicroKit.Security.Abstractions.Options;
 using MicroKit.Security.AspNetCore.Extraction;
@@ -24,12 +24,7 @@ public static class JwtAspNetCoreExtensions
         IConfiguration configuration,
         Action<JwtOptions>? configure = null)
     {
-        // 1. Appel au code métier (Projet MicroKit.Security.Jwt)
-        // Enregistre JwtOptions, IJwtTokenService et JwtAuthenticationProvider
         builder.AddJwt(configuration,configure);
-
-        // 2. Enregistrement de l'extracteur de Header spécifique au Web
-        // C'est ce qui permet au Middleware de "voir" le token dans les requêtes HTTP
         builder.Services.AddSingleton<IAuthenticationExtractor, JwtHeaderExtractor>();
         return builder;
     }
@@ -46,12 +41,7 @@ public static class JwtAspNetCoreExtensions
         Action<JwtOptions>? optionsConfigure = null,
         bool useCache = false)
     {
-        // 1. Appel au code métier (Projet MicroKit.Security.Jwt)
-        // Enregistre JwtOptions, IJwtTokenService et JwtAuthenticationProvider
         builder.AddJwt(configuration,optionsConfigure);
-
-        // 2. Enregistrement de l'extracteur de Header spécifique au Web
-        // C'est ce qui permet au Middleware de "voir" le token dans les requêtes HTTP
         builder.Services.AddSingleton<IAuthenticationExtractor, JwtHeaderExtractor>();
 
         var scheme = AuthenticationScheme.Jwt.ToString();

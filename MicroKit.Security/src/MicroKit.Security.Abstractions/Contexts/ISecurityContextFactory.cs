@@ -3,6 +3,7 @@ using MicroKit.Security.Abstractions.Identity;
 
 namespace MicroKit.Security.Abstractions.Contexts;
 
+/// <summary>Factory for creating <see cref="IClientContext"/> instances after successful authentication.</summary>
 public interface ISecurityContextFactory
 {
     /// <summary>

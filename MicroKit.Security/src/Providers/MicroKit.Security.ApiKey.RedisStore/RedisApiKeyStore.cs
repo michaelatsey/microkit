@@ -47,7 +47,6 @@ public sealed class RedisApiKeyStore : IApiKeyStore
         var data = await _db.StringGetAsync(RedisKeys.Key(id));
         if (data.IsNull) return null;
 
-        // Utilisation de ReadOnlyMemory pour éviter les allocations de strings inutiles
         return JsonSerializer.Deserialize<ApiKeyRecord>((byte[])data!, JsonOptions);
     }
 
@@ -63,7 +62,6 @@ public sealed class RedisApiKeyStore : IApiKeyStore
         string hashedKey,
         CancellationToken cancellationToken = default)
     {
-        // 1. Chercher l'ID correspondant au hash dans l'index secondaire
         var id = await _db.HashGetAsync(RedisKeys.Lookup(), hashedKey);
 
         return id.HasValue ? await GetByIdAsync(id!, cancellationToken) : null;
@@ -84,10 +82,7 @@ public sealed class RedisApiKeyStore : IApiKeyStore
     {
         var json = JsonSerializer.SerializeToUtf8Bytes(record, JsonOptions);
 
-        // Utilisation d'une transaction Redis (Multi/Exec) pour garantir l'intégrité
         var tran = _db.CreateTransaction();
-
-        // Ajout du record + Index de Hash + Index par Owner
         _ = tran.StringSetAsync(RedisKeys.Key(record.Id), json);
         _ = tran.HashSetAsync(RedisKeys.Lookup(), record.HashedKey, record.Id);
         _ = tran.SetAddAsync(RedisKeys.OwnerIndex(record.OwnerId), record.Id);
@@ -112,11 +107,9 @@ public sealed class RedisApiKeyStore : IApiKeyStore
         string ownerId,
         CancellationToken cancellationToken = default)
     {
-        // 1. Récupérer tous les IDs liés à ce propriétaire depuis le SET
         var ids = await _db.SetMembersAsync(RedisKeys.OwnerIndex(ownerId));
         if (ids.Length == 0) return [];
 
-        // 2. Batching pour la performance : Récupérer toutes les clefs en un seul appel (MGET)
         var keys = Array.ConvertAll(ids, id => (RedisKey)RedisKeys.Key(id!));
         var results = await _db.StringGetAsync(keys);
 
@@ -145,18 +138,7 @@ public sealed class RedisApiKeyStore : IApiKeyStore
         DateTimeOffset timestamp,
         CancellationToken cancellationToken = default)
     {
-        // On récupère, on modifie, on sauvegarde
-        // Note: Dans un système ultra-haute charge, on pourrait utiliser un Lua script
-        // pour ne pas désérialiser/resérialiser tout l'objet.
-        //var record = await GetByIdAsync(id, cancellationToken);
-        //if (record is not null)
-        //{
-        //    var updated = record with { LastUsedAt = timestamp };
-        //    await _db.StringSetAsync($"{_baseKey}{id}", JsonSerializer.Serialize(updated, JsonOptions));
-        //}
-
-        // Approche "Expert" : On utilise un script Lua pour mettre à jour un champ JSON
-        // sans rapatrier tout l'objet sur le réseau (réduction CPU/Bande passante)
+        // Lua script updates a single JSON field in-place, avoiding a full round-trip for high-throughput paths
         const string luaScript = @"
             local val = redis.call('GET', KEYS[1])
             if val then

@@ -4,7 +4,7 @@
 
 Solution robuste de messagerie transactionnelle pour .NET 8/9. Implémente les patterns **Outbox** et **Inbox** avec une gestion native du verrouillage SQL pour garantir la consistance des données dans des architectures distribuées.
 
-## 🛠 Features
+## Features
 
 * **Transactional Outbox** : Publication d'événements atomique avec vos changements d'état métier.
 * **Idempotent Inbox** : Détection et prévention des doublons de messages entrants pour garantir un traitement unique (Exactly-once processing).
@@ -14,7 +14,7 @@ Solution robuste de messagerie transactionnelle pour .NET 8/9. Implémente les p
 * **Validation au Démarrage** : Validation stricte des options via DataAnnotations et `IValidateOptions` dès le lancement de l'application.
 * **Nettoyage Automatique** : Background workers dédiés à la purge des messages traités pour éviter la saturation des tables.
 
-## ⚙️ Configuration
+## Configuration
 
 ### 1. Via appsettings.json
 
@@ -64,7 +64,7 @@ services.AddMicroKitMessaging(config =>
 
 ---
 
-## 🏗 Implémentation
+## Implémentation
 
 ### Configuration du Modèle
 
@@ -100,7 +100,7 @@ public async Task Handle(CreateOrderCommand command, CancellationToken ct)
 
 ---
 
-## 🔍 Mécanique Interne
+## Mécanique Interne
 
 ### Stratégie de Verrouillage
 
@@ -118,7 +118,7 @@ Pour éviter les données périmées ou les fuites mémoire dans les workers de 
 
 ---
 
-## 🛡 Validation & Sécurité
+## Validation & Sécurité
 
 * **OutboxOptionsValidator** : Valide la cohérence des `TimeSpan` (ex: intervalle de polling positif).
 * **MessagingModuleValidator** : Vérifie au démarrage que toutes les dépendances critiques (comme un `IOutboxPublisher`) sont correctement enregistrées avant de lancer les Background Workers.

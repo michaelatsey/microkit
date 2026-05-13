@@ -1,36 +1,36 @@
-﻿namespace MicroKit.Security.Abstractions.Identity;
+namespace MicroKit.Security.Abstractions.Identity;
 
 /// <summary>
-/// Représente un claim de sécurité immuable et AOT-compatible.
-/// Structure optimisée pour éviter les allocations sur le heap.
+/// Represents an immutable, AOT-compatible security claim.
+/// Struct layout avoids heap allocations.
 /// </summary>
-/// <param name="Type">Le type du claim (ex: "role", "sub", "email").</param>
-/// <param name="Value">La valeur du claim.</param>
+/// <param name="Type">The claim type (e.g. "role", "sub", "email").</param>
+/// <param name="Value">The claim value.</param>
 public readonly record struct SecurityClaim(string Type, string Value)
 {
     /// <summary>
-    /// Claim vide représentant l'absence de valeur.
+    /// Empty claim representing the absence of a value.
     /// </summary>
     public static SecurityClaim Empty => new(string.Empty, string.Empty);
 
     /// <summary>
-    /// Indique si le claim est vide (type non défini).
+    /// Indicates whether the claim is empty (undefined type).
     /// </summary>
     public bool IsEmpty => string.IsNullOrEmpty(Type);
 
     /// <summary>
-    /// Vérifie si le claim correspond au type spécifié.
+    /// Returns true if the claim type matches the specified type.
     /// </summary>
-    /// <param name="type">Le type à vérifier.</param>
-    /// <returns>True si le type correspond, false sinon.</returns>
+    /// <param name="type">The type to match.</param>
+    /// <returns>True if the type matches, false otherwise.</returns>
     public bool IsType(string type) => string.Equals(Type, type, StringComparison.Ordinal);
 
     /// <summary>
-    /// Vérifie si le claim correspond au type et à la valeur spécifiés.
+    /// Returns true if the claim matches both the specified type and value.
     /// </summary>
-    /// <param name="type">Le type à vérifier.</param>
-    /// <param name="value">La valeur à vérifier.</param>
-    /// <returns>True si le type et la valeur correspondent, false sinon.</returns>
+    /// <param name="type">The type to match.</param>
+    /// <param name="value">The value to match.</param>
+    /// <returns>True if both type and value match, false otherwise.</returns>
     public bool Matches(string type, string value) =>
         string.Equals(Type, type, StringComparison.Ordinal) &&
         string.Equals(Value, value, StringComparison.Ordinal);

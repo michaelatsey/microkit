@@ -2,7 +2,6 @@
 
 using Microsoft.AspNetCore.Http;
 using MicroKit.Security.Abstractions.Contexts;
-using MicroKit.Security.Core.Services;
 
 /// <summary>
 /// HttpContext extension methods for security operations.

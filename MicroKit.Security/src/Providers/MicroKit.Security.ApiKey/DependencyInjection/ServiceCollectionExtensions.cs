@@ -12,14 +12,15 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 
 namespace MicroKit.Security.ApiKey.DependencyInjection;
-/// <summary>
-/// Méthodes d'extension pour l'enregistrement de l'authentification par ApiKey.
-/// </summary>
+
+/// <summary>Extension methods for registering API key authentication.</summary>
 public static class ServiceCollectionExtensions
 {
-    /// <summary>
-    /// Ajoute l'authentification ApiKey avec configuration par délégué.
-    /// </summary>
+    /// <summary>Adds API key authentication using the in-memory store.</summary>
+    /// <param name="builder">The security builder.</param>
+    /// <param name="configuration">Application configuration used to bind <see cref="ApiKeyOptions"/>.</param>
+    /// <param name="configure">Optional additional configuration delegate.</param>
+    /// <returns>The same <paramref name="builder"/> for chaining.</returns>
     public static SecurityBuilder AddApiKey(
         this SecurityBuilder builder,
         IConfiguration configuration,
@@ -29,9 +30,12 @@ public static class ServiceCollectionExtensions
         return AddCoreServices<InMemoryApiKeyStore>(builder);
     }
 
-    /// <summary>
-    /// Ajoute l'authentification ApiKey avec un Store personnalisé.
-    /// </summary>
+    /// <summary>Adds API key authentication using a custom store implementation.</summary>
+    /// <typeparam name="TStore">The <see cref="IApiKeyStore"/> implementation to register.</typeparam>
+    /// <param name="builder">The security builder.</param>
+    /// <param name="configuration">Application configuration used to bind <see cref="ApiKeyOptions"/>.</param>
+    /// <param name="configure">Optional additional configuration delegate.</param>
+    /// <returns>The same <paramref name="builder"/> for chaining.</returns>
     public static SecurityBuilder AddApiKey<TStore>(
         this SecurityBuilder builder,
         IConfiguration configuration,
@@ -42,17 +46,9 @@ public static class ServiceCollectionExtensions
         return AddCoreServices<TStore>(builder);
     }
 
-
-    /// <summary>
-    /// Adds the API key options.
-    /// Méthodes privées pour centraliser la logique
-    /// </summary>
-    /// <param name="builder">The builder.</param>
-    /// <param name="configuration"></param>
-    /// <param name="configure">The configure.</param>
     private static void AddApiKeyOptions(
-        SecurityBuilder builder, 
-        IConfiguration configuration, 
+        SecurityBuilder builder,
+        IConfiguration configuration,
         Action<ApiKeyOptions>? configure = null)
     {
         var optionsBuilder = builder.Services
@@ -62,24 +58,13 @@ public static class ServiceCollectionExtensions
             .ValidateOnStart();
 
         if (configure is not null)
-        {
             optionsBuilder.Configure(configure);
-        }
     }
 
-    /// <summary>
-    /// Adds the core services.
-    /// </summary>
-    /// <typeparam name="TStore">The type of the store.</typeparam>
-    /// <param name="builder">The builder.</param>
-    /// <returns></returns>
     private static SecurityBuilder AddCoreServices<TStore>(SecurityBuilder builder)
         where TStore : class, IApiKeyStore
     {
-        // On le met en Singleton s'il ne dépend pas d'un DbContext "Scoped"
         builder.Services.TryAddSingleton<IApiKeyValidator, DefaultApiKeyValidator>();
-
-        // On évite les doublons si la méthode est appelée plusieurs fois
         builder.Services.TryAddSingleton<IApiKeyStore, TStore>();
         builder.Services.TryAddScoped<IApiKeyService, ApiKeyService>();
         return builder;

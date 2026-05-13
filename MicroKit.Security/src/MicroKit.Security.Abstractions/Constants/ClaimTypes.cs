@@ -1,71 +1,71 @@
-﻿namespace MicroKit.Security.Abstractions.Constants;
+namespace MicroKit.Security.Abstractions.Constants;
 
 /// <summary>
-/// Types de claims standard utilisés dans l'écosystème MicroKit.Security.
-/// Fournit des constantes pour éviter les erreurs de frappe et assurer la cohérence.
+/// Standard claim type constants used across MicroKit.Security.
+/// Provides typed constants to prevent typos and ensure consistency.
 /// </summary>
 public static class ClaimTypes
 {
-    /// <summary>Identifiant du sujet (subject).</summary>
+    /// <summary>Subject identifier.</summary>
     public const string Subject = "sub";
 
-    /// <summary>Identifiant unique de l'utilisateur.</summary>
+    /// <summary>Unique user identifier.</summary>
     public const string UserId = "user_id";
 
-    /// <summary>Adresse email.</summary>
+    /// <summary>Email address.</summary>
     public const string Email = "email";
 
-    /// <summary>Email vérifié.</summary>
+    /// <summary>Verified email flag.</summary>
     public const string EmailVerified = "email_verified";
 
-    /// <summary>Nom complet.</summary>
+    /// <summary>Full name.</summary>
     public const string Name = "name";
 
-    /// <summary>Prénom.</summary>
+    /// <summary>Given name.</summary>
     public const string GivenName = "given_name";
 
-    /// <summary>Nom de famille.</summary>
+    /// <summary>Family name.</summary>
     public const string FamilyName = "family_name";
 
-    /// <summary>Rôle de l'utilisateur.</summary>
+    /// <summary>User role.</summary>
     public const string Role = "role";
 
-    /// <summary>Rôles multiples (claim répétable).</summary>
+    /// <summary>Multiple roles (repeatable claim).</summary>
     public const string Roles = "roles";
 
-    /// <summary>Scope OAuth2.</summary>
+    /// <summary>OAuth2 scope.</summary>
     public const string Scope = "scope";
 
-    /// <summary>Identifiant du tenant.</summary>
+    /// <summary>Tenant identifier.</summary>
     public const string TenantId = "tenant_id";
 
-    /// <summary>Identifiant du client (application).</summary>
+    /// <summary>Client (application) identifier.</summary>
     public const string ClientId = "client_id";
 
-    /// <summary>Nom du client (application).</summary>
+    /// <summary>Client (application) name.</summary>
     public const string ClientName = "client_name";
 
-    /// <summary>Timestamp d'expiration.</summary>
+    /// <summary>Expiration timestamp.</summary>
     public const string Expiration = "exp";
 
-    /// <summary>Timestamp d'émission.</summary>
+    /// <summary>Issued-at timestamp.</summary>
     public const string IssuedAt = "iat";
 
-    /// <summary>Timestamp de validité (not before).</summary>
+    /// <summary>Not-before timestamp.</summary>
     public const string NotBefore = "nbf";
 
-    /// <summary>Émetteur du token.</summary>
+    /// <summary>Token issuer.</summary>
     public const string Issuer = "iss";
 
-    /// <summary>Audience du token.</summary>
+    /// <summary>Token audience.</summary>
     public const string Audience = "aud";
 
-    /// <summary>Identifiant unique du token (JWT ID).</summary>
+    /// <summary>JWT unique identifier.</summary>
     public const string JwtId = "jti";
 
-    /// <summary>Niveau de permission.</summary>
+    /// <summary>Permission level.</summary>
     public const string PermissionLevel = "permission_level";
 
-    /// <summary>Permissions spécifiques.</summary>
+    /// <summary>Specific permissions.</summary>
     public const string Permissions = "permissions";
 }
