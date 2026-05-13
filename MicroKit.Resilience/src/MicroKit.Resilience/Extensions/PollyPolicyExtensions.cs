@@ -9,44 +9,59 @@ using Polly.Retry;
 
 namespace MicroKit.Resilience.Extensions;
 
+/// <summary>
+/// Extension methods for configuring Polly resilience pipelines with the MicroKit builder.
+/// </summary>
 public static class PollyPolicyExtensions
 {
+    /// <summary>
+    /// Registers a default retry policy with fallback and circuit breaker protection into the Polly registry.
+    /// </summary>
+    /// <param name="builder">The resilience builder.</param>
+    /// <param name="configureOptions">Optional delegate to customize resilience options.</param>
+    /// <returns>The builder instance for method chaining.</returns>
+    /// <exception cref="ArgumentNullException">Thrown when builder is null.</exception>
     public static MicroKitResilienceBuilder AddDefaultRetryPolicy(
         this MicroKitResilienceBuilder builder,
         Action<ResilienceRetryOptions>? configureOptions = null)
     {
-        // On initialise les options par défaut
+        if (builder == null)
+            throw new ArgumentNullException(nameof(builder));
+
+        // Initialize default options and apply customization if provided
         var options = new ResilienceRetryOptions();
         configureOptions?.Invoke(options);
 
-        // On enregistre les options pour qu'elles soient injectables dans le Behavior
-        builder.Services.Configure<ResilienceRetryOptions>(opt => {
+        // Register options for injection into behaviors
+        builder.Services.Configure<ResilienceRetryOptions>(opt =>
+        {
             opt.RetryCount = options.RetryCount;
             opt.PipelineName = options.PipelineName;
             opt.BaseDelaySeconds = options.BaseDelaySeconds;
         });
-        
-        // On enregistre la Policy dans le Registry de Polly
+
+        // Register Polly resilience pipeline in the centralized registry
         builder.Services.AddResiliencePipeline<string, object>(options.PipelineName, (pipelineBuilder, context) =>
         {
-            // On récupère le détecteur d'erreurs depuis le conteneur de services
             var detector = context.ServiceProvider.GetRequiredService<IResilienceErrorDetector>();
 
+            // Fallback strategy: provide default value on transient errors
             if (options.EnableFallback)
             {
                 var predicateBuilder = new PredicateBuilder<object>().Handle<Exception>(ex => detector.ShouldRetry(ex));
-                // On utilise FallbackStrategyOptions<object> car le pipeline est multi-types
-                // Ou on définit des pipelines spécifiques par type de retour.
                 pipelineBuilder.AddFallback(new FallbackStrategyOptions<object>
                 {
                     ShouldHandle = predicateBuilder,
                     OnFallback = _ => default,
-                    FallbackAction = args 
-                        => throw new OperationCanceledException("Le service n'a pas pu répondre après plusieurs tentatives.", args.Outcome.Exception)
+                    FallbackAction = args => new ValueTask<Outcome<object>>(
+                        Outcome.FromException<object>(
+                            new OperationCanceledException(
+                                "The service did not respond successfully after multiple retry attempts.",
+                                args.Outcome.Exception)))
                 });
             }
 
-            // 2. CIRCUIT BREAKER : On coupe si le service est "mourant"
+            // Circuit breaker: stop making requests if the service is degraded
             if (options.EnableCircuitBreaker)
             {
                 pipelineBuilder.AddCircuitBreaker(new CircuitBreakerStrategyOptions<object>
@@ -59,20 +74,21 @@ public static class PollyPolicyExtensions
                 });
             }
 
+            // Retry with exponential backoff
             pipelineBuilder.AddRetry(new RetryStrategyOptions
-            {   
-                // C'est ici que le package injecte sa logique dans Polly
+            {
                 ShouldHandle = new PredicateBuilder().Handle<Exception>(ex => detector.ShouldRetry(ex)),
-
                 MaxRetryAttempts = options.RetryCount,
                 BackoffType = DelayBackoffType.Exponential,
-                UseJitter = true, // Recommandé en microservices pour éviter les pics de charge
+                UseJitter = true, // Recommended in microservices to avoid thundering herd
                 Delay = TimeSpan.FromSeconds(options.BaseDelaySeconds),
                 OnRetry = args =>
                 {
-                    // On récupère le logger via le service provider présent dans le contexte d'exécution
-                    var logger = context.ServiceProvider.GetService<ILoggerFactory>()?.CreateLogger("MicroKit.Resilience");
-                    // On logue l'erreur, le numéro de tentative et le délai avant le prochain essai
+                    // Log retry attempts for observability
+                    var logger = context.ServiceProvider
+                        .GetService<ILoggerFactory>()?
+                        .CreateLogger("MicroKit.Resilience");
+
                     logger?.LogWarning(
                         args.Outcome.Exception,
                         "[{Pipeline}] Retry {Attempt}: Waiting {Duration}ms due to {Error}",
@@ -80,6 +96,7 @@ public static class PollyPolicyExtensions
                         args.AttemptNumber + 1,
                         args.RetryDelay.TotalMilliseconds,
                         args.Outcome.Exception?.Message);
+
                     return default;
                 }
             });

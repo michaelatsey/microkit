@@ -8,12 +8,12 @@
 
     <ItemGroup>
       <PackageReference Include="MediatR" Version="14.0.0" />
-      <PackageReference Include="MediatR.Contracts" Version="2.0.1" />
+      <PackageReference Include="Polly" Version="8.6.5" />
     </ItemGroup>
 
     <ItemGroup>
-      <ProjectReference Include="..\..\..\MicroKit.Cqrs\src\MicroKit.Cqrs.Abstractions\MicroKit.Cqrs.Abstractions.csproj" />
-      <ProjectReference Include="..\MicroKit.Resilience\MicroKit.Resilience.csproj" />
+      <ProjectReference Include="../MicroKit.Resilience.Abstractions/MicroKit.Resilience.Abstractions.csproj" />
+      <ProjectReference Include="../MicroKit.Resilience/MicroKit.Resilience.csproj" />
     </ItemGroup>
 
 </Project>

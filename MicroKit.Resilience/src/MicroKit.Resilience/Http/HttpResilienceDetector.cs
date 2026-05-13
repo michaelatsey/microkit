@@ -1,36 +1,54 @@
 ﻿using MicroKit.Resilience.Abstractions;
-using System;
-using System.Collections.Generic;
 using System.Net.Sockets;
-using System.Text;
 
-namespace MicroKit.Resilience.Http
+namespace MicroKit.Resilience.Http;
+
+/// <summary>
+/// Resilience detector for HTTP and network-related transient errors.
+/// </summary>
+/// <remarks>
+/// This detector identifies transient HTTP exceptions and network errors
+/// that should be retried, including timeouts, socket errors, and server errors (5xx).
+/// </remarks>
+public sealed class HttpResilienceDetector : IResilienceStrategyDetector
 {
-    public class HttpResilienceDetector : IResilienceStrategyDetector
+    /// <summary>
+    /// Determines whether the specified exception originates from an HTTP operation or network layer.
+    /// </summary>
+    /// <param name="ex">The exception to evaluate.</param>
+    /// <returns>
+    /// <c>true</c> if the exception is related to HTTP requests, timeouts, or socket operations; otherwise, <c>false</c>.
+    /// </returns>
+    public bool CanHandle(Exception ex) =>
+        ex is HttpRequestException ||
+        ex is TaskCanceledException ||
+        ex is SocketException;
+
+    /// <summary>
+    /// Determines whether an HTTP-related exception represents a transient error
+    /// that should be retried.
+    /// </summary>
+    /// <param name="ex">The exception to evaluate.</param>
+    /// <returns>
+    /// <c>true</c> if the exception represents a transient HTTP error; otherwise, <c>false</c>.
+    /// </returns>
+    public bool ShouldRetry(Exception ex)
     {
-        // On gère les exceptions HTTP et les problèmes réseau bas niveau (Socket)
-        public bool CanHandle(Exception ex) =>
-            ex is HttpRequestException ||
-            ex is TaskCanceledException || // Souvent le signe d'un timeout
-            ex is SocketException;
-
-        public bool ShouldRetry(Exception ex)
+        return ex switch
         {
-            return ex switch
-            {
-                // Cas 1 : Erreur HTTP avec un code de statut spécifique
-                HttpRequestException httpEx when httpEx.StatusCode is null || (int)httpEx.StatusCode >= 500
-                    => true, // On réessaye si le serveur distant est en vrac (5xx) ou si la connexion a échoué
+            // HTTP error with server error status code (5xx) or no status code (connection failure)
+            HttpRequestException httpEx when httpEx.StatusCode is null || (int)httpEx.StatusCode >= 500
+                => true,
 
-                // Cas 2 : Timeout (TaskCanceledException qui n'est pas dû à l'utilisateur)
-                TaskCanceledException tce when !tce.CancellationToken.IsCancellationRequested
-                    => true,
+            // Task timeout (not due to explicit cancellation request)
+            TaskCanceledException tce when !tce.CancellationToken.IsCancellationRequested
+                => true,
 
-                // Cas 3 : Erreur de socket (Réseau coupé, DNS, etc.)
-                SocketException => true,
+            // Network socket errors (connection refused, DNS failure, network unreachable, etc.)
+            SocketException
+                => true,
 
-                _ => false
-            };
-        }
+            _ => false
+        };
     }
 }
