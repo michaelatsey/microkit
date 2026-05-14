@@ -11,7 +11,10 @@
     <Project Path="MicroKit.Caching/src/MicroKit.Caching.Distributed/MicroKit.Caching.Distributed.csproj" Id="e4d4998f-17e7-443f-9df4-f331d9743f5e" />
     <Project Path="MicroKit.Caching/src/MicroKit.Caching/MicroKit.Caching.csproj" Id="561eb436-c06e-4c46-9821-eaf39b709f3c" />
   </Folder>
-  <Folder Name="/MicroKit.Caching/tests/" />
+  <Folder Name="/MicroKit.Caching/tests/">
+    <Project Path="MicroKit.Caching/tests/MicroKit.Caching.Tests/MicroKit.Caching.Tests.csproj" />
+    <Project Path="MicroKit.Caching/tests/MicroKit.Caching.Integration.Tests/MicroKit.Caching.Integration.Tests.csproj" />
+  </Folder>
   <Folder Name="/MicroKit.Core/" />
   <Folder Name="/MicroKit.Core/src/">
     <Project Path="MicroKit.Core/src/MicroKit.Core/MicroKit.Core.csproj" />
@@ -30,14 +33,18 @@
     <Project Path="MicroKit.Cqrs/src/MicroKit.Cqrs.MediatR/MicroKit.Cqrs.MediatR.csproj" />
     <Project Path="MicroKit.Cqrs/src/MicroKit.Cqrs/MicroKit.Cqrs.csproj" Id="c33a625a-b4c1-489d-8594-eee7605d9778" />
   </Folder>
-  <Folder Name="/MicroKit.Cqrs/tests/" />
+  <Folder Name="/MicroKit.Cqrs/tests/">
+    <Project Path="MicroKit.Cqrs/tests/MicroKit.Cqrs.Tests/MicroKit.Cqrs.Tests.csproj" />
+  </Folder>
   <Folder Name="/MicroKit.Data/" />
   <Folder Name="/MicroKit.Data/src/">
     <Project Path="MicroKit.Data/src/MicroKit.Data.Abstractions/MicroKit.Data.Abstractions.csproj" />
     <Project Path="MicroKit.Data/src/MicroKit.Data.EntityFrameworkCore/MicroKit.Data.EntityFrameworkCore.csproj" />
     <Project Path="MicroKit.Data/src/MicroKit.Data/MicroKit.Data.csproj" />
   </Folder>
-  <Folder Name="/MicroKit.Data/tests/" />
+  <Folder Name="/MicroKit.Data/tests/">
+    <Project Path="MicroKit.Data/tests/MicroKit.Data.Tests/MicroKit.Data.Tests.csproj" />
+  </Folder>
   <Folder Name="/MicroKit.Domain/" />
   <Folder Name="/MicroKit.Domain/src/">
     <Project Path="MicroKit.Domain/src/MicroKit.Domain.Abstractions/MicroKit.Domain.Abstractions.csproj" />
@@ -51,13 +58,17 @@
   <Folder Name="/MicroKit.EntityFrameworkCore/src/">
     <Project Path="MicroKit.EntityFrameworkCore/src/MicroKit.EntityFrameworkCore/MicroKit.EntityFrameworkCore.csproj" Id="c511a07e-ba93-47fc-a73b-5fbfb8aa049e" />
   </Folder>
-  <Folder Name="/MicroKit.EntityFrameworkCore/tests/" />
+  <Folder Name="/MicroKit.EntityFrameworkCore/tests/">
+    <Project Path="MicroKit.EntityFrameworkCore/tests/MicroKit.EntityFrameworkCore.Tests/MicroKit.EntityFrameworkCore.Tests.csproj" />
+  </Folder>
   <Folder Name="/MicroKit.Events/" />
   <Folder Name="/MicroKit.Events/src/">
     <Project Path="MicroKit.Events/src/MicroKit.Events.Contracts/MicroKit.Events.Contracts.csproj" />
     <Project Path="MicroKit.Events/src/MicroKit.Events/MicroKit.Events.csproj" />
   </Folder>
-  <Folder Name="/MicroKit.Events/tests/" />
+  <Folder Name="/MicroKit.Events/tests/">
+    <Project Path="MicroKit.Events/tests/MicroKit.Events.Tests/MicroKit.Events.Tests.csproj" />
+  </Folder>
   <Folder Name="/MicroKit.Idempotency/" />
   <Folder Name="/MicroKit.Idempotency/src/">
     <Project Path="MicroKit.Idempotency/src/MicroKit.Idempotency.Abstractions/MicroKit.Idempotency.Abstractions.csproj" />
@@ -80,16 +91,21 @@
     <Project Path="MicroKit.Messaging/src/MicroKit.Messaging.Transport.AzureSB/MicroKit.Messaging.Transport.AzureSB.csproj" />
     <Project Path="MicroKit.Messaging/src/MicroKit.Messaging.Transport.RabbitMQ/MicroKit.Messaging.Transport.RabbitMQ.csproj" />
   </Folder>
-  <Folder Name="/MicroKit.Messaging/tests/" />
+  <Folder Name="/MicroKit.Messaging/tests/">
+    <Project Path="MicroKit.Messaging/tests/MicroKit.Messaging.Tests/MicroKit.Messaging.Tests.csproj" />
+  </Folder>
   <Folder Name="/MicroKit.MultiTenancy/" />
   <Folder Name="/MicroKit.MultiTenancy/src/">
     <Project Path="MicroKit.MultiTenancy/src/MicroKit.MultiTenancy.Abstractions/MicroKit.MultiTenancy.Abstractions.csproj" />
     <Project Path="MicroKit.MultiTenancy/src/MicroKit.MultiTenancy.EFCoreStore/MicroKit.MultiTenancy.EFCoreStore.csproj" />
     <Project Path="MicroKit.MultiTenancy/src/MicroKit.MultiTenancy.Extensions/MicroKit.MultiTenancy.Extensions.csproj" />
+    <Project Path="MicroKit.MultiTenancy/src/MicroKit.MultiTenancy.Mvc/MicroKit.MultiTenancy.Mvc.csproj" />
     <Project Path="MicroKit.MultiTenancy/src/MicroKit.MultiTenancy.Redis/MicroKit.MultiTenancy.Redis.csproj" />
     <Project Path="MicroKit.MultiTenancy/src/MicroKit.MultiTenancy/MicroKit.MultiTenancy.csproj" />
   </Folder>
-  <Folder Name="/MicroKit.MultiTenancy/tests/" />
+  <Folder Name="/MicroKit.MultiTenancy/tests/">
+    <Project Path="MicroKit.MultiTenancy/tests/MicroKit.MultiTenancy.Tests/MicroKit.MultiTenancy.Tests.csproj" />
+  </Folder>
   <Folder Name="/MicroKit.OpenApi/" />
   <Folder Name="/MicroKit.OpenApi/docs/">
     <File Path="MicroKit.OpenApi/docs/Readme.md" />
