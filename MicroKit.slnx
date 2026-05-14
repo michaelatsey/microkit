@@ -1,6 +1,5 @@
 <Solution>
   <Folder Name="/MicroKit.Abstractions/" />
-  <Folder Name="/MicroKit.Abstractions/samples/" />
   <Folder Name="/MicroKit.Abstractions/src/">
     <Project Path="MicroKit.Abstractions/src/MicroKit.Abstractions/MicroKit.Abstractions.csproj" />
   </Folder>
@@ -60,7 +59,6 @@
   </Folder>
   <Folder Name="/MicroKit.Events/tests/" />
   <Folder Name="/MicroKit.Idempotency/" />
-  <Folder Name="/MicroKit.Idempotency/samples/" />
   <Folder Name="/MicroKit.Idempotency/src/">
     <Project Path="MicroKit.Idempotency/src/MicroKit.Idempotency.Abstractions/MicroKit.Idempotency.Abstractions.csproj" />
     <Project Path="MicroKit.Idempotency/src/MicroKit.Idempotency.Core/MicroKit.Idempotency.Core.csproj" />
