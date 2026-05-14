@@ -1,0 +1,34 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+  </PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="MicroKit.Core" Version="1.0.0-preview.2" />
+    <PackageReference Include="MicroKit.Cqrs.MediatR" Version="1.0.0-preview.2" />
+    <PackageReference Include="MicroKit.Caching.Distributed" Version="1.0.0-preview.2" />
+    <PackageReference Include="MicroKit.Idempotency.Core" Version="1.0.0-preview.2" />
+    <PackageReference Include="MicroKit.Idempotency.MediatR" Version="1.0.0-preview.2" />
+    <PackageReference Include="MicroKit.Idempotency.EFCore" Version="1.0.0-preview.2" />
+    <PackageReference Include="MicroKit.Messaging.Core" Version="1.0.0-preview.2" />
+    <PackageReference Include="MicroKit.Messaging.Persistence.EFCore" Version="1.0.0-preview.2" />
+    <PackageReference Include="MicroKit.Messaging.Publisher.MediatR" Version="1.0.0-preview.2" />
+    <PackageReference Include="MicroKit.MultiTenancy.Extensions" Version="1.0.0-preview.2" />
+    <PackageReference Include="MicroKit.Resilience" Version="1.0.0-preview.2" />
+    <PackageReference Include="MicroKit.Resilience.MediatR" Version="1.0.0-preview.2" />
+    <PackageReference Include="MicroKit.EntityFrameworkCore" Version="1.0.0-preview.2" />
+    <PackageReference Include="MediatR" Version="14.0.0" />
+    <PackageReference Include="Microsoft.EntityFrameworkCore" Version="10.0.4" />
+    <PackageReference Include="Npgsql.EntityFrameworkCore.PostgreSQL" Version="10.0.1" />
+    <PackageReference Include="Microsoft.Extensions.DependencyInjection.Abstractions" Version="10.0.4" />
+    <PackageReference Include="Microsoft.Extensions.Hosting.Abstractions" Version="10.0.4" />
+    <PackageReference Include="Microsoft.Extensions.Configuration.Abstractions" Version="10.0.4" />
+    <PackageReference Include="StackExchange.Redis" Version="2.8.24" />
+    <PackageReference Include="Microsoft.Extensions.Caching.StackExchangeRedis" Version="10.0.0" />
+  </ItemGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\OrderApi.Domain\OrderApi.Domain.csproj" />
+    <ProjectReference Include="..\OrderApi.Application\OrderApi.Application.csproj" />
+  </ItemGroup>
+</Project>

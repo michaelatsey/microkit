@@ -148,8 +148,12 @@
     <Project Path="MicroKit.Security/tests/MicroKit.Security.Tests/MicroKit.Security.Tests.csproj" Id="c4fafea7-bca5-411d-8209-5841fbbf64af" />
   </Folder>
   <Folder Name="/Samples/" />
-  <Folder Name="/Samples/WebApi/">
-    <Project Path="Samples/WebApi/MicroKit.Sample.OrderApi/MicroKit.Sample.OrderApi.csproj" />
+  <Folder Name="/Samples/OrderApi/">
+    <Project Path="Samples/OrderApi/OrderApi.Api.Minimal/OrderApi.Api.Minimal.csproj" />
+    <Project Path="Samples/OrderApi/OrderApi.Api.Controllers/OrderApi.Api.Controllers.csproj" />
+    <Project Path="Samples/OrderApi/OrderApi.Infrastructure/OrderApi.Infrastructure.csproj" />
+    <Project Path="Samples/OrderApi/OrderApi.Application/OrderApi.Application.csproj" />
+    <Project Path="Samples/OrderApi/OrderApi.Domain/OrderApi.Domain.csproj" />
   </Folder>
   <Folder Name="/Éléments de solution/" />
 </Solution>

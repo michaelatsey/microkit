@@ -1,0 +1,16 @@
+<Project Sdk="Microsoft.NET.Sdk.Web">
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+  </PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="MicroKit.Cqrs.Abstractions" Version="1.0.0-preview.2" />
+    <PackageReference Include="MicroKit.MultiTenancy.Extensions" Version="1.0.0-preview.2" />
+    <PackageReference Include="Microsoft.AspNetCore.Authentication.JwtBearer" Version="10.0.0" />
+  </ItemGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\OrderApi.Application\OrderApi.Application.csproj" />
+    <ProjectReference Include="..\OrderApi.Infrastructure\OrderApi.Infrastructure.csproj" />
+  </ItemGroup>
+</Project>

@@ -7,7 +7,7 @@
 
     <!-- Package Metadata -->
     <PackageId>MicroKit.Security.ApiKey</PackageId>
-    <Version>1.0.0</Version>
+
     <Description>API key authentication provider for MicroKit.Security — create, validate, rotate, and revoke keys.</Description>
     <Authors>MicroKit Team</Authors>
     <Copyright>Copyright © MicroKit Team 2026</Copyright>

@@ -10,7 +10,7 @@
 
     <!-- Package Metadata -->
     <PackageId>MicroKit.Security.Abstractions</PackageId>
-    <Version>1.0.0</Version>
+
     <Description>Contracts and abstractions for the MicroKit.Security ecosystem. Zero third-party dependencies.</Description>
     <Authors>MicroKit Team</Authors>
     <Copyright>Copyright © MicroKit Team 2026</Copyright>

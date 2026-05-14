@@ -1,0 +1,20 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+  </PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="MicroKit.Cqrs.Abstractions" Version="1.0.0-preview.2" />
+    <PackageReference Include="MicroKit.Cqrs.MediatR" Version="1.0.0-preview.2" />
+    <PackageReference Include="MicroKit.Domain.Abstractions" Version="1.0.0-preview.2" />
+    <PackageReference Include="MicroKit.Idempotency.Abstractions" Version="1.0.0-preview.2" />
+    <PackageReference Include="MicroKit.Resilience.Abstractions" Version="1.0.0-preview.2" />
+    <PackageReference Include="MicroKit.Messaging.Abstractions" Version="1.0.0-preview.2" />
+    <PackageReference Include="MicroKit.Caching.Abstractions" Version="1.0.0-preview.2" />
+    <PackageReference Include="MediatR" Version="14.0.0" />
+  </ItemGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\OrderApi.Domain\OrderApi.Domain.csproj" />
+  </ItemGroup>
+</Project>

@@ -19,7 +19,7 @@
     <RepositoryType>git</RepositoryType>
     <RepositoryUrl>https://github.com/michaelatsey/microkit</RepositoryUrl>
     <PackageLicenseExpression>MIT</PackageLicenseExpression>
-    <Version>1.0.0-preview.1</Version>
+    <Version>1.0.0-preview.2</Version>
 <Trademark>$(Company)</Trademark>
     <Product>$(Company) Projects</Product>
 
