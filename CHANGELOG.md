@@ -9,6 +9,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.0.0-preview.3] - 2026-05-14
+
+### Added
+
+- `MicroKit.Security` — JWT, API key, Azure AD, Cognito, ASP.NET Core, and multi-tenancy security providers
+- `MicroKit.Resilience` — retry, circuit breaker, timeout strategies with MediatR pipeline integration
+- `MicroKit.OpenApi` — Scalar UI, versioning, operation filters, and document transformers
+- `Samples/OrderApi` — Hexagonal + DDD + CQRS reference sample using MicroKit NuGet packages v1.0.0-preview.2
+
+### Removed
+
+- `MicroKit.Payments` — deferred indefinitely; removed from solution and repository
+
+## [1.0.0-preview.2] - 2026-05-13
+
+### Added
+
+- README for all 24 packages (`docs/Readme.md` per module, wired via `PackageReadmeFile`)
+
+### Fixed
+
+- NuGet packages now published with the correct version derived from git tag
+- `MicroKit.Caching.Abstractions` was missing from the solution file
+- `PackageReadmeFile` scoped to modules that have a `docs/Readme.md`; non-doc projects no longer emit a warning
+
 ## [1.0.0-preview.1] - 2026-05-12
 
 ### Added
@@ -42,5 +67,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `MicroKit.Caching.Distributed` — `DistributedCacheService`, `AddMicroKitDistributedCache`
 - `MicroKit.Caching.Distributed.Autofac` — Autofac registration extension
 
-[Unreleased]: https://github.com/michaelatse/microkit/compare/v1.0.0-preview.1...HEAD
+[Unreleased]: https://github.com/michaelatse/microkit/compare/v1.0.0-preview.3...HEAD
+[1.0.0-preview.3]: https://github.com/michaelatse/microkit/compare/v1.0.0-preview.2...v1.0.0-preview.3
+[1.0.0-preview.2]: https://github.com/michaelatse/microkit/compare/v1.0.0-preview.1...v1.0.0-preview.2
 [1.0.0-preview.1]: https://github.com/michaelatse/microkit/releases/tag/v1.0.0-preview.1
