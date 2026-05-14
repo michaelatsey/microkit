@@ -1,4 +1,4 @@
-﻿using MicroKit.OpenApi.Abstractions;
+using MicroKit.OpenApi.Abstractions;
 using MicroKit.OpenApi.Filters;
 using MicroKit.OpenApi.Internal;
 using MicroKit.OpenApi.Options;
@@ -6,14 +6,14 @@ using MicroKit.OpenApi.Options;
 namespace MicroKit.OpenApi.Builder;
 
 /// <summary>
-/// Builder implementation for configuring MicroKit OpenAPI services.
+/// Fluent builder for configuring MicroKit OpenAPI services.
 /// </summary>
 internal sealed class MicroKitOpenApiBuilder : IMicroKitOpenApiBuilder
 {
     private readonly FilterRegistry _filterRegistry;
     private readonly ScalarOptionsRegistry _scalarOptionsRegistry;
 
-    public MicroKitOpenApiBuilder(
+    internal MicroKitOpenApiBuilder(
         IServiceCollection services,
         FilterRegistry filterRegistry,
         ScalarOptionsRegistry scalarOptionsRegistry)
@@ -34,7 +34,6 @@ internal sealed class MicroKitOpenApiBuilder : IMicroKitOpenApiBuilder
         return this;
     }
 
-        
     /// <inheritdoc />
     public IMicroKitOpenApiBuilder AddBearerSecurity(Action<BearerSecurityOptions>? configure = null)
     {
@@ -45,7 +44,6 @@ internal sealed class MicroKitOpenApiBuilder : IMicroKitOpenApiBuilder
     public IMicroKitOpenApiBuilder AddOAuth2Security(Action<OAuth2SecurityOptions> configure)
     {
         ArgumentNullException.ThrowIfNull(configure);
-
         return AddSecurity(configure);
     }
 
@@ -84,30 +82,24 @@ internal sealed class MicroKitOpenApiBuilder : IMicroKitOpenApiBuilder
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(version);
 
-        var documentName = $"v{version}";
-        // Étape CRUCIALE : On enregistre le document OpenAPI auprès de Microsoft
-        // Si le document est déjà enregistré, AddOpenApi est idempotent ou ignoré
-        Services.AddOpenApi(documentName);
+        Services.AddOpenApi($"v{version}");
 
         Services.Configure<MicroKitOpenApiOptions>(options =>
         {
             if (deprecated)
             {
                 if (!options.DeprecatedVersions.Contains(version))
-                {
                     options.DeprecatedVersions.Add(version);
-                }
                 options.SupportedVersions.Remove(version);
             }
             else
             {
                 if (!options.SupportedVersions.Contains(version))
-                {
                     options.SupportedVersions.Add(version);
-                }
                 options.DeprecatedVersions.Remove(version);
             }
         });
+
         return this;
     }
 
@@ -117,13 +109,8 @@ internal sealed class MicroKitOpenApiBuilder : IMicroKitOpenApiBuilder
         ArgumentException.ThrowIfNullOrWhiteSpace(url);
 
         Services.Configure<MicroKitOpenApiOptions>(options =>
-        {
-            options.Servers.Add(new ServerOptions
-            {
-                Url = url,
-                Description = description
-            });
-        });
+            options.Servers.Add(new ServerOptions { Url = url, Description = description }));
+
         return this;
     }
 
@@ -142,14 +129,13 @@ internal sealed class MicroKitOpenApiBuilder : IMicroKitOpenApiBuilder
             var security = new T();
             configure?.Invoke(security);
 
-            // Empêcher les doublons par nom de schéma
-            if (
-                options.Securities is not null && 
+            if (options.Securities is not null &&
                 !options.Securities.Any(s => s.SchemeName.Equals(security.SchemeName, StringComparison.OrdinalIgnoreCase)))
             {
                 options.Securities.Add(security);
             }
         });
+
         return this;
     }
 }

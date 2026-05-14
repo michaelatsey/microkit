@@ -1,12 +1,12 @@
-﻿using MicroKit.OpenApi.Internal;
+using MicroKit.OpenApi.Internal;
 using MicroKit.OpenApi.Options;
 using Microsoft.AspNetCore.Mvc.ApiExplorer;
 
 namespace MicroKit.OpenApi.Configuration;
 
 /// <summary>
-/// Configures OpenAPI options with transformers for each document.
-/// Uses IConfigureNamedOptions to configure options by document name without BuildServiceProvider.
+/// Configures <see cref="OpenApiOptions"/> for each named document, attaching MicroKit transformers.
+/// Uses <see cref="IConfigureNamedOptions{TOptions}"/> to avoid the <c>BuildServiceProvider()</c> anti-pattern.
 /// </summary>
 internal sealed class OpenApiOptionsConfigurator : IConfigureNamedOptions<OpenApiOptions>
 {
@@ -15,6 +15,7 @@ internal sealed class OpenApiOptionsConfigurator : IConfigureNamedOptions<OpenAp
     private readonly OpenApiSchemaTransformer _schemaTransformer;
     private readonly IOptions<MicroKitOpenApiOptions> _microKitOptions;
 
+    /// <summary>Initializes a new instance.</summary>
     public OpenApiOptionsConfigurator(
         OpenApiDocumentTransformer documentTransformer,
         OpenApiOperationTransformer operationTransformer,
@@ -27,6 +28,7 @@ internal sealed class OpenApiOptionsConfigurator : IConfigureNamedOptions<OpenAp
         _microKitOptions = microKitOptions;
     }
 
+    /// <inheritdoc />
     public void Configure(string? name, OpenApiOptions options)
     {
         if (string.IsNullOrEmpty(name))
@@ -34,31 +36,20 @@ internal sealed class OpenApiOptionsConfigurator : IConfigureNamedOptions<OpenAp
             return;
         }
 
-        // 1. Définir le filtre de sélection (Le chaînon manquant)
-        // Cela dit à OpenAPI : "N'inclut que les endpoints dont le GroupName correspond au nom du document"
-        options.ShouldInclude = (description) =>
+        // Only include endpoints whose ApiVersion matches this document's version.
+        options.ShouldInclude = description =>
         {
-            // 1. Récupérer la version de l'endpoint (fournie par ApiExplorer)
             var endpointVersion = description.GetApiVersion();
-            if (endpointVersion == null) return false;
-
-            // 2. Nettoyer le nom du document (enlever le 'v' initial s'il existe)
-            var docName = name.StartsWith("v", StringComparison.OrdinalIgnoreCase)
-                          ? name[1..]
-                          : name;
-
-            // 3. Transformer le nom du document en objet ApiVersion
-            if (ApiVersionParser.Default.TryParse(docName, out var documentVersion))
+            if (endpointVersion is null)
             {
-                // La magie est ici : Equals() gère les segments manquants (1.0 == 1.0.0)
-                return endpointVersion.Equals(documentVersion);
+                return false;
             }
 
-            return false;
-            //return description.GroupName == null || string.Equals(description.GroupName, name, StringComparison.OrdinalIgnoreCase);
+            var docName = name.StartsWith("v", StringComparison.OrdinalIgnoreCase) ? name[1..] : name;
+            return ApiVersionParser.Default.TryParse(docName, out var documentVersion)
+                && endpointVersion.Equals(documentVersion);
         };
 
-        // Check if this document name corresponds to one of our versions
         var microKitOpts = _microKitOptions.Value;
         var allVersions = microKitOpts.SupportedVersions
             .Concat(microKitOpts.DeprecatedVersions)
@@ -70,15 +61,14 @@ internal sealed class OpenApiOptionsConfigurator : IConfigureNamedOptions<OpenAp
             return;
         }
 
-        // Add transformers for MicroKit-managed documents
         options.AddDocumentTransformer(_documentTransformer);
         options.AddOperationTransformer(_operationTransformer);
         options.AddSchemaTransformer(_schemaTransformer);
     }
 
+    /// <inheritdoc />
     public void Configure(OpenApiOptions options)
     {
-        // Default configuration - apply to all documents if no name specified
         Configure($"v{_microKitOptions.Value.DefaultVersion}", options);
     }
 }

@@ -206,43 +206,32 @@ internal sealed class OpenApiDocumentTransformer : IOpenApiDocumentTransformer
 
     private static void ApplySecuritySchemes(OpenApiDocument document, MicroKitOpenApiOptions options)
     {
-        Console.WriteLine($"Nombre de securities configurées: {options.Securities?.Count ?? 0}");
         if (options.Securities is null || options.Securities.Count == 0)
         {
             return;
         }
 
-        // Initialize components if needed (Microsoft.OpenApi 2.0+ pattern)
         document.Components ??= new OpenApiComponents();
         document.Components.SecuritySchemes ??= new Dictionary<string, IOpenApiSecurityScheme>();
-
-        // Initialize security list if needed
         document.Security ??= [];
 
-        // 1. On crée UN SEUL dictionnaire d'exigence pour grouper les sécurités obligatoires
         var globalRequirement = new OpenApiSecurityRequirement();
 
         foreach (var securityOption in options.Securities)
         {
-            Console.WriteLine($"Security configurée: {securityOption.SchemeName}");
-            // 2. Enregistrement de la définition technique dans Components
             ApplySecurityDefinition(document, securityOption);
 
-            // 3. Ajout à l'exigence globale (force Scalar à tout envoyer ensemble)
             var reference = new OpenApiSecuritySchemeReference(securityOption.SchemeName);
-
-            // 2. LOGIQUE PRO : On détermine quels scopes afficher pour ce schéma
             var scopes = securityOption switch
             {
                 OAuth2SecurityOptions oauth => [.. oauth.Scopes.Keys],
-                BearerSecurityOptions bearer => bearer.Scopes, // On prend la liste de l'objet lui-même
+                BearerSecurityOptions bearer => bearer.Scopes,
                 _ => new List<string>()
             };
 
             globalRequirement.Add(reference, scopes);
         }
 
-        // 4. On ajoute ce requirement groupé au document
         document.Security = [globalRequirement];
     }
 }

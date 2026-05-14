@@ -29,5 +29,19 @@ All HIGH severity issues for phase 3–4 modules resolved (2026-05-12).
 - Unit tests: 8 passing (DistributedCacheServiceTests)
 - Integration tests: MicroKit.Caching.Integration.Tests with Testcontainers.Redis — requires Docker Desktop
 
+**MicroKit.OpenApi — fully implemented (2026-05-14)**
+- Removed Autofac (empty module, violates zero-vendor-lockdown rule) and Swashbuckle (unused)
+- Removed `NoWarn CS1591`, added all missing XML docs
+- Fixed `DeprecationDocumentFilter` bug: description banner was set N times inside path loop
+- Completed `ApplyOAuth2Flow` for all four OAuth flows (was only handling ClientCredentials)
+- Removed Console.WriteLine debug calls from OpenApiDocumentTransformer
+- Deleted 4 dead-code files (.old.cs files, empty OpenApiDescriptor.cs, empty Autofac module)
+- Fixed validator: now allows all-deprecated config (no supported versions)
+- Added `InternalsVisibleTo("MicroKit.OpenApi.Tests")` for testability
+- Added 72 unit tests covering: defaults, options, security options, validator, FilterRegistry, ScalarOptionsRegistry, DeprecationDocumentFilter, RequiredSchemaFilter, ServiceCollectionExtensions
+- Added test project to MicroKit.slnx; fixed wrong docs path (was pointing to MicroKit.ApiVersioning)
+- Rewrote docs/Readme.md in English (was French, for wrong package)
+- Tests: 72 passing; solution total: 307 passing across all 5 test projects; 0 build errors
+
 **Why:** Stabilization pass for phase 3–4 modules before NuGet publishing
 **How to apply:** The next batch of work is likely MicroKit.EntityFrameworkCore and remaining MEDIUM issues. Check STRUCTURE.md before adding new projects.

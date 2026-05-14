@@ -3,10 +3,11 @@
 namespace MicroKit.OpenApi.Validator;
 
 /// <summary>
-/// Validates MicroKit OpenAPI options.
+/// Validates <see cref="MicroKitOpenApiOptions"/> at application startup.
 /// </summary>
 internal sealed class MicroKitOpenApiOptionsValidator : IValidateOptions<MicroKitOpenApiOptions>
 {
+    /// <inheritdoc />
     public ValidateOptionsResult Validate(string? name, MicroKitOpenApiOptions options)
     {
         var failures = new List<string>();
@@ -18,8 +19,8 @@ internal sealed class MicroKitOpenApiOptionsValidator : IValidateOptions<MicroKi
         if (string.IsNullOrWhiteSpace(options.DefaultVersion))
             failures.Add("DefaultVersion is required and cannot be empty.");
 
-        if (options.SupportedVersions.Count == 0)
-            failures.Add("At least one supported version must be specified.");
+        if (options.SupportedVersions.Count == 0 && options.DeprecatedVersions.Count == 0)
+            failures.Add("At least one API version must be specified in SupportedVersions or DeprecatedVersions.");
 
         if (!options.SupportedVersions.Contains(options.DefaultVersion) &&
             !options.DeprecatedVersions.Contains(options.DefaultVersion))

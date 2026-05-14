@@ -94,12 +94,14 @@
   <Folder Name="/MicroKit.MultiTenancy/tests/" />
   <Folder Name="/MicroKit.OpenApi/" />
   <Folder Name="/MicroKit.OpenApi/docs/">
-    <File Path="MicroKit.ApiVersioning/docs/Readme.md" />
+    <File Path="MicroKit.OpenApi/docs/Readme.md" />
   </Folder>
   <Folder Name="/MicroKit.OpenApi/src/">
     <Project Path="MicroKit.OpenApi/src/MicroKit.OpenApi/MicroKit.OpenApi.csproj" Id="c2efc0a7-20c1-42df-8e5a-ea6017794dbb" />
   </Folder>
-  <Folder Name="/MicroKit.OpenApi/tests/" />
+  <Folder Name="/MicroKit.OpenApi/tests/">
+    <Project Path="MicroKit.OpenApi/tests/MicroKit.OpenApi.Tests/MicroKit.OpenApi.Tests.csproj" />
+  </Folder>
   <Folder Name="/MicroKit.Resilience/" />
   <Folder Name="/MicroKit.Resilience/src/">
     <Project Path="MicroKit.Resilience/src/MicroKit.Resilience.Abstractions/MicroKit.Resilience.Abstractions.csproj" />

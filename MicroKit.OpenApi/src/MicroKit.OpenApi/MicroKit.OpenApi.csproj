@@ -1,4 +1,4 @@
-﻿<Project Sdk="Microsoft.NET.Sdk">
+<Project Sdk="Microsoft.NET.Sdk">
 
   <PropertyGroup>
     <TargetFramework>net10.0</TargetFramework>
@@ -6,22 +6,22 @@
     <Nullable>enable</Nullable>
     <PackageId>MicroKit.OpenApi</PackageId>
     <Version>1.0.0</Version>
-    <Authors>MicroKit Team</Authors>
-    <Description>Enterprise-grade OpenAPI documentation library for ASP.NET Core microservices using Scalar UI</Description>
-    <PackageTags>openapi;aspnetcore;scalar;microservices;versioning</PackageTags>
-    <PackageReadmeFile>README.md</PackageReadmeFile>
+    <Description>OpenAPI documentation and Scalar UI integration for ASP.NET Core — multi-version, security schemes, extensible filters.</Description>
+    <PackageTags>openapi;aspnetcore;scalar;versioning;microkit</PackageTags>
+    <PackageReadmeFile>docs/Readme.md</PackageReadmeFile>
     <GenerateDocumentationFile>true</GenerateDocumentationFile>
-    <NoWarn>$(NoWarn);CS1591</NoWarn>
   </PropertyGroup>
+
+  <ItemGroup>
+    <None Include="../../docs/Readme.md" Pack="true" PackagePath="docs/Readme.md" />
+  </ItemGroup>
 
   <ItemGroup>
     <PackageReference Include="Asp.Versioning.Http" Version="8.1.1" />
     <PackageReference Include="Asp.Versioning.Mvc.ApiExplorer" Version="8.1.1" />
-    <PackageReference Include="Autofac" Version="9.1.0" />
     <PackageReference Include="Microsoft.AspNetCore.OpenApi" Version="10.0.5" />
     <PackageReference Include="Scalar.AspNetCore" Version="2.13.8" />
     <PackageReference Include="Scalar.AspNetCore.Microsoft" Version="2.13.8" />
-    <PackageReference Include="Swashbuckle.AspNetCore.SwaggerGen" Version="10.1.4" />
   </ItemGroup>
 
   <ItemGroup>

@@ -1,273 +1,387 @@
-﻿# MicroKit.ApiVersioning
+# MicroKit.OpenApi
 
-> Gestion avancée des versions d’API pour ASP.NET Core (.NET 9 / .NET 10)
-> Conçu pour les microservices, Clean Architecture, DDD et systèmes modulaires.
+OpenAPI documentation and Scalar UI integration for ASP.NET Core — multi-version, pluggable security schemes, extensible filters.
 
 ---
 
-## Présentation
+## Overview
 
-**MicroKit.ApiVersioning** fournit une couche d’intégration propre et validée sur [`Asp.Versioning`](https://github.com/dotnet/aspnet-api-versioning) pour :
+`MicroKit.OpenApi` wraps Microsoft's native OpenAPI infrastructure (`Microsoft.AspNetCore.OpenApi`) and adds:
 
-* ✅ Minimal APIs
-* ✅ Controllers
-* ✅ Swagger / OpenAPI
-* ✅ Clean Architecture
-* ✅ Intégration Autofac
-* ✅ Microservices
-* ✅ Validation de configuration au démarrage
-* ✅ Comportement “fail-fast” pour la production
-
-Elle impose une configuration fortement typée, élimine les valeurs par défaut silencieuses et garantit un démarrage sûr pour les systèmes distribués.
+- **Multi-version document generation** — one OpenAPI JSON document per API version, auto-registered.
+- **Scalar UI** — modern API explorer replacing Swagger UI, with theme and layout control.
+- **Security schemes** — Bearer/JWT, OAuth 2.0 (all four flows), and API Key out of the box.
+- **Extensible filter pipeline** — document, operation, and schema filters for custom transformations.
+- **Configuration-driven** — all options bindable from `appsettings.json`.
+- **Fluent builder API** — chainable setup without touching raw `IServiceCollection`.
 
 ---
 
 ## Installation
 
 ```bash
-dotnet add package MicroKit.ApiVersioning
+dotnet add package MicroKit.OpenApi
 ```
 
-Si vous utilisez Autofac :
-
-```bash
-dotnet add package MicroKit.ApiVersioning.Autofac
-```
+Requires .NET 10 / ASP.NET Core 10.
 
 ---
 
-## Configuration
+## Quickstart
 
-Ajouter la section suivante dans `appsettings.json` :
+```csharp
+// Program.cs
+var builder = WebApplication.CreateBuilder(args);
+
+builder.Services.AddMicroKitOpenApi(builder.Configuration)
+    .AddBearerSecurity()
+    .AddDocumentFilter<DeprecationDocumentFilter>()
+    .ConfigureScalar(s => { s.Theme = ScalarTheme.Moon; s.DarkMode = true; });
+
+var app = builder.Build();
+app.UseMicroKitOpenApi();
+app.Run();
+```
+
+OpenAPI documents are served at `/openapi/{documentName}.json`.  
+The Scalar UI is served at `/scalar/{documentName}`.
+
+---
+
+## Configuration — `appsettings.json`
 
 ```json
 {
-  "ApiVersioning": {
-    "DefaultVersion": "1.0",
-    "HeaderKey": "X-Api-Version",
-    "QueryStringReaderKey": "api-version",
-    "MediaTypeReaderKey": "ver",
-    "GroupNameFormat": "'v'VVV",
-    "AssumeDefaultVersionWhenUnspecified": true,
-    "ReportApiVersions": true,
-    "SubstituteApiVersionInUrl": true
+  "MicroKit:OpenApi": {
+    "Title": "Order Service",
+    "Description": "Manages orders in the platform.",
+    "DefaultVersion": "2.0",
+    "SupportedVersions": ["1.0", "2.0"],
+    "DeprecatedVersions": ["0.9"],
+    "EnableScalar": true,
+    "Theme": "Moon",
+    "ScalarEndpointPath": "/scalar/{documentName}",
+    "OpenApiEndpointPath": "/openapi/{documentName}.json",
+    "ApiVersionHeaderKey": "X-Api-Version",
+    "ApiVersionQueryKey": "api-version",
+    "Contact": {
+      "Name": "API Team",
+      "Email": "api@example.com",
+      "Url": "https://example.com/support"
+    },
+    "License": {
+      "Name": "MIT",
+      "Url": "https://opensource.org/licenses/MIT"
+    },
+    "TermsOfServiceUrl": "https://example.com/terms",
+    "Servers": [
+      { "Url": "https://api.example.com", "Description": "Production" },
+      { "Url": "https://staging.example.com", "Description": "Staging" }
+    ]
   }
 }
 ```
 
 ---
 
-## Fonctionnalités
+## Fluent Builder API
 
-* Options fortement typées
-* Validation au démarrage (`ValidateOnStart`)
-* Validation métier avancée via `IValidateOptions<T>`
-* Lecteurs de version configurables :
-
-  * Segment d’URL
-  * Query string
-  * Header
-  * Media type
-* Aucune valeur par défaut silencieuse
-* Séparation claire DI Microsoft ↔ Autofac
-* Abstraction OpenAPI via `IOpenApiDescriptor`
-
----
-
-## Enregistrement dans Microsoft DI
+All overloads return `IMicroKitOpenApiBuilder` for chaining.
 
 ```csharp
-var builder = WebApplication.CreateBuilder(args);
-
-builder.Services.AddMicroKitApiVersioning(builder.Configuration);
+builder.Services
+    .AddMicroKitOpenApi(builder.Configuration)          // bind from appsettings.json
+    .AddMicroKitOpenApi(options => { ... })             // code-only
+    .AddMicroKitOpenApi(builder.Configuration, options => { ... }); // both
 ```
 
-C’est tout ! ✅
-
----
-
-## Exemple Minimal API
+### Version management
 
 ```csharp
-var app = builder.Build();
-
-app.MapGet("/v{version:apiVersion}/hello", () => "Bonjour !")
-   .WithApiVersionSet()
-   .MapToApiVersion(1.0);
-
-app.Run();
-```
-
----
-
-## Exemple Controller
-
-```csharp
-using Asp.Versioning;
-using Microsoft.AspNetCore.Mvc;
-
-[ApiController]
-[Route("v{version:apiVersion}/[controller]")]
-[ApiVersion("1.0")]
-public class ProductsController : ControllerBase
+builder.Services.AddMicroKitOpenApi(options =>
 {
-    [HttpGet]
-    public IActionResult Get() => Ok("Produits v1");
-}
+    options.Title = "My API";
+    options.DefaultVersion = "2.0";
+    options.SupportedVersions = ["1.0", "2.0"];
+    options.DeprecatedVersions = ["0.9"];
+})
+// Or add versions via builder:
+.AddVersion("3.0")
+.AddVersion("0.8", deprecated: true)
+// Or register explicit OpenAPI documents for specific versions:
+.WithVersionDocuments("1.0", "2.0", "0.9")
+// Or read versions from configuration automatically:
+.WithVersionDocumentsFromConfig(builder.Configuration);
 ```
+
+### Server URLs
+
+```csharp
+.AddServer("https://api.example.com", "Production")
+.AddServer("https://staging.example.com", "Staging")
+```
+
+### Scalar UI
+
+```csharp
+.ConfigureScalar(s =>
+{
+    s.Theme = ScalarTheme.DeepSpace;
+    s.DarkMode = true;
+    s.ShowSidebar = true;
+    s.ShowDownloadButton = true;
+    s.Favicon = "/favicon.ico";
+    s.CustomCss = "body { font-family: sans-serif; }";
+})
+```
+
+Available themes: `Default`, `Alternate`, `Moon`, `Purple`, `Solarized`, `BluePlanet`, `Saturn`, `Kepler`, `Mars`, `DeepSpace`.
 
 ---
 
-## Intégration Autofac
+## Security Schemes
 
-MicroKit fournit un module Autofac propre, **sans couplage avec `IServiceCollection`**.
+Security schemes are registered via `IMicroKitOpenApiBuilder` and appear in both the OpenAPI document and the Scalar UI.
+
+### Bearer / JWT
 
 ```csharp
-using Autofac;
-using Autofac.Extensions.DependencyInjection;
-
-var builder = WebApplication.CreateBuilder(args);
-
-builder.Host.UseServiceProviderFactory(new AutofacServiceProviderFactory());
-
-builder.Services.AddMicroKitApiVersioning(builder.Configuration);
-
-builder.Host.ConfigureContainer<ContainerBuilder>(container =>
+.AddBearerSecurity(options =>
 {
-    container.RegisterModule<MicroKitVersioningModule>();
-});
+    options.SchemeName = "Bearer";          // default
+    options.BearerFormat = "JWT";           // default
+    options.Description = "Enter your JWT";
+    options.PrefilledValue = "dev-token";   // development only
+})
 ```
 
-✅ Pas besoin de `Populate()`.
-✅ Respect total des bonnes pratiques Autofac.
-
----
-
-## Support OpenAPI / Swagger
-
-Le package expose :
+### API Key
 
 ```csharp
-public interface IOpenApiDescriptor
+.AddApiKeySecurity(options =>
 {
-    string HeaderName { get; }
-    string DefaultVersion { get; }
-}
+    options.Name = "X-Api-Key";             // header/query param name
+    options.Location = ApiKeyLocation.Header; // Header | Query | Cookie
+    options.SchemeName = "ApiKey";          // default
+    options.PrefilledValue = "dev-key";     // development only
+})
 ```
 
-Vous pouvez l’injecter dans vos filtres ou services :
+### OAuth 2.0
 
 ```csharp
-public class SwaggerHeaderFilter
+.AddOAuth2Security(options =>
 {
-    private readonly IOpenApiDescriptor _descriptor;
-
-    public SwaggerHeaderFilter(IOpenApiDescriptor descriptor)
+    options.SchemeName = "Keycloak";
+    options.FlowType = OAuth2FlowType.AuthorizationCode; // or ClientCredentials, Password, Implicit
+    options.AuthorizationUrl = "https://auth.example.com/authorize";
+    options.TokenUrl = "https://auth.example.com/token";
+    options.EnablePkce = true;
+    options.Scopes = new Dictionary<string, string>
     {
-        _descriptor = descriptor;
+        ["api:read"]  = "Read access",
+        ["api:write"] = "Write access"
+    };
+    options.PrefilledClientId = "my-client"; // development only
+})
+```
+
+### Security schemes from `appsettings.json`
+
+Use the `Type` discriminator (`Bearer`, `ApiKey`, `OAuth2`) to configure schemes declaratively:
+
+```json
+"Securities": [
+  {
+    "Type": "Bearer",
+    "SchemeName": "UserAuth",
+    "Description": "JWT for end-users"
+  },
+  {
+    "Type": "ApiKey",
+    "SchemeName": "ServiceKey",
+    "Name": "X-Internal-Key",
+    "Location": "Header"
+  },
+  {
+    "Type": "OAuth2",
+    "SchemeName": "Keycloak",
+    "FlowType": "AuthorizationCode",
+    "AuthorizationUrl": "https://auth.example.com/authorize",
+    "TokenUrl": "https://auth.example.com/token",
+    "Scopes": { "api__read": "Read access" }
+  }
+]
+```
+
+> **Note:** Use double-underscore (`__`) in JSON scope keys as a stand-in for colon (`:`). The library rewrites them automatically (e.g., `api__read` → `api:read`).
+
+---
+
+## Extensible Filters
+
+Implement a filter interface and register it via the builder.
+
+### Document filter
+
+```csharp
+public sealed class CustomDocumentFilter : IOpenApiDocumentFilter
+{
+    public Task ApplyAsync(OpenApiDocument document, DocumentFilterContext context, CancellationToken ct = default)
+    {
+        document.Info.Description += "\n\nCustom footer added by document filter.";
+        return Task.CompletedTask;
     }
 }
+
+// Registration
+builder.Services.AddMicroKitOpenApi(config)
+    .AddDocumentFilter<CustomDocumentFilter>();
 ```
 
----
-
-## Validation de configuration
-
-Le package utilise :
-
-* `ValidateOnStart()`
-* `IValidateOptions<T>` pour la validation métier
-* Validation du format de version API
-
-Si la configuration est invalide, l’application **échoue au démarrage** :
-
-```
-Options validation failed for 'MicroKitApiVersioningOptions':
-- DefaultVersion doit être une version API valide (ex: 1.0)
-```
-
-Parfait pour :
-
-* Docker / Kubernetes
-* CI/CD
-* Environnements de production
-
----
-
-## Principes d’architecture
-
-* Clean Architecture
-* Respect des principes SOLID
-* Aucune fuite de framework
-* Pas de fallback silencieux
-* Testable et modulaire
-
----
-
-## Tests
-
-Vous pouvez tester facilement vos options :
+### Operation filter
 
 ```csharp
-var options = Options.Create(new MicroKitApiVersioningOptions
+public sealed class CustomOperationFilter : IOpenApiOperationFilter
 {
-    DefaultVersion = "1.0",
-    HeaderKey = "X-Api-Version",
-    QueryStringReaderKey = "api-version",
-    MediaTypeReaderKey = "ver",
-    GroupNameFormat = "'v'VVV"
-});
+    public Task ApplyAsync(OpenApiOperation operation, OperationFilterContext context, CancellationToken ct = default)
+    {
+        operation.Summary ??= "No summary provided";
+        return Task.CompletedTask;
+    }
+}
+
+.AddOperationFilter<CustomOperationFilter>()
 ```
 
-Ou tester la validation via `IValidateOptions`.
+### Schema filter
+
+```csharp
+public sealed class CustomSchemaFilter : IOpenApiSchemaFilter
+{
+    public Task ApplyAsync(OpenApiSchema schema, SchemaFilterContext context, CancellationToken ct = default)
+    {
+        if (context.Type == typeof(DateTime))
+            schema.Format = "date-time";
+        return Task.CompletedTask;
+    }
+}
+
+.AddSchemaFilter<CustomSchemaFilter>()
+```
 
 ---
 
-## Conçu pour les microservices
+## Built-in Filters
 
-Idéal pour :
+### `DeprecationDocumentFilter`
 
-* API Gateways
-* Microservices DDD
-* Monolithes modulaires
-* Déploiements multi-environnements
-* Plateformes d’entreprise
+Marks all operations in a deprecated API version document as deprecated and prepends a deprecation banner to the document description.
+
+```csharp
+.AddDocumentFilter<DeprecationDocumentFilter>()
+```
+
+### `RequiredSchemaFilter`
+
+Promotes properties annotated with `[Required]` to the OpenAPI `required` array. Respects `[JsonPropertyName]` for camelCase mapping.
+
+```csharp
+.AddSchemaFilter<RequiredSchemaFilter>()
+```
+
+### `ExamplesOperationFilter`
+
+Reads `[OpenApiResponseExample]` attributes from endpoint methods and injects JSON examples into the corresponding response.
+
+```csharp
+[OpenApiResponseExample(200, """{"id": 1, "name": "Widget"}""")]
+public IActionResult Get() => Ok(new Widget());
+
+.AddOperationFilter<ExamplesOperationFilter>()
+```
 
 ---
 
-## Roadmap
+## API Versioning
 
-* Support multi-tenant
-* Automation Swagger multi-version
-* Provider de version dynamique runtime
-* Helpers OpenAPI UI
+`MicroKit.OpenApi` configures `Asp.Versioning` automatically. Each version produces a separate OpenAPI document.
+
+### Minimal API
+
+```csharp
+var v1 = app.NewVersionedApi("Orders")
+    .MapGroup("/api/v{version:apiVersion}/orders")
+    .HasApiVersion(1.0);
+
+v1.MapGet("/", () => Results.Ok("v1 orders"));
+
+var v2 = app.NewVersionedApi("Orders")
+    .MapGroup("/api/v{version:apiVersion}/orders")
+    .HasApiVersion(2.0);
+
+v2.MapGet("/", () => Results.Ok(new { Orders = "v2 orders", Count = 1 }));
+```
+
+### Controller
+
+```csharp
+[ApiController]
+[ApiVersion("1.0")]
+[ApiVersion("2.0")]
+[Route("api/v{version:apiVersion}/[controller]")]
+public class ProductsController : ControllerBase
+{
+    [HttpGet, MapToApiVersion("1.0")]
+    public IActionResult GetV1() => Ok(new { Version = "1.0" });
+
+    [HttpGet, MapToApiVersion("2.0")]
+    public IActionResult GetV2() => Ok(new { Version = "2.0", Enhanced = true });
+}
+```
+
+Version readers configured by default: URL segment (`/v{version}`), query string (`?api-version=`), header (`X-Api-Version`), media type.
 
 ---
 
-## Prérequis
+## Startup Validation
 
-* .NET 9 ou .NET 10
-* [Asp.Versioning](https://github.com/dotnet/aspnet-api-versioning)
+`MicroKit.OpenApi` registers `IValidateOptions<MicroKitOpenApiOptions>` and validates configuration at startup:
+
+- `Title` is required.
+- `DefaultVersion` is required and must appear in `SupportedVersions` or `DeprecatedVersions`.
+- At least one version must be configured.
+- Contact email must be a valid address when set.
+- OAuth 2.0 flows require the appropriate URLs (`AuthorizationUrl`, `TokenUrl`).
+- Security `SchemeName` values must be unique.
+
+Invalid configuration causes a descriptive exception before the application starts — safe for Docker / Kubernetes / CI-CD.
 
 ---
 
-## Licence
+## Endpoints
+
+| Path | Description |
+|------|-------------|
+| `/openapi/{documentName}.json` | OpenAPI specification JSON for a specific document |
+| `/scalar/{documentName}` | Scalar UI for a specific document |
+
+The default document for the Scalar UI is the `DefaultVersion` from options.
+
+---
+
+## Dependencies
+
+| Package | Purpose |
+|---------|---------|
+| `Microsoft.AspNetCore.OpenApi` | Native ASP.NET Core OpenAPI document generation |
+| `Asp.Versioning.Http` | HTTP API versioning |
+| `Asp.Versioning.Mvc.ApiExplorer` | API Explorer integration for versioned endpoints |
+| `Scalar.AspNetCore` | Scalar UI endpoint and configuration |
+| `Scalar.AspNetCore.Microsoft` | Microsoft OpenAPI adapter for Scalar |
+
+---
+
+## License
 
 MIT
-
----
-
-## Contribution
-
-Les PR sont bienvenues.
-Les discussions architecturales encouragées.
-
----
-
-## Philosophie
-
-> Fail fast.
-> Valider tôt.
-> Éviter les valeurs par défaut silencieuses.
-> Séparer les conteneurs DI.
-> Construire d’abord pour la production.

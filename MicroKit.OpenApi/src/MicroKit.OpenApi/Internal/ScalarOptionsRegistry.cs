@@ -9,6 +9,7 @@ internal sealed class ScalarOptionsRegistry
 
     public void Configure(Action<MicroKit.OpenApi.Abstractions.ScalarOptions> configure)
     {
+        ArgumentNullException.ThrowIfNull(configure);
         configure(Options);
     }
 }

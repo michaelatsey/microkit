@@ -1,4 +1,4 @@
-﻿using MicroKit.OpenApi.Abstractions;
+using MicroKit.OpenApi.Abstractions;
 using MicroKit.OpenApi.Builder;
 using MicroKit.OpenApi.Configuration;
 using MicroKit.OpenApi.Constants;
@@ -10,16 +10,16 @@ using Microsoft.Extensions.DependencyInjection.Extensions;
 namespace MicroKit.OpenApi.Extensions;
 
 /// <summary>
-/// Extension methods for configuring MicroKit OpenAPI services.
+/// Extension methods for adding MicroKit OpenAPI services to an <see cref="IServiceCollection"/>.
 /// </summary>
 public static class ServiceCollectionExtensions
 {
     /// <summary>
-    /// Adds MicroKit OpenAPI services using configuration from appsettings.json.
+    /// Adds MicroKit OpenAPI services, reading configuration from <paramref name="configuration"/>.
     /// </summary>
     /// <param name="services">The service collection.</param>
-    /// <param name="configuration">The configuration.</param>
-    /// <returns>The MicroKit OpenAPI builder.</returns>
+    /// <param name="configuration">The application configuration (reads <c>MicroKit:OpenApi</c> section).</param>
+    /// <returns>The builder for fluent configuration.</returns>
     public static IMicroKitOpenApiBuilder AddMicroKitOpenApi(
         this IServiceCollection services,
         IConfiguration configuration)
@@ -28,41 +28,36 @@ public static class ServiceCollectionExtensions
     }
 
     /// <summary>
-    /// Adds MicroKit OpenAPI services using configuration from appsettings.json with additional configuration.
+    /// Adds MicroKit OpenAPI services with configuration from <paramref name="configuration"/> and an additional code-based override.
     /// </summary>
     /// <param name="services">The service collection.</param>
-    /// <param name="configuration">The configuration.</param>
-    /// <param name="configure">Additional configuration action.</param>
-    /// <returns>The MicroKit OpenAPI builder.</returns>
+    /// <param name="configuration">The application configuration.</param>
+    /// <param name="configure">Code-based override applied on top of the configuration file values.</param>
+    /// <returns>The builder for fluent configuration.</returns>
     public static IMicroKitOpenApiBuilder AddMicroKitOpenApi(
         this IServiceCollection services,
         IConfiguration? configuration,
         Action<MicroKitOpenApiOptions> configure)
     {
-        //ArgumentNullException.ThrowIfNull(configuration);
         ArgumentNullException.ThrowIfNull(configure);
 
-        // Bind configuration section
-        // Bind configuration from appsettings.json if available
         if (configuration is not null)
         {
-            var section = configuration.GetSection(MicroKitOpenApiDefaults.ConfigurationSectionName);
-            services.Configure<MicroKitOpenApiOptions>(section);
+            services.Configure<MicroKitOpenApiOptions>(
+                configuration.GetSection(MicroKitOpenApiDefaults.ConfigurationSectionName));
         }
 
-        // ApplyAsync code-based configuration
         services.Configure(configure);
 
         return services.AddMicroKitOpenApiCore(configuration);
     }
 
-
     /// <summary>
-    /// Adds MicroKit OpenAPI services with code-based configuration.
+    /// Adds MicroKit OpenAPI services with code-based configuration only.
     /// </summary>
     /// <param name="services">The service collection.</param>
-    /// <param name="configure">Configuration action.</param>
-    /// <returns>The MicroKit OpenAPI builder for fluent configuration.</returns>
+    /// <param name="configure">Configuration action for <see cref="MicroKitOpenApiOptions"/>.</param>
+    /// <returns>The builder for fluent configuration.</returns>
     public static IMicroKitOpenApiBuilder AddMicroKitOpenApi(
         this IServiceCollection services,
         Action<MicroKitOpenApiOptions> configure)
@@ -74,65 +69,43 @@ public static class ServiceCollectionExtensions
         this IServiceCollection services,
         IConfiguration? configuration)
     {
-        // Register internal services
         var filterRegistry = new FilterRegistry();
         var scalarOptionsRegistry = new ScalarOptionsRegistry();
 
         services.TryAddSingleton(filterRegistry);
         services.TryAddSingleton(scalarOptionsRegistry);
 
-        // Register options validator
         services.TryAddSingleton<IValidateOptions<MicroKitOpenApiOptions>, MicroKitOpenApiOptionsValidator>();
 
-        // Configure API versioning using IConfigureOptions pattern
-        // This avoids the BuildServiceProvider() anti-pattern
         services.TryAddSingleton<IConfigureOptions<ApiVersioningOptions>, ApiVersioningOptionsConfigurator>();
         services.TryAddSingleton<IConfigureOptions<ApiExplorerOptions>, ApiExplorerOptionsConfigurator>();
 
-        // Register transformers as scoped services for DI
         services.TryAddSingleton<OpenApiDocumentTransformer>();
         services.TryAddSingleton<OpenApiOperationTransformer>();
         services.TryAddSingleton<OpenApiSchemaTransformer>();
 
-        // Post-configure to ensure versions are set correctly
-        // Enregistrement du PostConfigurator avec passage de la configuration
-        services.TryAddSingleton<IPostConfigureOptions<MicroKitOpenApiOptions>>(sp =>
-            new OpenApiPostConfigurator(configuration));
+        services.TryAddSingleton<IPostConfigureOptions<MicroKitOpenApiOptions>>(
+            _ => new OpenApiPostConfigurator(configuration));
 
-        // Register OpenAPI options configurator using IConfigureNamedOptions
-        // This defers transformer registration until options are resolved - NO BuildServiceProvider!
         services.ConfigureOptions<OpenApiOptionsConfigurator>();
 
-        // Register document configurator for runtime access
         services.AddSingleton<OpenApiDocumentsConfigurator>();
 
-        //// Get versions from configuration to register OpenAPI documents
-        //// We need to read versions at registration time to call AddOpenApi per version
         var versions = GetVersions(configuration);
-
-        // Register OpenAPI document for each version
-        // IMPORTANT : On s'assure que Microsoft OpenAPI est enregistré par version
         foreach (var version in versions)
         {
             services.AddOpenApi($"v{version}");
         }
 
-        // Configure API versioning based on routing style
         ConfigureApiVersioning(services);
 
-        // Create and return builder
-        var builder = new MicroKitOpenApiBuilder(services, filterRegistry, scalarOptionsRegistry);
-        return builder;
+        return new MicroKitOpenApiBuilder(services, filterRegistry, scalarOptionsRegistry);
     }
 
     private static void ConfigureApiVersioning(IServiceCollection services)
     {
-        //services.AddEndpointsApiExplorer();
-        //services.AddSwaggerGen();
-
         services.AddApiVersioning(options =>
         {
-            // Default options - will be overridden by ApiVersioningOptionsConfigurator
             options.ReportApiVersions = true;
             options.AssumeDefaultVersionWhenUnspecified = true;
             options.ApiVersionReader = ApiVersionReader.Combine(
@@ -155,8 +128,6 @@ public static class ServiceCollectionExtensions
         if (configuration is not null)
         {
             var section = configuration.GetSection(MicroKitOpenApiDefaults.ConfigurationSectionName);
-
-            // Extraction manuelle des listes pour éviter le cycle de dépendance des Options
             var supported = section.GetSection("SupportedVersions").Get<List<string>>();
             var deprecated = section.GetSection("DeprecatedVersions").Get<List<string>>();
             var defaultVer = section.GetValue<string>("DefaultVersion");
@@ -166,98 +137,95 @@ public static class ServiceCollectionExtensions
             if (!string.IsNullOrEmpty(defaultVer)) versions.Add(defaultVer);
         }
 
-        // Fallback par défaut si rien n'est configuré
         if (versions.Count == 0)
         {
-            versions.Add(MicroKitOpenApiDefaults.DefaultApiVersion); // "1.0"
+            versions.Add(MicroKitOpenApiDefaults.DefaultApiVersion);
         }
 
         return [.. versions.Distinct()];
     }
-    
 }
 
-
 /// <summary>
-/// Post-configures MicroKitOpenApiOptions to ensure all versions are properly set.
+/// Post-configures <see cref="MicroKitOpenApiOptions"/> to ensure the default version is always present
+/// and to map polymorphic security schemes from JSON configuration.
 /// </summary>
 internal sealed class OpenApiPostConfigurator : IPostConfigureOptions<MicroKitOpenApiOptions>
 {
     private readonly IConfiguration? _configuration;
 
+    /// <summary>Initializes a new instance.</summary>
     public OpenApiPostConfigurator(IConfiguration? configuration = null)
     {
         _configuration = configuration;
     }
+
+    /// <inheritdoc />
     public void PostConfigure(string? name, MicroKitOpenApiOptions options)
     {
-        // 1. Gestion des versions (existant)
         if (!options.SupportedVersions.Contains(options.DefaultVersion) &&
             !options.DeprecatedVersions.Contains(options.DefaultVersion))
         {
             options.SupportedVersions.Insert(0, options.DefaultVersion);
         }
 
-        // 2. Mapping Polymorphique de la Sécurité depuis le JSON
-        if (_configuration != null)
+        if (_configuration is null)
         {
-            var section = _configuration.GetSection($"{MicroKitOpenApiDefaults.ConfigurationSectionName}:Securities");
-            if (section.Exists())
+            return;
+        }
+
+        // JSON security schemes use a "Type" discriminator for polymorphic deserialization.
+        var section = _configuration.GetSection($"{MicroKitOpenApiDefaults.ConfigurationSectionName}:Securities");
+        if (!section.Exists())
+        {
+            return;
+        }
+
+        foreach (var subSection in section.GetChildren())
+        {
+            var type = subSection.GetValue<string>("Type");
+
+            SecuritySchemeOptions? scheme = type?.ToLowerInvariant() switch
             {
-                foreach (var subSection in section.GetChildren())
-                {
-                    var type = subSection.GetValue<string>("Type");
+                "bearer" => subSection.Get<BearerSecurityOptions>(),
+                "apikey" => subSection.Get<ApiKeySecurityOptions>(),
+                "oauth2" => subSection.Get<OAuth2SecurityOptions>(),
+                _ => null
+            };
 
-                    SecuritySchemeOptions? scheme = type?.ToLowerInvariant() switch
-                    {
-                        "bearer" => subSection.Get<BearerSecurityOptions>(),
-                        "apikey" => subSection.Get<ApiKeySecurityOptions>(),
-                        "oauth2" => subSection.Get<OAuth2SecurityOptions>(),
-                        _ => null
-                    };
+            if (scheme is null || options.Securities is null)
+            {
+                continue;
+            }
 
-                    // On ajoute seulement si le SchemeName n'est pas déjà présent (évite les doublons code/json)
-                    if (
-                        scheme != null && 
-                        options.Securities is not null && 
-                        !options.Securities.Any(s => s.SchemeName == scheme.SchemeName))
-                    {
-                        if (string.IsNullOrWhiteSpace(scheme.Description))
-                        {
-                            scheme.Description = scheme.SchemeName switch
-                            {
-                                "Tenant" => "Identifiant de contexte organisationnel (Multi-tenant).",
-                                "Bearer" => "Authentification basée sur un jeton JWT.",
-                                _ => "Sécurité requise pour l'accès aux ressources."
-                            };
-                        }
-                        options.Securities.Add(scheme);
-                    }
-                }
+            if (!options.Securities.Any(s => s.SchemeName == scheme.SchemeName))
+            {
+                options.Securities.Add(scheme);
             }
         }
     }
 }
 
-
 /// <summary>
-/// Provides access to configured versions at runtime.
+/// Provides the list of all configured API version document names at runtime.
 /// </summary>
 internal sealed class OpenApiDocumentsConfigurator
 {
     private readonly IOptions<MicroKitOpenApiOptions> _options;
 
+    /// <summary>Initializes a new instance.</summary>
     public OpenApiDocumentsConfigurator(IOptions<MicroKitOpenApiOptions> options)
     {
         _options = options;
     }
 
+    /// <summary>Returns all version strings (supported + deprecated), ordered descending.</summary>
     public IEnumerable<string> GetAllVersions()
     {
         var opts = _options.Value;
         return opts.SupportedVersions
-                .Concat(opts.DeprecatedVersions)
-                .Distinct()
-                .OrderByDescending(v => v);
+            .Concat(opts.DeprecatedVersions)
+            .Distinct()
+            .OrderByDescending(v => v);
     }
 }

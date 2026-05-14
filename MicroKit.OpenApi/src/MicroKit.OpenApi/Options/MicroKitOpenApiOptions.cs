@@ -38,7 +38,14 @@ public sealed class MicroKitOpenApiOptions
     /// Gets or sets the API version header key.
     /// </summary>
     public string ApiVersionHeaderKey { get; set; } = MicroKitOpenApiDefaults.DefaultApiVersionHeaderKey;
+    /// <summary>
+    /// Gets or sets the query string parameter name used for version negotiation.
+    /// </summary>
     public string ApiVersionQueryKey { get; set; } = MicroKitOpenApiDefaults.DefaultApiVersionQueryKey;
+
+    /// <summary>
+    /// Gets or sets the media type parameter name used for version negotiation.
+    /// </summary>
     public string ApiVersionMediaTypeKey { get; set; } = MicroKitOpenApiDefaults.DefaultApiVersionMediaTypeKey;
 
     /// <summary>   
@@ -158,18 +165,28 @@ public sealed class ServerOptions
 }
 
 /// <summary>
-/// Scalar theme options.
+/// Available Scalar UI themes.
 /// </summary>
 public enum ScalarTheme
 {
+    /// <summary>Default Scalar theme.</summary>
     Default,
+    /// <summary>Alternate light theme.</summary>
     Alternate,
+    /// <summary>Dark moon theme.</summary>
     Moon,
+    /// <summary>Purple accent theme.</summary>
     Purple,
+    /// <summary>Solarized color scheme.</summary>
     Solarized,
+    /// <summary>Blue planet theme.</summary>
     BluePlanet,
+    /// <summary>Saturn theme.</summary>
     Saturn,
+    /// <summary>Kepler theme.</summary>
     Kepler,
+    /// <summary>Mars red theme.</summary>
     Mars,
+    /// <summary>Deep space dark theme.</summary>
     DeepSpace
 }
