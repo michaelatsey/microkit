@@ -111,15 +111,7 @@
   <Folder Name="/MicroKit.Resilience/tests/">
     <Project Path="MicroKit.Resilience/tests/MicroKit.Resilience.Tests/MicroKit.Resilience.Tests.csproj" />
   </Folder>
-  <Folder Name="/MicroKit.Payments/" />
-  <Folder Name="/MicroKit.Payments/docs/" />
-  <Folder Name="/MicroKit.Payments/src/">
-    <Project Path="MicroKit.Payments/src/MicroKit.Payments.Abstractions/MicroKit.Payments.Abstractions.csproj" Id="75b69c16-c08c-4b0b-a15a-22f2177d782b" />
-    <Project Path="MicroKit.Payments/src/MicroKit.Payments.Stripe/MicroKit.Payments.Stripe.csproj" Id="bcf4c6af-4ac4-4059-a496-7e6fe8f095e5" />
-    <Project Path="MicroKit.Payments/src/MicroKit.Payments/MicroKit.Payments.csproj" Id="b7b38c4c-7249-4679-b477-78f46b0a23b8" />
-  </Folder>
-  <Folder Name="/MicroKit.Payments/tests/" />
-  <Folder Name="/MicroKit.Security/" />
+<Folder Name="/MicroKit.Security/" />
   <Folder Name="/MicroKit.Security/docs/">
     <File Path="MicroKit.Security/docs/Readme.md" />
   </Folder>

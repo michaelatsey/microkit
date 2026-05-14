@@ -193,11 +193,15 @@
                 "name": "MicroKit.OpenApi",
                 "purpose": "OpenAPI / Scalar configuration helpers",
                 "status": "defer — stabilize core modules first"
-            },
+            }
+        ],
+        "removed": [
             {
                 "name": "MicroKit.Payments",
                 "purpose": "Payment abstractions + Stripe implementation",
-                "status": "defer — stabilize core modules first"
+                "status": "removed",
+                "reason": "Stripe SDK maintenance cost too high relative to current project needs. Will be re-added when a real project requires it.",
+                "removedOn": "2026-05-14"
             }
         ]
     },
