@@ -1,0 +1,83 @@
+{
+  "version": "1.0",
+  "project": {
+    "name": "MicroKit.Result",
+    "type": "dotnet-library",
+    "language": "csharp",
+    "framework": "net9.0",
+    "paradigm": "functional-railway-oriented"
+  },
+  "model": {
+    "preferred": "claude-sonnet-4-20250514",
+    "fallback": "claude-opus-4-20250514"
+  },
+  "behavior": {
+    "autoApprove": [
+      "Read files",
+      "List directory",
+      "Run dotnet build",
+      "Run dotnet test",
+      "Run dotnet format"
+    ],
+    "requireApproval": [
+      "Delete files",
+      "Modify .csproj",
+      "Modify NuGet packages",
+      "Push to remote"
+    ],
+    "neverDo": [
+      "Add reflection-based serialization without attribute annotations",
+      "Use dynamic types",
+      "Catch Exception broadly without rethrowing",
+      "Return null from public APIs",
+      "Use mutable static state"
+    ]
+  },
+  "codeStyle": {
+    "indentation": "spaces",
+    "indentSize": 4,
+    "braces": "new-line",
+    "nullable": "enable",
+    "implicitUsings": "enable",
+    "fileScopedNamespaces": true,
+    "primaryConstructors": "prefer",
+    "targetTypedNew": "prefer",
+    "patternMatching": "prefer-over-casting"
+  },
+  "testing": {
+    "framework": "xUnit",
+    "assertionLibrary": "FluentAssertions",
+    "mockingLibrary": "NSubstitute",
+    "coverageTarget": 90,
+    "namingConvention": "MethodName_Scenario_ExpectedBehavior"
+  },
+  "documentation": {
+    "xmlDocs": "required-for-public-api",
+    "exampleRequired": true,
+    "remarksForComplexMethods": true
+  },
+  "agentDefaults": {
+    "alwaysLoadRules": [
+      ".claude/rules/csharp-style.md",
+      ".claude/rules/result-patterns.md",
+      ".claude/rules/no-exceptions-flow.md"
+    ],
+    "contextFiles": [
+      ".claude/CLAUDE.md",
+      "src/MicroKit.Result/Core/Result.cs",
+      "src/MicroKit.Result/Core/Result{T}.cs",
+      "src/MicroKit.Result/Errors/IError.cs",
+      "src/MicroKit.Result/Errors/Error.cs"
+    ]
+  },
+  "hooks": {
+    "preTask": [".claude/hooks/load-context.md"],
+    "postTask": [".claude/hooks/validate-output.md"],
+    "onError": [".claude/hooks/debug-guide.md"]
+  },
+  "subAgents": {
+    "architect": ".claude/agents/result-architect.md",
+    "reviewer": ".claude/agents/dotnet-reviewer.md",
+    "testWriter": ".claude/agents/test-generator.md"
+  }
+}
