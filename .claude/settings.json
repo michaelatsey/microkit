@@ -7,10 +7,7 @@
         "framework": "net10.0",
         "paradigm": "modular-library-ecosystem"
     },
-    "model": {
-        "preferred": "claude-sonnet-4-20250514",
-        "fallback": "claude-opus-4-20250514"
-    },
+    "model": "claude-sonnet-4-20250514",
     "behavior": {
         "autoApprove": [
             "Read files",
@@ -151,17 +148,6 @@
             ".claude/CLAUDE.md",
             "build/Directory.Build.props",
             "build/Directory.Packages.props"
-        ]
-    },
-    "hooks": {
-        "preTask": [
-            ".claude/hooks/detect-module-context.md"
-        ],
-        "postNewModule": [
-            ".claude/hooks/register-module.md"
-        ],
-        "preRelease": [
-            ".claude/hooks/pre-release-checklist.md"
         ]
     },
     "ci": {
