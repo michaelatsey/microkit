@@ -1,161 +1,19 @@
 {
-    "version": "1.0",
-    "project": {
-        "name": "MicroKit",
-        "type": "dotnet-monorepo",
-        "language": "csharp",
-        "framework": "net10.0",
-        "paradigm": "modular-library-ecosystem"
-    },
+    "$schema": "https://json.schemastore.org/claude-code-settings.json",
     "model": "claude-sonnet-4-6",
-    "behavior": {
-        "autoApprove": [
-            "Read files",
-            "List directory",
-            "Run dotnet build",
-            "Run dotnet test",
-            "Run dotnet format",
-            "Run git status",
-            "Run git log",
-            "Run git diff"
+    "permissions": {
+        "allow": [
+            "Bash(dotnet build *)",
+            "Bash(dotnet test *)",
+            "Bash(dotnet format *)",
+            "Bash(git status *)",
+            "Bash(git log *)",
+            "Bash(git diff *)"
         ],
-        "requireApproval": [
-            "Modify build/Directory.Build.props",
-            "Modify build/Directory.Packages.props",
-            "Modify build/version.json",
-            "Modify .github/workflows/*.yml",
-            "git tag",
-            "git push",
-            "Delete files",
-            "Add cross-module dependency"
-        ],
-        "neverDo": [
-            "Ajouter une dépendance circulaire entre modules",
-            "Modifier un package NuGet déjà publié (immuable)",
-            "Push sur main directement",
-            "Référencer un projet src/ d'un autre module (utiliser le package NuGet)",
-            "Modifier la structure de modules/ sans mettre à jour ce CLAUDE.md"
+        "deny": [
+            "Bash(git push * main)",
+            "Bash(git push origin main)"
         ]
-    },
-    "moduleRegistry": {
-        "MicroKit.Result": {
-            "path": "modules/MicroKit.Result",
-            "claude": "modules/MicroKit.Result/.claude/CLAUDE.md",
-            "status": "active",
-            "hasDependencies": []
-        },
-        "MicroKit.MediatR": {
-            "path": "modules/MicroKit.MediatR",
-            "claude": "modules/MicroKit.MediatR/.claude/CLAUDE.md",
-            "status": "active",
-            "hasDependencies": [
-                "MicroKit.Result"
-            ]
-        },
-        "MicroKit.Domain": {
-            "path": "modules/MicroKit.Domain",
-            "claude": "modules/MicroKit.Domain/.claude/CLAUDE.md",
-            "status": "active",
-            "hasDependencies": []
-        },
-        "MicroKit.Messaging": {
-            "path": "modules/MicroKit.Messaging",
-            "claude": "modules/MicroKit.Messaging/.claude/CLAUDE.md",
-            "status": "planned",
-            "hasDependencies": [
-                "MicroKit.Result",
-                "MicroKit.Domain"
-            ]
-        },
-        "MicroKit.Persistence": {
-            "path": "modules/MicroKit.Persistence",
-            "claude": "modules/MicroKit.Persistence/.claude/CLAUDE.md",
-            "status": "planned",
-            "hasDependencies": [
-                "MicroKit.Result",
-                "MicroKit.Domain"
-            ]
-        },
-        "MicroKit.Caching": {
-            "path": "modules/MicroKit.Caching",
-            "claude": "modules/MicroKit.Caching/.claude/CLAUDE.md",
-            "status": "planned",
-            "hasDependencies": [
-                "MicroKit.Result"
-            ]
-        },
-        "MicroKit.Http": {
-            "path": "modules/MicroKit.Http",
-            "claude": "modules/MicroKit.Http/.claude/CLAUDE.md",
-            "status": "planned",
-            "hasDependencies": [
-                "MicroKit.Result",
-                "MicroKit.Observability"
-            ]
-        },
-        "MicroKit.Auth": {
-            "path": "modules/MicroKit.Auth",
-            "claude": "modules/MicroKit.Auth/.claude/CLAUDE.md",
-            "status": "planned",
-            "hasDependencies": [
-                "MicroKit.Result",
-                "MicroKit.Domain"
-            ]
-        },
-        "MicroKit.Observability": {
-            "path": "modules/MicroKit.Observability",
-            "claude": "modules/MicroKit.Observability/.claude/CLAUDE.md",
-            "status": "planned",
-            "hasDependencies": [
-                "MicroKit.Result",
-                "MicroKit.Logging"
-            ]
-        },
-        "MicroKit.Logging": {
-            "path": "modules/MicroKit.Logging",
-            "claude": "modules/MicroKit.Logging/.claude/CLAUDE.md",
-            "status": "planned",
-            "hasDependencies": [
-                "MicroKit.Result"
-            ]
-        },
-        "MicroKit.Multitenancy": {
-            "path": "modules/MicroKit.Multitenancy",
-            "claude": "modules/MicroKit.Multitenancy/.claude/CLAUDE.md",
-            "status": "planned",
-            "hasDependencies": [
-                "MicroKit.Result",
-                "MicroKit.Auth",
-                "MicroKit.Persistence"
-            ]
-        }
-    },
-    "navigation": {
-        "onModuleTask": "Toujours lire modules/MicroKit.[X]/.claude/CLAUDE.md avant d'agir",
-        "onCrossModuleTask": "Lire ce fichier + les .claude/ de chaque module concerné",
-        "onBuildTask": "Lire .claude/skills/build-system.md",
-        "onReleaseTask": "Lire .claude/skills/release-process.md",
-        "onNewModule": "Lire .claude/skills/new-module-bootstrap.md"
-    },
-    "agentDefaults": {
-        "alwaysLoadRules": [
-            ".claude/rules/monorepo-conventions.md",
-            ".claude/rules/module-boundaries.md",
-            ".claude/rules/git-workflow.md"
-        ],
-        "contextFiles": [
-            ".claude/CLAUDE.md",
-            "build/Directory.Build.props",
-            "build/Directory.Packages.props"
-        ]
-    },
-    "ci": {
-        "provider": "github-actions",
-        "workflowsPath": ".github/workflows",
-        "changesetDetection": true,
-        "nugetFeed": "https://api.nuget.org/v3/index.json",
-        "versioningTool": "Nerdbank.GitVersioning",
-        "tagPattern": "{module}-v{version}"
     },
     "hooks": {
         "SessionStart": [
@@ -163,7 +21,7 @@
                 "hooks": [
                     {
                         "type": "command",
-                        "command": "echo 'MicroKit monorepo — charge le .claude/CLAUDE.md du module concerné avant toute action'"
+                        "command": "echo 'MicroKit monorepo session started'"
                     }
                 ]
             }
@@ -175,7 +33,7 @@
                     {
                         "type": "command",
                         "if": "Bash(git push * main)",
-                        "command": "echo '{\"hookSpecificOutput\":{\"hookEventName\":\"PreToolUse\",\"permissionDecision\":\"deny\",\"permissionDecisionReason\":\"Push direct sur main interdit\"}}'  "
+                        "command": "echo '{\"hookSpecificOutput\":{\"hookEventName\":\"PreToolUse\",\"permissionDecision\":\"deny\",\"permissionDecisionReason\":\"Push direct sur main interdit — utiliser une PR\"}}'"
                     }
                 ]
             }

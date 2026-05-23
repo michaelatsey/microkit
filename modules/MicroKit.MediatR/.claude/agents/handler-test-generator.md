@@ -1,3 +1,10 @@
+---
+name: handler-test-generator
+description: Generates exhaustive xUnit tests for CQRS handlers in MicroKit.MediatR. Covers CommandHandlers, QueryHandlers, DomainEventHandlers, Behaviors, and full pipeline integration tests using MicroKit.MediatR.Testing harnesses.
+model: inherit
+tools: Read, Grep, Glob, Write, Edit
+---
+
 # Agent: Handler Test Generator
 
 ## Identité

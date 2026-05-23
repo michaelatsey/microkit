@@ -1,127 +1,18 @@
 {
-    "version": "1.0",
-    "project": {
-        "name": "MicroKit.MediatR",
-        "type": "dotnet-library",
-        "language": "csharp",
-        "framework": "net10.0",
-        "paradigm": "cqrs-mediator-pipeline",
-        "dependsOn": [
-            "MediatR",
-            "MicroKit.Result (optional)"
-        ]
-    },
-    "model": {
-        "preferred": "claude-sonnet-4-6",
-        "fallback": "claude-opus-4-7"
-    },
-    "behavior": {
-        "autoApprove": [
-            "Read files",
-            "List directory",
-            "Run dotnet build",
-            "Run dotnet test",
-            "Run dotnet format"
-        ],
-        "requireApproval": [
-            "Delete files",
-            "Modify .csproj",
-            "Add/remove NuGet packages",
-            "Modify pipeline order in PipelineOrder.cs",
-            "Change public handler interfaces"
-        ],
-        "neverDo": [
-            "Coupler un handler à l'infrastructure (HTTP, DB) directement",
-            "Retourner void depuis un ICommandHandler sans Result ni Unit",
-            "Enregistrer des behaviors sans ordre PipelineOrder explicite",
-            "Utiliser IMediator directement dans les handlers",
-            "Capturer Exception sans la mapper en IError ou la relancer",
-            "Créer un handler qui fait à la fois Command et Query",
-            "Utiliser dynamic ou réflexion dans les behaviors hot-path"
-        ]
-    },
-    "codeStyle": {
-        "indentation": "spaces",
-        "indentSize": 4,
-        "braces": "new-line",
-        "nullable": "enable",
-        "implicitUsings": "enable",
-        "fileScopedNamespaces": true,
-        "primaryConstructors": "prefer",
-        "targetTypedNew": "prefer",
-        "patternMatching": "prefer-over-casting",
-        "asyncSuffix": "required",
-        "cancellationToken": "always-last-param-with-default"
-    },
-    "testing": {
-        "framework": "xUnit",
-        "assertionLibrary": "FluentAssertions",
-        "mockingLibrary": "NSubstitute",
-        "harnessLibrary": "MicroKit.MediatR.Testing",
-        "coverageTarget": 90,
-        "namingConvention": "MethodName_Scenario_ExpectedBehavior",
-        "isolationStrategy": "handler-harness-first",
-        "integrationTestProject": "MicroKit.MediatR.IntegrationTests"
-    },
-    "documentation": {
-        "xmlDocs": "required-for-public-api",
-        "exampleRequired": true,
-        "remarksForBehaviors": true,
-        "pipelineOrderDocumented": true
-    },
-    "agentDefaults": {
-        "alwaysLoadRules": [
-            ".claude/rules/csharp-style.md",
-            ".claude/rules/cqrs-patterns.md",
-            ".claude/rules/pipeline-behaviors.md",
-            ".claude/rules/no-handler-coupling.md"
-        ],
-        "contextFiles": [
-            ".claude/CLAUDE.md",
-            "src/MicroKit.MediatR/Abstractions/ICommand.cs",
-            "src/MicroKit.MediatR/Abstractions/IQuery.cs",
-            "src/MicroKit.MediatR/Behaviors/Core/PipelineOrder.cs"
-        ]
-    },
+    "$schema": "https://json.schemastore.org/claude-code-settings.json",
+    "model": "claude-sonnet-4-6",
     "hooks": {
-        "preTask": [
-            ".claude/hooks/load-context.md"
-        ],
-        "postGenerateHandler": [
-            ".claude/hooks/validate-handler-contract.md"
-        ],
-        "postGenerateBehavior": [
-            ".claude/hooks/validate-behavior-order.md"
-        ],
-        "onError": [
-            ".claude/hooks/debug-pipeline.md"
-        ]
-    },
-    "subAgents": {
-        "architect": ".claude/agents/mediatr-architect.md",
-        "behaviorDesigner": ".claude/agents/behavior-designer.md",
-        "testWriter": ".claude/agents/handler-test-generator.md"
-    },
-    "pipelineDefaults": {
-        "order": [
-            "LoggingBehavior",
-            "AuthorizationBehavior",
-            "ValidationBehavior",
-            "IdempotencyBehavior",
-            "CachingBehavior",
-            "RetryBehavior"
-        ],
-        "commandsOnly": [
-            "IdempotencyBehavior"
-        ],
-        "queriesOnly": [
-            "CachingBehavior"
-        ],
-        "allRequests": [
-            "LoggingBehavior",
-            "AuthorizationBehavior",
-            "ValidationBehavior",
-            "RetryBehavior"
+        "PostToolUse": [
+            {
+                "matcher": "Write|Edit",
+                "hooks": [
+                    {
+                        "type": "command",
+                        "command": "dotnet build src/MicroKit.MediatR/MicroKit.MediatR.csproj --nologo --verbosity quiet 2>&1 | tail -3",
+                        "timeout": 30
+                    }
+                ]
+            }
         ]
     }
 }

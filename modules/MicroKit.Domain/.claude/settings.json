@@ -1,81 +1,18 @@
 {
-  "version": "1.0",
-  "project": {
-    "name": "MicroKit.Domain",
-    "type": "dotnet-library",
-    "language": "csharp",
-    "framework": "net10.0",
-    "paradigm": "domain-driven-design",
-    "dependsOn": []
-  },
-  "model": {
-    "preferred": "claude-sonnet-4-6",
-    "fallback": "claude-opus-4-7"
-  },
-  "behavior": {
-    "autoApprove": [
-      "Read files",
-      "List directory",
-      "Run dotnet build",
-      "Run dotnet test",
-      "Run dotnet format"
-    ],
-    "requireApproval": [
-      "Delete files",
-      "Modify .csproj",
-      "Add NuGet packages",
-      "Add public API"
-    ],
-    "neverDo": [
-      "Ajouter une dépendance NuGet tierce avec implémentation",
-      "Référencer MicroKit.Result ou tout autre module MicroKit",
-      "Injecter ILogger, IMediator, IServiceProvider dans les types Domain",
-      "Implémenter un repository (interfaces uniquement)",
-      "Utiliser DbContext ou tout accès données",
-      "Créer des types mutables sans justification explicite",
-      "Lever une exception non-DomainException pour un invariant métier",
-      "Implémenter du code source sans demande explicite"
-    ]
-  },
-  "codeStyle": {
-    "indentation": "spaces",
-    "indentSize": 4,
-    "nullable": "enable",
-    "implicitUsings": "enable",
-    "fileScopedNamespaces": true,
-    "primaryConstructors": "prefer",
-    "sealedByDefault": true,
-    "recordsForValueObjects": "prefer",
-    "recordsForDomainEvents": "required"
-  },
-  "testing": {
-    "framework": "xUnit",
-    "assertionLibrary": "FluentAssertions",
-    "mockingLibrary": "NSubstitute",
-    "coverageTarget": 90,
-    "namingConvention": "MethodName_Scenario_ExpectedBehavior",
-    "architectureTests": "NetArchTest.Rules"
-  },
-  "agentDefaults": {
-    "alwaysLoadRules": [
-      ".claude/rules/ddd-patterns.md",
-      ".claude/rules/domain-purity.md",
-      ".claude/rules/csharp-style.md"
-    ],
-    "contextFiles": [
-      ".claude/CLAUDE.md",
-      "src/MicroKit.Domain/Aggregates/AggregateRoot.cs",
-      "src/MicroKit.Domain/Events/IDomainEvent.cs",
-      "src/MicroKit.Domain/Rules/IBusinessRule.cs"
-    ]
-  },
-  "hooks": {
-    "postGenerateType": [".claude/hooks/validate-domain-purity.md"],
-    "postGenerateEvent": [".claude/hooks/validate-domain-event.md"]
-  },
-  "subAgents": {
-    "architect": ".claude/agents/domain-architect.md",
-    "reviewer": ".claude/agents/domain-reviewer.md",
-    "testWriter": ".claude/agents/domain-test-generator.md"
-  }
+    "$schema": "https://json.schemastore.org/claude-code-settings.json",
+    "model": "claude-sonnet-4-6",
+    "hooks": {
+        "PostToolUse": [
+            {
+                "matcher": "Write|Edit",
+                "hooks": [
+                    {
+                        "type": "command",
+                        "command": "dotnet build src/MicroKit.Domain/MicroKit.Domain.csproj --nologo --verbosity quiet 2>&1 | tail -3",
+                        "timeout": 30
+                    }
+                ]
+            }
+        ]
+    }
 }

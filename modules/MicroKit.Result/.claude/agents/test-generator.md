@@ -1,3 +1,10 @@
+---
+name: test-generator
+description: Generates exhaustive xUnit + FluentAssertions tests for MicroKit.Result. Covers success paths, failure paths, edge cases, async behaviors, error equality, and serialization. Also generates BenchmarkDotNet benchmarks for hot-path methods.
+model: inherit
+tools: Read, Grep, Glob, Write, Edit
+---
+
 # Agent: Test Generator
 
 ## Identité

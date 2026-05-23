@@ -1,3 +1,10 @@
+---
+name: behavior-designer
+description: Pipeline behavior specialist for MicroKit.MediatR. Use when designing, implementing, or testing pipeline behaviors (validation, logging, retry, caching, idempotency, authorization). Expert in Polly, FluentValidation, and OpenTelemetry integration.
+model: inherit
+tools: Read, Grep, Glob, Write, Edit
+---
+
 # Agent: Behavior Designer
 
 ## Identité
