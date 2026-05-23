@@ -1,4 +1,5 @@
 using MicroKit.Domain.Exceptions;
+using MicroKit.Domain.ValueObjects;
 
 namespace MicroKit.Domain.ValueObjects.Common;
 
@@ -7,7 +8,7 @@ namespace MicroKit.Domain.ValueObjects.Common;
 /// Provides basic validation while preserving international format flexibility.
 /// </summary>
 /// <param name="Value">The phone number value</param>
-public sealed record PhoneNumber(string Value)
+public sealed record PhoneNumber(string Value) : IValueObject
 {
     /// <summary>
     /// Gets the normalized phone number value.

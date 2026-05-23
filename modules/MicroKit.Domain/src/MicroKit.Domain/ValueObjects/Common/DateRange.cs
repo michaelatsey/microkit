@@ -1,4 +1,5 @@
 using MicroKit.Domain.Exceptions;
+using MicroKit.Domain.ValueObjects;
 
 namespace MicroKit.Domain.ValueObjects.Common;
 
@@ -8,7 +9,7 @@ namespace MicroKit.Domain.ValueObjects.Common;
 /// </summary>
 /// <param name="Start">The start date and time of the range</param>
 /// <param name="End">The end date and time of the range</param>
-public sealed record DateRange(DateTimeOffset Start, DateTimeOffset End)
+public sealed record DateRange(DateTimeOffset Start, DateTimeOffset End) : IValueObject
 {
     /// <summary>
     /// Gets the start date and time of the range.

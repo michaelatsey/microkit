@@ -1,13 +1,15 @@
 using MicroKit.Domain.Exceptions;
+using MicroKit.Domain.ValueObjects;
 
 namespace MicroKit.Domain.ValueObjects.Common;
 
 /// <summary>
 /// Represents a percentage value between 0 and 100 inclusive.
 /// Provides arithmetic operations and calculations for percentage-based operations.
+/// Uses sealed record for optimal API design with nullable reference semantics.
 /// </summary>
 /// <param name="Value">The percentage value between 0 and 100</param>
-public sealed record Percentage(decimal Value)
+public sealed record Percentage(decimal Value) : IValueObject
 {
     /// <summary>
     /// Gets the percentage value between 0 and 100.

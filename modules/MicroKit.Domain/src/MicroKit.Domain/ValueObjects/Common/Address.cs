@@ -1,4 +1,5 @@
 using MicroKit.Domain.Exceptions;
+using MicroKit.Domain.ValueObjects;
 
 namespace MicroKit.Domain.ValueObjects.Common;
 
@@ -10,7 +11,7 @@ namespace MicroKit.Domain.ValueObjects.Common;
 /// <param name="City">The city or locality name</param>
 /// <param name="PostalCode">The postal or ZIP code</param>
 /// <param name="Country">The country name or code</param>
-public sealed record Address(string Street, string City, string PostalCode, string Country)
+public sealed record Address(string Street, string City, string PostalCode, string Country) : IValueObject
 {
     /// <summary>
     /// Gets the street address including number and street name.

@@ -13,9 +13,11 @@ Base de tout l'écosystème MicroKit — doit être stable avant tout autre modu
 
 ### Entités et agrégats
 ```
-AggregateRoot<TId>    ← racine d'agrégat, porte les DomainEvents
-Entity<TId>           ← entité avec identité, sans events
-ValueObject           ← immuable, égalité par valeur
+AggregateRoot<TId>           ← racine d'agrégat, porte les DomainEvents
+Entity<TId>                  ← entité avec identité, sans events
+IValueObject                 ← marker interface pour contraintes génériques
+sealed record                ← value objects complexes (Money, Address, Email)
+readonly record struct       ← value objects simples (Percentage, identifiants)
 ```
 
 ### Identifiants
@@ -101,15 +103,32 @@ public abstract class Entity<TId> where TId : IEntityId
 }
 ```
 
-### ValueObject
+### ValueObject (2026 Modern Approach)
 ```csharp
-// Égalité structurelle — utiliser record de préférence
-public abstract class ValueObject
+// ✅ RECOMMANDÉ: sealed record pour les value objects complexes
+public sealed record Money(decimal Amount, string Currency) : IValueObject
 {
-    protected abstract IEnumerable<object?> GetEqualityComponents();
-    // Equals/GetHashCode basés sur GetEqualityComponents()
+    // Validation dans le constructeur
+    public Money {
+        if (Amount < 0) throw new DomainException("Amount cannot be negative");
+        ArgumentException.ThrowIfNullOrWhiteSpace(Currency);
+    }
+    
+    // Méthodes métier
+    public Money Add(Money other) => new(Amount + other.Amount, Currency);
 }
-// ✅ Alternative moderne recommandée : sealed record directement
+
+// ✅ RECOMMANDÉ: readonly record struct pour les value objects simples
+public readonly record struct Percentage(decimal Value) : IValueObject
+{
+    public Percentage {
+        if (Value < 0 || Value > 100) 
+            throw new DomainException("Percentage must be 0-100");
+    }
+}
+
+// ❌ OBSOLÈTE: Abstract base class (removed in 2026)
+// public abstract class ValueObject { ... }
 ```
 
 ### IDs fortement typés

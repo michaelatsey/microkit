@@ -1,4 +1,5 @@
 using MicroKit.Domain.Exceptions;
+using MicroKit.Domain.ValueObjects;
 
 namespace MicroKit.Domain.ValueObjects.Common;
 
@@ -8,7 +9,7 @@ namespace MicroKit.Domain.ValueObjects.Common;
 /// </summary>
 /// <param name="Amount">The monetary amount</param>
 /// <param name="Currency">The ISO 4217 currency code</param>
-public sealed record Money(decimal Amount, string Currency)
+public sealed record Money(decimal Amount, string Currency) : IValueObject
 {
     /// <summary>
     /// Gets the monetary amount.

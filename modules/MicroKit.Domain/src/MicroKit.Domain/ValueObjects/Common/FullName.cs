@@ -1,4 +1,5 @@
 using MicroKit.Domain.Exceptions;
+using MicroKit.Domain.ValueObjects;
 
 namespace MicroKit.Domain.ValueObjects.Common;
 
@@ -8,7 +9,7 @@ namespace MicroKit.Domain.ValueObjects.Common;
 /// </summary>
 /// <param name="FirstName">The person's first name</param>
 /// <param name="LastName">The person's last name</param>
-public sealed record FullName(string FirstName, string LastName)
+public sealed record FullName(string FirstName, string LastName) : IValueObject
 {
     /// <summary>
     /// Gets the person's first name.

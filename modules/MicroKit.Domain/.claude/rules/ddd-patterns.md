@@ -5,12 +5,13 @@
 ## Hiérarchie des types
 
 ```
-AggregateRoot<TId>   ← racine, porte les events, frontière de cohérence
-  └── Entity<TId>   ← entité enfant, accessible uniquement via son agrégat
-ValueObject          ← immuable, égalité par valeur, pas d'identité
-IDomainEvent         ← fait passé, immuable, sealed record
-IBusinessRule        ← invariant vérifiable, booléen
-ISpecification<T>    ← critère de sélection, composable
+AggregateRoot<TId>         ← racine, porte les events, frontière de cohérence
+  └── Entity<TId>         ← entité enfant, accessible uniquement via son agrégat
+sealed record             ← value objects complexes, égalité par valeur, immuables
+readonly record struct    ← value objects simples, stack-allocated, zero-copy
+IDomainEvent             ← fait passé, immuable, sealed record
+IBusinessRule            ← invariant vérifiable, booléen
+ISpecification<T>        ← critère de sélection, composable
 ```
 
 ## Règles par type
@@ -57,10 +58,10 @@ public string Name { get; private set; }
 public DateTimeOffset CreatedAt { get; init; }
 ```
 
-### ValueObject
+### ValueObject (2026 Modern Approach)
 ```csharp
-// ✅ Préférer sealed record (moderne, égalité structurelle automatique)
-public sealed record Money(decimal Amount, string Currency)
+// ✅ sealed record pour value objects complexes
+public sealed record Money(decimal Amount, string Currency) : IValueObject
 {
     // Validation dans le constructeur
     public Money
@@ -68,10 +69,27 @@ public sealed record Money(decimal Amount, string Currency)
         if (Amount < 0) throw new DomainException("Amount cannot be negative.");
         ArgumentException.ThrowIfNullOrWhiteSpace(Currency);
     }
+    
+    // Méthodes métier immutables
+    public Money Add(Money other)
+    {
+        ValidateSameCurrency(other);
+        return new(Amount + other.Amount, Currency);
+    }
 }
 
-// ✅ Opérations retournent de nouvelles instances (immuabilité)
-public Money Add(Money other) => this with { Amount = Amount + other.Amount };
+// ✅ readonly record struct pour value objects simples (≤16 bytes)
+public readonly record struct Percentage(decimal Value) : IValueObject
+{
+    public Percentage
+    {
+        if (Value < 0 || Value > 100) 
+            throw new DomainException("Percentage must be 0-100");
+    }
+}
+
+// ❌ OBSOLÈTE: Abstract base class (supprimé en 2026)
+// public abstract class ValueObject { ... } // Ne plus utiliser
 ```
 
 ### DomainEvent

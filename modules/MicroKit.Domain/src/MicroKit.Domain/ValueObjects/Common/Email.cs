@@ -1,4 +1,5 @@
 using MicroKit.Domain.Exceptions;
+using MicroKit.Domain.ValueObjects;
 
 namespace MicroKit.Domain.ValueObjects.Common;
 
@@ -7,7 +8,7 @@ namespace MicroKit.Domain.ValueObjects.Common;
 /// Provides case-insensitive equality and normalized storage.
 /// </summary>
 /// <param name="Value">The email address value</param>
-public sealed record Email(string Value)
+public sealed record Email(string Value) : IValueObject
 {
     /// <summary>
     /// Gets the normalized email address in lowercase.

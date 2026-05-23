@@ -14,22 +14,42 @@ public abstract class BusinessRule : IBusinessRule
         if (obj is not BusinessRule other || GetType() != other.GetType())
             return false;
 
-        return GetEqualityComponents().SequenceEqual(other.GetEqualityComponents());
+        var left = GetEqualityComponents();
+        var right = other.GetEqualityComponents();
+
+        if (left.Length != right.Length)
+            return false;
+
+        for (var i = 0; i < left.Length; i++)
+        {
+            if (!Equals(left[i], right[i]))
+                return false;
+        }
+
+        return true;
     }
 
     public override int GetHashCode()
     {
-        return GetEqualityComponents()
-            .Select(x => x?.GetHashCode() ?? 0)
-            .Aggregate((x, y) => x ^ y);
+        var hash = new HashCode();
+        var components = GetEqualityComponents();
+
+        for (var i = 0; i < components.Length; i++)
+        {
+            hash.Add(components[i]);
+        }
+
+        return hash.ToHashCode();
     }
 
     /// <summary>
     /// Override to provide the values that determine rule equality.
     /// Rules with same type and same parameters should be considered equal.
+    /// Returns an array for optimal performance with minimal allocations.
     /// </summary>
-    protected virtual IEnumerable<object?> GetEqualityComponents()
-    {
-        yield return GetType();
-    }
+    /// <example>
+    /// protected override object?[] GetEqualityComponents() =>
+    ///     [MinAmount, MaxAmount, Currency];
+    /// </example>
+    protected virtual object?[] GetEqualityComponents() => [GetType()];
 }
