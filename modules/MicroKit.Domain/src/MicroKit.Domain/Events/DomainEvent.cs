@@ -6,6 +6,13 @@ namespace MicroKit.Domain.Events;
 /// </summary>
 public abstract record DomainEvent : IDomainEvent
 {
+    /// <summary>
+    /// Gets the unique identifier for this domain event.
+    /// </summary>
     public Guid EventId { get; init; } = Guid.NewGuid();
+
+    /// <summary>
+    /// Gets the date and time when this domain event occurred.
+    /// </summary>
     public DateTimeOffset OccurredAt { get; init; } = DateTimeOffset.UtcNow;
 }

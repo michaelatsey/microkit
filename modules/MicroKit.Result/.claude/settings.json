@@ -8,8 +8,8 @@
         "paradigm": "functional-railway-oriented"
     },
     "model": {
-        "preferred": "claude-sonnet-4-20250514",
-        "fallback": "claude-opus-4-20250514"
+        "preferred": "claude-sonnet-4-6",
+        "fallback": "claude-opus-4-7"
     },
     "behavior": {
         "autoApprove": [

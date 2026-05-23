@@ -13,3 +13,7 @@ indent_size = 2
 
 [*.md]
 trim_trailing_whitespace = false
+
+# Test projects - suppress CA1707 (underscores in test method names are xUnit convention)
+[{*Tests.cs,tests/**/*.cs}]
+dotnet_diagnostic.CA1707.severity = none

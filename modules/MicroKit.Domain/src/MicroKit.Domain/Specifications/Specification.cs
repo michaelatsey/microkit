@@ -7,7 +7,17 @@ namespace MicroKit.Domain.Specifications;
 /// <typeparam name="T">The type this specification applies to</typeparam>
 public abstract class Specification<T> : ISpecification<T>
 {
+    /// <summary>
+    /// Determines whether the given candidate satisfies this specification.
+    /// </summary>
+    /// <param name="candidate">The candidate to evaluate</param>
+    /// <returns>True if the candidate satisfies this specification; otherwise, false</returns>
     public abstract bool IsSatisfiedBy(T candidate);
+
+    /// <summary>
+    /// Converts this specification to a LINQ expression that can be used with query providers.
+    /// </summary>
+    /// <returns>An expression representing this specification's logic</returns>
     public abstract Expression<Func<T, bool>> ToExpression();
 
     /// <summary>

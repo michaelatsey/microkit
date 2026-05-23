@@ -6,9 +6,23 @@ namespace MicroKit.Domain.Rules;
 /// </summary>
 public abstract class BusinessRule : IBusinessRule
 {
+    /// <summary>
+    /// Determines whether this business rule is currently broken.
+    /// </summary>
+    /// <returns>True if the rule is violated; otherwise, false</returns>
     public abstract bool IsBroken();
+
+    /// <summary>
+    /// Gets the message that explains why this rule was broken.
+    /// </summary>
     public abstract string Message { get; }
 
+    /// <summary>
+    /// Determines whether the specified object is equal to the current business rule.
+    /// Business rules are equal if they have the same type and same equality components.
+    /// </summary>
+    /// <param name="obj">The object to compare with the current business rule</param>
+    /// <returns>True if the specified object is equal to the current business rule; otherwise, false</returns>
     public override bool Equals(object? obj)
     {
         if (obj is not BusinessRule other || GetType() != other.GetType())
@@ -29,6 +43,10 @@ public abstract class BusinessRule : IBusinessRule
         return true;
     }
 
+    /// <summary>
+    /// Returns a hash code for this business rule based on its equality components.
+    /// </summary>
+    /// <returns>A hash code for the current business rule</returns>
     public override int GetHashCode()
     {
         var hash = new HashCode();

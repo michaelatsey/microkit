@@ -11,9 +11,20 @@ namespace MicroKit.Domain.Exceptions;
 public sealed class EntityNotFoundException<TEntity, TId> : DomainException
     where TId : IEntityId
 {
+    /// <summary>
+    /// Gets the identifier of the entity that was not found.
+    /// </summary>
     public TId EntityId { get; }
+
+    /// <summary>
+    /// Gets the type of the entity that was not found.
+    /// </summary>
     public Type EntityType { get; }
 
+    /// <summary>
+    /// Initializes a new instance of the <see cref="EntityNotFoundException{TEntity, TId}"/> class.
+    /// </summary>
+    /// <param name="entityId">The identifier of the entity that was not found</param>
     public EntityNotFoundException(TId entityId)
         : base($"{typeof(TEntity).Name} with ID '{entityId}' was not found.")
     {
