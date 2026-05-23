@@ -18,6 +18,10 @@
   </ItemGroup>
 
   <ItemGroup>
+    <Using Include="Xunit" />
+  </ItemGroup>
+
+  <ItemGroup>
     <ProjectReference Include="../../src/MicroKit.Domain/MicroKit.Domain.csproj" />
   </ItemGroup>
 
