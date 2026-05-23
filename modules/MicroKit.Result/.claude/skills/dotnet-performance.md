@@ -135,7 +135,7 @@ public static Result<UserDto> ToDto(Result<User> result, IMapper mapper)
 
 ```csharp
 [MemoryDiagnoser]
-[SimpleJob(RuntimeMoniker.Net90)]
+[SimpleJob(RuntimeMoniker.Net10)]
 public class ResultCoreBenchmarks
 {
     private static readonly Result<int> _successResult = Result.Success(42);

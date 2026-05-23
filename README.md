@@ -1,6 +1,6 @@
 # MicroKit
 
-Ecosystem of modular, opinionated .NET 9+ libraries for production-ready applications.
+Ecosystem of modular, opinionated .NET 10+ libraries for production-ready applications.
 
 ## Modules
 

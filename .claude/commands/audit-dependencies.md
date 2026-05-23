@@ -47,7 +47,7 @@ les références circulaires et les packages obsolètes.
 ### .csproj par projet
 ```
 □ Pas de version explicite sur les PackageReference (doit être dans Directory.Packages.props)
-□ TargetFramework = net9.0 (ou conforme à la politique du module)
+□ TargetFramework = net10.0 (ou conforme à la politique du module)
 □ Nullable = enable
 □ ImplicitUsings = enable
 □ GenerateDocumentationFile = true pour les projets src/
@@ -69,7 +69,7 @@ les références circulaires et les packages obsolètes.
   ✅ All packages use central version management
   🔴 Microsoft.Extensions.DependencyInjection: 3 different versions across modules
       Result: 8.0.0 / MediatR: 9.0.0 / Messaging: 8.0.7
-      Fix: align to 9.0.0
+      Fix: align to 10.0.8
 
 🏷️  Module versions
   ✅ MicroKit.Result: version.json valid (1.2)

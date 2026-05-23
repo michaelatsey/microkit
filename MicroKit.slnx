@@ -1,0 +1,13 @@
+<Solution>
+  <Folder Name="/modules/" />
+  <Folder Name="/modules/MicroKit.Domain/" />
+  <Folder Name="/modules/MicroKit.Domain/src/">
+    <Project Path="modules/MicroKit.Domain/src/MicroKit.Domain/MicroKit.Domain.csproj" />
+  </Folder>
+  <Folder Name="/modules/MicroKit.Domain/tests/">
+    <Project Path="modules/MicroKit.Domain/tests/MicroKit.Domain.ArchitectureTests/MicroKit.Domain.ArchitectureTests.csproj" />
+    <Project Path="modules/MicroKit.Domain/tests/MicroKit.Domain.IntegrationTests/MicroKit.Domain.IntegrationTests.csproj" />
+    <Project Path="modules/MicroKit.Domain/tests/MicroKit.Domain.PerformanceTests/MicroKit.Domain.PerformanceTests.csproj" />
+    <Project Path="modules/MicroKit.Domain/tests/MicroKit.Domain.UnitTests/MicroKit.Domain.UnitTests.csproj" />
+  </Folder>
+</Solution>

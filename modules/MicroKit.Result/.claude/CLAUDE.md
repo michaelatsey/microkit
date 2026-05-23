@@ -1,7 +1,7 @@
 # MicroKit.Result — Project Brain
 
 ## 🎯 Mission
-Librairie .NET 9+ pour la gestion explicite des résultats, erreurs et workflows fonctionnels.
+Librairie .NET 10+ pour la gestion explicite des résultats, erreurs et workflows fonctionnels.
 Remplace le pattern exception-as-flow par des types expressifs, composables et performants.
 
 ## 🏛️ Philosophie Architecturale

@@ -13,7 +13,7 @@
 <Project>
   <PropertyGroup>
     <!-- Langue et framework -->
-    <TargetFramework>net9.0</TargetFramework>
+    <TargetFramework>net10.0</TargetFramework>
     <LangVersion>latest</LangVersion>
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
@@ -56,10 +56,10 @@
   </PropertyGroup>
 
   <ItemGroup Label="Framework">
-    <PackageVersion Include="Microsoft.Extensions.DependencyInjection.Abstractions" Version="9.0.0" />
-    <PackageVersion Include="Microsoft.Extensions.Logging.Abstractions" Version="9.0.0" />
-    <PackageVersion Include="Microsoft.Extensions.Caching.Abstractions" Version="9.0.0" />
-    <PackageVersion Include="Microsoft.Extensions.Options" Version="9.0.0" />
+    <PackageVersion Include="Microsoft.Extensions.DependencyInjection.Abstractions" Version="10.0.8" />
+    <PackageVersion Include="Microsoft.Extensions.Logging.Abstractions" Version="10.0.8" />
+    <PackageVersion Include="Microsoft.Extensions.Caching.Abstractions" Version="10.0.8" />
+    <PackageVersion Include="Microsoft.Extensions.Options" Version="10.0.8" />
   </ItemGroup>
 
   <ItemGroup Label="MediatR">
@@ -74,11 +74,11 @@
 
   <ItemGroup Label="Resilience">
     <PackageVersion Include="Polly" Version="8.*" />
-    <PackageVersion Include="Microsoft.Extensions.Http.Resilience" Version="9.*" />
+    <PackageVersion Include="Microsoft.Extensions.Http.Resilience" Version="10.*" />
   </ItemGroup>
 
   <ItemGroup Label="Serialization">
-    <PackageVersion Include="System.Text.Json" Version="9.0.0" />
+    <PackageVersion Include="System.Text.Json" Version="10.0.8" />
   </ItemGroup>
 
   <ItemGroup Label="Observability">
@@ -100,7 +100,7 @@
   </ItemGroup>
 
   <ItemGroup Label="Analyzers">
-    <PackageVersion Include="Microsoft.CodeAnalysis.NetAnalyzers" Version="9.*" />
+    <PackageVersion Include="Microsoft.CodeAnalysis.NetAnalyzers" Version="10.*" />
     <PackageVersion Include="Roslynator.Analyzers" Version="4.*" />
   </ItemGroup>
 </Project>
@@ -142,7 +142,7 @@ dotnet list package --outdated
 ```json
 {
   "sdk": {
-    "version": "9.0.100",
+    "version": "10.0.107",
     "rollForward": "latestMinor"
   }
 }

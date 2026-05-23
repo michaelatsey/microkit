@@ -114,7 +114,7 @@ public static class ResultAssertions
 
 ```csharp
 [MemoryDiagnoser]
-[SimpleJob(RuntimeMoniker.Net90)]
+[SimpleJob(RuntimeMoniker.Net10)]
 public class ResultMapBenchmark
 {
     // Baseline: direct method call

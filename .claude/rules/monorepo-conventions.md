@@ -50,7 +50,7 @@ Exemples :
   fix(mediatr): correct pipeline order when behaviors share same order value
   perf(caching): reduce allocations in CachingBehavior hot path
   docs(domain): add aggregate root usage guide
-  chore(monorepo): update Directory.Packages.props to net9.0 packages
+  chore(monorepo): update Directory.Packages.props to net10.0 packages
   ci(result): add performance test job to CI workflow
   feat(domain)!: rename IDomainEvent to IEvent (BREAKING CHANGE)
 ```

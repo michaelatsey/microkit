@@ -1,7 +1,7 @@
 # MicroKit — Monorepo Root Brain
 
 ## 🎯 Vision
-MicroKit est un écosystème de librairies .NET 9+ modulaires, opinionées et production-ready.
+MicroKit est un écosystème de librairies .NET 10+ modulaires, opinionées et production-ready.
 Chaque module est autonome, versionnée indépendamment, publiée sur NuGet, et conçue pour
 s'assembler sans friction dans une architecture hexagonale / DDD / CQRS / microservices.
 
