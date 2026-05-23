@@ -1,0 +1,12 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <AssemblyName>MicroKit.Result.AspNetCore</AssemblyName>
+    <RootNamespace>MicroKit.Result.AspNetCore</RootNamespace>
+    <Description>ASP.NET Core extensions for MicroKit.Result — ProblemDetails, HTTP mapping.</Description>
+    <PackageTags>microkit;result;aspnetcore;problemdetails;dotnet</PackageTags>
+  </PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="Microsoft.AspNetCore.Http.Abstractions" />
+    <ProjectReference Include="../MicroKit.Result/MicroKit.Result.csproj" />
+  </ItemGroup>
+</Project>

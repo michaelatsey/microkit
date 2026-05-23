@@ -30,4 +30,7 @@
   <ItemGroup Label="Analyzers">
     <PackageVersion Include="Microsoft.CodeAnalysis.NetAnalyzers" Version="10.0.300" />
   </ItemGroup>
+  <ItemGroup Label="Framework">
+    <PackageVersion Include="Microsoft.AspNetCore.Http.Abstractions" Version="2.3.10" />
+  </ItemGroup>
 </Project>
