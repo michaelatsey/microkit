@@ -4,5 +4,6 @@
     <RootNamespace>MicroKit.Result</RootNamespace>
     <Description>Railway-oriented result type for .NET 10. Explicit success/failure without exceptions.</Description>
     <PackageTags>microkit;result;railway;functional;dotnet</PackageTags>
+    <NoWarn>$(NoWarn);CA1716;CA1000</NoWarn>
   </PropertyGroup>
 </Project>
