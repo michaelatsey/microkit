@@ -14,7 +14,8 @@ internal static class ThrowHelper
     [MethodImpl(MethodImplOptions.NoInlining)]
     internal static void ThrowResultFailure(IError error) =>
         throw new ResultException(
-            $"Cannot access Value on a failed result. Error: [{error.Code}] {error.Message}");
+            $"Cannot access Value on a failed result. Error: [{error.Code}] {error.Message}",
+            [error]);
 
     [DoesNotReturn]
     [MethodImpl(MethodImplOptions.NoInlining)]

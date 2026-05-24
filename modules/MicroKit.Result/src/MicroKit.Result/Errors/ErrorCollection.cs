@@ -76,6 +76,97 @@ public sealed class ErrorCollection : IError, IReadOnlyList<IError>
         return new ErrorCollection(errors.ToImmutableArray());
     }
 
+    // ── Filter methods ────────────────────────────────────────────────────
+
+    /// <summary>
+    /// Returns a new collection containing only errors whose category matches <paramref name="category"/>.
+    /// </summary>
+    /// <param name="category">The category to filter by.</param>
+    public ErrorCollection WithCategory(ErrorCategory category) =>
+        From(_errors.Where(e => e.Category == category));
+
+    /// <summary>
+    /// Returns a new collection containing only errors whose severity matches <paramref name="severity"/>.
+    /// </summary>
+    /// <param name="severity">The severity to filter by.</param>
+    public ErrorCollection WithSeverity(ErrorSeverity severity) =>
+        From(_errors.Where(e => e.Severity == severity));
+
+    /// <summary>
+    /// Returns a new collection containing only errors whose code matches <paramref name="code"/>.
+    /// </summary>
+    /// <param name="code">The error code to filter by.</param>
+    public ErrorCollection WithCode(ErrorCode code) =>
+        From(_errors.Where(e => e.Code == code));
+
+    /// <summary>
+    /// Returns <see langword="true"/> if any error in this collection has the specified category.
+    /// </summary>
+    /// <param name="category">The category to test for.</param>
+    public bool HasCategory(ErrorCategory category) =>
+        _errors.Any(e => e.Category == category);
+
+    /// <summary>
+    /// Returns a new collection containing only errors of the concrete type <typeparamref name="TError"/>.
+    /// </summary>
+    /// <typeparam name="TError">The concrete error type to filter by.</typeparam>
+    public ErrorCollection OfType<TError>() where TError : IError =>
+        From(_errors.OfType<TError>().Cast<IError>());
+
+    /// <summary>
+    /// Returns a new flat collection with all nested <see cref="ErrorCollection"/> instances expanded.
+    /// </summary>
+    public ErrorCollection Flatten()
+    {
+        var flat = new List<IError>(_errors.Length);
+        foreach (var error in _errors)
+        {
+            if (error is ErrorCollection nested)
+                flat.AddRange(nested.Flatten());
+            else
+                flat.Add(error);
+        }
+        return From(flat);
+    }
+
+    /// <summary>
+    /// Groups errors by their <see cref="IError.Code"/>.
+    /// </summary>
+    /// <returns>A dictionary mapping each error code to the list of matching errors.</returns>
+    public IReadOnlyDictionary<ErrorCode, IReadOnlyList<IError>> GroupByCode()
+    {
+        var groups = new Dictionary<ErrorCode, List<IError>>();
+        foreach (var error in _errors)
+        {
+            if (!groups.TryGetValue(error.Code, out var list))
+                groups[error.Code] = list = [];
+            list.Add(error);
+        }
+        return groups.ToDictionary(
+            kvp => kvp.Key,
+            kvp => (IReadOnlyList<IError>)kvp.Value.AsReadOnly());
+    }
+
+    /// <summary>
+    /// Groups errors by their <see cref="IError.Category"/>.
+    /// </summary>
+    /// <returns>A dictionary mapping each error category to the list of matching errors.</returns>
+    public IReadOnlyDictionary<ErrorCategory, IReadOnlyList<IError>> GroupByCategory()
+    {
+        var groups = new Dictionary<ErrorCategory, List<IError>>();
+        foreach (var error in _errors)
+        {
+            if (!groups.TryGetValue(error.Category, out var list))
+                groups[error.Category] = list = [];
+            list.Add(error);
+        }
+        return groups.ToDictionary(
+            kvp => kvp.Key,
+            kvp => (IReadOnlyList<IError>)kvp.Value.AsReadOnly());
+    }
+
+    // ── Enumeration ───────────────────────────────────────────────────────
+
     /// <summary>Returns an enumerator that iterates through the error collection.</summary>
     public ImmutableArray<IError>.Enumerator GetEnumerator() => _errors.GetEnumerator();
 

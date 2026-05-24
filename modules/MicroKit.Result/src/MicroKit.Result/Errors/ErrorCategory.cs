@@ -28,4 +28,22 @@ public enum ErrorCategory
 
     /// <summary>The service is temporarily unavailable (HTTP 503).</summary>
     Unavailable,
+
+    /// <summary>An external dependency (API, service, provider) returned a failure (HTTP 502).</summary>
+    External,
+
+    /// <summary>A domain business rule was violated (HTTP 422).</summary>
+    BusinessRule,
+
+    /// <summary>The requested operation is not supported (HTTP 501).</summary>
+    NotSupported,
+
+    /// <summary>The operation exceeded its time limit (HTTP 408).</summary>
+    Timeout,
+
+    /// <summary>The operation was cancelled by the caller (HTTP 499).</summary>
+    Cancelled,
+
+    /// <summary>A required precondition was not met (HTTP 412).</summary>
+    PreconditionFailed,
 }

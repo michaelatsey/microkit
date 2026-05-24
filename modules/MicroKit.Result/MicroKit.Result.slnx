@@ -3,6 +3,9 @@
     <Project Path="src/MicroKit.Result.AspNetCore/MicroKit.Result.AspNetCore.csproj" />
     <Project Path="src/MicroKit.Result/MicroKit.Result.csproj" />
   </Folder>
+  <Folder Name="/samples/">
+    <Project Path="samples/MicroKit.Result.Samples/MicroKit.Result.Samples.csproj" />
+  </Folder>
   <Folder Name="/tests/">
     <Project Path="tests/MicroKit.Result.ArchitectureTests/MicroKit.Result.ArchitectureTests.csproj" />
     <Project Path="tests/MicroKit.Result.IntegrationTests/MicroKit.Result.IntegrationTests.csproj" />

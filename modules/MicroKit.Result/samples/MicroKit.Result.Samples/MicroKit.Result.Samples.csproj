@@ -1,0 +1,16 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <LangVersion>latest</LangVersion>
+    <AssemblyName>MicroKit.Result.Samples</AssemblyName>
+    <RootNamespace>MicroKit.Result.Samples</RootNamespace>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\MicroKit.Result\MicroKit.Result.csproj" />
+    <ProjectReference Include="..\..\src\MicroKit.Result.AspNetCore\MicroKit.Result.AspNetCore.csproj" />
+  </ItemGroup>
+</Project>

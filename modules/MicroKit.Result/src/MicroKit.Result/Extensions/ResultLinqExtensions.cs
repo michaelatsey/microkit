@@ -68,4 +68,33 @@ public static class ResultLinqExtensions
     public static Result<TOut> SelectMany<TIn, TOut>(
         this Result<TIn> result, Func<TIn, Result<TOut>> selector)
         => result.Bind(selector);
+
+    /// <summary>
+    /// Enables LINQ <c>where</c> clause on <see cref="Result{T}"/>.
+    /// If the predicate returns <see langword="false"/>, the result becomes a failure with <paramref name="errorOnFalse"/>.
+    /// Equivalent to <see cref="ResultExtensions.Ensure{T}"/>.
+    /// </summary>
+    /// <typeparam name="T">The value type.</typeparam>
+    /// <param name="result">The source result.</param>
+    /// <param name="predicate">The filtering predicate.</param>
+    /// <param name="errorOnFalse">The error to use when the predicate returns <see langword="false"/>.</param>
+    /// <returns>The original result if the predicate passes, or a failure.</returns>
+    public static Result<T> Where<T>(
+        this Result<T> result,
+        Func<T, bool> predicate,
+        IError errorOnFalse)
+        => result.Ensure(predicate, errorOnFalse);
+
+    /// <summary>
+    /// Projects the result to an enumerable of zero or one element.
+    /// Yields the success value if the result is successful; yields nothing if it is a failure.
+    /// </summary>
+    /// <typeparam name="T">The value type.</typeparam>
+    /// <param name="result">The source result.</param>
+    /// <returns>An enumerable containing the value on success, or an empty enumerable on failure.</returns>
+    public static IEnumerable<T> AsEnumerable<T>(this Result<T> result)
+    {
+        if (result.IsSuccess)
+            yield return result.Value;
+    }
 }

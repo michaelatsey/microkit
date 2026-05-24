@@ -58,6 +58,12 @@ public static class ResultProblemDetailsFactory
         ErrorCategory.TooManyRequests => StatusCodes.Status429TooManyRequests,
         ErrorCategory.Technical => StatusCodes.Status500InternalServerError,
         ErrorCategory.Unavailable => StatusCodes.Status503ServiceUnavailable,
+        ErrorCategory.External => StatusCodes.Status502BadGateway,
+        ErrorCategory.BusinessRule => StatusCodes.Status422UnprocessableEntity,
+        ErrorCategory.NotSupported => StatusCodes.Status501NotImplemented,
+        ErrorCategory.Timeout => StatusCodes.Status408RequestTimeout,
+        ErrorCategory.Cancelled => 499, // Client Closed Request — de-facto standard, no StatusCodes constant
+        ErrorCategory.PreconditionFailed => StatusCodes.Status412PreconditionFailed,
         _ => StatusCodes.Status500InternalServerError,
     };
 
@@ -71,6 +77,12 @@ public static class ResultProblemDetailsFactory
         ErrorCategory.TooManyRequests => "Too Many Requests",
         ErrorCategory.Technical => "Internal Server Error",
         ErrorCategory.Unavailable => "Service Unavailable",
+        ErrorCategory.External => "Bad Gateway",
+        ErrorCategory.BusinessRule => "Business Rule Violation",
+        ErrorCategory.NotSupported => "Not Supported",
+        ErrorCategory.Timeout => "Request Timeout",
+        ErrorCategory.Cancelled => "Client Closed Request",
+        ErrorCategory.PreconditionFailed => "Precondition Failed",
         _ => "Internal Server Error",
     };
 }
