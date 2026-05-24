@@ -6,17 +6,17 @@ Ecosystem of modular, opinionated .NET 10+ libraries for production-ready applic
 
 | Module | Description | Status |
 |--------|-------------|--------|
-| MicroKit.Result | Railway-oriented result type | 🔄 In progress |
-| MicroKit.MediatR | CQRS pipeline over MediatR | 🔄 In progress |
-| MicroKit.Domain | DDD primitives | 📋 Planned |
-| MicroKit.Messaging | Message bus + outbox + saga | 📋 Planned |
-| MicroKit.Persistence | Repository + UoW + EF/Dapper | 📋 Planned |
-| MicroKit.Caching | Distributed multi-layer cache | 📋 Planned |
-| MicroKit.Http | Resilient HTTP clients | 📋 Planned |
-| MicroKit.Auth | JWT + policies + identity | 📋 Planned |
-| MicroKit.Observability | OpenTelemetry + metrics + health | 📋 Planned |
-| MicroKit.Logging | Structured logging | 📋 Planned |
-| MicroKit.Multitenancy | Multi-tenancy support | 📋 Planned |
+| MicroKit.Result | Railway-oriented result type | Done |
+| MicroKit.MediatR | CQRS pipeline over MediatR | In progress |
+| MicroKit.Domain | DDD primitives | Done |
+| MicroKit.Messaging | Message bus + outbox + saga | Planned |
+| MicroKit.Persistence | Repository + UoW + EF/Dapper | Planned |
+| MicroKit.Caching | Distributed multi-layer cache | Planned |
+| MicroKit.Http | Resilient HTTP clients | Planned |
+| MicroKit.Auth | JWT + policies + identity | Planned |
+| MicroKit.Observability | OpenTelemetry + metrics + health | Planned |
+| MicroKit.Logging | Structured logging | Planned |
+| MicroKit.Multitenancy | Multi-tenancy support | Planned |
 
 ## Getting Started
 
