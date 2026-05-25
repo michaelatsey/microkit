@@ -14,6 +14,9 @@ namespace MicroKit.Logging;
 /// </remarks>
 public static class MicroKitActivitySources
 {
+    // Exception to "no runtime reflection" rule (CLAUDE.md §3): static field initializer reads
+    // assembly metadata once at AppDomain load — standard ActivitySource versioning pattern,
+    // not on any hot path.
     private static readonly string s_version =
         typeof(MicroKitActivitySources).Assembly
             .GetCustomAttribute<AssemblyInformationalVersionAttribute>()

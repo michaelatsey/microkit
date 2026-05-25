@@ -36,7 +36,9 @@ internal sealed class EnrichmentPipeline
             ? asyncList.ToArray()
             : asyncList.GetRange(0, LoggingConstants.MaxEnrichersPerPipeline).ToArray();
 
-        // Cache type names at construction — avoids string allocation on every exception path
+        // Cache type names at construction — avoids string allocation on every exception path.
+        // Exception to "no runtime reflection" rule (CLAUDE.md §3): GetType().Name is called once
+        // at startup and the result is stored; the hot-path exception handler reads the cached string.
         _enricherTypeNames = new string[_enrichers.Length];
         for (int i = 0; i < _enrichers.Length; i++)
             _enricherTypeNames[i] = _enrichers[i].GetType().Name;

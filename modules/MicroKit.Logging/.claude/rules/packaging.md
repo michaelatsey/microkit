@@ -7,7 +7,7 @@
 | `MicroKit.Logging.Abstractions` | `MicroKit.Logging.Abstractions` |
 | `MicroKit.Logging` | `MicroKit.Logging` |
 | `MicroKit.Logging.OpenTelemetry` | `MicroKit.Logging.OpenTelemetry` |
-| `MicroKit.Logging.Serilog` | `MicroKit.Logging.Serilog` |
+| `MicroKit.Logging.Serilog` | `MicroKit.Logging.Serilog` _(planned v2 — not yet implemented)_ |
 | `MicroKit.Logging.AspNetCore` | `MicroKit.Logging.AspNetCore` |
 | `MicroKit.Logging.Diagnostics` | `MicroKit.Logging.Diagnostics` |
 | `MicroKit.Logging.Analyzers` | `MicroKit.Logging.Analyzers` |
