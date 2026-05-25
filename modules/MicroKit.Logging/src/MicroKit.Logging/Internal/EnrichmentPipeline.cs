@@ -54,7 +54,7 @@ internal sealed class EnrichmentPipeline
     internal void Execute(LogEnrichmentContext context)
     {
         using var activity = MicroKitActivitySources.Enrichment.HasListeners()
-            ? MicroKitActivitySources.Enrichment.StartActivity("EnrichmentPipeline.Execute")
+            ? MicroKitActivitySources.Enrichment.StartActivity("EnrichmentPipeline.Execute", ActivityKind.Internal)
             : null;
 
         long startTimestamp = Stopwatch.GetTimestamp();

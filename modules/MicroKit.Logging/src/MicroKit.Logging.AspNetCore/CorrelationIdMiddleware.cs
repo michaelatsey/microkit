@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using Microsoft.AspNetCore.Http;
 using Microsoft.Extensions.Logging;
 
@@ -54,10 +55,13 @@ internal sealed class CorrelationIdMiddleware(
 
     private string? ExtractCorrelationId(HttpContext context)
     {
-        if (!context.Request.Headers.TryGetValue(options.CorrelationIdHeader, out var values))
-            return null;
+        if (context.Request.Headers.TryGetValue(options.CorrelationIdHeader, out var values))
+        {
+            var value = values.ToString();
+            if (!string.IsNullOrEmpty(value)) return value;
+        }
 
-        var value = values.ToString();
-        return string.IsNullOrEmpty(value) ? null : value;
+        // Fall back to W3C Activity baggage propagated by upstream MicroKit services.
+        return Activity.Current?.GetBaggageItem(LogPropertyNames.CorrelationId);
     }
 }

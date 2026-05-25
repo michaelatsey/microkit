@@ -3,6 +3,7 @@ using MicroKit.Logging.OpenTelemetry;
 using NSubstitute;
 using OpenTelemetry;
 using OpenTelemetry.Logs;
+using OpenTelemetry.Trace;
 
 namespace MicroKit.Logging.UnitTests.OpenTelemetry;
 
@@ -107,6 +108,53 @@ public sealed class MicroKitLogProcessorTests : IDisposable
         var attrs = _exported[0];
         attrs.Should().NotContain(kv => kv.Key == LogPropertyNames.TraceId);
         attrs.Should().NotContain(kv => kv.Key == LogPropertyNames.SpanId);
+    }
+
+    [Fact]
+    public void OnEnd_WhenContextHasProperties_AndNoExistingAttributes_SetsAttributesDirectly()
+    {
+        // Plain message (no structured parameters) → data.Attributes may be null or empty.
+        // Verifies the else branch where existing attributes are absent.
+        var context = BuildContext(correlationId: "bare-log");
+        _accessor.Current.Returns(context);
+
+        // Log with no structured parameters — no pre-existing attributes on the record
+        _logger.Log(LogLevel.Warning, "bare log with no params");
+
+        _exported.Should().ContainSingle();
+        var attrs = _exported[0];
+        attrs.Should().NotBeNull();
+        attrs.Should().Contain(kv => kv.Key == LogPropertyNames.CorrelationId && kv.Value!.ToString() == "bare-log");
+    }
+
+    [Fact]
+    public void OnEnd_WhenActivityCurrentIsNonNull_ScrubsSnapshotTraceAndSpanFromAttributes()
+    {
+        // Simulate stale snapshot TraceId/SpanId in MEL scope state by using a structured
+        // log parameter with those property names. MicroKitLogProcessor must scrub them when
+        // Activity.Current is non-null (the OTEL SDK will supply live values from the Activity).
+        using var source = new ActivitySource("MicroKit.UnitTest.Scrub");
+        using var provider = Sdk.CreateTracerProviderBuilder()
+            .AddSource(source.Name)
+            .Build();
+
+        var context = BuildContext(correlationId: "scrub-test");
+        _accessor.Current.Returns(context);
+
+        using (source.StartActivity("scrub-span"))
+        {
+            // Inject stale TraceId/SpanId as structured log params (mimics MEL scope state snapshot)
+            _logger.LogInformation("msg {TraceId} {SpanId}", "stale-trace", "stale-span");
+        }
+
+        _exported.Should().ContainSingle();
+        var attrs = _exported[0];
+        attrs.Should().NotContain(kv => kv.Key == LogPropertyNames.TraceId,
+            "stale TraceId snapshot must be scrubbed when Activity.Current is live");
+        attrs.Should().NotContain(kv => kv.Key == LogPropertyNames.SpanId,
+            "stale SpanId snapshot must be scrubbed when Activity.Current is live");
+        // CorrelationId from context must still be present
+        attrs.Should().Contain(kv => kv.Key == LogPropertyNames.CorrelationId);
     }
 
     public void Dispose() => _loggerFactory.Dispose();

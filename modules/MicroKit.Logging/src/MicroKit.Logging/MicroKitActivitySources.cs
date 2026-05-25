@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Reflection;
 
 namespace MicroKit.Logging;
 
@@ -14,7 +15,9 @@ namespace MicroKit.Logging;
 public static class MicroKitActivitySources
 {
     private static readonly string s_version =
-        typeof(MicroKitActivitySources).Assembly.GetName().Version?.ToString() ?? "1.0.0";
+        typeof(MicroKitActivitySources).Assembly
+            .GetCustomAttribute<AssemblyInformationalVersionAttribute>()
+            ?.InformationalVersion ?? "1.0.0";
 
     /// <summary>
     /// ActivitySource for operation scope lifecycle events (<c>OperationScope.Begin</c>).

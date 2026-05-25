@@ -104,9 +104,12 @@ internal sealed class LogScopeFactory(
         long scopeStartTimestamp = Stopwatch.GetTimestamp();
         if (MicroKitActivitySources.Logging.HasListeners())
         {
-            scopeActivity = MicroKitActivitySources.Logging.StartActivity("OperationScope.Begin");
+            scopeActivity = MicroKitActivitySources.Logging.StartActivity("OperationScope.Begin", ActivityKind.Internal);
             scopeActivity?.SetTag(LogPropertyNames.CorrelationId, correlationId);
             scopeActivity?.SetTag(LogPropertyNames.OperationId, operationId);
+            // Write to W3C baggage so downstream services can recover CorrelationId
+            // from Activity.Current without reading a custom HTTP header.
+            scopeActivity?.SetBaggage(LogPropertyNames.CorrelationId, correlationId);
         }
 
         LoggingDiagnosticEmitter.EmitScopeCreated(

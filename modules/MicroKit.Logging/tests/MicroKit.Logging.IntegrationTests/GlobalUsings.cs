@@ -1,0 +1,10 @@
+global using System.Diagnostics;
+global using FluentAssertions;
+global using MicroKit.Logging;
+global using MicroKit.Logging.OpenTelemetry;
+global using Microsoft.Extensions.DependencyInjection;
+global using Microsoft.Extensions.Logging;
+global using OpenTelemetry;
+global using OpenTelemetry.Logs;
+global using OpenTelemetry.Trace;
+global using Xunit;

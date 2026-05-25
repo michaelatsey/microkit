@@ -27,10 +27,20 @@ public static class ActivitySources
     /// <summary>
     /// Gets the <see cref="ActivitySource"/> for operation scope lifecycle events.
     /// </summary>
-    public static ActivitySource Logging => MicroKitActivitySources.Logging;
+    /// <remarks>
+    /// Internal — external code must not call <c>ActivitySource.StartActivity</c> on
+    /// sources it does not own. Use <see cref="LoggingSourceName"/> with
+    /// <c>TracerProviderBuilder.AddSource</c> to subscribe as a listener.
+    /// </remarks>
+    internal static ActivitySource Logging => MicroKitActivitySources.Logging;
 
     /// <summary>
     /// Gets the <see cref="ActivitySource"/> for enrichment pipeline execution.
     /// </summary>
-    public static ActivitySource Enrichment => MicroKitActivitySources.Enrichment;
+    /// <remarks>
+    /// Internal — external code must not call <c>ActivitySource.StartActivity</c> on
+    /// sources it does not own. Use <see cref="EnrichmentSourceName"/> with
+    /// <c>TracerProviderBuilder.AddSource</c> to subscribe as a listener.
+    /// </remarks>
+    internal static ActivitySource Enrichment => MicroKitActivitySources.Enrichment;
 }
