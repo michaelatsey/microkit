@@ -15,5 +15,9 @@
     <Project Path="modules/MicroKit.Logging/src/MicroKit.Logging.Abstractions/MicroKit.Logging.Abstractions.csproj" />
     <Project Path="modules/MicroKit.Logging/src/MicroKit.Logging/MicroKit.Logging.csproj" />
     <Project Path="modules/MicroKit.Logging/src/MicroKit.Logging.AspNetCore/MicroKit.Logging.AspNetCore.csproj" />
+    <Project Path="modules/MicroKit.Logging/src/MicroKit.Logging.Diagnostics/MicroKit.Logging.Diagnostics.csproj" />
+  </Folder>
+  <Folder Name="/modules/MicroKit.Logging/tests/">
+    <Project Path="modules/MicroKit.Logging/tests/MicroKit.Logging.UnitTests/MicroKit.Logging.UnitTests.csproj" />
   </Folder>
 </Solution>
