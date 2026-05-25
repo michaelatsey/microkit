@@ -4,6 +4,7 @@
     <Project Path="src/MicroKit.Logging/MicroKit.Logging.csproj" />
     <Project Path="src/MicroKit.Logging.AspNetCore/MicroKit.Logging.AspNetCore.csproj" />
     <Project Path="src/MicroKit.Logging.Diagnostics/MicroKit.Logging.Diagnostics.csproj" />
+    <Project Path="src/MicroKit.Logging.OpenTelemetry/MicroKit.Logging.OpenTelemetry.csproj" />
   </Folder>
   <Folder Name="/tests/">
     <Project Path="tests/MicroKit.Logging.UnitTests/MicroKit.Logging.UnitTests.csproj" />
@@ -11,4 +12,5 @@
     <Project Path="tests/MicroKit.Logging.ArchitectureTests/MicroKit.Logging.ArchitectureTests.csproj" />
     <Project Path="tests/MicroKit.Logging.PerformanceTests/MicroKit.Logging.PerformanceTests.csproj" />
   </Folder>
+
 </Solution>

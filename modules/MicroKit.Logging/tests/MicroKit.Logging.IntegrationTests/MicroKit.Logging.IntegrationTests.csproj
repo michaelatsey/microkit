@@ -1,14 +1,15 @@
 <Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup>
-    <AssemblyName>MicroKit.Logging.UnitTests</AssemblyName>
-    <RootNamespace>MicroKit.Logging.UnitTests</RootNamespace>
+    <AssemblyName>MicroKit.Logging.IntegrationTests</AssemblyName>
+    <RootNamespace>MicroKit.Logging.IntegrationTests</RootNamespace>
     <IsPackable>false</IsPackable>
     <IsTestProject>true</IsTestProject>
     <GenerateDocumentationFile>false</GenerateDocumentationFile>
-    <NoWarn>CS1591;CA1707;CA1711;CA1848;CA1873</NoWarn>
+    <NoWarn>CS1591;CA1707;CA1848;CA1873</NoWarn>
   </PropertyGroup>
   <ItemGroup>
     <ProjectReference Include="..\..\src\MicroKit.Logging\MicroKit.Logging.csproj" />
+    <ProjectReference Include="..\..\src\MicroKit.Logging.AspNetCore\MicroKit.Logging.AspNetCore.csproj" />
     <ProjectReference Include="..\..\src\MicroKit.Logging.Diagnostics\MicroKit.Logging.Diagnostics.csproj" />
     <ProjectReference Include="..\..\src\MicroKit.Logging.OpenTelemetry\MicroKit.Logging.OpenTelemetry.csproj" />
   </ItemGroup>
@@ -19,6 +20,6 @@
     <PackageReference Include="FluentAssertions" />
     <PackageReference Include="NSubstitute" />
     <PackageReference Include="coverlet.collector" />
-    <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" />
+    <PackageReference Include="OpenTelemetry" />
   </ItemGroup>
 </Project>
