@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using Microsoft.Extensions.Logging;
 
 namespace MicroKit.Logging.Internal;
@@ -16,43 +17,44 @@ internal sealed class LogScopeFactory(
     // ── ILogScopeFactory (sync) ──────────────────────────────────────────────
 
     public IDisposable BeginOperationScope()
-        => CreateScopeCore(GenerateCorrelationId(), operationId: null, tenantId: null, userId: null);
+        => CreateScopeCore(GenerateCorrelationId(), correlationIdGenerated: true, operationId: null, tenantId: null, userId: null);
 
     public IDisposable BeginOperationScope(string correlationId)
     {
         ArgumentException.ThrowIfNullOrEmpty(correlationId);
-        return CreateScopeCore(correlationId, operationId: null, tenantId: null, userId: null);
+        return CreateScopeCore(correlationId, correlationIdGenerated: false, operationId: null, tenantId: null, userId: null);
     }
 
     public IDisposable BeginOperationScope(OperationScopeOptions opts)
     {
         ArgumentNullException.ThrowIfNull(opts);
         ArgumentException.ThrowIfNullOrEmpty(opts.CorrelationId);
-        return CreateScopeCore(opts.CorrelationId, opts.OperationId, opts.TenantId, opts.UserId);
+        return CreateScopeCore(opts.CorrelationId, correlationIdGenerated: false, opts.OperationId, opts.TenantId, opts.UserId);
     }
 
     // ── IAsyncLogScopeFactory (async) ────────────────────────────────────────
 
     public async ValueTask<IDisposable> BeginOperationScopeAsync(CancellationToken ct = default)
-        => await CreateScopeCoreAsync(GenerateCorrelationId(), operationId: null, tenantId: null, userId: null, ct).ConfigureAwait(false);
+        => await CreateScopeCoreAsync(GenerateCorrelationId(), correlationIdGenerated: true, operationId: null, tenantId: null, userId: null, ct).ConfigureAwait(false);
 
     public async ValueTask<IDisposable> BeginOperationScopeAsync(string correlationId, CancellationToken ct = default)
     {
         ArgumentException.ThrowIfNullOrEmpty(correlationId);
-        return await CreateScopeCoreAsync(correlationId, operationId: null, tenantId: null, userId: null, ct).ConfigureAwait(false);
+        return await CreateScopeCoreAsync(correlationId, correlationIdGenerated: false, operationId: null, tenantId: null, userId: null, ct).ConfigureAwait(false);
     }
 
     public async ValueTask<IDisposable> BeginOperationScopeAsync(OperationScopeOptions opts, CancellationToken ct = default)
     {
         ArgumentNullException.ThrowIfNull(opts);
         ArgumentException.ThrowIfNullOrEmpty(opts.CorrelationId);
-        return await CreateScopeCoreAsync(opts.CorrelationId, opts.OperationId, opts.TenantId, opts.UserId, ct).ConfigureAwait(false);
+        return await CreateScopeCoreAsync(opts.CorrelationId, correlationIdGenerated: false, opts.OperationId, opts.TenantId, opts.UserId, ct).ConfigureAwait(false);
     }
 
     // ── Core logic ───────────────────────────────────────────────────────────
 
     private OperationScope CreateScopeCore(
-        string correlationId, string? operationId, string? tenantId, string? userId)
+        string correlationId, bool correlationIdGenerated,
+        string? operationId, string? tenantId, string? userId)
     {
         (string? traceId, string? spanId) = options.EnableActivityContextReading
             ? ActivityContextReader.Read()
@@ -61,11 +63,12 @@ internal sealed class LogScopeFactory(
         var enrichmentContext = new LogEnrichmentContext(DefaultEnrichmentCapacity);
         pipeline.Execute(enrichmentContext);
 
-        return FinishScope(correlationId, traceId, spanId, operationId, tenantId, userId, enrichmentContext);
+        return FinishScope(correlationId, correlationIdGenerated, traceId, spanId, operationId, tenantId, userId, enrichmentContext);
     }
 
     private async ValueTask<IDisposable> CreateScopeCoreAsync(
-        string correlationId, string? operationId, string? tenantId, string? userId, CancellationToken ct)
+        string correlationId, bool correlationIdGenerated,
+        string? operationId, string? tenantId, string? userId, CancellationToken ct)
     {
         (string? traceId, string? spanId) = options.EnableActivityContextReading
             ? ActivityContextReader.Read()
@@ -74,11 +77,12 @@ internal sealed class LogScopeFactory(
         var enrichmentContext = new LogEnrichmentContext(DefaultEnrichmentCapacity);
         await pipeline.ExecuteAsync(enrichmentContext, ct).ConfigureAwait(false);
 
-        return FinishScope(correlationId, traceId, spanId, operationId, tenantId, userId, enrichmentContext);
+        return FinishScope(correlationId, correlationIdGenerated, traceId, spanId, operationId, tenantId, userId, enrichmentContext);
     }
 
     private OperationScope FinishScope(
-        string correlationId, string? traceId, string? spanId,
+        string correlationId, bool correlationIdGenerated,
+        string? traceId, string? spanId,
         string? operationId, string? tenantId, string? userId,
         LogEnrichmentContext enrichmentContext)
     {
@@ -89,12 +93,33 @@ internal sealed class LogScopeFactory(
         var scopeState = BuildScopeState(context, enrichmentContext);
         var previousContext = LogContextAccessor.CurrentContext;
 
+        // Emit correlation event before setting context
+        if (correlationIdGenerated)
+            LoggingDiagnosticEmitter.EmitCorrelationGenerated(correlationId);
+        else
+            LoggingDiagnosticEmitter.EmitCorrelationResolved(correlationId, "caller");
+
+        // Start Activity spanning the entire scope lifetime — disposed in OperationScope.Dispose()
+        Activity? scopeActivity = null;
+        long scopeStartTimestamp = Stopwatch.GetTimestamp();
+        if (MicroKitActivitySources.Logging.HasListeners())
+        {
+            scopeActivity = MicroKitActivitySources.Logging.StartActivity("OperationScope.Begin");
+            scopeActivity?.SetTag(LogPropertyNames.CorrelationId, correlationId);
+            scopeActivity?.SetTag(LogPropertyNames.OperationId, operationId);
+        }
+
+        LoggingDiagnosticEmitter.EmitScopeCreated(
+            scopeName: operationId ?? correlationId,
+            operationId: operationId ?? string.Empty,
+            correlationId: correlationId);
+
         LogContextAccessor.CurrentContext = context;
 
         var melScope = logger.BeginScope(scopeState);
         logger.OperationScopeCreated(correlationId, operationId);
 
-        return new OperationScope(previousContext, melScope, logger);
+        return new OperationScope(previousContext, melScope, logger, scopeActivity, scopeStartTimestamp);
     }
 
     private string GenerateCorrelationId()

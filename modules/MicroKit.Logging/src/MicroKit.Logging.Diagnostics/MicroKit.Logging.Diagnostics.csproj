@@ -1,0 +1,15 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <AssemblyName>MicroKit.Logging.Diagnostics</AssemblyName>
+    <RootNamespace>MicroKit.Logging.Diagnostics</RootNamespace>
+    <Description>ActivitySource and DiagnosticSource instrumentation layer for MicroKit.Logging. Enables OpenTelemetry and custom observer integration.</Description>
+    <PackageTags>microkit;logging;diagnostics;activitysource;opentelemetry;dotnet</PackageTags>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\MicroKit.Logging.Abstractions\MicroKit.Logging.Abstractions.csproj" />
+    <ProjectReference Include="..\MicroKit.Logging\MicroKit.Logging.csproj" />
+  </ItemGroup>
+  <ItemGroup>
+    <PackageReference Include="Microsoft.Extensions.DependencyInjection.Abstractions" />
+  </ItemGroup>
+</Project>
