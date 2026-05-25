@@ -1,3 +1,5 @@
+using System.Diagnostics;
+
 namespace MicroKit.Logging.Internal;
 
 /// <summary>
@@ -22,9 +24,14 @@ internal sealed class LogEnrichmentContext(int capacity) : ILogEnrichmentContext
             }
         }
 
-        // Silently drop when at capacity (LoggingConstants.MaxPropertiesPerEnricher enforced by caller)
         if (_count < _properties.Length)
+        {
             _properties[_count++] = new KeyValuePair<string, object?>(name, value);
+        }
+        else
+        {
+            Debug.Fail($"LogEnrichmentContext capacity exceeded: dropping property '{name}'. Increase capacity or reduce enricher properties.");
+        }
     }
 
     public bool TrySetProperty(string name, object? value)

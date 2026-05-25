@@ -1,0 +1,9 @@
+global using System.Diagnostics;
+global using Microsoft.Extensions.DependencyInjection;
+global using Microsoft.Extensions.DependencyInjection.Extensions;
+global using Microsoft.Extensions.Logging;
+global using Microsoft.Extensions.Options;
+global using MicroKit.Logging;
+global using OpenTelemetry;
+global using OpenTelemetry.Logs;
+global using OpenTelemetry.Trace;

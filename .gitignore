@@ -16,3 +16,4 @@ Thumbs.db
 **/*.cobertura.xml
 **/BenchmarkDotNet.Artifacts/
 .mcp.json
+.claude/worktrees/

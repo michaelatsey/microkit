@@ -59,6 +59,7 @@ internal sealed class EnrichmentPipeline
 
         long startTimestamp = Stopwatch.GetTimestamp();
         var enrichers = _enrichers;
+        var ctx = LogContextAccessor.CurrentContext;
 
         for (int i = 0; i < enrichers.Length; i++)
         {
@@ -71,16 +72,16 @@ internal sealed class EnrichmentPipeline
                 _logger.EnricherFailed(_enricherTypeNames[i], ex);
                 LoggingDiagnosticEmitter.EmitEnrichmentFaulted(
                     _enricherTypeNames[i], ex,
-                    LogContextAccessor.CurrentContext?.OperationId ?? string.Empty);
+                    ctx?.OperationId ?? string.Empty);
             }
         }
 
         LoggingDiagnosticEmitter.EmitEnrichmentExecuted(
             enrichers.Length,
-            LogContextAccessor.CurrentContext?.OperationId ?? string.Empty,
-            Stopwatch.GetElapsedTime(startTimestamp).TotalMilliseconds);
+            ctx?.OperationId ?? string.Empty,
+            startTimestamp);
 
-        activity?.SetTag(LogPropertyNames.OperationId, LogContextAccessor.CurrentContext?.OperationId);
+        activity?.SetTag(LogPropertyNames.OperationId, ctx?.OperationId);
     }
 
     /// <summary>

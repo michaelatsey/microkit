@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using Microsoft.AspNetCore.Http;
 
 namespace MicroKit.Logging.AspNetCore;
@@ -36,7 +37,7 @@ public sealed class HttpRequestLogEnricher : ILogEnricher
     /// <inheritdoc/>
     public void Enrich(ILogEnrichmentContext context)
     {
-        ArgumentNullException.ThrowIfNull(context);
+        Debug.Assert(context is not null);
         var httpContext = _httpContextAccessor.HttpContext;
         if (httpContext is null) return;
 
