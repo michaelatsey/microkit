@@ -1,0 +1,13 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/MicroKit.Logging.Abstractions/MicroKit.Logging.Abstractions.csproj" />
+    <Project Path="src/MicroKit.Logging/MicroKit.Logging.csproj" />
+    <Project Path="src/MicroKit.Logging.AspNetCore/MicroKit.Logging.AspNetCore.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/MicroKit.Logging.UnitTests/MicroKit.Logging.UnitTests.csproj" />
+    <Project Path="tests/MicroKit.Logging.IntegrationTests/MicroKit.Logging.IntegrationTests.csproj" />
+    <Project Path="tests/MicroKit.Logging.ArchitectureTests/MicroKit.Logging.ArchitectureTests.csproj" />
+    <Project Path="tests/MicroKit.Logging.PerformanceTests/MicroKit.Logging.PerformanceTests.csproj" />
+  </Folder>
+</Solution>

@@ -1,0 +1,15 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <AssemblyName>MicroKit.Logging</AssemblyName>
+    <RootNamespace>MicroKit.Logging</RootNamespace>
+    <Description>Enrichment pipeline, context propagation, and scope management for MicroKit structured logging.</Description>
+    <PackageTags>microkit;logging;enrichment;correlation;observability;dotnet</PackageTags>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\MicroKit.Logging.Abstractions\MicroKit.Logging.Abstractions.csproj" />
+  </ItemGroup>
+  <ItemGroup>
+    <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" />
+    <PackageReference Include="Microsoft.Extensions.DependencyInjection.Abstractions" />
+  </ItemGroup>
+</Project>

@@ -1,0 +1,15 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <AssemblyName>MicroKit.Logging.AspNetCore</AssemblyName>
+    <RootNamespace>MicroKit.Logging.AspNetCore</RootNamespace>
+    <Description>ASP.NET Core integration for MicroKit.Logging — HTTP correlation middleware and request enrichment.</Description>
+    <PackageTags>microkit;logging;aspnetcore;correlation;middleware;dotnet</PackageTags>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\MicroKit.Logging.Abstractions\MicroKit.Logging.Abstractions.csproj" />
+    <ProjectReference Include="..\MicroKit.Logging\MicroKit.Logging.csproj" />
+  </ItemGroup>
+  <ItemGroup>
+    <FrameworkReference Include="Microsoft.AspNetCore.App" />
+  </ItemGroup>
+</Project>
