@@ -6,6 +6,7 @@
     <Project Path="src/MicroKit.Logging.Diagnostics/MicroKit.Logging.Diagnostics.csproj" />
     <Project Path="src/MicroKit.Logging.OpenTelemetry/MicroKit.Logging.OpenTelemetry.csproj" />
     <Project Path="src/MicroKit.Logging.Analyzers/MicroKit.Logging.Analyzers.csproj" />
+    <Project Path="src/MicroKit.Logging.Generators/MicroKit.Logging.Generators.csproj" />
   </Folder>
   <Folder Name="/tests/">
     <Project Path="tests/MicroKit.Logging.UnitTests/MicroKit.Logging.UnitTests.csproj" />
@@ -13,6 +14,7 @@
     <Project Path="tests/MicroKit.Logging.ArchitectureTests/MicroKit.Logging.ArchitectureTests.csproj" />
     <Project Path="tests/MicroKit.Logging.PerformanceTests/MicroKit.Logging.PerformanceTests.csproj" />
     <Project Path="tests/MicroKit.Logging.AnalyzerTests/MicroKit.Logging.AnalyzerTests.csproj" />
+    <Project Path="tests/MicroKit.Logging.GeneratorTests/MicroKit.Logging.GeneratorTests.csproj" />
   </Folder>
 
 </Solution>
