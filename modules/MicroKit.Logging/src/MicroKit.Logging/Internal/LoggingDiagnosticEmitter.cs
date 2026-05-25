@@ -5,91 +5,52 @@ namespace MicroKit.Logging.Internal;
 
 /// <summary>
 /// Centralises all <see cref="DiagnosticSource.Write"/> calls for MicroKit.Logging.
-/// Suppressing IL2026 here is safe: payloads are anonymous types whose properties are
-/// compiler-generated and never subject to .NET trimming.
+/// Payloads are <c>readonly struct</c> types — value types that box on Write, eliminating
+/// the anonymous-class allocation that would occur with <c>new { ... }</c> payloads.
 /// </summary>
+[UnconditionalSuppressMessage("ReflectionAnalysis", "IL2026",
+    Justification = "Payload types are concrete readonly structs. Their properties are referenced at call sites and preserved by the linker — no trimming risk.")]
 internal static class LoggingDiagnosticEmitter
 {
     private static DiagnosticListener Listener => MicroKitDiagnosticSource.Listener;
 
-    [UnconditionalSuppressMessage("ReflectionAnalysis", "IL2026",
-        Justification = "Anonymous type properties used in diagnostic payloads are compiler-generated and not trimmed.")]
-    internal static void EmitEnrichmentExecuted(int enricherCount, string operationId, double elapsedMs)
+    internal static void EmitEnrichmentExecuted(int enricherCount, string operationId, long startTimestamp)
     {
         if (!Listener.IsEnabled(MicroKitDiagnosticSource.EnrichmentExecuted)) return;
-        // Shape: { int EnricherCount, string OperationId, double ElapsedMs }
-        Listener.Write(MicroKitDiagnosticSource.EnrichmentExecuted, new
-        {
-            EnricherCount = enricherCount,
-            OperationId = operationId,
-            ElapsedMs = elapsedMs
-        });
+        Listener.Write(MicroKitDiagnosticSource.EnrichmentExecuted, new EnrichmentExecutedPayload(
+            enricherCount, operationId, Stopwatch.GetElapsedTime(startTimestamp).TotalMilliseconds));
     }
 
-    [UnconditionalSuppressMessage("ReflectionAnalysis", "IL2026",
-        Justification = "Anonymous type properties used in diagnostic payloads are compiler-generated and not trimmed.")]
     internal static void EmitEnrichmentFaulted(string enricherType, Exception exception, string operationId)
     {
         if (!Listener.IsEnabled(MicroKitDiagnosticSource.EnrichmentFaulted)) return;
-        // Shape: { string EnricherType, Exception Exception, string OperationId }
-        Listener.Write(MicroKitDiagnosticSource.EnrichmentFaulted, new
-        {
-            EnricherType = enricherType,
-            Exception = exception,
-            OperationId = operationId
-        });
+        Listener.Write(MicroKitDiagnosticSource.EnrichmentFaulted, new EnrichmentFaultedPayload(
+            enricherType, exception, operationId));
     }
 
-    [UnconditionalSuppressMessage("ReflectionAnalysis", "IL2026",
-        Justification = "Anonymous type properties used in diagnostic payloads are compiler-generated and not trimmed.")]
     internal static void EmitScopeCreated(string scopeName, string operationId, string correlationId)
     {
         if (!Listener.IsEnabled(MicroKitDiagnosticSource.ScopeCreated)) return;
-        // Shape: { string ScopeName, string OperationId, string CorrelationId }
-        Listener.Write(MicroKitDiagnosticSource.ScopeCreated, new
-        {
-            ScopeName = scopeName,
-            OperationId = operationId,
-            CorrelationId = correlationId
-        });
+        Listener.Write(MicroKitDiagnosticSource.ScopeCreated, new ScopeCreatedPayload(
+            scopeName, operationId, correlationId));
     }
 
-    [UnconditionalSuppressMessage("ReflectionAnalysis", "IL2026",
-        Justification = "Anonymous type properties used in diagnostic payloads are compiler-generated and not trimmed.")]
-    internal static void EmitScopeDisposed(string scopeName, string operationId, double durationMs)
+    internal static void EmitScopeDisposed(string scopeName, string operationId, long startTimestamp)
     {
         if (!Listener.IsEnabled(MicroKitDiagnosticSource.ScopeDisposed)) return;
-        // Shape: { string ScopeName, string OperationId, double DurationMs }
-        Listener.Write(MicroKitDiagnosticSource.ScopeDisposed, new
-        {
-            ScopeName = scopeName,
-            OperationId = operationId,
-            DurationMs = durationMs
-        });
+        Listener.Write(MicroKitDiagnosticSource.ScopeDisposed, new ScopeDisposedPayload(
+            scopeName, operationId, Stopwatch.GetElapsedTime(startTimestamp).TotalMilliseconds));
     }
 
-    [UnconditionalSuppressMessage("ReflectionAnalysis", "IL2026",
-        Justification = "Anonymous type properties used in diagnostic payloads are compiler-generated and not trimmed.")]
     internal static void EmitCorrelationGenerated(string correlationId)
     {
         if (!Listener.IsEnabled(MicroKitDiagnosticSource.CorrelationGenerated)) return;
-        // Shape: { string CorrelationId }
-        Listener.Write(MicroKitDiagnosticSource.CorrelationGenerated, new
-        {
-            CorrelationId = correlationId
-        });
+        Listener.Write(MicroKitDiagnosticSource.CorrelationGenerated, new CorrelationGeneratedPayload(correlationId));
     }
 
-    [UnconditionalSuppressMessage("ReflectionAnalysis", "IL2026",
-        Justification = "Anonymous type properties used in diagnostic payloads are compiler-generated and not trimmed.")]
     internal static void EmitCorrelationResolved(string correlationId, string source)
     {
         if (!Listener.IsEnabled(MicroKitDiagnosticSource.CorrelationResolved)) return;
-        // Shape: { string CorrelationId, string Source }
-        Listener.Write(MicroKitDiagnosticSource.CorrelationResolved, new
-        {
-            CorrelationId = correlationId,
-            Source = source
-        });
+        Listener.Write(MicroKitDiagnosticSource.CorrelationResolved, new CorrelationResolvedPayload(correlationId, source));
     }
 }

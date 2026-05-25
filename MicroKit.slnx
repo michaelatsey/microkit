@@ -16,8 +16,12 @@
     <Project Path="modules/MicroKit.Logging/src/MicroKit.Logging/MicroKit.Logging.csproj" />
     <Project Path="modules/MicroKit.Logging/src/MicroKit.Logging.AspNetCore/MicroKit.Logging.AspNetCore.csproj" />
     <Project Path="modules/MicroKit.Logging/src/MicroKit.Logging.Diagnostics/MicroKit.Logging.Diagnostics.csproj" />
+    <Project Path="modules/MicroKit.Logging/src/MicroKit.Logging.OpenTelemetry/MicroKit.Logging.OpenTelemetry.csproj" />
   </Folder>
   <Folder Name="/modules/MicroKit.Logging/tests/">
     <Project Path="modules/MicroKit.Logging/tests/MicroKit.Logging.UnitTests/MicroKit.Logging.UnitTests.csproj" />
+    <Project Path="modules/MicroKit.Logging/tests/MicroKit.Logging.IntegrationTests/MicroKit.Logging.IntegrationTests.csproj" />
+    <Project Path="modules/MicroKit.Logging/tests/MicroKit.Logging.ArchitectureTests/MicroKit.Logging.ArchitectureTests.csproj" />
+    <Project Path="modules/MicroKit.Logging/tests/MicroKit.Logging.PerformanceTests/MicroKit.Logging.PerformanceTests.csproj" />
   </Folder>
 </Solution>

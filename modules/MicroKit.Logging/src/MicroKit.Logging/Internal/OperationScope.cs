@@ -50,7 +50,7 @@ internal sealed class OperationScope : IDisposable
         LoggingDiagnosticEmitter.EmitScopeDisposed(
             scopeName: current?.OperationId ?? current?.CorrelationId ?? string.Empty,
             operationId: current?.OperationId ?? string.Empty,
-            durationMs: Stopwatch.GetElapsedTime(_startTimestamp).TotalMilliseconds);
+            startTimestamp: _startTimestamp);
 
         // Dispose Activity AFTER ScopeDisposed so OTEL span duration matches DurationMs
         _activity?.Dispose();

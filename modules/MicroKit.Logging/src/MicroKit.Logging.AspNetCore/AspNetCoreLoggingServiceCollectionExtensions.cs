@@ -33,12 +33,12 @@ public static class AspNetCoreLoggingServiceCollectionExtensions
 
         services.AddHttpContextAccessor();
 
-        if (!services.Any(sd => sd.ServiceType == typeof(AspNetCoreLoggingOptions)))
+        services.TryAddSingleton<AspNetCoreLoggingOptions>(_ =>
         {
             var opts = new AspNetCoreLoggingOptions();
             configureOptions?.Invoke(opts);
-            services.AddSingleton(opts);
-        }
+            return opts;
+        });
 
         services.TryAddEnumerable(
             ServiceDescriptor.Singleton<ILogEnricher, HttpRequestLogEnricher>());
