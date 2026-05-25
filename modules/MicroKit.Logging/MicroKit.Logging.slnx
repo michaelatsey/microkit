@@ -5,12 +5,14 @@
     <Project Path="src/MicroKit.Logging.AspNetCore/MicroKit.Logging.AspNetCore.csproj" />
     <Project Path="src/MicroKit.Logging.Diagnostics/MicroKit.Logging.Diagnostics.csproj" />
     <Project Path="src/MicroKit.Logging.OpenTelemetry/MicroKit.Logging.OpenTelemetry.csproj" />
+    <Project Path="src/MicroKit.Logging.Analyzers/MicroKit.Logging.Analyzers.csproj" />
   </Folder>
   <Folder Name="/tests/">
     <Project Path="tests/MicroKit.Logging.UnitTests/MicroKit.Logging.UnitTests.csproj" />
     <Project Path="tests/MicroKit.Logging.IntegrationTests/MicroKit.Logging.IntegrationTests.csproj" />
     <Project Path="tests/MicroKit.Logging.ArchitectureTests/MicroKit.Logging.ArchitectureTests.csproj" />
     <Project Path="tests/MicroKit.Logging.PerformanceTests/MicroKit.Logging.PerformanceTests.csproj" />
+    <Project Path="tests/MicroKit.Logging.AnalyzerTests/MicroKit.Logging.AnalyzerTests.csproj" />
   </Folder>
 
 </Solution>

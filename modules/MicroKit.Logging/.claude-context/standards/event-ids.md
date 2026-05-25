@@ -16,8 +16,8 @@ Never assign an ID outside this registry. Use `/new-analyzer` to get an ID auto-
 
 | ID | Title | Severity | Status |
 |----|-------|----------|--------|
-| `MKL0011` | Interpolated string used in log message | Warning | Reserved |
-| `MKL0012` | String concatenation used in log message | Warning | Reserved |
+| `MKL0011` | Interpolated string used in log message | Warning | Active |
+| `MKL0012` | String concatenation used in log message | Warning | Active |
 | `MKL0013` | `ToString()` call in log message argument | Warning | Reserved |
 | `MKL0014` | Positional placeholder instead of named placeholder | Info | Reserved |
 
@@ -33,14 +33,14 @@ Never assign an ID outside this registry. Use `/new-analyzer` to get an ID auto-
 
 | ID | Title | Severity | Status |
 |----|-------|----------|--------|
-| `MKL0031` | Sensitive data identifier used as log property name | Error | Reserved |
+| `MKL0031` | Sensitive data identifier used as log property name | Error | Active |
 | `MKL0032` | Potential PII in log message template | Warning | Reserved |
 
 ### MKL004x — Performance
 
 | ID | Title | Severity | Status |
 |----|-------|----------|--------|
-| `MKL0041` | Expensive expression in log argument without `IsEnabled` guard | Warning | Reserved |
+| `MKL0041` | Expensive expression in log argument without `IsEnabled` guard | Warning | Active |
 | `MKL0042` | `params object[]` boxing in log call — use `LoggerMessage` | Info | Reserved |
 | `MKL0043` | Log call inside tight loop without level guard | Warning | Reserved |
 
