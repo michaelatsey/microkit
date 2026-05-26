@@ -1,0 +1,25 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <AssemblyName>MicroKit.Logging.Analyzers</AssemblyName>
+    <RootNamespace>MicroKit.Logging.Analyzers</RootNamespace>
+    <!-- Roslyn analyzer packages must target netstandard2.0 for cross-SDK compatibility -->
+    <TargetFramework>netstandard2.0</TargetFramework>
+    <IncludeBuildOutput>false</IncludeBuildOutput>
+    <EnforceExtendedAnalyzerRules>true</EnforceExtendedAnalyzerRules>
+    <!-- Not meaningful for netstandard2.0 analyzer DLLs -->
+    <IsTrimmable>false</IsTrimmable>
+    <Description>Roslyn analyzers for MicroKit.Logging — enforces structured logging, canonical property names, security constraints, and IsEnabled guards at compile time.</Description>
+    <PackageTags>microkit;logging;analyzers;roslyn;structured-logging;dotnet</PackageTags>
+    <!-- RS1038: Workspaces reference warning — accepted trade-off; both analyzers and code fixes share one DLL. -->
+    <!-- RS2008: Release tracking — will add AnalyzerReleases files before first NuGet publish. -->
+    <NoWarn>RS1038;RS2008</NoWarn>
+  </PropertyGroup>
+  <ItemGroup>
+    <!-- Workspaces brings code fix provider APIs (CodeAction, CodeFixProvider, WellKnownFixAllProviders, Formatter) -->
+    <PackageReference Include="Microsoft.CodeAnalysis.CSharp.Workspaces" />
+  </ItemGroup>
+  <!-- Place the analyzer DLL in the correct NuGet package location -->
+  <ItemGroup>
+    <None Include="$(OutputPath)\$(AssemblyName).dll" Pack="true" PackagePath="analyzers/dotnet/cs" Visible="false" />
+  </ItemGroup>
+</Project>

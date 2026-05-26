@@ -1,0 +1,23 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <AssemblyName>MicroKit.Logging.Generators</AssemblyName>
+    <RootNamespace>MicroKit.Logging.Generators</RootNamespace>
+    <!-- Roslyn generator packages must target netstandard2.0 for cross-SDK compatibility -->
+    <TargetFramework>netstandard2.0</TargetFramework>
+    <IncludeBuildOutput>false</IncludeBuildOutput>
+    <EnforceExtendedAnalyzerRules>true</EnforceExtendedAnalyzerRules>
+    <IsTrimmable>false</IsTrimmable>
+    <Description>Roslyn source generators for MicroKit.Logging — generates BeginLogScope methods for context types decorated with [MicroKitLogScope].</Description>
+    <PackageTags>microkit;logging;generators;roslyn;source-generator;dotnet</PackageTags>
+    <!-- RS2008: Release tracking — will add AnalyzerReleases files before first NuGet publish. -->
+    <NoWarn>RS2008</NoWarn>
+  </PropertyGroup>
+  <ItemGroup>
+    <!-- Generators only need compiler APIs — no Workspaces reference needed -->
+    <PackageReference Include="Microsoft.CodeAnalysis.CSharp" />
+  </ItemGroup>
+  <!-- Place the generator DLL in the correct NuGet package location -->
+  <ItemGroup>
+    <None Include="$(OutputPath)\$(AssemblyName).dll" Pack="true" PackagePath="analyzers/dotnet/cs" Visible="false" />
+  </ItemGroup>
+</Project>

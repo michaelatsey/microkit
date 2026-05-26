@@ -36,12 +36,20 @@ Rules for `MicroKit.Logging.OpenTelemetry` — the OTEL bridge.
 
 ```csharp
 // ✅ Correct — consumer opt-in
-services.AddLogging(builder =>
-{
-    builder.AddMicroKitLogging();          // Core, no OTEL
-    builder.AddMicroKitOpenTelemetry();    // OTEL bridge, optional
-});
+services.AddMicroKitLogging();          // Core, no OTEL (IServiceCollection extension)
+services.AddMicroKitOpenTelemetry();    // OTEL bridge, optional (IServiceCollection extension)
+
+// The consuming application configures the OTEL logging pipeline and exporter separately:
+services.AddLogging(b => b.AddOpenTelemetry(opts => opts.AddOtlpExporter()));
+
+// For trace correlation, register MicroKit ActivitySources with the TracerProvider:
+services.AddOpenTelemetry()
+    .WithTracing(t => t.AddMicroKitLoggingSources().AddOtlpExporter());
 ```
+
+Note: `AddMicroKitOpenTelemetry` extends `IServiceCollection`, not `ILoggingBuilder`. It registers
+a `MicroKitLogProcessor` into the OTEL logging pipeline via `IConfigureOptions<OpenTelemetryLoggerOptions>`.
+The processor is owned by the `OpenTelemetryLoggerProvider` — not a DI singleton.
 
 The bridge must not be auto-registered by any other MicroKit package.
 

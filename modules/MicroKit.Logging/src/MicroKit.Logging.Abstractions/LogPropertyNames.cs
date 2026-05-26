@@ -3,7 +3,6 @@ namespace MicroKit.Logging;
 /// <summary>
 /// Canonical structured log property names shared across all MicroKit modules.
 /// Always use these constants — never hardcode property name strings.
-/// Enforced at compile time by the <c>MKL002x</c> analyzer family.
 /// </summary>
 public static class LogPropertyNames
 {

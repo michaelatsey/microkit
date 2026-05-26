@@ -1,4 +1,5 @@
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 using MicroKit.Logging.Internal;
 
 namespace MicroKit.Logging;
@@ -32,8 +33,12 @@ public static class LoggingBuilderExtensions
         services.AddSingleton<LogContextAccessor>();
         services.AddSingleton<ILogContextAccessor>(sp => sp.GetRequiredService<LogContextAccessor>());
 
-        // Pipeline — receives all ILogEnricher and IAsyncLogEnricher registrations
-        services.AddSingleton<EnrichmentPipeline>();
+        // Pipeline — receives all ILogEnricher and IAsyncLogEnricher registrations.
+        // Factory required: EnrichmentPipeline ctor is internal; GetConstructors() skips it.
+        services.AddSingleton<EnrichmentPipeline>(sp => new EnrichmentPipeline(
+            sp.GetServices<ILogEnricher>(),
+            sp.GetServices<IAsyncLogEnricher>(),
+            sp.GetRequiredService<ILogger<EnrichmentPipeline>>()));
 
         // Scope factory — single instance satisfies both sync and async interfaces
         services.AddSingleton<LogScopeFactory>();

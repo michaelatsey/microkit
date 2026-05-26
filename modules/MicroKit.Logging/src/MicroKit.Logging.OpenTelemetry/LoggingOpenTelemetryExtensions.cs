@@ -28,7 +28,9 @@ public static class LoggingOpenTelemetryExtensions
     {
         ArgumentNullException.ThrowIfNull(services);
 
-        services.TryAddSingleton<MicroKitLogProcessor>();
+        // Do NOT register MicroKitLogProcessor as a DI singleton — OpenTelemetryLoggerProvider
+        // takes disposal ownership of every processor it receives. The setup class below constructs
+        // a fresh processor per provider build so the provider's lifetime governs disposal.
         services.TryAddEnumerable(ServiceDescriptor.Singleton<
             IConfigureOptions<OpenTelemetryLoggerOptions>,
             MicroKitOpenTelemetryLoggerOptionsSetup>());
@@ -36,9 +38,10 @@ public static class LoggingOpenTelemetryExtensions
         return services;
     }
 
-    private sealed class MicroKitOpenTelemetryLoggerOptionsSetup(MicroKitLogProcessor processor)
+    private sealed class MicroKitOpenTelemetryLoggerOptionsSetup(ILogContextAccessor accessor)
         : IConfigureOptions<OpenTelemetryLoggerOptions>
     {
-        public void Configure(OpenTelemetryLoggerOptions options) => options.AddProcessor(processor);
+        public void Configure(OpenTelemetryLoggerOptions options)
+            => options.AddProcessor(new MicroKitLogProcessor(accessor));
     }
 }

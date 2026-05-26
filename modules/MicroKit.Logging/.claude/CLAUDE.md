@@ -38,7 +38,7 @@ MicroKit.Logging/
 │   ├── MicroKit.Logging.Abstractions/     ← pure contracts, MEL.Abstractions only
 │   ├── MicroKit.Logging/                  ← enrichment pipeline, context propagation
 │   ├── MicroKit.Logging.OpenTelemetry/    ← OTEL bridge (optional)
-│   ├── MicroKit.Logging.Serilog/          ← Serilog integration (optional)
+│   ├── MicroKit.Logging.Serilog/          ← Serilog integration (planned v2)
 │   ├── MicroKit.Logging.AspNetCore/       ← HTTP middleware, request enrichment
 │   ├── MicroKit.Logging.Diagnostics/      ← ActivitySource, DiagnosticSource
 │   ├── MicroKit.Logging.Analyzers/        ← Roslyn analyzers, DX enforcement
@@ -68,7 +68,7 @@ MicroKit.Logging                     ← core pipeline
         ├── MicroKit.Logging.AspNetCore
         ├── MicroKit.Logging.Diagnostics
         ├── MicroKit.Logging.OpenTelemetry
-        └── MicroKit.Logging.Serilog
+        └── MicroKit.Logging.Serilog  (planned v2 — not yet implemented)
 ```
 
 **Other MicroKit modules:** depend on `MicroKit.Logging.Abstractions` only.
