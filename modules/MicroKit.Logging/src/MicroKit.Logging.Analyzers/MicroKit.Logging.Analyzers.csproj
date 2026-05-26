@@ -13,6 +13,7 @@
     <!-- RS1038: Workspaces reference warning — accepted trade-off; both analyzers and code fixes share one DLL. -->
     <!-- RS2008: Release tracking — will add AnalyzerReleases files before first NuGet publish. -->
     <NoWarn>RS1038;RS2008;NU5128</NoWarn>
+    <IncludeSymbols>false</IncludeSymbols>
   </PropertyGroup>
   <ItemGroup>
     <!-- Workspaces brings code fix provider APIs (CodeAction, CodeFixProvider, WellKnownFixAllProviders, Formatter) -->

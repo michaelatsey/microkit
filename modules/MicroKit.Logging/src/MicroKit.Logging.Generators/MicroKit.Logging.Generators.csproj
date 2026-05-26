@@ -11,6 +11,7 @@
     <PackageTags>microkit;logging;generators;roslyn;source-generator;dotnet</PackageTags>
     <!-- RS2008: Release tracking — will add AnalyzerReleases files before first NuGet publish. -->
     <NoWarn>RS2008;NU5128</NoWarn>
+    <IncludeSymbols>false</IncludeSymbols>
   </PropertyGroup>
   <ItemGroup>
     <!-- Generators only need compiler APIs — no Workspaces reference needed -->
