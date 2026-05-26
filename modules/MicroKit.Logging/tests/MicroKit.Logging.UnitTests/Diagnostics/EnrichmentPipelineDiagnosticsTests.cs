@@ -21,10 +21,10 @@ public sealed class EnrichmentPipelineDiagnosticsTests : IDisposable
 
         pipeline.Execute(context);
 
-        _subscriber.Events.Should().ContainSingle(e => e.EventName == DiagnosticEventNames.EnrichmentExecuted);
+        _subscriber.Events.ShouldContain(e => e.EventName == DiagnosticEventNames.EnrichmentExecuted);
         var payload = _subscriber.Events.Single(e => e.EventName == DiagnosticEventNames.EnrichmentExecuted).Payload;
-        DiagnosticListenerSubscriber.GetPayloadValue<int>(payload, "EnricherCount").Should().Be(1);
-        DiagnosticListenerSubscriber.GetPayloadValue<double>(payload, "ElapsedMs").Should().BeGreaterThanOrEqualTo(0);
+        DiagnosticListenerSubscriber.GetPayloadValue<int>(payload, "EnricherCount").ShouldBe(1);
+        DiagnosticListenerSubscriber.GetPayloadValue<double>(payload, "ElapsedMs").ShouldBeGreaterThanOrEqualTo(0);
     }
 
     [Fact]
@@ -35,10 +35,10 @@ public sealed class EnrichmentPipelineDiagnosticsTests : IDisposable
 
         pipeline.Execute(context);
 
-        _subscriber.Events.Should().ContainSingle(e => e.EventName == DiagnosticEventNames.EnrichmentFaulted);
+        _subscriber.Events.ShouldContain(e => e.EventName == DiagnosticEventNames.EnrichmentFaulted);
         var payload = _subscriber.Events.Single(e => e.EventName == DiagnosticEventNames.EnrichmentFaulted).Payload;
-        DiagnosticListenerSubscriber.GetPayloadValue<string>(payload, "EnricherType").Should().Be(nameof(ThrowingEnricher));
-        DiagnosticListenerSubscriber.GetPayloadValue<Exception>(payload, "Exception").Should().NotBeNull();
+        DiagnosticListenerSubscriber.GetPayloadValue<string>(payload, "EnricherType").ShouldBe(nameof(ThrowingEnricher));
+        DiagnosticListenerSubscriber.GetPayloadValue<Exception>(payload, "Exception").ShouldNotBeNull();
     }
 
     [Fact]
@@ -49,10 +49,10 @@ public sealed class EnrichmentPipelineDiagnosticsTests : IDisposable
 
         pipeline.Execute(context);
 
-        _subscriber.Events.Should().Contain(e => e.EventName == DiagnosticEventNames.EnrichmentFaulted);
-        _subscriber.Events.Should().Contain(e => e.EventName == DiagnosticEventNames.EnrichmentExecuted);
+        _subscriber.Events.ShouldContain(e => e.EventName == DiagnosticEventNames.EnrichmentFaulted);
+        _subscriber.Events.ShouldContain(e => e.EventName == DiagnosticEventNames.EnrichmentExecuted);
         var executedPayload = _subscriber.Events.Single(e => e.EventName == DiagnosticEventNames.EnrichmentExecuted).Payload;
-        DiagnosticListenerSubscriber.GetPayloadValue<int>(executedPayload, "EnricherCount").Should().Be(2);
+        DiagnosticListenerSubscriber.GetPayloadValue<int>(executedPayload, "EnricherCount").ShouldBe(2);
     }
 
     public void Dispose() => _subscriber.Dispose();

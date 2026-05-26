@@ -20,9 +20,9 @@ public sealed class OperationScopeDiagnosticsTests : IDisposable
     {
         using var scope = _factory.BeginOperationScope();
 
-        _subscriber.Events.Should().ContainSingle(e => e.EventName == DiagnosticEventNames.ScopeCreated);
+        _subscriber.Events.ShouldContain(e => e.EventName == DiagnosticEventNames.ScopeCreated);
         var payload = _subscriber.Events.Single(e => e.EventName == DiagnosticEventNames.ScopeCreated).Payload;
-        DiagnosticListenerSubscriber.GetPayloadValue<string>(payload, "CorrelationId").Should().NotBeNullOrEmpty();
+        DiagnosticListenerSubscriber.GetPayloadValue<string>(payload, "CorrelationId").ShouldNotBeNullOrEmpty();
     }
 
     [Fact]
@@ -32,9 +32,9 @@ public sealed class OperationScopeDiagnosticsTests : IDisposable
 
         scope.Dispose();
 
-        _subscriber.Events.Should().ContainSingle(e => e.EventName == DiagnosticEventNames.ScopeDisposed);
+        _subscriber.Events.ShouldContain(e => e.EventName == DiagnosticEventNames.ScopeDisposed);
         var payload = _subscriber.Events.Single(e => e.EventName == DiagnosticEventNames.ScopeDisposed).Payload;
-        DiagnosticListenerSubscriber.GetPayloadValue<double>(payload, "DurationMs").Should().BeGreaterThanOrEqualTo(0);
+        DiagnosticListenerSubscriber.GetPayloadValue<double>(payload, "DurationMs").ShouldBeGreaterThanOrEqualTo(0);
     }
 
     [Fact]
@@ -45,7 +45,7 @@ public sealed class OperationScopeDiagnosticsTests : IDisposable
         using var scope = _factory.BeginOperationScope(expectedId);
 
         var payload = _subscriber.Events.Single(e => e.EventName == DiagnosticEventNames.ScopeCreated).Payload;
-        DiagnosticListenerSubscriber.GetPayloadValue<string>(payload, "CorrelationId").Should().Be(expectedId);
+        DiagnosticListenerSubscriber.GetPayloadValue<string>(payload, "CorrelationId").ShouldBe(expectedId);
     }
 
     public void Dispose() => _subscriber.Dispose();

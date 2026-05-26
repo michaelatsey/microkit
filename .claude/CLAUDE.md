@@ -36,6 +36,7 @@ Tâche sur un module spécifique  → lire modules/MicroKit.[X]/.claude/CLAUDE.m
 Tâche transversale (build, CI)  → lire ce fichier + .claude/rules/monorepo-conventions.md
 Nouvelle feature cross-module   → lire ce fichier + les .claude/ des modules concernés
 Ajout d'un nouveau module       → lire .claude/skills/new-module-bootstrap.md
+Écriture de tests               → lire .claude/rules/testing-libraries.md (Shouldly obligatoire)
 ```
 
 ---
@@ -226,6 +227,7 @@ docs(domain): add aggregate root design guide
 - Conventions de nommage des packages NuGet
 - Format des PRs et commits (Conventional Commits)
 - Politique de dépendances inter-modules
+- Bibliothèque d'assertions obligatoire (voir `.claude/rules/testing-libraries.md`)
 
 ### Ce qui EST défini dans chaque module (local)
 - Philosophie et patterns spécifiques au module
