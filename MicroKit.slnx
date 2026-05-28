@@ -10,6 +10,10 @@
     <Project Path="modules/MicroKit.Domain/tests/MicroKit.Domain.PerformanceTests/MicroKit.Domain.PerformanceTests.csproj" />
     <Project Path="modules/MicroKit.Domain/tests/MicroKit.Domain.UnitTests/MicroKit.Domain.UnitTests.csproj" />
   </Folder>
+  <Folder Name="/modules/MicroKit.MediatR/" />
+  <Folder Name="/modules/MicroKit.MediatR/src/">
+    <Project Path="modules/MicroKit.MediatR/src/MicroKit.MediatR.Abstractions/MicroKit.MediatR.Abstractions.csproj" />
+  </Folder>
   <Folder Name="/modules/MicroKit.Logging/" />
   <Folder Name="/modules/MicroKit.Logging/src/">
     <Project Path="modules/MicroKit.Logging/src/MicroKit.Logging.Abstractions/MicroKit.Logging.Abstractions.csproj" />

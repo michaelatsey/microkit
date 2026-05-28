@@ -13,13 +13,13 @@ enforces them.
 public interface ICommand : IRequest;
 
 /// <summary>A command that mutates state and returns <typeparamref name="TResult"/>.</summary>
-public interface ICommand<out TResult> : IRequest<TResult>;
+public interface ICommand<TResult> : IRequest<TResult>;
 
 /// <summary>A query that reads state and returns <typeparamref name="TResult"/>.</summary>
-public interface IQuery<out TResult> : IRequest<TResult>;
+public interface IQuery<TResult> : IRequest<TResult>;
 
 /// <summary>A query that streams <typeparamref name="TResult"/> items.</summary>
-public interface IStreamQuery<out TResult> : IStreamRequest<TResult>;
+public interface IStreamQuery<TResult> : IStreamRequest<TResult>;
 
 /// <summary>A domain fact that has already happened.</summary>
 public interface IEvent;
@@ -52,7 +52,7 @@ public interface IQueryHandler<in TQuery, TResult>
     ValueTask<TResult> Handle(TQuery query, CancellationToken ct = default);
 }
 
-public interface IStreamQueryHandler<in TQuery, out TResult>
+public interface IStreamQueryHandler<in TQuery, TResult>
     where TQuery : IStreamQuery<TResult>
 {
     IAsyncEnumerable<TResult> Handle(TQuery query, CancellationToken ct = default);

@@ -1,0 +1,20 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <AssemblyName>MicroKit.MediatR.Abstractions</AssemblyName>
+    <RootNamespace>MicroKit.MediatR</RootNamespace>
+    <Description>Typed CQRS contracts for MicroKit.MediatR — ICommand, IQuery, IStreamQuery, IEvent, handler interfaces, and behavior markers. Zero implementation.</Description>
+    <PackageTags>microkit;mediatr;cqrs;mediator;ddd;dotnet;abstractions</PackageTags>
+    <!-- CA1711: IDomainEventHandler intentionally ends in 'EventHandler' — canonical CQRS contract name -->
+    <NoWarn>$(NoWarn);CA1711</NoWarn>
+  </PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="MediatR.Contracts" />
+  </ItemGroup>
+  <ItemGroup>
+    <!-- Cross-module ProjectReferences (monorepo-internal dev build).
+         These become PackageReferences on first NuGet publish.
+         MicroKit.Logging.Abstractions is intentionally excluded — not used by any type here. -->
+    <ProjectReference Include="../../../MicroKit.Result/src/MicroKit.Result/MicroKit.Result.csproj" />
+    <ProjectReference Include="../../../MicroKit.Domain/src/MicroKit.Domain/MicroKit.Domain.csproj" />
+  </ItemGroup>
+</Project>
