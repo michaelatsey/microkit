@@ -35,6 +35,7 @@ Always load the relevant file before working on a specific concern:
 | Dependency / `.csproj` change | `.claude/rules/dependencies.md` + `.claude-context/context/dependency-graph.md` | `dependency-guardian` — auto on `.csproj` edit |
 | Generating tests | `.claude/rules/testing.md` + `/new-handler-tests` | `handler-test-generator` |
 | Release | `.claude/workflows/releasing-module.md` + `/release` | `release-manager` |
+| TransactionBehavior design | `.claude-context/context/transaction-behavior-design.md` | `architect` + `behavior-designer` when implementing Persistence/Messaging |
 
 ---
 
