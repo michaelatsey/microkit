@@ -1,0 +1,18 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <AssemblyName>MicroKit.MediatR</AssemblyName>
+    <RootNamespace>MicroKit.MediatR</RootNamespace>
+    <Description>CQRS dispatch layer for MicroKit — BehaviorBase, PipelineOrder, IDomainEventDispatcher, handler adapters, DI registration, and typed IMediator extensions. Built on MediatR 12.x (MIT).</Description>
+    <PackageTags>microkit;mediatr;cqrs;mediator;ddd;dotnet;pipeline</PackageTags>
+    <!-- CA1711/CA1716: canonical MediatR names that conflict with analyzer rules -->
+    <!-- IL2026/IL2060/IL2067/IL2070: reflection-based assembly scanning — entry point annotated [RequiresUnreferencedCode] -->
+    <NoWarn>$(NoWarn);CA1711;CA1716;IL2026;IL2060;IL2067;IL2070</NoWarn>
+  </PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="MediatR" />
+    <PackageReference Include="Microsoft.Extensions.DependencyInjection.Abstractions" />
+  </ItemGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\MicroKit.MediatR.Abstractions\MicroKit.MediatR.Abstractions.csproj" />
+  </ItemGroup>
+</Project>

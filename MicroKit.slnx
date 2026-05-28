@@ -13,6 +13,7 @@
   <Folder Name="/modules/MicroKit.MediatR/" />
   <Folder Name="/modules/MicroKit.MediatR/src/">
     <Project Path="modules/MicroKit.MediatR/src/MicroKit.MediatR.Abstractions/MicroKit.MediatR.Abstractions.csproj" />
+    <Project Path="modules/MicroKit.MediatR/src/MicroKit.MediatR/MicroKit.MediatR.csproj" />
   </Folder>
   <Folder Name="/modules/MicroKit.Logging/" />
   <Folder Name="/modules/MicroKit.Logging/src/">

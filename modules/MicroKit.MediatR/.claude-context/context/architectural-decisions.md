@@ -112,3 +112,45 @@ validation, has a registered `IValidator<T>`. `LoggingBehavior` is always active
 - The first statement of every opt-in behavior is the marker guard (zero-cost pass-through).
 - The marker suffix encodes scope (`*Command` ⇒ commands only, `*Query` ⇒ queries only).
 - `/audit-pipeline` flags a command marked `ICacheableQuery` or a query marked `IIdempotentCommand`.
+
+---
+
+## ADR-005: IDomainEventDispatcher Uses Registration-Time Handler Scan for Notification Mapping
+
+**Status:** Accepted
+**Date:** 2026-05-28
+
+### Decision
+
+`IDomainEventDispatcher.PublishAsync(IEvent)` accepts the raw domain event. The mapping from
+`IEvent` type to its concrete `DomainEventNotification<TEvent>` subclass is built **at registration
+time** (inside `AddMicroKitMediatR`) by scanning for all types implementing
+`IDomainEventHandler<TEvent, TNotification>` in the provided assemblies, extracting `TNotification`,
+and compiling a `Func<IEvent, INotification>` factory per event type. This factory dictionary is
+registered as a singleton and injected into `DomainEventDispatcher`. At dispatch time, no reflection
+occurs — the factory is looked up by `IEvent` type in O(1).
+
+### Rationale
+
+1. **AOT/trimming safety:** `AppDomain.CurrentDomain.GetAssemblies()` scanned at first publish is
+   incompatible with .NET NativeAOT and the trimmer. Registration-time scanning uses the assemblies
+   explicitly provided by the consumer via `MediatRBuilder.FromAssembly(...)`, which are already
+   known to the trimmer.
+2. **Deterministic startup validation:** If a command handler publishes an event with no registered
+   notification, the application fails at DI startup with an informative error — not silently at
+   runtime during the first request.
+3. **O(1) dispatch lookup:** After startup, `PublishAsync` performs one dictionary lookup and invokes
+   the pre-compiled factory — zero per-dispatch reflection.
+4. **Consistency with adapter scan:** `AddMicroKitMediatR` already scans assemblies for
+   `IDomainEventHandler<TEvent, TNotification>` to register adapters. The notification mapping is
+   derived from the same scan pass — no second scan needed.
+
+### Consequences
+
+- Consumers must pass all assemblies containing domain event handlers to `MediatRBuilder.FromAssembly`
+  or `FromAssemblyContaining<T>` — unregistered handlers are silently ignored by MediatR but the
+  notification factory entry will be missing (startup error on first `PublishAsync`).
+- Multiple `IDomainEventHandler` types for the same event with different notification types results
+  in a startup exception (ambiguous mapping). One event type maps to exactly one notification type.
+- `DomainEventDispatcher` injects `IDomainEventNotificationFactory` (internal singleton) — not
+  `AppDomain` or `IServiceProvider`. This is not a service locator.
