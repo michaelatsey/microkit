@@ -39,7 +39,7 @@ public sealed class MicroKitLogProcessorTests : IDisposable
         _logger.LogInformation("test message");
 
         _exported.Count.ShouldBe(1);
-        var attrs = _exported[0];
+        var attrs = _exported[0].ShouldNotBeNull();
         attrs.ShouldNotContain(kv => kv.Key == LogPropertyNames.CorrelationId);
         attrs.ShouldNotContain(kv => kv.Key == LogPropertyNames.OperationId);
         attrs.ShouldNotContain(kv => kv.Key == LogPropertyNames.TenantId);
@@ -55,7 +55,8 @@ public sealed class MicroKitLogProcessorTests : IDisposable
         _logger.LogInformation("test message");
 
         _exported.Count.ShouldBe(1);
-        _exported[0].ShouldContain(kv => kv.Key == LogPropertyNames.CorrelationId && kv.Value!.ToString() == "ctx-123");
+        var attrs = _exported[0].ShouldNotBeNull();
+        attrs.ShouldContain(kv => kv.Key == LogPropertyNames.CorrelationId && kv.Value!.ToString() == "ctx-123");
     }
 
     [Fact]
@@ -105,7 +106,7 @@ public sealed class MicroKitLogProcessorTests : IDisposable
         _logger.LogInformation("test message");
 
         _exported.Count.ShouldBe(1);
-        var attrs = _exported[0];
+        var attrs = _exported[0].ShouldNotBeNull();
         attrs.ShouldNotContain(kv => kv.Key == LogPropertyNames.TraceId);
         attrs.ShouldNotContain(kv => kv.Key == LogPropertyNames.SpanId);
     }
@@ -122,8 +123,7 @@ public sealed class MicroKitLogProcessorTests : IDisposable
         _logger.Log(LogLevel.Warning, "bare log with no params");
 
         _exported.Count.ShouldBe(1);
-        var attrs = _exported[0];
-        attrs.ShouldNotBeNull();
+        var attrs = _exported[0].ShouldNotBeNull();
         attrs.ShouldContain(kv => kv.Key == LogPropertyNames.CorrelationId && kv.Value!.ToString() == "bare-log");
     }
 
@@ -148,7 +148,7 @@ public sealed class MicroKitLogProcessorTests : IDisposable
         }
 
         _exported.Count.ShouldBe(1);
-        var attrs = _exported[0];
+        var attrs = _exported[0].ShouldNotBeNull();
         attrs.ShouldNotContain(kv => kv.Key == LogPropertyNames.TraceId,
             "stale TraceId snapshot must be scrubbed when Activity.Current is live");
         attrs.ShouldNotContain(kv => kv.Key == LogPropertyNames.SpanId,

@@ -105,13 +105,14 @@ public sealed class ActivityCorrelationIntegrationTests : IDisposable
         record.SpanId.ShouldNotBe(parentSpan!.SpanId, "child span must win over stale snapshot");
 
         // MicroKitLogProcessor scrubs snapshot TraceId/SpanId from attributes when Activity is live
-        record.Attributes.ShouldNotContain(kv => kv.Key == LogPropertyNames.TraceId,
+        var attrs = record.Attributes.ShouldNotBeNull();
+        attrs.ShouldNotContain(kv => kv.Key == LogPropertyNames.TraceId,
             "stale TraceId snapshot must be scrubbed from attributes");
-        record.Attributes.ShouldNotContain(kv => kv.Key == LogPropertyNames.SpanId,
+        attrs.ShouldNotContain(kv => kv.Key == LogPropertyNames.SpanId,
             "stale SpanId snapshot must be scrubbed from attributes");
 
         // CorrelationId from MicroKit scope must still be present
-        record.Attributes.ShouldContain(kv =>
+        attrs.ShouldContain(kv =>
             kv.Key == LogPropertyNames.CorrelationId && kv.Value!.ToString() == "corr-child-test");
     }
 
@@ -125,7 +126,8 @@ public sealed class ActivityCorrelationIntegrationTests : IDisposable
         _logger.LogInformation("post-yield message");
 
         _exported.Count.ShouldBe(1);
-        _exported[0].Attributes.ShouldContain(kv =>
+        var attrs = _exported[0].Attributes.ShouldNotBeNull();
+        attrs.ShouldContain(kv =>
             kv.Key == LogPropertyNames.CorrelationId && kv.Value!.ToString() == "async-flow-test");
     }
 
