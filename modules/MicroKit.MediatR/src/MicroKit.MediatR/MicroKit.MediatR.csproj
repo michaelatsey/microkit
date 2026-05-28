@@ -4,9 +4,12 @@
     <RootNamespace>MicroKit.MediatR</RootNamespace>
     <Description>CQRS dispatch layer for MicroKit — BehaviorBase, PipelineOrder, IDomainEventDispatcher, handler adapters, DI registration, and typed IMediator extensions. Built on MediatR 12.x (MIT).</Description>
     <PackageTags>microkit;mediatr;cqrs;mediator;ddd;dotnet;pipeline</PackageTags>
-    <!-- CA1711/CA1716: canonical MediatR names that conflict with analyzer rules -->
-    <!-- IL2026/IL2060/IL2067/IL2070: reflection-based assembly scanning — entry point annotated [RequiresUnreferencedCode] -->
-    <NoWarn>$(NoWarn);CA1711;CA1716;IL2026;IL2060;IL2067;IL2070</NoWarn>
+    <!-- CA1711: IDomainEventDispatcher — 'Dispatcher' is not a reserved analyzer suffix; suppressed -->
+    <!-- CA1716: 'next' is a VB.NET keyword but is the canonical MediatR delegate parameter name; suppressed -->
+    <!-- IL trimming codes (IL2026/IL2060/IL2067/IL2070) are now handled by targeted -->
+    <!-- [UnconditionalSuppressMessage] attributes on the specific methods that use reflection, -->
+    <!-- rather than a blanket project-wide suppression. -->
+    <NoWarn>$(NoWarn);CA1711;CA1716</NoWarn>
   </PropertyGroup>
   <ItemGroup>
     <PackageReference Include="MediatR" />

@@ -14,5 +14,6 @@ public interface IDomainEventHandler<TEvent, in TNotification>
     /// <summary>Handles the domain event notification.</summary>
     /// <param name="notification">The notification containing the domain event.</param>
     /// <param name="cancellationToken">Propagates notification that operations should be cancelled.</param>
+    /// <returns>A <see cref="Task"/> representing the asynchronous notification handling.</returns>
     Task Handle(TNotification notification, CancellationToken cancellationToken);
 }

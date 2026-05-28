@@ -136,9 +136,9 @@ occurs — the factory is looked up by `IEvent` type in O(1).
    incompatible with .NET NativeAOT and the trimmer. Registration-time scanning uses the assemblies
    explicitly provided by the consumer via `MediatRBuilder.FromAssembly(...)`, which are already
    known to the trimmer.
-2. **Deterministic startup validation:** If a command handler publishes an event with no registered
-   notification, the application fails at DI startup with an informative error — not silently at
-   runtime during the first request.
+2. **Startup conflict detection:** If two handlers for the same event declare *different* notification
+   types, `AddMicroKitMediatR` throws at DI startup with a clear error naming both conflicting types
+   and guiding the consumer toward the correct pattern (ADR-005 violation detection).
 3. **O(1) dispatch lookup:** After startup, `PublishAsync` performs one dictionary lookup and invokes
    the pre-compiled factory — zero per-dispatch reflection.
 4. **Consistency with adapter scan:** `AddMicroKitMediatR` already scans assemblies for
@@ -148,9 +148,16 @@ occurs — the factory is looked up by `IEvent` type in O(1).
 ### Consequences
 
 - Consumers must pass all assemblies containing domain event handlers to `MediatRBuilder.FromAssembly`
-  or `FromAssemblyContaining<T>` — unregistered handlers are silently ignored by MediatR but the
-  notification factory entry will be missing (startup error on first `PublishAsync`).
-- Multiple `IDomainEventHandler` types for the same event with different notification types results
-  in a startup exception (ambiguous mapping). One event type maps to exactly one notification type.
+  or `FromAssemblyContaining<T>`. If a handler assembly is omitted, the notification factory entry
+  for that event type will be absent. **This is NOT detected at DI startup** — the failure surfaces
+  only when `IDomainEventDispatcher.PublishAsync` is first called for that event type (dispatch-time
+  `InvalidOperationException`). Only the notification-type uniqueness conflict (two handlers, different
+  notification types, same event) is detected at startup.
+- **1-event → 1-notification constraint:** Each `IEvent` type maps to exactly one
+  `DomainEventNotification<TEvent>` subclass. Multiple handlers for the same event must all implement
+  `IDomainEventHandler<TEvent, SameNotificationType>` — MediatR then dispatches to all registered
+  `INotificationHandler<SameNotificationType>` implementations (fan-out). Cross-bounded-context
+  fan-out patterns requiring *different* notification types per handler are not supported by this
+  model; such scenarios require either a shared notification type or a separate dispatcher.
 - `DomainEventDispatcher` injects `IDomainEventNotificationFactory` (internal singleton) — not
   `AppDomain` or `IServiceProvider`. This is not a service locator.

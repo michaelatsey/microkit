@@ -20,5 +20,6 @@ public interface IDomainEventDispatcher
     /// <exception cref="InvalidOperationException">
     /// Thrown when no <see cref="DomainEventNotification{TEvent}"/> is registered for the event type.
     /// </exception>
+    /// <returns>A <see cref="ValueTask"/> representing the asynchronous publish operation.</returns>
     ValueTask PublishAsync(IEvent domainEvent, CancellationToken ct = default);
 }

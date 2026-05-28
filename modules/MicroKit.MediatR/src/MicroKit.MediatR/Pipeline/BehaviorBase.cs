@@ -1,4 +1,5 @@
 using System.Linq.Expressions;
+using System.Reflection;
 using MicroKit.Result;
 using ResultStatic = MicroKit.Result.Result;
 
@@ -28,6 +29,13 @@ public abstract class BehaviorBase<TRequest, TResponse> : IPipelineBehavior<TReq
     public abstract int Order { get; }
 
     /// <inheritdoc />
+    /// <remarks>
+    /// Returns <see cref="Task{TResult}"/> — not <c>ValueTask&lt;TResponse&gt;</c> — because this
+    /// overrides <c>IPipelineBehavior&lt;TRequest, TResponse&gt;.Handle</c>, which is MediatR's contract.
+    /// The <c>ValueTask</c> convention (ADR-003) applies to <see cref="ICommandHandler{TCommand}"/> and
+    /// <see cref="IQueryHandler{TQuery,TResult}"/> handler interfaces, not to pipeline behavior overrides.
+    /// Always use <c>await next().ConfigureAwait(false)</c> within the implementation body.
+    /// </remarks>
     public abstract Task<TResponse> Handle(
         TRequest request,
         RequestHandlerDelegate<TResponse> next,
@@ -63,23 +71,40 @@ public abstract class BehaviorBase<TRequest, TResponse> : IPipelineBehavior<TReq
         return type.IsGenericType && type.GetGenericTypeDefinition() == typeof(Result<>);
     }
 
+    // MakeGenericMethod targets ResultStatic.Failure<T> — linked in via ProjectReference, always present.
     [System.Diagnostics.CodeAnalysis.UnconditionalSuppressMessage(
         "ReflectionAnalysis", "IL2060",
-        Justification = "ResultStatic.Failure<T> is always present via ProjectReference — type safety is guaranteed by generic type constraints.")]
+        Justification = "FailureMethodCache.Method references ResultStatic.Failure<T>, which is always present via ProjectReference.")]
     private static Func<IError, TResponse> BuildCreateFailure()
     {
         // Called only when IsResultResponse is true — TResponse is guaranteed to be Result<TInner>.
-        // Build: (IError error) => ResultStatic.Failure<TInner>(error)
-        // where TInner = TResponse's generic argument (e.g. UserDto when TResponse = Result<UserDto>)
+        // FailureMethodCache.Method is resolved once per process (not per closed generic).
+        // MakeGenericMethod is called once per distinct TInner across the process lifetime.
         var innerType = typeof(TResponse).GetGenericArguments()[0];
-        var failureMethod = typeof(ResultStatic)
-            .GetMethods()
-            .First(m => m.Name == "Failure" && m.IsGenericMethodDefinition && m.GetParameters().Length == 1)
-            .MakeGenericMethod(innerType);
+        var failureMethod = FailureMethodCache.Method.MakeGenericMethod(innerType);
 
         var errorParam = Expression.Parameter(typeof(IError), "error");
         var call = Expression.Call(failureMethod, errorParam);
         var convert = Expression.Convert(call, typeof(TResponse));
         return Expression.Lambda<Func<IError, TResponse>>(convert, errorParam).Compile();
     }
+}
+
+// MEDIUM #3: caches the ResultStatic.Failure<T> MethodInfo once per process, shared across ALL
+// closed-generic instantiations of BehaviorBase<TRequest,TResponse>. Previously, each closed
+// generic ran GetMethods().First(...) independently at class-first-use time.
+//
+// Uses nameof for a compile-time link: if ResultStatic.Failure is ever renamed, this fails
+// to compile — removing the fragile name-string dependency identified in the architect review.
+file static class FailureMethodCache
+{
+    [System.Diagnostics.CodeAnalysis.UnconditionalSuppressMessage(
+        "Trimming", "IL2026",
+        Justification = "ResultStatic is linked in via ProjectReference — its methods are always present.")]
+    internal static readonly MethodInfo Method =
+        typeof(ResultStatic)
+            .GetMethods()
+            .First(m => m.Name == nameof(ResultStatic.Failure)
+                     && m.IsGenericMethodDefinition
+                     && m.GetParameters().Length == 1);
 }
