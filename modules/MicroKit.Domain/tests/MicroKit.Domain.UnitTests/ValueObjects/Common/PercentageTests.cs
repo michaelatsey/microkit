@@ -252,23 +252,4 @@ public class PercentageTests
         percentage1.GetHashCode().ShouldBe(percentage2.GetHashCode());
     }
 
-    [Fact]
-    public void Add_WithNull_ShouldThrowArgumentNullException()
-    {
-        // Arrange
-        var percentage = new Percentage(50);
-
-        // Act & Assert
-        Should.Throw<ArgumentNullException>(() => percentage.Add(null!));
-    }
-
-    [Fact]
-    public void Subtract_WithNull_ShouldThrowArgumentNullException()
-    {
-        // Arrange
-        var percentage = new Percentage(50);
-
-        // Act & Assert
-        Should.Throw<ArgumentNullException>(() => percentage.Subtract(null!));
-    }
 }

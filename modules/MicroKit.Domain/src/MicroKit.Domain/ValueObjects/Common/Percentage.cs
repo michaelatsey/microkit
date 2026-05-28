@@ -6,10 +6,10 @@ namespace MicroKit.Domain.ValueObjects.Common;
 /// <summary>
 /// Represents a percentage value between 0 and 100 inclusive.
 /// Provides arithmetic operations and calculations for percentage-based operations.
-/// Uses sealed record for optimal API design with nullable reference semantics.
+/// Uses readonly record struct for zero-allocation stack semantics on this single-field value.
 /// </summary>
 /// <param name="Value">The percentage value between 0 and 100</param>
-public sealed record Percentage(decimal Value) : IValueObject
+public readonly record struct Percentage(decimal Value) : IValueObject
 {
     /// <summary>
     /// Gets the percentage value between 0 and 100.
@@ -40,10 +40,7 @@ public sealed record Percentage(decimal Value) : IValueObject
     /// </summary>
     /// <param name="amount">The amount to calculate the percentage of</param>
     /// <returns>The calculated percentage amount</returns>
-    public decimal Of(decimal amount)
-    {
-        return amount * AsFraction;
-    }
+    public decimal Of(decimal amount) => amount * AsFraction;
 
     /// <summary>
     /// Adds another percentage to this percentage.
@@ -51,11 +48,7 @@ public sealed record Percentage(decimal Value) : IValueObject
     /// <param name="other">The percentage to add</param>
     /// <returns>A new Percentage representing the sum</returns>
     /// <exception cref="DomainException">Thrown when the result exceeds 100%</exception>
-    public Percentage Add(Percentage other)
-    {
-        ArgumentNullException.ThrowIfNull(other);
-        return new Percentage(Value + other.Value);
-    }
+    public Percentage Add(Percentage other) => new(Value + other.Value);
 
     /// <summary>
     /// Subtracts another percentage from this percentage.
@@ -63,11 +56,7 @@ public sealed record Percentage(decimal Value) : IValueObject
     /// <param name="other">The percentage to subtract</param>
     /// <returns>A new Percentage representing the difference</returns>
     /// <exception cref="DomainException">Thrown when the result is less than 0%</exception>
-    public Percentage Subtract(Percentage other)
-    {
-        ArgumentNullException.ThrowIfNull(other);
-        return new Percentage(Value - other.Value);
-    }
+    public Percentage Subtract(Percentage other) => new(Value - other.Value);
 
     /// <summary>
     /// Creates a percentage from a decimal value.
@@ -75,15 +64,12 @@ public sealed record Percentage(decimal Value) : IValueObject
     /// <param name="value">The percentage value between 0 and 100</param>
     /// <returns>A new Percentage instance</returns>
     /// <exception cref="DomainException">Thrown when the value is outside the range 0-100</exception>
-    public static Percentage Create(decimal value)
-    {
-        return new Percentage(value);
-    }
+    public static Percentage Create(decimal value) => new(value);
 
     /// <summary>
     /// Creates a percentage from a fraction (0.0 to 1.0).
     /// </summary>
-    /// <param name="fraction">The fraction value between 0.0 and 1.0</param>
+    /// <param name="fraction">The fraction value between 0.0 to 1.0</param>
     /// <returns>A new Percentage instance</returns>
     /// <exception cref="DomainException">Thrown when the fraction is outside the range 0.0-1.0</exception>
     public static Percentage FromFraction(decimal fraction)
@@ -91,7 +77,7 @@ public sealed record Percentage(decimal Value) : IValueObject
         if (fraction < 0 || fraction > 1)
             throw new DomainException("Fraction value must be between 0.0 and 1.0 inclusive.");
 
-        return new Percentage(fraction * 100m);
+        return new(fraction * 100m);
     }
 
     /// <summary>
@@ -121,22 +107,13 @@ public sealed record Percentage(decimal Value) : IValueObject
     /// <summary>
     /// Addition operator for Percentage instances.
     /// </summary>
-    /// <param name="left">The first percentage</param>
-    /// <param name="right">The second percentage</param>
-    /// <returns>A new Percentage representing the sum</returns>
     public static Percentage operator +(Percentage left, Percentage right) => left.Add(right);
 
     /// <summary>
     /// Subtraction operator for Percentage instances.
     /// </summary>
-    /// <param name="left">The first percentage</param>
-    /// <param name="right">The second percentage</param>
-    /// <returns>A new Percentage representing the difference</returns>
     public static Percentage operator -(Percentage left, Percentage right) => left.Subtract(right);
 
-    /// <summary>
-    /// Returns a string representation of this percentage.
-    /// </summary>
-    /// <returns>A formatted string with the percentage symbol</returns>
+    /// <inheritdoc/>
     public override string ToString() => $"{Value:F2}%";
 }
