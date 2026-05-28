@@ -4,12 +4,19 @@
     "hooks": {
         "PostToolUse": [
             {
-                "matcher": "Write|Edit",
+                "matcher": "Edit|Write",
                 "hooks": [
                     {
                         "type": "command",
-                        "command": "dotnet build src/MicroKit.MediatR/MicroKit.MediatR.csproj --nologo --verbosity quiet 2>&1 | tail -3",
-                        "timeout": 30
+                        "command": "bash .claude/hooks/scripts/architecture-check.sh \"$CLAUDE_TOOL_INPUT_PATH\""
+                    },
+                    {
+                        "type": "command",
+                        "command": "bash .claude/hooks/scripts/dependency-check.sh \"$CLAUDE_TOOL_INPUT_PATH\""
+                    },
+                    {
+                        "type": "command",
+                        "command": "bash .claude/hooks/scripts/performance-check.sh \"$CLAUDE_TOOL_INPUT_PATH\""
                     }
                 ]
             }
