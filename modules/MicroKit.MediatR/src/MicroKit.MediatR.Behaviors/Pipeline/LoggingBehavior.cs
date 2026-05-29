@@ -52,7 +52,19 @@ public sealed partial class LoggingBehavior<TRequest, TResponse>(
         {
             var response = await next().ConfigureAwait(false);
             var elapsedMs = (long)Stopwatch.GetElapsedTime(startTimestamp).TotalMilliseconds;
-            LogHandlingSucceeded(logger, _requestName, elapsedMs);
+
+            // Result.Failure is a business failure — log at Warning and mark the span as Error
+            // so observability tooling can distinguish domain failures from true successes.
+            if (MicroKit.MediatR.Behaviors.Pipeline.ResultInspector<TResponse>.IsFailure(response))
+            {
+                activity?.SetStatus(ActivityStatusCode.Error);
+                LogHandlingBusinessFailure(logger, _requestName, elapsedMs);
+            }
+            else
+            {
+                LogHandlingSucceeded(logger, _requestName, elapsedMs);
+            }
+
             return response;
         }
         catch (Exception ex)
@@ -71,4 +83,7 @@ public sealed partial class LoggingBehavior<TRequest, TResponse>(
 
     [LoggerMessage(1002, LogLevel.Warning, "Failed {CommandName} after {ElapsedMs}ms")]
     private static partial void LogHandlingFailed(ILogger logger, Exception ex, string commandName, long elapsedMs);
+
+    [LoggerMessage(1003, LogLevel.Warning, "BusinessFailure {CommandName} in {ElapsedMs}ms")]
+    private static partial void LogHandlingBusinessFailure(ILogger logger, string commandName, long elapsedMs);
 }

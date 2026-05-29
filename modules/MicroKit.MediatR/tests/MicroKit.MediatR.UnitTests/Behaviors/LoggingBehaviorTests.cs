@@ -1,6 +1,8 @@
 using MediatR;
 using MicroKit.Logging;
 using MicroKit.MediatR.Behaviors;
+using MicroKit.Result;
+using static MicroKit.Result.Result;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using Shouldly;
@@ -89,6 +91,54 @@ public sealed class LoggingBehaviorTests
         scope.ShouldContainKey(LogPropertyNames.OperationId);
         scope[LogPropertyNames.OperationId].ShouldNotBeNull();
     }
+
+    [Fact]
+    public async Task Handle_WhenRequestDispatched_ScopeContainsExactlyCommandNameAndOperationId()
+    {
+        // Verify that LoggingBehavior does not add any keys beyond the two canonical
+        // LogPropertyNames.CommandName and LogPropertyNames.OperationId — no accidental noise.
+        var logger = new CapturingLogger();
+        var behavior = new LoggingBehavior<SimpleLogRequest, string>(logger);
+
+        await behavior.Handle(new SimpleLogRequest(), () => Task.FromResult("result"), CancellationToken.None);
+
+        var scope = logger.Scopes[0].ShouldBeOfType<Dictionary<string, object?>>();
+        scope.Count.ShouldBe(2, "scope must contain exactly CommandName and OperationId — no extra keys");
+        scope.Keys.ShouldContain(LogPropertyNames.CommandName);
+        scope.Keys.ShouldContain(LogPropertyNames.OperationId);
+    }
+
+    [Fact]
+    public async Task Handle_WhenRequestDispatched_OperationIdIsNonEmptyString()
+    {
+        // OperationId is sourced from Activity.Current?.Id or a new Guid — must always be non-empty.
+        var logger = new CapturingLogger();
+        var behavior = new LoggingBehavior<SimpleLogRequest, string>(logger);
+
+        await behavior.Handle(new SimpleLogRequest(), () => Task.FromResult("result"), CancellationToken.None);
+
+        var scope = logger.Scopes[0].ShouldBeOfType<Dictionary<string, object?>>();
+        var operationId = scope[LogPropertyNames.OperationId].ShouldBeOfType<string>();
+        operationId.ShouldNotBeNullOrEmpty("OperationId must be a non-empty string derived from Activity or a new Guid");
+    }
+
+    [Fact]
+    public async Task Handle_WhenResultFailureReturned_ReturnsFailureUnmodified()
+    {
+        // Fix #2 (MEDIUM): the new business-failure branch in LoggingBehavior must not
+        // modify or swallow a Result.Failure response — it must pass it through untouched.
+        var failure = Failure<string>(new LoggingTestError());
+        RequestHandlerDelegate<Result<string>> next = () => Task.FromResult(failure);
+        var behavior = new LoggingBehavior<SimpleLogRequest, Result<string>>(
+            NullLogger<LoggingBehavior<SimpleLogRequest, Result<string>>>.Instance);
+
+        var result = await behavior.Handle(new SimpleLogRequest(), next, CancellationToken.None);
+
+        result.IsFailure.ShouldBeTrue();
+        result.ShouldBe(failure);
+    }
+
+    private sealed record LoggingTestError() : Error(ErrorCode.From("TEST.LOGGING"), "logging test error");
 
     private sealed record SimpleLogRequest;
 

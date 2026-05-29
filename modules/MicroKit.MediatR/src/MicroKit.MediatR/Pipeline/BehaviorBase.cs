@@ -106,5 +106,6 @@ file static class FailureMethodCache
             .GetMethods()
             .First(m => m.Name == nameof(ResultStatic.Failure)
                      && m.IsGenericMethodDefinition
-                     && m.GetParameters().Length == 1);
+                     && m.GetParameters().Length == 1
+                     && m.GetParameters()[0].ParameterType == typeof(IError));
 }

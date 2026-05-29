@@ -21,13 +21,14 @@ public sealed class DistributedCacheIdempotencyStore(
     /// <inheritdoc />
     [System.Diagnostics.CodeAnalysis.UnconditionalSuppressMessage("Trimming", "IL2026",
         Justification = "TResponse is a generic parameter preserved by the open-generic behavior registration via [RequiresDynamicCode] callers.")]
-    public async ValueTask<TResponse?> GetAsync<TResponse>(string key, CancellationToken ct = default)
+    public async ValueTask<CacheEntry<TResponse>?> GetAsync<TResponse>(string key, CancellationToken ct = default)
     {
         var bytes = await cache.GetAsync(key, ct).ConfigureAwait(false);
         if (bytes is null)
-            return default;
+            return null;
 
-        return JsonSerializer.Deserialize<TResponse>(bytes, jsonOptions.Value);
+        var value = JsonSerializer.Deserialize<TResponse>(bytes, jsonOptions.Value);
+        return new CacheEntry<TResponse>(value!);
     }
 
     /// <inheritdoc />

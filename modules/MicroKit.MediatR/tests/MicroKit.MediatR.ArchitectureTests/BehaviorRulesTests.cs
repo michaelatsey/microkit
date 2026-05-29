@@ -89,6 +89,40 @@ public sealed class BehaviorRulesTests
             $"All behavior error types must be sealed. Violators: {FailingNames(result)}");
     }
 
+    /// <summary>
+    /// No type in Behaviors may inject <c>IMediator</c> directly.
+    /// Behaviors interact with the pipeline through the <c>RequestHandlerDelegate</c>
+    /// delegate; direct IMediator injection would risk dispatch loops.
+    /// </summary>
+    [Fact]
+    public void NoBehavior_InjectsMediatRIMediator_Directly()
+    {
+        var mediatRType = typeof(IMediator);
+
+        var violators = BehaviorsAssembly.GetTypes()
+            .Where(t => !t.IsAbstract && !t.IsInterface)
+            .Where(t => t.GetConstructors(BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance)
+                .Any(ctor => ctor.GetParameters().Any(p => p.ParameterType == mediatRType)))
+            .Select(t => t.FullName)
+            .ToList();
+
+        violators.ShouldBeEmpty(
+            $"No behavior may inject IMediator directly (would risk dispatch loops). Violators: {string.Join(", ", violators)}");
+    }
+
+    /// <summary>
+    /// The Behaviors assembly must not reference Microsoft.EntityFrameworkCore.
+    /// Behaviors operate at the pipeline level — persistence concerns belong in handlers.
+    /// </summary>
+    [Fact]
+    [System.Diagnostics.CodeAnalysis.UnconditionalSuppressMessage("Trimming", "IL2026",
+        Justification = "Architecture tests run in a non-trimmed test host.")]
+    public void Behaviors_DoesNotReferenceEntityFramework() =>
+        BehaviorsAssembly.GetReferencedAssemblies()
+            .Select(n => n.Name ?? string.Empty)
+            .ShouldNotContain("Microsoft.EntityFrameworkCore",
+                "Behaviors must not reference EntityFrameworkCore — persistence belongs in handlers");
+
     private static bool InheritsFromOpenGeneric(Type type, Type openGenericBase)
     {
         var cursor = type.BaseType;

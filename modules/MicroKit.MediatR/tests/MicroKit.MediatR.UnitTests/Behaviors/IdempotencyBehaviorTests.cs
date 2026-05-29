@@ -57,7 +57,7 @@ public sealed class IdempotencyBehaviorTests
         RequestHandlerDelegate<string> next = () => { callCount++; return Task.FromResult("fresh"); };
         var store = Substitute.For<IIdempotencyStore>();
         store.GetAsync<string>("idem-key", Arg.Any<CancellationToken>())
-            .Returns(new ValueTask<string?>("cached"));
+            .Returns(new ValueTask<CacheEntry<string>?>(new CacheEntry<string>("cached")));
         var behavior = new IdempotencyBehavior<CacheHitRequest, string>(store);
 
         var result = await behavior.Handle(new CacheHitRequest(), next, CancellationToken.None);
@@ -73,7 +73,7 @@ public sealed class IdempotencyBehaviorTests
         RequestHandlerDelegate<string> next = () => { callCount++; return Task.FromResult("fresh"); };
         var store = Substitute.For<IIdempotencyStore>();
         store.GetAsync<string>("idem-key", Arg.Any<CancellationToken>())
-            .Returns(new ValueTask<string?>(default(string?)));
+            .Returns(ValueTask.FromResult<CacheEntry<string>?>(null));
         store.SetAsync("idem-key", "fresh", Arg.Any<CancellationToken>())
             .Returns(ValueTask.CompletedTask);
         var behavior = new IdempotencyBehavior<CacheMissRequest, string>(store);
@@ -127,7 +127,7 @@ public sealed class IdempotencyBehaviorTests
     {
         var store = Substitute.For<IIdempotencyStore>();
         store.GetAsync<string>("idem-key", Arg.Any<CancellationToken>())
-            .Returns(new ValueTask<string?>("cached"));
+            .Returns(new ValueTask<CacheEntry<string>?>(new CacheEntry<string>("cached")));
         var behavior = new IdempotencyBehavior<CacheHitNoStoreRequest, string>(store);
 
         await behavior.Handle(new CacheHitNoStoreRequest(), () => Task.FromResult("fresh"), CancellationToken.None);
@@ -194,15 +194,15 @@ public sealed class IdempotencyBehaviorTests
         public string IdempotencyKey => "idem-key";
     }
 
-    // Concrete IIdempotencyStore: NSubstitute's default ValueTask<T?> return for struct T returns a
-    // zero-initialized value (not null), causing false cache hits. This implementation correctly
-    // returns default(TResponse?) = null (nullable struct null) for every GetAsync call.
+    // Concrete IIdempotencyStore used for tests that need to verify whether SetAsync was called.
+    // Returns null (miss) from GetAsync so the behavior always calls next() and reaches the SetAsync guard.
+    // CacheEntry<TResponse>? is a reference type — null is unambiguously a miss for any TResponse.
     private sealed class TrackingStore : IIdempotencyStore
     {
         public bool WasStored { get; private set; }
 
-        public ValueTask<TResponse?> GetAsync<TResponse>(string key, CancellationToken ct = default)
-            => ValueTask.FromResult(default(TResponse?));
+        public ValueTask<CacheEntry<TResponse>?> GetAsync<TResponse>(string key, CancellationToken ct = default)
+            => ValueTask.FromResult<CacheEntry<TResponse>?>(null);
 
         public ValueTask SetAsync<TResponse>(string key, TResponse response, CancellationToken ct = default)
         {

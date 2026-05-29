@@ -58,6 +58,8 @@ public sealed class RetryBehavior<TRequest, TResponse>
                 UseJitter = true,
                 ShouldHandle = new PredicateBuilder()
                     .Handle<Exception>(static ex =>
+                        // Result.Failure is a returned value, not an exception — Polly never sees it here.
+                        // Only transient infrastructure exceptions are retried; business failures propagate as-is.
                         ex is not OperationCanceledException
                         and not ValidationException
                         and not UnauthorizedAccessException)

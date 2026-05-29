@@ -23,7 +23,6 @@ public sealed partial class CachingBehavior<TRequest, TResponse>(
     : BehaviorBase<TRequest, TResponse>
     where TRequest : notnull
 {
-    private static readonly string _requestName = typeof(TRequest).Name;
     private static readonly string _responseTypeName = typeof(TResponse).FullName ?? typeof(TResponse).Name;
 
     /// <inheritdoc />
@@ -41,7 +40,7 @@ public sealed partial class CachingBehavior<TRequest, TResponse>(
             return await next().ConfigureAwait(false);
 
         if (cacheableQuery.Expiry is null)
-            LogNullExpiry(logger, _requestName);
+            LogNullExpiry(logger);
 
         var bytes = await cache.GetAsync(cacheableQuery.CacheKey, cancellationToken).ConfigureAwait(false);
         if (bytes is not null)
@@ -52,7 +51,7 @@ public sealed partial class CachingBehavior<TRequest, TResponse>(
             }
             catch (JsonException ex)
             {
-                LogDeserializationFailure(logger, _requestName, cacheableQuery.CacheKey, ex);
+                LogDeserializationFailure(logger, cacheableQuery.CacheKey, ex);
                 return CreateFailureOrThrow(
                     new CacheDeserializationError(cacheableQuery.CacheKey, _responseTypeName),
                     new InvalidOperationException(
@@ -78,11 +77,12 @@ public sealed partial class CachingBehavior<TRequest, TResponse>(
         return response;
     }
 
+    // CommandName is already present in the enclosing LoggingBehavior scope — no need to re-emit it.
     [LoggerMessage(2000, LogLevel.Warning,
-        "CachingBehavior: {CommandName} has a null Expiry — cached entry will not expire automatically")]
-    private static partial void LogNullExpiry(ILogger logger, string commandName);
+        "CachingBehavior: null Expiry — cached entry will not expire automatically")]
+    private static partial void LogNullExpiry(ILogger logger);
 
     [LoggerMessage(2001, LogLevel.Error,
-        "CachingBehavior: {CommandName} — deserialization of cached entry for key '{CacheKey}' failed")]
-    private static partial void LogDeserializationFailure(ILogger logger, string commandName, string cacheKey, Exception ex);
+        "CachingBehavior: deserialization of cached entry for key '{CacheKey}' failed")]
+    private static partial void LogDeserializationFailure(ILogger logger, string cacheKey, Exception ex);
 }

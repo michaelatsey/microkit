@@ -21,6 +21,42 @@ public sealed class NamingConventionTests
     private static string FailingNames(TestResult result) =>
         result.FailingTypeNames is { } names ? string.Join(", ", names) : string.Empty;
 
+    /// <summary>
+    /// All public types in the Abstractions assembly must be in the <c>MicroKit.MediatR</c>
+    /// root namespace (not <c>MicroKit.MediatR.Abstractions</c> or any sub-namespace).
+    /// This keeps the consuming API surface clean: <c>using MicroKit.MediatR;</c> is the
+    /// only import a consumer needs.
+    /// </summary>
+    [Fact]
+    public void AbstractionsPublicTypes_AreInMicroKitMediatRNamespace()
+    {
+        var result = Types
+            .InAssembly(Abstractions)
+            .That().ArePublic()
+            .Should().ResideInNamespace("MicroKit.MediatR")
+            .GetResult();
+
+        result.IsSuccessful.ShouldBeTrue(
+            $"All public types in Abstractions must reside in 'MicroKit.MediatR'. Violators: {FailingNames(result)}");
+    }
+
+    /// <summary>
+    /// All public types in the Core assembly must be in the <c>MicroKit.MediatR</c>
+    /// root namespace, keeping the public API consistent with Abstractions.
+    /// </summary>
+    [Fact]
+    public void CorePublicTypes_AreInMicroKitMediatRNamespace()
+    {
+        var result = Types
+            .InAssembly(Core)
+            .That().ArePublic()
+            .Should().ResideInNamespace("MicroKit.MediatR")
+            .GetResult();
+
+        result.IsSuccessful.ShouldBeTrue(
+            $"All public types in Core must reside in 'MicroKit.MediatR'. Violators: {FailingNames(result)}");
+    }
+
     /// <summary>All public types ending with "Extensions" must be static classes.</summary>
     [Fact]
     public void TypesEndingWithExtensions_AreStatic()

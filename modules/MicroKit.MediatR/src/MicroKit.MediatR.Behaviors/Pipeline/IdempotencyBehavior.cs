@@ -36,13 +36,11 @@ public sealed class IdempotencyBehavior<TRequest, TResponse>(IIdempotencyStore s
                 $"'{typeof(TRequest).Name}' implements IIdempotentCommand but returned a null or empty IdempotencyKey. " +
                 $"IdempotencyKey must be a non-null, non-empty, deterministic value derived from the command's inputs.");
 
-        var cached = await store.GetAsync<TResponse>(key, cancellationToken).ConfigureAwait(false);
-        // For reference-type TResponse, null indicates a cache miss.
-        // For struct TResponse (e.g. Result<T>), TResponse? is TResponse at IL level in unconstrained
-        // generics — structs can never be null — so use EqualityComparer to distinguish a real
-        // zero-initialized default from a legitimately stored value.
-        if (!EqualityComparer<TResponse?>.Default.Equals(cached, default(TResponse?)))
-            return cached!;
+        // CacheEntry<TResponse>? is a reference type — null is an unambiguous miss for any TResponse,
+        // including value structs and Result<T>. No EqualityComparer sentinel needed.
+        var entry = await store.GetAsync<TResponse>(key, cancellationToken).ConfigureAwait(false);
+        if (entry is not null)
+            return entry.Value;
 
         var response = await next().ConfigureAwait(false);
 

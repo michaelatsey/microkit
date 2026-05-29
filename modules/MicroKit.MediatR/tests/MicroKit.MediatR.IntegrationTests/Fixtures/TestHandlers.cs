@@ -112,6 +112,81 @@ internal sealed class OrderPlacedHandlerTwo(DomainEventLog log)
     }
 }
 
+// ── Retryable command fixtures ─────────────────────────────────────────────
+// Each retryable command uses a DISTINCT request type so the RetryBehavior's
+// process-wide Polly pipeline cache (keyed by TRequest) does not bleed between tests.
+
+internal sealed class AttemptCounter { public int Count; }
+
+internal sealed record RetrySucceedAfterTwoCommand : ICommand<Result<string>>, IRetryableRequest
+{
+    public int MaxRetries => 3;
+    public TimeSpan Delay => TimeSpan.FromMilliseconds(1);
+}
+
+internal sealed class RetrySucceedAfterTwoHandler(AttemptCounter counter)
+    : ICommandHandler<RetrySucceedAfterTwoCommand, Result<string>>
+{
+    public ValueTask<Result<string>> Handle(RetrySucceedAfterTwoCommand command, CancellationToken ct = default)
+    {
+        counter.Count++;
+        if (counter.Count < 3)
+            throw new IOException("transient failure");
+        return new(Success("after retries"));
+    }
+}
+
+internal sealed record RetryAlwaysFailCommand : ICommand<Result<string>>, IRetryableRequest
+{
+    public int MaxRetries => 2;
+    public TimeSpan Delay => TimeSpan.FromMilliseconds(1);
+}
+
+internal sealed class RetryAlwaysFailHandler(AttemptCounter counter)
+    : ICommandHandler<RetryAlwaysFailCommand, Result<string>>
+{
+    public ValueTask<Result<string>> Handle(RetryAlwaysFailCommand command, CancellationToken ct = default)
+    {
+        counter.Count++;
+        throw new IOException("always fails");
+    }
+}
+
+// ── Idempotent command fixtures ────────────────────────────────────────────
+
+internal sealed record IdempotentEchoCommand(string Key, string Message) : ICommand<Result<string>>, IIdempotentCommand
+{
+    public string IdempotencyKey => Key;
+}
+
+internal sealed class IdempotentEchoHandler(AttemptCounter counter)
+    : ICommandHandler<IdempotentEchoCommand, Result<string>>
+{
+    public ValueTask<Result<string>> Handle(IdempotentEchoCommand command, CancellationToken ct = default)
+    {
+        counter.Count++;
+        return new(Success(command.Message));
+    }
+}
+
+// ── Cacheable query fixtures ───────────────────────────────────────────────
+
+internal sealed record CacheableDoubleQuery(string Key, int Input) : IQuery<Result<int>>, ICacheableQuery
+{
+    public string CacheKey => Key;
+    public TimeSpan? Expiry => TimeSpan.FromMinutes(5);
+}
+
+internal sealed class CacheableDoubleHandler(AttemptCounter counter)
+    : IQueryHandler<CacheableDoubleQuery, Result<int>>
+{
+    public ValueTask<Result<int>> Handle(CacheableDoubleQuery query, CancellationToken ct = default)
+    {
+        counter.Count++;
+        return new(Success(query.Input * 2));
+    }
+}
+
 // ── Domain event with no handler (for dispatch-time error test) ───────────
 
 internal sealed record UnregisteredEvent(Guid Id) : IEvent;
