@@ -18,6 +18,9 @@
   </Folder>
   <Folder Name="/modules/MicroKit.MediatR/tests/">
     <Project Path="modules/MicroKit.MediatR/tests/MicroKit.MediatR.UnitTests/MicroKit.MediatR.UnitTests.csproj" />
+    <Project Path="modules/MicroKit.MediatR/tests/MicroKit.MediatR.ArchitectureTests/MicroKit.MediatR.ArchitectureTests.csproj" />
+    <Project Path="modules/MicroKit.MediatR/tests/MicroKit.MediatR.IntegrationTests/MicroKit.MediatR.IntegrationTests.csproj" />
+    <Project Path="modules/MicroKit.MediatR/tests/MicroKit.MediatR.PerformanceTests/MicroKit.MediatR.PerformanceTests.csproj" />
   </Folder>
   <Folder Name="/modules/MicroKit.Logging/" />
   <Folder Name="/modules/MicroKit.Logging/src/">
