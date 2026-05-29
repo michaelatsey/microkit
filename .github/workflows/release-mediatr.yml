@@ -1,0 +1,49 @@
+name: Release — MicroKit.MediatR
+
+on:
+  push:
+    tags:
+      - 'mediatr-v*'
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          global-json-file: global.json
+
+      # CIReleaseBuild=true replaces cross-module ProjectReferences with PackageReferences
+      # (MicroKit.Result, MicroKit.Domain, MicroKit.Logging.Abstractions) so that:
+      #   - Restore resolves the published NuGet versions from Directory.Packages.props
+      #   - Build compiles against those published packages (ABI verification)
+      #   - Pack emits the correct nuspec dependency versions
+      # Prerequisites: MicroKit.Result, MicroKit.Domain, and MicroKit.Logging.Abstractions
+      # must be published to NuGet.org at the versions declared in Directory.Packages.props
+      # before this workflow is triggered.
+      - name: Restore
+        run: dotnet restore modules/MicroKit.MediatR/MicroKit.MediatR.slnx -p:CIReleaseBuild=true
+
+      - name: Build
+        run: dotnet build modules/MicroKit.MediatR/MicroKit.MediatR.slnx --no-restore -c Release -p:CIReleaseBuild=true
+
+      - name: Test
+        run: dotnet test modules/MicroKit.MediatR/MicroKit.MediatR.slnx --no-build -c Release
+
+      - name: Pack
+        run: |
+          dotnet pack modules/MicroKit.MediatR/MicroKit.MediatR.slnx \
+            --no-build -c Release \
+            -p:CIReleaseBuild=true \
+            -o nupkgs
+
+      - name: Push to NuGet.org
+        run: |
+          dotnet nuget push nupkgs/*.nupkg \
+            --api-key ${{ secrets.NUGET_API_KEY }} \
+            --source https://api.nuget.org/v3/index.json \
+            --skip-duplicate

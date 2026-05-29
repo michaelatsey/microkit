@@ -1,0 +1,14 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/MicroKit.MediatR.Abstractions/MicroKit.MediatR.Abstractions.csproj" />
+    <Project Path="src/MicroKit.MediatR/MicroKit.MediatR.csproj" />
+    <Project Path="src/MicroKit.MediatR.Behaviors/MicroKit.MediatR.Behaviors.csproj" />
+    <Project Path="src/MicroKit.MediatR.Testing/MicroKit.MediatR.Testing.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/MicroKit.MediatR.UnitTests/MicroKit.MediatR.UnitTests.csproj" />
+    <Project Path="tests/MicroKit.MediatR.IntegrationTests/MicroKit.MediatR.IntegrationTests.csproj" />
+    <Project Path="tests/MicroKit.MediatR.ArchitectureTests/MicroKit.MediatR.ArchitectureTests.csproj" />
+    <Project Path="tests/MicroKit.MediatR.PerformanceTests/MicroKit.MediatR.PerformanceTests.csproj" />
+  </Folder>
+</Solution>

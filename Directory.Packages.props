@@ -9,6 +9,14 @@
     <PackageVersion Include="Microsoft.Extensions.Caching.Abstractions" Version="10.0.8" />
     <PackageVersion Include="Microsoft.Extensions.Options" Version="10.0.8" />
   </ItemGroup>
+  <ItemGroup Label="MicroKit">
+    <!-- Published versions of sibling MicroKit modules.
+         Used by CIReleaseBuild=true pack step to emit correct NuGet dependencies
+         instead of the git-height versions produced by cross-module ProjectReferences. -->
+    <PackageVersion Include="MicroKit.Result" Version="1.0.0" />
+    <PackageVersion Include="MicroKit.Domain" Version="1.0.0" />
+    <PackageVersion Include="MicroKit.Logging.Abstractions" Version="1.0.0" />
+  </ItemGroup>
   <ItemGroup Label="MediatR">
     <PackageVersion Include="MediatR" Version="12.4.1" />
     <PackageVersion Include="MediatR.Contracts" Version="2.0.1" />

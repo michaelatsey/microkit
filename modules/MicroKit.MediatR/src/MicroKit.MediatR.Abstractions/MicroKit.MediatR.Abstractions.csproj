@@ -10,11 +10,14 @@
   <ItemGroup>
     <PackageReference Include="MediatR.Contracts" />
   </ItemGroup>
-  <ItemGroup>
-    <!-- Cross-module ProjectReferences (monorepo-internal dev build).
-         These become PackageReferences on first NuGet publish.
-         MicroKit.Logging.Abstractions is intentionally excluded — not used by any type here. -->
+  <!-- Cross-module references: source in dev/CI builds, published NuGet packages when packing for release.
+       Set CIReleaseBuild=true on the `dotnet pack` step to emit correct nuspec dependencies. -->
+  <ItemGroup Condition="'$(CIReleaseBuild)' != 'true'">
     <ProjectReference Include="../../../MicroKit.Result/src/MicroKit.Result/MicroKit.Result.csproj" />
     <ProjectReference Include="../../../MicroKit.Domain/src/MicroKit.Domain/MicroKit.Domain.csproj" />
+  </ItemGroup>
+  <ItemGroup Condition="'$(CIReleaseBuild)' == 'true'">
+    <PackageReference Include="MicroKit.Result" />
+    <PackageReference Include="MicroKit.Domain" />
   </ItemGroup>
 </Project>
