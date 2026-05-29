@@ -18,16 +18,16 @@ Ce fichier racine donne la vision globale et les conventions transversales.
 
 | Module | Chemin | .claude/ | Statut |
 |--------|--------|----------|--------|
-| **MicroKit.Result** | `modules/MicroKit.Result/` | `modules/MicroKit.Result/.claude/` | ✅ Actif |
-| **MicroKit.MediatR** | `modules/MicroKit.MediatR/` | `modules/MicroKit.MediatR/.claude/` | ✅ Actif |
-| **MicroKit.Domain** | `modules/MicroKit.Domain/` | `modules/MicroKit.Domain/.claude/` | ✅ Actif |
+| **MicroKit.Result** | `modules/MicroKit.Result/` | `modules/MicroKit.Result/.claude/` | ✅ Released 1.0.0-preview.1 |
+| **MicroKit.Domain** | `modules/MicroKit.Domain/` | `modules/MicroKit.Domain/.claude/` | ✅ Released 1.0.0-preview.1 |
+| **MicroKit.Logging** | `modules/MicroKit.Logging/` | `modules/MicroKit.Logging/.claude/` | ✅ Released 1.0.0-preview.1 |
+| **MicroKit.MediatR** | `modules/MicroKit.MediatR/` | `modules/MicroKit.MediatR/.claude/` | 🔄 En cours (Abstractions ✅, Core ✅, Behaviors 🔄 5/6, Testing ⬜) |
 | **MicroKit.Messaging** | `modules/MicroKit.Messaging/` | `modules/MicroKit.Messaging/.claude/` | 📋 Planifié |
 | **MicroKit.Persistence** | `modules/MicroKit.Persistence/` | `modules/MicroKit.Persistence/.claude/` | 📋 Planifié |
 | **MicroKit.Caching** | `modules/MicroKit.Caching/` | `modules/MicroKit.Caching/.claude/` | 📋 Planifié |
 | **MicroKit.Http** | `modules/MicroKit.Http/` | `modules/MicroKit.Http/.claude/` | 📋 Planifié |
 | **MicroKit.Auth** | `modules/MicroKit.Auth/` | `modules/MicroKit.Auth/.claude/` | 📋 Planifié |
 | **MicroKit.Observability** | `modules/MicroKit.Observability/` | `modules/MicroKit.Observability/.claude/` | 📋 Planifié |
-| **MicroKit.Logging** | `modules/MicroKit.Logging/` | `modules/MicroKit.Logging/.claude/` | 📋 Planifié |
 | **MicroKit.Multitenancy** | `modules/MicroKit.Multitenancy/` | `modules/MicroKit.Multitenancy/.claude/` | 📋 Planifié |
 
 ### Règle de navigation pour Claude Code
@@ -59,6 +59,8 @@ MicroKit/
 │   │   ├── ci.yml                    ← build + test sur PR (tous modules)
 │   │   ├── release.yml               ← publish NuGet sur tag
 │   │   ├── ci-result.yml             ← CI spécifique MicroKit.Result
+│   │   ├── ci-domain.yml             ← CI spécifique MicroKit.Domain
+│   │   ├── ci-logging.yml            ← CI spécifique MicroKit.Logging
 │   │   └── ci-[module].yml           ← CI par module (changeset detection)
 │   ├── CODEOWNERS
 │   └── pull_request_template.md
@@ -78,7 +80,9 @@ MicroKit/
 │       └── MicroKit.Analyzers.props  ← analyzers partagés (Roslynator, etc.)
 │
 ├── modules/
-│   ├── MicroKit.Result/              ← voir structure interne ci-dessous
+│   ├── MicroKit.Result/
+│   ├── MicroKit.Domain/
+│   ├── MicroKit.Logging/
 │   ├── MicroKit.MediatR/
 │   └── ...
 │
@@ -102,10 +106,11 @@ MicroKit/
 ```
 modules/MicroKit.[Module]/
 ├── .claude/                          ← cerveau du module (indépendant)
+├── .claude-context/                  ← standards, templates, ADRs (chargés par les agents)
+│   ├── standards/
+│   ├── templates/
+│   └── context/
 ├── docs/
-│   ├── guides/
-│   ├── architecture/
-│   └── README.md
 ├── src/
 │   ├── MicroKit.[Module].Abstractions/   ← contrats purs, zéro dépendance tierce
 │   ├── MicroKit.[Module]/                ← implémentation core
@@ -119,7 +124,7 @@ modules/MicroKit.[Module]/
 │   └── MicroKit.[Module].PerformanceTests/
 ├── samples/
 ├── benchmarks/
-├── build/                            ← props spécifiques au module si nécessaire
+├── build/
 ├── README.md
 └── MicroKit.[Module].slnx
 ```
@@ -132,14 +137,14 @@ modules/MicroKit.[Module]/
 ```
 MicroKit.Domain          ← aucune dépendance sur les autres modules
 MicroKit.Result          ← aucune dépendance sur les autres modules
-MicroKit.Logging         ← peut dépendre de Result
+MicroKit.Logging         ← peut dépendre de Result (ADR-006: ne dépend PAS de Result — permanent)
 MicroKit.Observability   ← peut dépendre de Result, Logging
 MicroKit.Auth            ← peut dépendre de Result, Domain
 MicroKit.Caching         ← peut dépendre de Result
 MicroKit.Persistence     ← peut dépendre de Result, Domain
 MicroKit.Messaging       ← peut dépendre de Result, Domain, Persistence (outbox)
 MicroKit.Http            ← peut dépendre de Result, Observability
-MicroKit.MediatR         ← peut dépendre de Result, Domain
+MicroKit.MediatR         ← peut dépendre de Result, Domain, Logging.Abstractions
 MicroKit.Multitenancy    ← peut dépendre de Result, Auth, Persistence
 ```
 
@@ -168,6 +173,7 @@ Chaque module est versionné **indépendamment** via `version.json` dans son ré
 result-v1.2.0          → release MicroKit.Result 1.2.0
 mediatr-v1.0.0         → release MicroKit.MediatR 1.0.0
 domain-v1.0.0-beta.1   → pre-release MicroKit.Domain
+logging-v1.0.0         → release MicroKit.Logging 1.0.0
 ```
 
 ### Branches
@@ -227,7 +233,7 @@ docs(domain): add aggregate root design guide
 - Conventions de nommage des packages NuGet
 - Format des PRs et commits (Conventional Commits)
 - Politique de dépendances inter-modules
-- Bibliothèque d'assertions obligatoire (voir `.claude/rules/testing-libraries.md`)
+- **Bibliothèque d'assertions : Shouldly (MIT) — voir `.claude/rules/testing-libraries.md`**
 
 ### Ce qui EST défini dans chaque module (local)
 - Philosophie et patterns spécifiques au module
@@ -235,15 +241,33 @@ docs(domain): add aggregate root design guide
 - Décisions d'API et de conception
 - Dépendances NuGet spécifiques
 
+### Règles non négociables (tous modules)
+- `sealed record` pour erreurs/VO/events | `sealed class` pour handlers/behaviors
+- `ValueTask<T>` async | `ConfigureAwait(false)` dans les libs
+- `CancellationToken ct = default` toujours en dernier
+- `Console.WriteLine` interdit → `ILogger<T>`
+- Zéro dépendance circulaire | `.Abstractions` → uniquement autres `.Abstractions`
+- Tests : `GenerateDocumentationFile=false` + `NoWarn CS1591;CA1707`
+- CPM : toutes les versions dans `Directory.Packages.props` racine
+- **`Shouldly` (MIT) obligatoire** — FluentAssertions INTERDIT (licence commerciale Xceed v8+)
+- **NSubstitute** pour les mocks — Moq DÉCONSEILLÉ
+- **NetArchTest** pour les tests d'architecture
+
 ### Nommage des packages NuGet publiés
 ```
 MicroKit.Result
 MicroKit.Result.AspNetCore
+MicroKit.Domain
+MicroKit.Logging
+MicroKit.Logging.Abstractions
+MicroKit.Logging.OpenTelemetry
+MicroKit.Logging.AspNetCore
+MicroKit.Logging.Diagnostics
+MicroKit.Logging.Analyzers
+MicroKit.Logging.Generators
 MicroKit.MediatR
 MicroKit.MediatR.Behaviors
 MicroKit.MediatR.Testing
-MicroKit.Domain
-MicroKit.Domain.Abstractions
 MicroKit.Persistence
 MicroKit.Persistence.EntityFramework
 MicroKit.Messaging

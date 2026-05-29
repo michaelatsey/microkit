@@ -161,3 +161,165 @@ occurs — the factory is looked up by `IEvent` type in O(1).
   model; such scenarios require either a shared notification type or a separate dispatcher.
 - `DomainEventDispatcher` injects `IDomainEventNotificationFactory` (internal singleton) — not
   `AppDomain` or `IServiceProvider`. This is not a service locator.
+
+---
+
+## ADR-006: AuthorizationBehavior Uses `ICurrentUserAccessor`, Not `IHttpContextAccessor`
+
+**Status:** Accepted
+**Date:** 2026-05-29
+
+### Decision
+
+`AuthorizationBehavior` injects `ICurrentUserAccessor` (defined in `MicroKit.MediatR.Abstractions`)
+to obtain the current `ClaimsPrincipal`, rather than injecting `IHttpContextAccessor` directly.
+
+### Rationale
+
+1. **Non-web host compatibility:** `IHttpContextAccessor.HttpContext` returns `null` outside an
+   ASP.NET Core HTTP request. Worker services, message consumers, and background tasks — all
+   first-class MicroKit.MediatR use cases — would NullReferenceException silently.
+2. **Decoupling principle:** The dispatch pipeline must not be coupled to the HTTP runtime.
+   This mirrors the rule in `no-handler-coupling.md` that forbids `HttpContext` in handlers.
+3. **BCL-only contract:** `ClaimsPrincipal` is in `System.Security.Claims` (BCL) — no extra
+   package required in `Abstractions`.
+
+### Consequences
+
+- `ICurrentUserAccessor` is added to `MicroKit.MediatR.Abstractions`. Consumers must register
+  an implementation: ASP.NET Core apps use `HttpContextCurrentUserAccessor` (ships in Behaviors);
+  non-HTTP hosts implement their own.
+- `Microsoft.AspNetCore.Authorization` (`IAuthorizationService`) remains in `Behaviors` — the
+  web-framework dependency is reduced but not eliminated. A future `MicroKit.MediatR.Behaviors.Authorization`
+  split-package is the clean exit for non-ASP.NET Core consumers (tracked as v2 debt).
+
+---
+
+## ADR-007: Idempotency and Caching Behaviors Require Explicit `ResultJsonConverterFactory` Registration
+
+**Status:** Accepted
+**Date:** 2026-05-29
+
+### Decision
+
+`IdempotencyBehavior` and `CachingBehavior` consume `IOptions<JsonSerializerOptions>` from DI for
+serialization. When `TResponse` is `Result<T>`, consumers must register `ResultJsonConverterFactory`
+via `services.Configure<JsonSerializerOptions>(opts => opts.Converters.Add(new ResultJsonConverterFactory()))`.
+
+### Rationale
+
+1. **`Result<T>` is not default-serializable:** `Result<T>` is a `readonly struct` with private
+   constructors and an internal `byte _tag` field. `JsonSerializerOptions.Default` (no custom
+   converters) would serialize to `{}` and deserialize to `default(Result<T>)` — an uninitialised
+   struct that throws on any value access.
+2. **`ResultJsonConverterFactory` exists:** Confirmed present in `MicroKit.Result/Serialization/`.
+   It provides correct round-trip semantics for `Result<T>`.
+3. **`IOptions<T>` pattern:** The standard .NET pattern for configurable infrastructure. Consumers
+   configure once via `IOptions<JsonSerializerOptions>`; behaviors consume it at dispatch time.
+
+### Consequences
+
+- Consumers using Idempotency or Caching with `Result<T>` responses must call
+  `services.Configure<JsonSerializerOptions>(...)` once during DI setup.
+- Behaviors log a WARNING (not throw) when `TResponse` is `Result<T>` and the factory is absent,
+  to avoid hard startup failures for consumers who handle non-Result responses.
+- `IOptions<JsonSerializerOptions>` is injected into both `IdempotencyBehavior` and `CachingBehavior`
+  constructors as a required dependency.
+
+---
+
+## ADR-008: `ICurrentUserAccessor` Lives in `MicroKit.MediatR.Abstractions` (v1 Pragmatic Placement)
+
+**Status:** Accepted  
+**Date:** 2026-05-29
+
+### Decision
+
+`ICurrentUserAccessor` is declared in `MicroKit.MediatR.Abstractions` for v1. It is a candidate
+for promotion to a future `MicroKit.Abstractions` (or `MicroKit.Identity.Abstractions`) package
+once cross-module identity contracts are centralized in the monorepo.
+
+### Context
+
+`AuthorizationBehavior` needs to obtain the current `ClaimsPrincipal` without coupling to
+`IHttpContextAccessor` (see ADR-006). The interface uses only BCL types (`System.Security.Claims`),
+so it has no package dependency beyond the BCL — it could live anywhere in the graph without
+creating a new edge.
+
+The question is: which package *owns* the contract?
+
+### Rationale for current placement (`MicroKit.MediatR.Abstractions`)
+
+1. **Single consumer today.** Only `AuthorizationBehavior` (in `MicroKit.MediatR.Behaviors`) reads
+   `ICurrentUserAccessor`. Placing it in Abstractions keeps the interface collocated with the
+   contract it serves. No other module needs it today.
+2. **Avoids a premature shared package.** Creating `MicroKit.Abstractions` or
+   `MicroKit.Identity.Abstractions` for a single interface would introduce monorepo infrastructure
+   (new project, new NuGet ID, new CI step, new versioning) with no immediate payoff. The
+   organizational cost exceeds the benefit until at least two modules share the interface.
+3. **Zero extra dependency edge.** `MicroKit.MediatR.Abstractions` is already the lowest-level
+   MediatR package. Placing `ICurrentUserAccessor` here adds no new edge to the dependency graph.
+4. **BCL-only surface.** `ClaimsPrincipal` is in `System.Security.Claims` (BCL). The interface
+   does not pull any additional NuGet package into `Abstractions`.
+
+### Why `MicroKit.Abstractions` is the right long-term home
+
+1. **Cross-module identity contracts will emerge.** `MicroKit.Auth`, `MicroKit.Multitenancy`, and
+   `MicroKit.Persistence` (audit columns, row-level security) will all need a stable identity
+   contract. If each module declares its own `ICurrentUserAccessor`, consumers end up with
+   three incompatible interfaces and three independent registration points for the same concept.
+2. **`MicroKit.Abstractions` is the canonical Level 0 anchor.** It has no MicroKit dependencies
+   and can be referenced by any module without creating a cycle. That makes it the correct owner
+   of primitives that span the ecosystem.
+3. **Prevents interface duplication.** A centralized package ensures every module that needs
+   "who is the current user?" answers it with the same type, enabling one registration at DI startup.
+
+### Affected modules (current and projected)
+
+| Module | Current use | Projected use |
+|--------|------------|---------------|
+| `MicroKit.MediatR` | `AuthorizationBehavior` reads `ICurrentUserAccessor` | unchanged |
+| `MicroKit.Auth` | — | will need principal for policy evaluation |
+| `MicroKit.Persistence` | — | will need principal for audit columns / row-level security |
+| `MicroKit.Multitenancy` | — | will need principal for tenant resolution |
+
+### Migration path (when `MicroKit.Abstractions` is introduced)
+
+1. **Create `MicroKit.Abstractions`** as a new Level 0 project with its own package ID and
+   `version.json`. No MicroKit dependencies; BCL only.
+2. **Move `ICurrentUserAccessor`** into `MicroKit.Abstractions` under the
+   `MicroKit.Abstractions` namespace (or a sub-namespace such as `MicroKit.Abstractions.Identity`).
+3. **Add `MicroKit.Abstractions` as a dependency** of `MicroKit.MediatR.Abstractions` (allowed —
+   both are Level 0).
+4. **Provide a type alias in `MicroKit.MediatR.Abstractions`** for one release cycle to avoid a
+   hard breaking change for consumers who reference the old namespace directly:
+   ```csharp
+   // MicroKit.MediatR.Abstractions — compatibility shim, deprecated in v2
+   [Obsolete("Use MicroKit.Abstractions.ICurrentUserAccessor. This alias will be removed in v2.")]
+   global using ICurrentUserAccessor = MicroKit.Abstractions.ICurrentUserAccessor;
+   ```
+5. **Update `MicroKit.MediatR.Behaviors`** to import from the new namespace — no behavior
+   logic changes; only the `using` directive changes.
+6. **Remove the shim** in the next major version (`mediatr-v2.0.0`).
+
+### Trigger condition for promotion
+
+Promotion should be initiated when **any of the following is true**:
+- A second module (e.g., `MicroKit.Auth` or `MicroKit.Persistence`) needs to reference
+  `ICurrentUserAccessor` and would otherwise take a dependency on `MicroKit.MediatR.Abstractions`
+  purely for this interface.
+- A `MicroKit.Abstractions` package is created for any other cross-cutting primitive, making
+  the migration cost near-zero.
+
+Until the trigger fires, the current placement is correct. Do not promote prematurely.
+
+### Consequences
+
+- **v1 consumers** register `ICurrentUserAccessor` against a type in `MicroKit.MediatR` namespace.
+  Their registration code will need a one-line namespace update at v2.
+- **`dependency-guardian`** must allowlist `MicroKit.MediatR.Abstractions → MicroKit.Abstractions`
+  when the promotion occurs (new edge in the dependency graph, requires graph update in
+  `modules/MicroKit.MediatR/.claude-context/context/dependency-graph.md` and the root
+  `.claude/CLAUDE.md` module boundaries section).
+- **No action required today.** This ADR exists to document intent and prevent ad-hoc duplication
+  of the interface in other modules before the centralized package is ready.

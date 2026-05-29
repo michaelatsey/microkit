@@ -1,0 +1,24 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <AssemblyName>MicroKit.MediatR.Behaviors</AssemblyName>
+    <RootNamespace>MicroKit.MediatR.Behaviors</RootNamespace>
+    <Description>Production-ready pipeline behaviors for MicroKit.MediatR — Logging (100), Authorization (200), Validation (300), Idempotency (400), Caching (500), Retry (600).</Description>
+    <PackageTags>microkit;mediatr;cqrs;behaviors;fluentvalidation;polly;dotnet</PackageTags>
+    <!-- CA1711: 'Accessor' is not a reserved analyzer suffix — suppress -->
+    <NoWarn>$(NoWarn);CA1711</NoWarn>
+  </PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="FluentValidation" />
+    <PackageReference Include="Polly" />
+    <PackageReference Include="Microsoft.AspNetCore.Authorization" />
+    <PackageReference Include="Microsoft.Extensions.Caching.Abstractions" />
+    <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" />
+    <PackageReference Include="Microsoft.Extensions.Options" />
+  </ItemGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\MicroKit.MediatR.Abstractions\MicroKit.MediatR.Abstractions.csproj" />
+    <ProjectReference Include="..\MicroKit.MediatR\MicroKit.MediatR.csproj" />
+    <!-- Cross-module ProjectReference (dev build — becomes PackageReference on first NuGet publish) -->
+    <ProjectReference Include="..\..\..\..\modules\MicroKit.Logging\src\MicroKit.Logging.Abstractions\MicroKit.Logging.Abstractions.csproj" />
+  </ItemGroup>
+</Project>
