@@ -13,9 +13,9 @@
     <!-- Published versions of sibling MicroKit modules.
          Used by CIReleaseBuild=true pack step to emit correct NuGet dependencies
          instead of the git-height versions produced by cross-module ProjectReferences. -->
-    <PackageVersion Include="MicroKit.Result" Version="1.0.0" />
-    <PackageVersion Include="MicroKit.Domain" Version="1.0.0" />
-    <PackageVersion Include="MicroKit.Logging.Abstractions" Version="1.0.0" />
+    <PackageVersion Include="MicroKit.Result" Version="1.0.0-preview.1" />
+    <PackageVersion Include="MicroKit.Domain" Version="1.0.0-preview.1" />
+    <PackageVersion Include="MicroKit.Logging.Abstractions" Version="1.0.0-preview.1" />
   </ItemGroup>
   <ItemGroup Label="MediatR">
     <PackageVersion Include="MediatR" Version="12.4.1" />

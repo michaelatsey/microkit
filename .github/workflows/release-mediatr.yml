@@ -17,6 +17,14 @@ jobs:
         with:
           global-json-file: global.json
 
+      # Derive the package version from the triggering tag (e.g. mediatr-v1.0.0-preview.1 → 1.0.0-preview.1).
+      # This makes the version explicit and independent of Nerdbank.GitVersioning tooling availability.
+      - name: Extract version from tag
+        run: |
+          TAG="${GITHUB_REF#refs/tags/}"
+          PACKAGE_VERSION="${TAG#mediatr-v}"
+          echo "PACKAGE_VERSION=$PACKAGE_VERSION" >> "$GITHUB_ENV"
+
       # CIReleaseBuild=true replaces cross-module ProjectReferences with PackageReferences
       # (MicroKit.Result, MicroKit.Domain, MicroKit.Logging.Abstractions) so that:
       #   - Restore resolves the published NuGet versions from Directory.Packages.props
@@ -39,6 +47,8 @@ jobs:
           dotnet pack modules/MicroKit.MediatR/MicroKit.MediatR.slnx \
             --no-build -c Release \
             -p:CIReleaseBuild=true \
+            -p:PackageVersion=${{ env.PACKAGE_VERSION }} \
+            -p:AssemblyVersion=$(echo "${{ env.PACKAGE_VERSION }}" | grep -oE '^[0-9]+\.[0-9]+\.[0-9]+').0 \
             -o nupkgs
 
       - name: Push to NuGet.org

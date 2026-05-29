@@ -1,0 +1,17 @@
+{
+  "version": "1.0",
+  "publicReleaseRefSpec": [
+    "^refs/heads/main$",
+    "^refs/tags/mediatr-v\\d+\\.\\d+\\.\\d+(-.+)?$"
+  ],
+  "pathFilters": [
+    "modules/MicroKit.MediatR/"
+  ],
+  "cloudBuild": {
+    "setVersionVariables": true
+  },
+  "release": {
+    "tagName": "mediatr-v{version}",
+    "branchName": "release/mediatr/{version}"
+  }
+}
