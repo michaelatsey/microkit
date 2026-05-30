@@ -228,3 +228,7 @@ MicroKit.Messaging                   📋 planifié
 MicroKit.Messaging.AzureServiceBus   📋 planifié
 MicroKit.Messaging.RabbitMQ          📋 planifié
 ```
+
+## Sessions
+Lire le fichier de session le plus récent dans `.claude-context/sessions/`
+avant de commencer tout travail.

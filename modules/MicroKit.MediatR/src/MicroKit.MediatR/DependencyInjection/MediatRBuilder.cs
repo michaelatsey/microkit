@@ -215,20 +215,6 @@ public static class ServiceCollectionExtensions
         services.AddSingleton<IDomainEventNotificationFactory>(
             new DomainEventNotificationFactory(notificationMap));
 
-        // MEDIUM #5 — DomainEventDispatcher lifetime: Scoped, not Singleton.
-        //
-        // Although DomainEventDispatcher holds no mutable per-scope state (it is effectively
-        // stateless), it MUST be Scoped because it injects IPublisher (MediatR's IMediator,
-        // registered as Transient). Transient services injected into a Singleton capture the
-        // ROOT IServiceProvider at Singleton construction time. When Publish() is subsequently
-        // called during a request, MediatR resolves INotificationHandler<T> from that ROOT
-        // provider — and Scoped handlers (e.g., those injecting DbContext) cannot be resolved
-        // from the root scope, producing InvalidOperationException at dispatch time.
-        //
-        // Scoped lifetime ensures IPublisher is resolved fresh per scope, giving the Mediator
-        // the correct request-scoped IServiceProvider for handler resolution.
-        services.AddScoped<IDomainEventDispatcher, DomainEventDispatcher>();
-
         return services;
     }
 

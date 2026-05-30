@@ -1,21 +1,19 @@
-# Transaction Behavior Design
+# Transaction Behavior Design — v2
 
-> **Status:** Planned — v2 (depends on MicroKit.Persistence + MicroKit.Messaging)
-> **Scope:** This document captures the full architectural design for `TransactionBehavior`
-> to be implemented once `MicroKit.Persistence` and `MicroKit.Messaging` are available.
-> Load this file when working on TransactionBehavior, MicroKit.Persistence, or MicroKit.Messaging.
+> **Status:** Implementation-ready — waiting on MicroKit.Persistence.EntityFrameworkCore
+> (DomainEventsDispatcher) and MicroKit.Messaging (OutboxMessage transport).
+> Load this file when working on TransactionBehavior, DomainEventsDispatcher,
+> or IOutboxStore.
 
 ---
 
-## Architecture Overview
-
-The system has **5 distinct levels** with clearly separated scopes:
+## Architecture Overview — 5 Levels
 
 | Level | Component | Scope | Consistency |
 |-------|-----------|-------|-------------|
 | 1 | DomainEvent | Business transaction | Synchronous, atomic |
 | 2 | DomainEventHandler | Intra-domain consistency | Same DbContext, same transaction |
-| 3 | DomainEventNotification + Outbox | Deferred reaction | Eventually consistent |
+| 3 | DomainEventNotification + Outbox | Deferred reaction | Persisted atomically, processed async |
 | 4 | NotificationHandler + IntegrationMessage | Application orchestration | Async, separate transaction |
 | 5 | BrokerWorker | External distributed messaging | At-least-once delivery |
 
@@ -25,339 +23,258 @@ The system has **5 distinct levels** with clearly separated scopes:
 
 ### 1. Command Flow — Transaction Scope
 
-The most important diagram. Shows the full transactional boundary:
-- Command Handler execution
-- Aggregate mutation
-- DomainEvent raise
-- DomainEventHandler modifying another aggregate **in the same transaction**
-- OutboxMessage persisted atomically
-- Single SaveChanges + single commit
-
 ```mermaid
 sequenceDiagram
     autonumber
-
     actor Client
-
-    participant MR as MediatR
     participant TB as TransactionBehavior
     participant CH as CommandHandler
-
     participant OA as OrderAggregate
-    participant DE as DomainEventsProvider
-
+    participant DD as DomainEventsDispatcher
     participant DH as DomainEventHandler
-
     participant CA as CustomerAggregate
-
-    participant NM as NotificationMapper
-    participant OB as OutboxStore
-
+    participant OS as OutboxStore
     participant UOW as UnitOfWork
     participant DB as Database
 
     rect rgb(235, 245, 255)
         Note over TB,DB: TRANSACTION SCOPE
 
-        Client->>MR: Send(CreateOrderCommand)
-        MR->>TB: Handle(command)
-        TB->>CH: Execute command
+        Client->>TB: Send(CreateOrderCommand)
+        TB->>CH: Handle(command)
         CH->>OA: Create Order
-        OA-->>DE: Raise OrderPlacedDomainEvent
+        OA-->>DD: [via IDomainEventsProvider] OrderPlacedDomainEvent accumulated
 
-        TB->>DE: Get domain events
+        TB->>DD: DispatchEventsAsync()
 
-        loop For each DomainEvent
-            TB->>DH: Dispatch DomainEvent
-            Note over DH: Pure transactional domain logic
-            DH->>CA: Update Customer loyalty points
-            CA-->>DE: Raise CustomerLoyaltyUpdatedDomainEvent
-            Note over DH: Optional notification mapping
-            DH->>NM: Resolve matching notifications
-            NM->>OB: Create OutboxMessage
+        loop While events exist
+            Note over DD: Phase 1 — GetAndClear (atomic)
+            Note over DD: Phase 2 — Resolve notifications
+            Note over DD: Phase 3 — Publish (may raise new events)
+            DD->>DH: Publish(OrderPlacedDomainEvent)
+            DH->>CA: Update Customer loyalty
+            CA-->>DD: CustomerPointsGrantedEvent accumulated
+            Note over DD: Phase 4 — Add to Outbox (change tracker)
+            DD->>OS: Add(OrderPlacedNotification)
         end
 
-        Note over TB: Drain recursively raised events
-
-        TB->>UOW: SaveChangesAsync()
-        UOW->>DB: Persist aggregates + outbox messages
-        DB-->>UOW: Commit transaction
+        TB->>UOW: CommitAsync()
+        UOW->>DB: SaveChanges — aggregates + outbox messages ATOMIC
     end
 
-    TB-->>MR: Return response
-    MR-->>Client: Success
+    TB-->>Client: Result
 ```
 
----
-
-### 2. Recursive Domain Event Draining Flow
-
-Critical: `DomainEventHandler` instances can raise new events during dispatch.
-The drain loop must continue until the queue is empty.
+### 2. DomainEventsDispatcher — 4-Phase Loop
 
 ```mermaid
 sequenceDiagram
     autonumber
+    participant DD as DomainEventsDispatcher
+    participant DEP as IDomainEventsProvider
+    participant NF as INotificationFactory
+    participant PUB as IPublisher (MediatR)
+    participant OS as IOutboxStore
 
-    participant TB as TransactionBehavior
-    participant Q as DomainEventQueue
+    loop While events exist (drain recursive)
+        DD->>DEP: GetAndClearDomainEvents() ← atomic
+        DEP-->>DD: [OrderPlacedEvent, ...]
 
-    participant H1 as OrderPlacedHandler
-    participant H2 as LoyaltyHandler
-    participant H3 as InvoiceHandler
+        Note over DD: Phase 2 — Resolve notifications (sync, no I/O)
+        DD->>NF: Create(OrderPlacedEvent)
+        NF-->>DD: OrderPlacedNotification
 
-    rect rgb(235, 245, 255)
-        Note over TB,H3: SAME TRANSACTION SCOPE
+        Note over DD: Phase 3 — Publish (may raise new events via handlers)
+        DD->>PUB: Publish(OrderPlacedEvent)
 
-        TB->>Q: Enqueue(OrderPlacedDomainEvent)
-
-        loop Until queue empty
-            Q-->>TB: Dequeue next event
-            TB->>H1: Handle(OrderPlacedDomainEvent)
-            H1->>Q: Enqueue(CustomerPointsGrantedDomainEvent)
-            H1->>Q: Enqueue(InvoiceRequestedDomainEvent)
-            Q-->>TB: Dequeue(CustomerPointsGrantedDomainEvent)
-            TB->>H2: Handle(CustomerPointsGrantedDomainEvent)
-            Q-->>TB: Dequeue(InvoiceRequestedDomainEvent)
-            TB->>H3: Handle(InvoiceRequestedDomainEvent)
-        end
+        Note over DD: Phase 4 — Add to Outbox (change tracker, no flush)
+        DD->>OS: Add(OrderPlacedNotification) ← sync, no SaveChanges
     end
 ```
 
----
-
-### 3. Outbox Processing Flow
-
-Outside the business transaction scope — async processing.
+### 3. Outbox Processing (async, outside transaction)
 
 ```mermaid
 sequenceDiagram
-    autonumber
-
     participant W as OutboxWorker
     participant DB as Database
-    participant DES as DomainEventSerializer
     participant MR as MediatR
     participant NH as NotificationHandler
 
     rect rgb(255, 248, 235)
-        Note over W,NH: ASYNCHRONOUS PROCESSING SCOPE
+        Note over W,NH: ASYNC PROCESSING SCOPE
 
         W->>DB: Read pending OutboxMessages
-        DB-->>W: Serialized notifications
-
         loop For each message
-            W->>DES: Deserialize notification
-            DES-->>W: DomainEventNotification<T>
             W->>MR: Publish(notification)
-            MR->>NH: Execute NotificationHandler
-            NH-->>MR: Completed
-            W->>DB: Mark message as processed
-        end
-    end
-```
-
----
-
-### 4. Integration Message Flow
-
-```mermaid
-sequenceDiagram
-    autonumber
-
-    participant NH as NotificationHandler
-    participant IQ as IntegrationQueueStore
-    participant UOW as UnitOfWork
-    participant DB as Database
-
-    rect rgb(255, 248, 235)
-        Note over NH,DB: APPLICATION INTEGRATION SCOPE
-
-        NH->>IQ: Create IntegrationMessage
-        NH->>UOW: SaveChangesAsync()
-        UOW->>DB: Persist IntegrationMessage
-        DB-->>UOW: Commit
-    end
-```
-
----
-
-### 5. Broker Publishing Flow
-
-```mermaid
-sequenceDiagram
-    autonumber
-
-    participant W as IntegrationWorker
-    participant DB as Database
-    participant BR as Kafka/RabbitMQ
-
-    rect rgb(255, 240, 240)
-        Note over W,BR: EXTERNAL DISTRIBUTED MESSAGING
-
-        W->>DB: Read IntegrationMessages
-        DB-->>W: Pending messages
-
-        loop For each integration message
-            W->>BR: Publish message
-            BR-->>W: Ack
-            W->>DB: Mark as published
-        end
-    end
-```
-
----
-
-### 6. Failure / Retry / DeadLetter Flow
-
-```mermaid
-sequenceDiagram
-    autonumber
-
-    participant W as Worker
-    participant DB as Database
-    participant BR as Broker
-
-    loop Retry Policy
-        W->>DB: Read pending message
-        W->>BR: Publish
-
-        alt Success
-            BR-->>W: Ack
+            MR->>NH: Handle
             W->>DB: Mark processed
-        else Failure
-            BR-->>W: Error
-            W->>DB: Increment retry count
         end
-    end
-
-    alt Retry limit exceeded
-        W->>DB: Move to DeadLetter
     end
 ```
 
 ---
 
-## TransactionBehavior Implementation Design
+## Key Interfaces
 
-### Dependencies
-
+### IDomainEventsProvider
 ```csharp
-// Required — from MicroKit.Persistence (not yet implemented)
-ITransactionalContext  // wraps the DB transaction
-IUnitOfWork            // SaveChangesAsync()
-
-// Required — from MicroKit.MediatR (already available)
-IDomainEventDispatcher // dispatch events
-
-// Required — from MicroKit.Domain (already available)
-IDomainEventsProvider  // collect events raised during dispatch
-```
-
-### Decorator Pattern — IDomainEventsProvider
-
-`IDomainEventsProvider` is implemented as a **decorator** on the DbContext or repositories.
-It automatically captures domain events raised by **any** aggregate modified during the transaction —
-including aggregates modified by secondary `DomainEventHandler` instances.
-
-This means `IDomainEventsProvider` **fills itself** during `DispatchAsync` — the drain loop
-in `TransactionBehavior` picks up newly raised events automatically on the next iteration.
-
-### Correct Recursive Drain Loop
-
-```csharp
-private static async ValueTask InvokeCommandAsync(TransactionState state, CancellationToken ct)
+// MicroKit.Domain or MicroKit.Persistence.Abstractions
+public interface IDomainEventsProvider
 {
-    // Execute the handler
-    state.Response = await state.Next(ct).ConfigureAwait(false);
-
-    // Recursive drain — handlers can raise new events during dispatch
-    while (true)
-    {
-        var events = state.DomainEventsProvider.GetAllDomainEvents();
-        if (events.Count == 0) break;
-
-        // Clear BEFORE dispatch — so new events raised during dispatch are captured
-        state.DomainEventsProvider.ClearAllDomainEvents();
-        await state.Dispatcher.DispatchAsync(events, ct).ConfigureAwait(false);
-        // Loop will pick up any newly raised events on next iteration
-    }
-
-    // Single SaveChanges — all aggregates + outbox messages persisted atomically
-    await state.UnitOfWork.SaveChangesAsync(ct).ConfigureAwait(false);
+    /// <summary>
+    /// Returns all accumulated domain events and clears the internal collection atomically.
+    /// </summary>
+    IReadOnlyList<IDomainEvent> GetAndClearDomainEvents();
 }
 ```
 
-### v1 Reference Implementation (annotated)
+### IDomainEventDispatcher
+```csharp
+// MicroKit.MediatR.Abstractions
+public interface IDomainEventDispatcher
+{
+    /// <summary>
+    /// Dispatches all accumulated domain events in 4 phases:
+    /// 1. GetAndClear (atomic), 2. Resolve notifications, 3. Publish, 4. Add to Outbox.
+    /// Recursive drain — continues until no new events are raised.
+    /// </summary>
+    Task DispatchEventsAsync(CancellationToken ct = default);
+}
+```
 
-The following is the v1 draft with corrections applied:
+### IOutboxStore
+```csharp
+// MicroKit.Persistence.Abstractions
+public interface IOutboxStore
+{
+    /// <summary>
+    /// Adds a notification to the outbox via the EF change tracker.
+    /// No SaveChanges — persisted atomically during CommitAsync.
+    /// </summary>
+    void Add(INotification notification); // sync — change tracker only
+}
+```
+
+### INotificationFactory
+```csharp
+// MicroKit.MediatR.Abstractions or MicroKit.Persistence
+public interface INotificationFactory
+{
+    /// <summary>
+    /// Resolves the IDomainEventNotification associated with a domain event.
+    /// Returns null if no notification is registered for this event type.
+    /// </summary>
+    IDomainEventNotification<IDomainEvent>? Create(IDomainEvent domainEvent);
+}
+```
+
+---
+
+## DomainEventsDispatcher — Full Implementation
 
 ```csharp
-/// <summary>
-/// Pipeline behavior that wraps command execution in a database transaction,
-/// dispatches domain events recursively within the transaction boundary,
-/// and persists all changes atomically via <see cref="IUnitOfWork"/>.
-/// Query requests bypass the transaction entirely.
-/// </summary>
-/// <remarks>
-/// Requires MicroKit.Persistence (ITransactionalContext, IUnitOfWork) and
-/// MicroKit.Messaging (IOutboxStore via DomainEventHandler).
-/// PipelineOrder: <see cref="PipelineOrder.Transaction"/> (700 — after Retry).
-/// </remarks>
+// MicroKit.Persistence.EntityFrameworkCore
+public sealed class DomainEventsDispatcher : IDomainEventDispatcher
+{
+    private readonly IDomainEventsProvider _domainEventsProvider;
+    private readonly IPublisher _publisher;           // MediatR IPublisher
+    private readonly INotificationFactory _factory;
+    private readonly IOutboxStore _outboxStore;
+    private bool _isDispatching;                      // reentrancy guard
+
+    public async Task DispatchEventsAsync(CancellationToken ct = default)
+    {
+        if (_isDispatching) return; // reentrancy — new events accumulate, picked up on return
+
+        _isDispatching = true;
+        try
+        {
+            while (true)
+            {
+                // Phase 1 — Collect atomically (GetAndClear in one operation)
+                var domainEvents = _domainEventsProvider.GetAndClearDomainEvents();
+                if (domainEvents.Count == 0) break;
+
+                // Phase 2 — Resolve notifications (sync, no I/O)
+                var notifications = new List<IDomainEventNotification<IDomainEvent>>(domainEvents.Count);
+                foreach (var domainEvent in domainEvents)
+                {
+                    var notification = _factory.Create(domainEvent);
+                    if (notification is not null)
+                        notifications.Add(notification);
+                }
+
+                // Phase 3 — Publish domain events (may raise new events via handlers)
+                foreach (var domainEvent in domainEvents)
+                    await _publisher.Publish(domainEvent, ct).ConfigureAwait(false);
+
+                // Phase 4 — Add notifications to Outbox (change tracker, no flush)
+                foreach (var notification in notifications)
+                    _outboxStore.Add(notification);
+                // → All persisted atomically by CommitAsync in TransactionBehavior
+            }
+        }
+        finally
+        {
+            _isDispatching = false;
+        }
+    }
+}
+```
+
+---
+
+## TransactionBehavior — Final Implementation
+
+```csharp
+// MicroKit.MediatR.Behaviors — PipelineOrder 700 (after Retry)
 public sealed class TransactionBehavior<TRequest, TResponse>(
     ITransactionalContext transactionalContext,
-    IDomainEventsProvider domainEventsProvider,
     IDomainEventDispatcher domainEventDispatcher,
     IUnitOfWork unitOfWork)
-    : BehaviorBase<TRequest, TResponse>           // ✅ BehaviorBase, not IPipelineBehavior
+    : BehaviorBase<TRequest, TResponse>
     where TRequest : IRequest<TResponse>
 {
     public override int Order => PipelineOrder.Transaction; // 700
 
-    public override async ValueTask<TResponse> Handle( // ✅ ValueTask, not Task
+    public override async ValueTask<TResponse> Handle(
         TRequest request,
         RequestHandlerDelegate<TResponse> next,
         CancellationToken cancellationToken)
     {
-        // Only wrap commands — queries are read-only, bypass transaction
         if (request is not ICommand)
             return await next().ConfigureAwait(false);
 
-        var state = new TransactionState(next, domainEventsProvider, domainEventDispatcher, unitOfWork);
+        var state = new TransactionState(next, domainEventDispatcher, unitOfWork);
 
         await transactionalContext.ExecuteAsync(
-            static async (st, ct) => await InvokeCommandAsync(st, ct).ConfigureAwait(false),
+            static async (st, ct) => await ExecuteCommandAsync(st, ct).ConfigureAwait(false),
             state,
             cancellationToken).ConfigureAwait(false);
 
         return state.Response!;
     }
 
-    private static async ValueTask InvokeCommandAsync(TransactionState state, CancellationToken ct)
+    private static async Task ExecuteCommandAsync(TransactionState state, CancellationToken ct)
     {
+        // Execute the command handler
         state.Response = await state.Next().ConfigureAwait(false);
 
-        // Recursive domain event drain
-        while (true)
-        {
-            var events = state.DomainEventsProvider.GetAllDomainEvents();
-            if (events.Count == 0) break;
-            state.DomainEventsProvider.ClearAllDomainEvents();
-            await state.Dispatcher.DispatchAsync(events, ct).ConfigureAwait(false);
-        }
+        // Dispatch domain events — recursive drain + outbox fill
+        await state.Dispatcher.DispatchEventsAsync(ct).ConfigureAwait(false);
 
-        await state.UnitOfWork.SaveChangesAsync(ct).ConfigureAwait(false);
+        // Single commit — aggregates + outbox messages atomic
+        await state.UnitOfWork.CommitAsync(ct).ConfigureAwait(false);
     }
 
     // Closure-free state carrier — avoids heap allocation per pipeline invocation
     private sealed class TransactionState(
         RequestHandlerDelegate<TResponse> next,
-        IDomainEventsProvider domainEventsProvider,
         IDomainEventDispatcher dispatcher,
         IUnitOfWork unitOfWork)
     {
         public RequestHandlerDelegate<TResponse> Next { get; } = next;
-        public IDomainEventsProvider DomainEventsProvider { get; } = domainEventsProvider;
         public IDomainEventDispatcher Dispatcher { get; } = dispatcher;
         public IUnitOfWork UnitOfWork { get; } = unitOfWork;
         public TResponse? Response { get; set; }
@@ -365,38 +282,60 @@ public sealed class TransactionBehavior<TRequest, TResponse>(
 }
 ```
 
-### PipelineOrder for TransactionBehavior
+---
+
+## ITransactionalContext — Correct Signature
 
 ```csharp
-// Add to PipelineOrder.cs when implementing:
-public const int Transaction = 700; // After Retry(600), wraps the full command execution
+// MicroKit.Persistence.Abstractions
+// ExecuteAsync<TState> pattern — closure-free, EF Core ExecutionStrategy compatible
+public interface ITransactionalContext
+{
+    Task ExecuteAsync<TState>(
+        Func<TState, CancellationToken, Task> operation,
+        TState state,
+        CancellationToken ct = default);
+}
 ```
 
-### Open Questions for v2 Implementation
+> **Note:** Current implementation in MicroKit.Persistence.Abstractions uses
+> Begin/Commit/Rollback methods — must be updated to this signature before
+> TransactionBehavior implementation.
 
-1. **Infinite loop guard** — what if a DomainEventHandler always raises a new event?
-   Add a `maxDrainIterations` limit (default: 10) with a clear exception message.
+---
 
-2. **Partial failure** — if `DispatchAsync` fails mid-drain, some events were dispatched
-   and some weren't. The transaction rollback handles DB state, but in-memory state
-   of `IDomainEventsProvider` may be inconsistent. Needs investigation.
+## Required Changes to Existing Implementations
 
-3. **`ITransactionalContext` contract** — to be defined in `MicroKit.Persistence.Abstractions`.
-   Must support `ExecuteAsync<TState>(Func<TState, CancellationToken, ValueTask>, TState, CancellationToken)`.
+### MicroKit.Persistence.Abstractions
+- [ ] `ITransactionalContext` — replace Begin/Commit/Rollback with `ExecuteAsync<TState>`
+- [ ] `IOutboxStore` — add `void Add(INotification notification)`
+
+### MicroKit.MediatR.Abstractions
+- [ ] `IDomainEventDispatcher` — change signature to `DispatchEventsAsync(CancellationToken)`
+- [ ] `INotificationFactory` — new interface
+
+### MicroKit.Persistence.EntityFrameworkCore
+- [ ] `DomainEventsDispatcher` — implement 4-phase loop with reentrancy guard
+- [ ] `EfOutboxStore` — implement `IOutboxStore` via DbSet change tracker
+
+### MicroKit.MediatR.Behaviors
+- [ ] `TransactionBehavior` — implement with `ExecuteAsync<TState>` + `TransactionState`
+- [ ] `PipelineOrder.Transaction = 700` — add constant
 
 ---
 
 ## Scope Visualization
 
 ```
-🔵 BLUE  = Business transaction (synchronous, atomic)
+🔵 BLUE   = Business transaction (synchronous, atomic — same DbContext)
 🟠 ORANGE = Async application processing (eventually consistent)
-🔴 RED   = External distributed messaging (at-least-once)
+🔴 RED    = External distributed messaging (at-least-once)
 
-Level 1: DomainEvent              🔵 Business transaction
-Level 2: DomainEventHandler       🔵 Intra-domain consistency (same DbContext)
-Level 3: DomainEventNotification  🔵→🟠 Bridge (Outbox persisted in transaction, processed async)
-Level 4: NotificationHandler      🟠 Application orchestration
-Level 5: IntegrationMessage       🟠→🔴 Bridge (persisted, then published)
-Level 6: BrokerWorker             🔴 External transport
+Level 1: DomainEvent              🔵 raised during handler
+Level 2: DomainEventHandler       🔵 intra-domain side effects
+Level 3: DomainEventNotification  🔵 added to Outbox in same transaction
+Level 4: OutboxWorker             🟠 reads + publishes async
+Level 5: NotificationHandler      🟠 application orchestration
+Level 6: IntegrationMessage       🟠→🔴 bridge
+Level 7: BrokerWorker             🔴 external transport
 ```

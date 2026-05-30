@@ -1,44 +1,31 @@
 namespace MicroKit.Persistence.Abstractions;
 
 /// <summary>
-/// Provides ambient database transaction management for cross-aggregate operations
-/// that require all-or-nothing semantics.
+/// Executes a database operation inside an explicit database transaction.
+/// Begin, Commit, and Rollback are managed internally by the implementation.
 /// </summary>
 /// <remarks>
-/// <see cref="ITransactionalContext"/> is consumed by <c>TransactionBehavior</c> in
-/// <c>MicroKit.MediatR.Behaviors</c>, which automatically wraps <c>ICommand</c> handlers
-/// in a database transaction. It is also available for direct injection in command handlers
-/// that require explicit multi-aggregate transaction control.
-/// <para>
-/// Implementations must clean up the underlying transaction on disposal via
-/// <see cref="IAsyncDisposable.DisposeAsync"/>. Disposing an uncommitted context
-/// performs a rollback.
-/// </para>
+/// Consumed by <c>TransactionBehavior</c> in <c>MicroKit.MediatR.Behaviors</c>, which wraps
+/// <c>ICommand</c> handlers automatically. The <c>ExecuteAsync&lt;TState&gt;</c> pattern
+/// is closure-free and compatible with EF Core's execution-strategy retry mechanism.
 /// </remarks>
-public interface ITransactionalContext : IAsyncDisposable
+public interface ITransactionalContext
 {
     /// <summary>
-    /// Begins an explicit database transaction.
+    /// Executes <paramref name="operation"/> inside a database transaction.
+    /// The implementation begins a transaction, invokes the operation, commits on success,
+    /// and rolls back on failure. Transient-failure retry is handled transparently when
+    /// supported by the provider (e.g., Npgsql, SQL Server execution strategies).
     /// </summary>
+    /// <typeparam name="TState">
+    /// The type of caller-owned state threaded through to <paramref name="operation"/>.
+    /// Using a state carrier avoids lambda closures and heap allocations on the hot path.
+    /// </typeparam>
+    /// <param name="operation">The work to execute inside the transaction.</param>
+    /// <param name="state">State passed to <paramref name="operation"/> on each attempt.</param>
     /// <param name="ct">Propagates notification that operations should be cancelled.</param>
-    /// <returns>
-    /// An <see cref="ITransaction"/> representing the active transaction.
-    /// The caller is responsible for committing or rolling back.
-    /// </returns>
-    ValueTask<ITransaction> BeginTransactionAsync(CancellationToken ct = default);
-
-    /// <summary>
-    /// Commits the current explicit transaction, persisting all pending changes.
-    /// </summary>
-    /// <param name="ct">Propagates notification that operations should be cancelled.</param>
-    /// <exception cref="PersistenceException">
-    /// Thrown when the underlying provider fails to commit.
-    /// </exception>
-    ValueTask CommitTransactionAsync(CancellationToken ct = default);
-
-    /// <summary>
-    /// Rolls back the current explicit transaction, discarding all pending changes.
-    /// </summary>
-    /// <param name="ct">Propagates notification that operations should be cancelled.</param>
-    ValueTask RollbackTransactionAsync(CancellationToken ct = default);
+    Task ExecuteAsync<TState>(
+        Func<TState, CancellationToken, Task> operation,
+        TState state,
+        CancellationToken ct = default);
 }

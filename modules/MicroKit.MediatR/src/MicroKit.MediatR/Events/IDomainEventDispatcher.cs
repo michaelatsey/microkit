@@ -1,25 +1,25 @@
 namespace MicroKit.MediatR;
 
 /// <summary>
-/// Publishes domain events from command handlers without coupling them to <c>IMediator</c>.
-/// Inject this interface into command handlers — never inject <c>IMediator</c> directly.
+/// Drains all domain events accumulated on aggregates and dispatches them through the
+/// 4-phase loop: GetAndClear → resolve notifications → publish → add to outbox.
 /// </summary>
 /// <remarks>
-/// Publish events <b>after</b> persistence — the event is a fait accompli.
-/// The dispatcher wraps the event in its registered notification type and dispatches
-/// it via MediatR's publish pipeline. Notification mapping is built at DI startup.
+/// Called by <c>TransactionBehavior</c> after the command handler completes, before
+/// <c>IUnitOfWork.CommitAsync</c> — ensuring domain events and their outbox entries
+/// are persisted atomically with the aggregate changes.
+/// <para>
+/// Command handlers must <b>not</b> call this interface directly. Domain events should
+/// be accumulated on aggregates via <c>IDomainEventsProvider</c>; the dispatcher is
+/// invoked by the pipeline behavior.
+/// </para>
 /// </remarks>
 public interface IDomainEventDispatcher
 {
     /// <summary>
-    /// Wraps <paramref name="domainEvent"/> in its registered <see cref="DomainEventNotification{TEvent}"/>
-    /// subclass and publishes it to all registered handlers.
+    /// Dispatches all accumulated domain events in a recursive drain loop.
+    /// Continues until no new events are raised by domain event handlers.
     /// </summary>
-    /// <param name="domainEvent">The domain event that occurred. Must have a registered notification type.</param>
     /// <param name="ct">Propagates notification that operations should be cancelled.</param>
-    /// <exception cref="InvalidOperationException">
-    /// Thrown when no <see cref="DomainEventNotification{TEvent}"/> is registered for the event type.
-    /// </exception>
-    /// <returns>A <see cref="ValueTask"/> representing the asynchronous publish operation.</returns>
-    ValueTask PublishAsync(IEvent domainEvent, CancellationToken ct = default);
+    Task DispatchEventsAsync(CancellationToken ct = default);
 }

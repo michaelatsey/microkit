@@ -21,3 +21,4 @@ artifacts/
 .claude/CONTEXT-DEV.md
 .gitignore
 .claude/SESSION-MICROKIT-LOGGING.md
+.claude-context/sessions/

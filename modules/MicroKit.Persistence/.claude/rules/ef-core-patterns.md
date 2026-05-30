@@ -72,7 +72,7 @@ public sealed class EfSpecificationEvaluator : ISpecificationEvaluator
             query = query.AsSplitQuery();
 
         if (opts.Pagination is { } p)
-            query = query.Skip((p.Page - 1) * p.PageSize).Take(p.PageSize);
+            query = query.Skip(p.Skip).Take(p.PageSize);  // p.Skip = (p.Page - 1) * p.PageSize
 
         return query;
     }
@@ -133,7 +133,10 @@ public sealed class EfUnitOfWork(AppDbContext ctx) : ITransactionalUnitOfWork
     }
 
     public async ValueTask RollbackTransactionAsync(CancellationToken ct = default)
-        => await _currentTransaction!.RollbackAsync(ct).ConfigureAwait(false);
+    {
+        if (_currentTransaction is not null)
+            await _currentTransaction.RollbackAsync(ct).ConfigureAwait(false);
+    }
 
     public async ValueTask DisposeAsync()
     {

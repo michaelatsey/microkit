@@ -7,6 +7,10 @@
   </PropertyGroup>
   <!-- Cross-module references: ProjectReference in dev/CI builds, PackageReference when packing for release.
        Set CIReleaseBuild=true on the `dotnet pack` step to emit correct nuspec dependencies. -->
+  <ItemGroup>
+    <!-- MediatR.Contracts provides INotification, required by IOutboxStore. -->
+    <PackageReference Include="MediatR.Contracts" />
+  </ItemGroup>
   <ItemGroup Condition="'$(CIReleaseBuild)' != 'true'">
     <ProjectReference Include="../../../MicroKit.Result/src/MicroKit.Result/MicroKit.Result.csproj" />
     <ProjectReference Include="../../../MicroKit.Domain/src/MicroKit.Domain/MicroKit.Domain.csproj" />

@@ -7,8 +7,7 @@ namespace MicroKit.Persistence.Abstractions;
 /// Implementations wrap the underlying provider transaction
 /// (e.g., <c>IDbContextTransaction</c> in EF Core).
 /// <see cref="IAsyncDisposable"/> ensures rollback on unhandled exceptions
-/// when used with <c>await using</c>: disposing without calling
-/// <see cref="ITransactionalContext.CommitTransactionAsync"/> performs a rollback.
+/// when used with <c>await using</c> — disposing an uncommitted transaction performs a rollback.
 /// </remarks>
 public interface ITransaction : IAsyncDisposable
 {

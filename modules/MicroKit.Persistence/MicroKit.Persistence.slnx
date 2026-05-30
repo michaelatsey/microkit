@@ -2,5 +2,6 @@
   <Folder Name="/src/">
     <Project Path="src/MicroKit.Persistence.Abstractions/MicroKit.Persistence.Abstractions.csproj" />
     <Project Path="src/MicroKit.Persistence/MicroKit.Persistence.csproj" />
+    <Project Path="src/MicroKit.Persistence.EntityFrameworkCore/MicroKit.Persistence.EntityFrameworkCore.csproj" />
   </Folder>
 </Solution>
