@@ -1,0 +1,16 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <AssemblyName>MicroKit.Persistence</AssemblyName>
+    <RootNamespace>MicroKit.Persistence</RootNamespace>
+    <Description>Core persistence layer for MicroKit — QueryOptions, ISpecificationEvaluator, full IReadRepository contract, and PagedResult. No EF Core, no DI dependency.</Description>
+    <PackageTags>persistence;repository;query-options;specification;microkit;ddd;dotnet</PackageTags>
+  </PropertyGroup>
+  <!-- Cross-module references: ProjectReference in dev/CI builds, PackageReference when packing for release.
+       Set CIReleaseBuild=true on the `dotnet pack` step to emit correct nuspec dependencies. -->
+  <ItemGroup Condition="'$(CIReleaseBuild)' != 'true'">
+    <ProjectReference Include="..\MicroKit.Persistence.Abstractions\MicroKit.Persistence.Abstractions.csproj" />
+  </ItemGroup>
+  <ItemGroup Condition="'$(CIReleaseBuild)' == 'true'">
+    <PackageReference Include="MicroKit.Persistence.Abstractions" />
+  </ItemGroup>
+</Project>

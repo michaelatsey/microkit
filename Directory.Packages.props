@@ -16,6 +16,7 @@
     <PackageVersion Include="MicroKit.Result" Version="1.0.0-preview.1" />
     <PackageVersion Include="MicroKit.Domain" Version="1.0.0-preview.1" />
     <PackageVersion Include="MicroKit.Logging.Abstractions" Version="1.0.0-preview.1" />
+    <PackageVersion Include="MicroKit.Persistence.Abstractions" Version="1.0.0-preview.1" />
   </ItemGroup>
   <ItemGroup Label="MediatR">
     <PackageVersion Include="MediatR" Version="12.4.1" />
