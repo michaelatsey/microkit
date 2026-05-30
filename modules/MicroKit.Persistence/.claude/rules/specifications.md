@@ -61,16 +61,31 @@ public sealed class EfSpecificationEvaluator : ISpecificationEvaluator { ... }
 The `Specifications` package provides QueryOptions extensions and composition helpers:
 
 ```csharp
-// ✅ Fluent extensions (in Specifications package)
-opts.OrderBy(u => u.CreatedAt)
-opts.OrderByDescending(u => u.Email)
-opts.ThenBy(u => u.LastName)
+// ✅ Ordering extensions (in Specifications package) — use With- prefix
+opts.WithOrderBy(u => u.CreatedAt)
+opts.WithOrderByDescending(u => u.Email)
+opts.WithThenBy(u => u.LastName)
+opts.WithThenByDescending(u => u.CreatedAt)
 
-// ✅ Spec composition helpers
+// ✅ Specification-swap extension (in Specifications package)
+opts.WithSpec(new ActiveUserSpec())
+
+// ✅ Spec composition helpers — built into Specification<T> in MicroKit.Domain
 new ActiveUserSpec().And(new UserByEmailSpec(email))
 new ActiveUserSpec().Or(new AdminUserSpec())
 new ActiveUserSpec().Not()
 ```
+
+> **Why `With-` prefix for ordering?**  
+> `QueryOptions<T>` exposes a delegate property named `OrderBy`
+> (`Func<IQueryable<T>, IOrderedQueryable<T>>?`). When both the Core and Specifications
+> namespaces are in scope, C# resolves `opts.OrderBy(lambda)` as a **delegate invocation
+> on the property**, not as the extension method — because instance member access takes
+> precedence over extension method lookup. The call then fails to compile because
+> `lambda` cannot be converted to `IQueryable<T>` (the property's parameter type).
+> The `With-` prefix (`WithOrderBy`, `WithOrderByDescending`, `WithThenBy`,
+> `WithThenByDescending`) sidesteps this collision entirely and is consistent with
+> Core's existing builder convention: `WithIncludes`, `WithPagination`, `WithTracking`.
 
 ## Rules
 
