@@ -1,0 +1,18 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <AssemblyName>MicroKit.Persistence.Abstractions</AssemblyName>
+    <RootNamespace>MicroKit.Persistence.Abstractions</RootNamespace>
+    <Description>Repository, Unit of Work, and transaction contracts for MicroKit.Persistence. Zero implementation — no EF Core, no infrastructure dependency.</Description>
+    <PackageTags>persistence;repository;unit-of-work;transactions;microkit;ddd;dotnet;abstractions</PackageTags>
+  </PropertyGroup>
+  <!-- Cross-module references: ProjectReference in dev/CI builds, PackageReference when packing for release.
+       Set CIReleaseBuild=true on the `dotnet pack` step to emit correct nuspec dependencies. -->
+  <ItemGroup Condition="'$(CIReleaseBuild)' != 'true'">
+    <ProjectReference Include="../../../MicroKit.Result/src/MicroKit.Result/MicroKit.Result.csproj" />
+    <ProjectReference Include="../../../MicroKit.Domain/src/MicroKit.Domain/MicroKit.Domain.csproj" />
+  </ItemGroup>
+  <ItemGroup Condition="'$(CIReleaseBuild)' == 'true'">
+    <PackageReference Include="MicroKit.Result" />
+    <PackageReference Include="MicroKit.Domain" />
+  </ItemGroup>
+</Project>

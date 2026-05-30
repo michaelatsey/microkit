@@ -10,7 +10,7 @@ namespace MicroKit.Domain.Aggregates;
 /// Manages domain events and serves as consistency boundary.
 /// </summary>
 /// <typeparam name="TId">The strongly-typed identifier type</typeparam>
-public abstract class AggregateRoot<TId> : Entity<TId>, IDomainEventsProvider
+public abstract class AggregateRoot<TId> : Entity<TId>, IDomainEventsProvider, IAggregateRoot
     where TId : IEntityId
 {
     private readonly List<IDomainEvent> _domainEvents = [];
