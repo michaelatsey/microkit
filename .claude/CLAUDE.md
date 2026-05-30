@@ -21,7 +21,7 @@ Ce fichier racine donne la vision globale et les conventions transversales.
 | **MicroKit.Result** | `modules/MicroKit.Result/` | `modules/MicroKit.Result/.claude/` | ✅ Released 1.0.0-preview.1 |
 | **MicroKit.Domain** | `modules/MicroKit.Domain/` | `modules/MicroKit.Domain/.claude/` | ✅ Released 1.0.0-preview.1 |
 | **MicroKit.Logging** | `modules/MicroKit.Logging/` | `modules/MicroKit.Logging/.claude/` | ✅ Released 1.0.0-preview.1 |
-| **MicroKit.MediatR** | `modules/MicroKit.MediatR/` | `modules/MicroKit.MediatR/.claude/` | 🔄 En cours (Abstractions ✅, Core ✅, Behaviors 🔄 5/6, Testing ⬜) |
+| **MicroKit.MediatR** | `modules/MicroKit.MediatR/` | `modules/MicroKit.MediatR/.claude/` | ✅ Released 1.0.0-preview.1 |
 | **MicroKit.Messaging** | `modules/MicroKit.Messaging/` | `modules/MicroKit.Messaging/.claude/` | 📋 Planifié |
 | **MicroKit.Persistence** | `modules/MicroKit.Persistence/` | `modules/MicroKit.Persistence/.claude/` | 📋 Planifié |
 | **MicroKit.Caching** | `modules/MicroKit.Caching/` | `modules/MicroKit.Caching/.claude/` | 📋 Planifié |
@@ -56,12 +56,14 @@ MicroKit/
 │
 ├── .github/
 │   ├── workflows/
-│   │   ├── ci.yml                    ← build + test sur PR (tous modules)
-│   │   ├── release.yml               ← publish NuGet sur tag
-│   │   ├── ci-result.yml             ← CI spécifique MicroKit.Result
-│   │   ├── ci-domain.yml             ← CI spécifique MicroKit.Domain
-│   │   ├── ci-logging.yml            ← CI spécifique MicroKit.Logging
-│   │   └── ci-[module].yml           ← CI par module (changeset detection)
+│   │   ├── ci-domain.yml             ← CI MicroKit.Domain
+│   │   ├── ci-result.yml             ← CI MicroKit.Result
+│   │   ├── ci-logging.yml            ← CI MicroKit.Logging
+│   │   ├── ci-mediatr.yml            ← CI MicroKit.MediatR
+│   │   ├── release-domain.yml
+│   │   ├── release-result.yml
+│   │   ├── release-logging.yml
+│   │   └── release-mediatr.yml
 │   ├── CODEOWNERS
 │   └── pull_request_template.md
 │
@@ -71,14 +73,6 @@ MicroKit/
 │   ├── Directory.Packages.props      ← NuGet Central Package Management
 │   └── version.json                  ← Nerdbank.GitVersioning config
 │
-├── eng/
-│   ├── scripts/
-│   │   ├── build-all.ps1
-│   │   ├── test-all.ps1
-│   │   └── pack-all.ps1
-│   └── analyzers/
-│       └── MicroKit.Analyzers.props  ← analyzers partagés (Roslynator, etc.)
-│
 ├── modules/
 │   ├── MicroKit.Result/
 │   ├── MicroKit.Domain/
@@ -86,16 +80,7 @@ MicroKit/
 │   ├── MicroKit.MediatR/
 │   └── ...
 │
-├── docs/
-│   ├── architecture/
-│   │   ├── overview.md               ← vue d'ensemble de l'écosystème
-│   │   ├── module-dependencies.md    ← graphe de dépendances inter-modules
-│   │   └── design-decisions/         ← ADRs (Architecture Decision Records)
-│   └── guides/
-│       ├── getting-started.md
-│       └── contributing.md
-│
-├── .editorconfig                     ← style partagé tous modules
+├── .editorconfig
 ├── .gitignore
 ├── global.json                       ← SDK .NET version fixée
 ├── MicroKit.slnx                     ← solution racine (tous modules)
@@ -110,7 +95,6 @@ modules/MicroKit.[Module]/
 │   ├── standards/
 │   ├── templates/
 │   └── context/
-├── docs/
 ├── src/
 │   ├── MicroKit.[Module].Abstractions/   ← contrats purs, zéro dépendance tierce
 │   ├── MicroKit.[Module]/                ← implémentation core
@@ -124,7 +108,6 @@ modules/MicroKit.[Module]/
 │   └── MicroKit.[Module].PerformanceTests/
 ├── samples/
 ├── benchmarks/
-├── build/
 ├── README.md
 └── MicroKit.[Module].slnx
 ```
@@ -137,7 +120,7 @@ modules/MicroKit.[Module]/
 ```
 MicroKit.Domain          ← aucune dépendance sur les autres modules
 MicroKit.Result          ← aucune dépendance sur les autres modules
-MicroKit.Logging         ← peut dépendre de Result (ADR-006: ne dépend PAS de Result — permanent)
+MicroKit.Logging         ← ADR-006: ne dépend PAS de Result (permanent)
 MicroKit.Observability   ← peut dépendre de Result, Logging
 MicroKit.Auth            ← peut dépendre de Result, Domain
 MicroKit.Caching         ← peut dépendre de Result
@@ -153,27 +136,28 @@ MicroKit.Multitenancy    ← peut dépendre de Result, Auth, Persistence
 > Les dépendances circulaires entre modules sont **interdites**.
 > Toute nouvelle dépendance inter-module nécessite une mise à jour de ce graphe.
 
+### Pattern cross-module pour NuGet publish (CIReleaseBuild)
+Les ProjectReferences cross-module dans les `.csproj` sont conditionnelles :
+```xml
+<!-- Local dev -->
+<ProjectReference Condition="'$(CIReleaseBuild)' != 'true'" Include="..." />
+<!-- NuGet publish -->
+<PackageReference Condition="'$(CIReleaseBuild)' == 'true'" Include="MicroKit.Result" />
+```
+Les workflows `release-*.yml` passent `-p:CIReleaseBuild=true` pour résoudre les packages publiés.
+
 ---
 
 ## 🔢 Versioning — Nerdbank.GitVersioning
 
 Chaque module est versionné **indépendamment** via `version.json` dans son répertoire.
 
-```json
-// modules/MicroKit.Result/version.json
-{
-  "version": "1.0",
-  "publicReleaseRefSpec": ["^refs/heads/main$", "^refs/tags/result-v\\d+\\.\\d+"],
-  "cloudBuild": { "setVersionVariables": true }
-}
-```
-
 ### Convention de tags Git pour les releases
 ```
-result-v1.2.0          → release MicroKit.Result 1.2.0
-mediatr-v1.0.0         → release MicroKit.MediatR 1.0.0
-domain-v1.0.0-beta.1   → pre-release MicroKit.Domain
-logging-v1.0.0         → release MicroKit.Logging 1.0.0
+result-v1.0.0-preview.1   → release MicroKit.Result
+domain-v1.0.0-preview.1   → release MicroKit.Domain
+logging-v1.0.0-preview.1  → release MicroKit.Logging
+mediatr-v1.0.0-preview.1  → release MicroKit.MediatR
 ```
 
 ### Branches
@@ -188,9 +172,7 @@ release/*         ← préparation de release (release/result-1.2)
 
 ## 🏗️ Build partagé — Directory.Build.props
 
-Propriétés appliquées à **tous** les projets du monorepo :
 ```xml
-<!-- Voir build/Directory.Build.props pour le détail -->
 Nullable: enable
 ImplicitUsings: enable
 LangVersion: latest
@@ -201,45 +183,7 @@ NuGet: Central Package Management via Directory.Packages.props
 
 ---
 
-## 🤖 CI/CD — GitHub Actions
-
-### Workflow principal (`ci.yml`)
-- Déclenché sur : PR vers `main` ou `dev`
-- Détecte les modules modifiés (changeset)
-- Lance uniquement les tests des modules impactés + leurs dépendants
-- Publie les résultats de coverage (Codecov)
-
-### Workflow de release (`release.yml`)
-- Déclenché sur : push de tag `[module]-v*`
-- Build + test + pack + push NuGet
-- Génère les release notes depuis CHANGELOG.md
-
-### Convention de PR
-```
-feat(result): add EnsureAsync overload
-fix(mediatr): correct pipeline order with custom behaviors
-chore(build): update Directory.Packages.props
-docs(domain): add aggregate root design guide
-```
-
----
-
 ## ✅ Conventions globales (valables pour tous les modules)
-
-### Ce qui EST défini ici (global)
-- Versioning et tags Git
-- Structure des modules (imposée)
-- Propriétés MSBuild partagées
-- Conventions de nommage des packages NuGet
-- Format des PRs et commits (Conventional Commits)
-- Politique de dépendances inter-modules
-- **Bibliothèque d'assertions : Shouldly (MIT) — voir `.claude/rules/testing-libraries.md`**
-
-### Ce qui EST défini dans chaque module (local)
-- Philosophie et patterns spécifiques au module
-- Agents, commands, rules, skills propres
-- Décisions d'API et de conception
-- Dépendances NuGet spécifiques
 
 ### Règles non négociables (tous modules)
 - `sealed record` pour erreurs/VO/events | `sealed class` pour handlers/behaviors
@@ -250,28 +194,37 @@ docs(domain): add aggregate root design guide
 - Tests : `GenerateDocumentationFile=false` + `NoWarn CS1591;CA1707`
 - CPM : toutes les versions dans `Directory.Packages.props` racine
 - **`Shouldly` (MIT) obligatoire** — FluentAssertions INTERDIT (licence commerciale Xceed v8+)
-- **NSubstitute** pour les mocks — Moq DÉCONSEILLÉ
-- **NetArchTest** pour les tests d'architecture
+- **`NSubstitute`** pour les mocks
+- **`NetArchTest`** pour les tests d'architecture
+- `.claude/` complet AVANT toute implémentation
+
+### Conventions de commit
+```
+feat(result): add EnsureAsync overload
+fix(mediatr): correct pipeline order with custom behaviors
+chore(build): update Directory.Packages.props
+docs(domain): add aggregate root design guide
+```
 
 ### Nommage des packages NuGet publiés
 ```
-MicroKit.Result
-MicroKit.Result.AspNetCore
-MicroKit.Domain
-MicroKit.Logging
-MicroKit.Logging.Abstractions
-MicroKit.Logging.OpenTelemetry
-MicroKit.Logging.AspNetCore
-MicroKit.Logging.Diagnostics
-MicroKit.Logging.Analyzers
-MicroKit.Logging.Generators
-MicroKit.MediatR
-MicroKit.MediatR.Behaviors
-MicroKit.MediatR.Testing
-MicroKit.Persistence
-MicroKit.Persistence.EntityFramework
-MicroKit.Messaging
-MicroKit.Messaging.AzureServiceBus
-MicroKit.Messaging.RabbitMQ
-...
+MicroKit.Result                      ✅ 1.0.0-preview.1
+MicroKit.Result.AspNetCore           ✅ 1.0.0-preview.1
+MicroKit.Domain                      ✅ 1.0.0-preview.1
+MicroKit.Logging                     ✅ 1.0.0-preview.1
+MicroKit.Logging.Abstractions        ✅ 1.0.0-preview.1
+MicroKit.Logging.OpenTelemetry       ✅ 1.0.0-preview.1
+MicroKit.Logging.AspNetCore          ✅ 1.0.0-preview.1
+MicroKit.Logging.Diagnostics         ✅ 1.0.0-preview.1
+MicroKit.Logging.Analyzers           ✅ 1.0.0-preview.1
+MicroKit.Logging.Generators          ✅ 1.0.0-preview.1
+MicroKit.MediatR                     ✅ 1.0.0-preview.1
+MicroKit.MediatR.Abstractions        ✅ 1.0.0-preview.1
+MicroKit.MediatR.Behaviors           ✅ 1.0.0-preview.1
+MicroKit.MediatR.Testing             ✅ 1.0.0-preview.1
+MicroKit.Persistence                 📋 planifié
+MicroKit.Persistence.EntityFramework 📋 planifié
+MicroKit.Messaging                   📋 planifié
+MicroKit.Messaging.AzureServiceBus   📋 planifié
+MicroKit.Messaging.RabbitMQ          📋 planifié
 ```
