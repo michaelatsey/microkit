@@ -1,0 +1,23 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <AssemblyName>MicroKit.Persistence.Testing</AssemblyName>
+    <RootNamespace>MicroKit.Persistence.Testing</RootNamespace>
+    <Description>In-memory IRepository / IReadRepository / IUnitOfWork test doubles for MicroKit.Persistence — unit-test command and query handlers with no database, EF Core, or DI container.</Description>
+    <PackageTags>persistence;testing;repository;unit-of-work;in-memory;microkit;ddd;dotnet</PackageTags>
+    <!-- Test helper — uses reflection and AsQueryable; not intended for AOT/trimmed deployments -->
+    <IsTrimmable>false</IsTrimmable>
+    <NoWarn>$(NoWarn);IL2026;IL2090</NoWarn>
+  </PropertyGroup>
+
+  <!-- Core: project ref for local dev; package ref when building for NuGet release -->
+  <ItemGroup Condition="'$(CIReleaseBuild)' != 'true'">
+    <ProjectReference Include="..\MicroKit.Persistence\MicroKit.Persistence.csproj" />
+  </ItemGroup>
+  <ItemGroup Condition="'$(CIReleaseBuild)' == 'true'">
+    <PackageReference Include="MicroKit.Persistence" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="NSubstitute" />
+  </ItemGroup>
+</Project>
