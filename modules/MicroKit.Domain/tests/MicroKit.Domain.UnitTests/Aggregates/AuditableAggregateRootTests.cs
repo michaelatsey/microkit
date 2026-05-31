@@ -1,7 +1,7 @@
-using FluentAssertions;
 using MicroKit.Domain.Aggregates;
 using MicroKit.Domain.Events;
 using MicroKit.Domain.Identifiers;
+using Shouldly;
 using Xunit;
 
 namespace MicroKit.Domain.UnitTests.Aggregates;
@@ -20,11 +20,10 @@ public class AuditableAggregateRootTests
         var afterCreation = DateTimeOffset.UtcNow.AddMilliseconds(100);
 
         // Assert
-        aggregate.CreatedAt.Should().BeAfter(beforeCreation);
-        aggregate.CreatedAt.Should().BeBefore(afterCreation);
-        aggregate.UpdatedAt.Should().BeNull();
-        aggregate.CreatedBy.Should().BeNull();
-        aggregate.UpdatedBy.Should().BeNull();
+        aggregate.CreatedAt.ShouldBeInRange(beforeCreation, afterCreation);
+        aggregate.UpdatedAt.ShouldBeNull();
+        aggregate.CreatedBy.ShouldBeNull();
+        aggregate.UpdatedBy.ShouldBeNull();
     }
 
     [Fact]
@@ -34,7 +33,7 @@ public class AuditableAggregateRootTests
         var aggregate = new TestAuditableAggregateRoot(new TestAuditableId(Guid.NewGuid()));
 
         // Assert
-        aggregate.Should().BeAssignableTo<IAuditableEntity>();
+        aggregate.ShouldBeAssignableTo<IAuditableEntity>();
     }
 
     [Fact]
@@ -44,7 +43,7 @@ public class AuditableAggregateRootTests
         var aggregate = new TestAuditableAggregateRoot(new TestAuditableId(Guid.NewGuid()));
 
         // Assert
-        aggregate.Should().BeAssignableTo<AggregateRoot<TestAuditableId>>();
+        aggregate.ShouldBeAssignableTo<AggregateRoot<TestAuditableId>>();
     }
 
     [Fact]
@@ -57,7 +56,7 @@ public class AuditableAggregateRootTests
         var aggregate = new TestAuditableAggregateRoot(id);
 
         // Assert
-        aggregate.Id.Should().Be(id);
+        aggregate.Id.ShouldBe(id);
     }
 
     [Fact]
@@ -71,7 +70,7 @@ public class AuditableAggregateRootTests
         aggregate.TestRaiseEvent(new TestDomainEvent("Test"));
 
         // Assert
-        aggregate.DomainEvents.Should().HaveCount(1);
+        aggregate.DomainEvents.Count.ShouldBe(1);
     }
 
     [Fact]
@@ -87,10 +86,9 @@ public class AuditableAggregateRootTests
         var afterUpdate = DateTimeOffset.UtcNow.AddMilliseconds(100);
 
         // Assert
-        aggregate.UpdatedAt.Should().NotBeNull();
-        aggregate.UpdatedAt.Should().BeAfter(beforeUpdate);
-        aggregate.UpdatedAt.Should().BeBefore(afterUpdate);
-        aggregate.UpdatedBy.Should().Be("user123");
+        aggregate.UpdatedAt.ShouldNotBeNull();
+        aggregate.UpdatedAt!.Value.ShouldBeInRange(beforeUpdate, afterUpdate);
+        aggregate.UpdatedBy.ShouldBe("user123");
     }
 
     [Fact]
@@ -103,7 +101,7 @@ public class AuditableAggregateRootTests
         var aggregate = new TestAuditableAggregateRoot(id, "user456");
 
         // Assert
-        aggregate.CreatedBy.Should().Be("user456");
+        aggregate.CreatedBy.ShouldBe("user456");
     }
 }
 

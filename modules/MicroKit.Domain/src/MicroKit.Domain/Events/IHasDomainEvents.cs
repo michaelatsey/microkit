@@ -10,5 +10,5 @@ public interface IHasDomainEvents
     /// Gets the domain events that have been raised by this entity.
     /// Events represent facts about what has already happened in the domain.
     /// </summary>
-    IReadOnlyCollection<IDomainEvent> DomainEvents { get; }
+    IReadOnlyList<IDomainEvent> DomainEvents { get; }
 }

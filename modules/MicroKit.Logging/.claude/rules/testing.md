@@ -19,7 +19,8 @@
 ## Library Choices
 
 - **xUnit** — test framework (no NUnit, no MSTest)
-- **FluentAssertions** — all assertions (`result.Should().Be(...)` not `Assert.Equal(...)`)
+- **Shouldly** — all assertions (`result.ShouldBe(...)` not `Assert.Equal(...)`) — see root `.claude/rules/testing-libraries.md`
+- **FluentAssertions is banned** — commercial license (Xceed EULA) in v8+
 - **NSubstitute** — all mocks and stubs (no Moq)
 - **NetArchTest.Rules** — architecture tests only
 

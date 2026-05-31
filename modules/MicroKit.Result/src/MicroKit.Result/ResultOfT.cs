@@ -38,7 +38,6 @@ public readonly struct Result<T> : IEquatable<Result<T>>
 
     /// <summary>Gets a value indicating whether this result represents a success.</summary>
     [MemberNotNullWhen(true, nameof(Value))]
-    [MemberNotNullWhen(false, nameof(Error))]
     public bool IsSuccess
     {
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -46,12 +45,13 @@ public readonly struct Result<T> : IEquatable<Result<T>>
     }
 
     /// <summary>Gets a value indicating whether this result represents a failure.</summary>
-    [MemberNotNullWhen(false, nameof(Value))]
+    /// <remarks>Returns <see langword="false"/> for an uninitialized (<c>default</c>) result.
+    /// Accessing <see cref="Error"/> or <see cref="Value"/> on an uninitialized result throws <see cref="ResultException"/>.</remarks>
     [MemberNotNullWhen(true, nameof(Error))]
     public bool IsFailure
     {
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        get => _tag != TagSuccess;
+        get => _tag == TagFailure;
     }
 
     /// <summary>

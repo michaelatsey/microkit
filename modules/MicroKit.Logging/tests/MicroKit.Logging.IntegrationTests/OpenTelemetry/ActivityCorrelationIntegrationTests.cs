@@ -40,10 +40,10 @@ public sealed class ActivityCorrelationIntegrationTests : IDisposable
     {
         _logger.LogInformation("no span message");
 
-        _exported.Should().ContainSingle();
+        _exported.Count.ShouldBe(1);
         var record = _exported[0];
-        record.TraceId.Should().Be(default(ActivityTraceId));
-        record.SpanId.Should().Be(default(ActivitySpanId));
+        record.TraceId.ShouldBe(default(ActivityTraceId));
+        record.SpanId.ShouldBe(default(ActivitySpanId));
     }
 
     [Fact]
@@ -54,17 +54,17 @@ public sealed class ActivityCorrelationIntegrationTests : IDisposable
 
         using (var span = s_testSource.StartActivity("test-span"))
         {
-            span.Should().NotBeNull();
+            span.ShouldNotBeNull();
             expectedTraceId = span!.TraceId;
             expectedSpanId = span.SpanId;
 
             _logger.LogInformation("inside span");
         }
 
-        _exported.Should().ContainSingle();
+        _exported.Count.ShouldBe(1);
         var record = _exported[0];
-        record.TraceId.Should().Be(expectedTraceId);
-        record.SpanId.Should().Be(expectedSpanId);
+        record.TraceId.ShouldBe(expectedTraceId);
+        record.SpanId.ShouldBe(expectedSpanId);
     }
 
     [Fact]
@@ -74,10 +74,10 @@ public sealed class ActivityCorrelationIntegrationTests : IDisposable
 
         _logger.LogInformation("scoped message");
 
-        _exported.Should().ContainSingle();
-        _exported[0].Attributes.Should().NotBeNull()
-            .And.Contain(kv => kv.Key == LogPropertyNames.CorrelationId
-                            && kv.Value!.ToString() == "test-correlation-id");
+        _exported.Count.ShouldBe(1);
+        _exported[0].Attributes.ShouldNotBeNull();
+        _exported[0].Attributes!.ShouldContain(kv => kv.Key == LogPropertyNames.CorrelationId
+                        && kv.Value!.ToString() == "test-correlation-id");
     }
 
     [Fact]
@@ -87,31 +87,32 @@ public sealed class ActivityCorrelationIntegrationTests : IDisposable
         // The exported log record must carry the *child* span's ID (live Activity.Current),
         // not the stale parent snapshot from the MEL scope state.
         using var parentSpan = s_testSource.StartActivity("parent-span");
-        parentSpan.Should().NotBeNull();
+        parentSpan.ShouldNotBeNull();
 
         using (var scope = _scopeFactory.BeginOperationScope("corr-child-test"))
         {
             // Start child span — Activity.Current advances past the parent
             using var childSpan = s_testSource.StartActivity("child-span");
-            childSpan.Should().NotBeNull();
+            childSpan.ShouldNotBeNull();
 
             _logger.LogInformation("inside child span");
         }
 
-        _exported.Should().ContainSingle();
+        _exported.Count.ShouldBe(1);
         var record = _exported[0];
 
         // LogRecord.SpanId must match the child (not the parent that was snapshotted)
-        record.SpanId.Should().NotBe(parentSpan!.SpanId, "child span must win over stale snapshot");
+        record.SpanId.ShouldNotBe(parentSpan!.SpanId, "child span must win over stale snapshot");
 
         // MicroKitLogProcessor scrubs snapshot TraceId/SpanId from attributes when Activity is live
-        record.Attributes.Should().NotContain(kv => kv.Key == LogPropertyNames.TraceId,
+        var attrs = record.Attributes.ShouldNotBeNull();
+        attrs.ShouldNotContain(kv => kv.Key == LogPropertyNames.TraceId,
             "stale TraceId snapshot must be scrubbed from attributes");
-        record.Attributes.Should().NotContain(kv => kv.Key == LogPropertyNames.SpanId,
+        attrs.ShouldNotContain(kv => kv.Key == LogPropertyNames.SpanId,
             "stale SpanId snapshot must be scrubbed from attributes");
 
         // CorrelationId from MicroKit scope must still be present
-        record.Attributes.Should().Contain(kv =>
+        attrs.ShouldContain(kv =>
             kv.Key == LogPropertyNames.CorrelationId && kv.Value!.ToString() == "corr-child-test");
     }
 
@@ -124,8 +125,9 @@ public sealed class ActivityCorrelationIntegrationTests : IDisposable
 
         _logger.LogInformation("post-yield message");
 
-        _exported.Should().ContainSingle();
-        _exported[0].Attributes.Should().Contain(kv =>
+        _exported.Count.ShouldBe(1);
+        var attrs = _exported[0].Attributes.ShouldNotBeNull();
+        attrs.ShouldContain(kv =>
             kv.Key == LogPropertyNames.CorrelationId && kv.Value!.ToString() == "async-flow-test");
     }
 
@@ -152,7 +154,7 @@ public sealed class ActivityCorrelationIntegrationTests : IDisposable
             .Where(kv => kv.Key == LogPropertyNames.CorrelationId)
             .ToList();
 
-        correlationAttrs.Should().ContainSingle("double AddMicroKitOpenTelemetry must not duplicate CorrelationId");
+        correlationAttrs.Count.ShouldBe(1, "double AddMicroKitOpenTelemetry must not duplicate CorrelationId");
     }
 
     public void Dispose()

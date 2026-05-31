@@ -1,0 +1,14 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/MicroKit.Persistence.Abstractions/MicroKit.Persistence.Abstractions.csproj" />
+    <Project Path="src/MicroKit.Persistence/MicroKit.Persistence.csproj" />
+    <Project Path="src/MicroKit.Persistence.EntityFrameworkCore/MicroKit.Persistence.EntityFrameworkCore.csproj" />
+    <Project Path="src/MicroKit.Persistence.EntityFrameworkCore.PostgreSql/MicroKit.Persistence.EntityFrameworkCore.PostgreSql.csproj" />
+    <Project Path="src/MicroKit.Persistence.EntityFrameworkCore.SqlServer/MicroKit.Persistence.EntityFrameworkCore.SqlServer.csproj" />
+    <Project Path="src/MicroKit.Persistence.Specifications/MicroKit.Persistence.Specifications.csproj" />
+    <Project Path="src/MicroKit.Persistence.Testing/MicroKit.Persistence.Testing.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/MicroKit.Persistence.UnitTests/MicroKit.Persistence.UnitTests.csproj" />
+  </Folder>
+</Solution>

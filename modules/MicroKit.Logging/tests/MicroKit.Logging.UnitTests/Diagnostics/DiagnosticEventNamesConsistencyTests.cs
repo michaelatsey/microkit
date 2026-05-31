@@ -13,5 +13,5 @@ public sealed class DiagnosticEventNamesConsistencyTests
     [InlineData(DiagnosticEventNames.CorrelationResolved,  MicroKitDiagnosticSource.CorrelationResolved)]
     [InlineData(DiagnosticEventNames.CorrelationGenerated, MicroKitDiagnosticSource.CorrelationGenerated)]
     public void PublicEventName_MatchesCoreInternal(string publicName, string internalName)
-        => publicName.Should().Be(internalName);
+        => publicName.ShouldBe(internalName);
 }

@@ -37,5 +37,5 @@ public interface IDomainEventsProvider : IHasDomainEvents
     /// and ensure event integrity during the dispatch process.
     /// </para>
     /// </remarks>
-    IReadOnlyCollection<IDomainEvent> DrainDomainEvents();
+    IReadOnlyList<IDomainEvent> DrainDomainEvents();
 }

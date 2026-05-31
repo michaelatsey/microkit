@@ -1,6 +1,6 @@
-using FluentAssertions;
 using MicroKit.Domain.Exceptions;
 using MicroKit.Domain.ValueObjects.Common;
+using Shouldly;
 using Xunit;
 
 namespace MicroKit.Domain.UnitTests.ValueObjects.Common;
@@ -18,7 +18,7 @@ public class EmailTests
         var emailObj = new Email(email);
 
         // Assert
-        emailObj.Value.Should().Be(email.ToLowerInvariant());
+        emailObj.Value.ShouldBe(email.ToLowerInvariant());
     }
 
     [Theory]
@@ -31,7 +31,7 @@ public class EmailTests
         var email = new Email(input);
 
         // Assert
-        email.Value.Should().Be(expected);
+        email.Value.ShouldBe(expected);
     }
 
     [Theory]
@@ -41,9 +41,8 @@ public class EmailTests
     public void Constructor_InvalidEmail_ShouldThrowDomainException(string? email)
     {
         // Act & Assert
-        var act = () => new Email(email!);
-        act.Should().Throw<DomainException>()
-           .WithMessage("Email address cannot be null or empty.");
+        var ex = Should.Throw<DomainException>(() => new Email(email!));
+        ex.Message.ShouldBe("Email address cannot be null or empty.");
     }
 
     [Theory]
@@ -53,9 +52,8 @@ public class EmailTests
     public void Constructor_TooShortEmail_ShouldThrowDomainException(string email)
     {
         // Act & Assert
-        var act = () => new Email(email);
-        act.Should().Throw<DomainException>()
-           .WithMessage("Email address is too short.");
+        var ex = Should.Throw<DomainException>(() => new Email(email));
+        ex.Message.ShouldBe("Email address is too short.");
     }
 
     [Fact]
@@ -67,9 +65,8 @@ public class EmailTests
         var longEmail = $"{localPart}@{domainPart}"; // 50 + 1 + 204 = 255 characters > 254
 
         // Act & Assert
-        var act = () => new Email(longEmail);
-        act.Should().Throw<DomainException>()
-           .WithMessage("Email address is too long.");
+        var ex = Should.Throw<DomainException>(() => new Email(longEmail));
+        ex.Message.ShouldBe("Email address is too long.");
     }
 
     [Theory]
@@ -80,8 +77,7 @@ public class EmailTests
     public void Constructor_InvalidFormat_ShouldThrowDomainException(string email)
     {
         // Act & Assert
-        var act = () => new Email(email);
-        act.Should().Throw<DomainException>();
+        Should.Throw<DomainException>(() => new Email(email));
     }
 
     [Theory]
@@ -90,8 +86,7 @@ public class EmailTests
     public void Constructor_InvalidDomain_ShouldThrowDomainException(string email)
     {
         // Act & Assert
-        var act = () => new Email(email);
-        act.Should().Throw<DomainException>();
+        Should.Throw<DomainException>(() => new Email(email));
     }
 
     [Theory]
@@ -101,8 +96,7 @@ public class EmailTests
     public void Constructor_InvalidLocalPartDots_ShouldThrowDomainException(string email)
     {
         // Act & Assert
-        var act = () => new Email(email);
-        act.Should().Throw<DomainException>();
+        Should.Throw<DomainException>(() => new Email(email));
     }
 
     [Theory]
@@ -112,8 +106,7 @@ public class EmailTests
     public void Constructor_InvalidDomainDots_ShouldThrowDomainException(string email)
     {
         // Act & Assert
-        var act = () => new Email(email);
-        act.Should().Throw<DomainException>();
+        Should.Throw<DomainException>(() => new Email(email));
     }
 
     [Fact]
@@ -124,9 +117,8 @@ public class EmailTests
         var email = $"{longLocalPart}@example.com";
 
         // Act & Assert
-        var act = () => new Email(email);
-        act.Should().Throw<DomainException>()
-           .WithMessage("Email local part length is invalid.");
+        var ex = Should.Throw<DomainException>(() => new Email(email));
+        ex.Message.ShouldBe("Email local part length is invalid.");
     }
 
     [Fact]
@@ -137,9 +129,8 @@ public class EmailTests
         var email = $"test@{longDomain}";
 
         // Act & Assert
-        var act = () => new Email(email);
-        act.Should().Throw<DomainException>()
-           .WithMessage("Email domain part length is invalid.");
+        var ex = Should.Throw<DomainException>(() => new Email(email));
+        ex.Message.ShouldBe("Email domain part length is invalid.");
     }
 
     [Fact]
@@ -152,7 +143,7 @@ public class EmailTests
         Email email = emailString;
 
         // Assert
-        email.Value.Should().Be(emailString);
+        email.Value.ShouldBe(emailString);
     }
 
     [Fact]
@@ -165,7 +156,7 @@ public class EmailTests
         string emailString = email;
 
         // Assert
-        emailString.Should().Be("test@example.com");
+        emailString.ShouldBe("test@example.com");
     }
 
     [Fact]
@@ -178,7 +169,7 @@ public class EmailTests
         var result = email.ToString();
 
         // Assert
-        result.Should().Be("test@example.com");
+        result.ShouldBe("test@example.com");
     }
 
     [Theory]
@@ -192,9 +183,9 @@ public class EmailTests
         var emailObj2 = new Email(email2);
 
         // Act & Assert
-        emailObj1.Equals(emailObj2).Should().Be(expected);
-        (emailObj1 == emailObj2).Should().Be(expected);
-        (emailObj1 != emailObj2).Should().Be(!expected);
+        emailObj1.Equals(emailObj2).ShouldBe(expected);
+        (emailObj1 == emailObj2).ShouldBe(expected);
+        (emailObj1 != emailObj2).ShouldBe(!expected);
     }
 
     [Fact]
@@ -205,7 +196,7 @@ public class EmailTests
         var email2 = new Email("TEST@EXAMPLE.COM");
 
         // Act & Assert
-        email1.GetHashCode().Should().Be(email2.GetHashCode());
+        email1.GetHashCode().ShouldBe(email2.GetHashCode());
     }
 
     [Fact]
@@ -216,7 +207,7 @@ public class EmailTests
         var email2 = new Email("test@other.com");
 
         // Act & Assert
-        email1.GetHashCode().Should().NotBe(email2.GetHashCode());
+        email1.GetHashCode().ShouldNotBe(email2.GetHashCode());
     }
 
     [Theory]
@@ -226,7 +217,6 @@ public class EmailTests
     public void Constructor_CommonValidFormats_ShouldSucceed(string email)
     {
         // Act & Assert
-        var act = () => new Email(email);
-        act.Should().NotThrow();
+        Should.NotThrow(() => new Email(email));
     }
 }

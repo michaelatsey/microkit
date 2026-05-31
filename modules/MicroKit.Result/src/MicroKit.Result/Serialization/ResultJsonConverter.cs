@@ -10,6 +10,7 @@ namespace MicroKit.Result.Serialization;
 /// </summary>
 /// <typeparam name="T">The result value type.</typeparam>
 [RequiresUnreferencedCode("JSON serialization of Result<T> may require unreferenced code.")]
+[RequiresDynamicCode("JSON serialization of Result<T> may require runtime code generation.")]
 public sealed class ResultJsonConverter<T> : JsonConverter<Result<T>>
 {
     /// <inheritdoc/>

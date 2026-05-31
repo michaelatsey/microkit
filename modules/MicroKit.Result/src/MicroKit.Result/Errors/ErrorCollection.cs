@@ -59,9 +59,12 @@ public sealed class ErrorCollection : IError, IReadOnlyList<IError>
     /// </summary>
     /// <param name="errors">The errors to include.</param>
     /// <returns>A new <see cref="ErrorCollection"/>.</returns>
+    /// <exception cref="ArgumentException">Thrown when <paramref name="errors"/> is empty.</exception>
     public static ErrorCollection From(params IError[] errors)
     {
         ArgumentNullException.ThrowIfNull(errors);
+        if (errors.Length == 0)
+            throw new ArgumentException("An ErrorCollection must contain at least one error.", nameof(errors));
         return new ErrorCollection(ImmutableArray.Create(errors));
     }
 
@@ -70,11 +73,18 @@ public sealed class ErrorCollection : IError, IReadOnlyList<IError>
     /// </summary>
     /// <param name="errors">The errors to include.</param>
     /// <returns>A new <see cref="ErrorCollection"/>.</returns>
+    /// <exception cref="ArgumentException">Thrown when <paramref name="errors"/> is empty.</exception>
     public static ErrorCollection From(IEnumerable<IError> errors)
     {
         ArgumentNullException.ThrowIfNull(errors);
-        return new ErrorCollection(errors.ToImmutableArray());
+        var array = errors.ToImmutableArray();
+        if (array.IsEmpty)
+            throw new ArgumentException("An ErrorCollection must contain at least one error.", nameof(errors));
+        return new ErrorCollection(array);
     }
+
+    private static ErrorCollection FromFiltered(IEnumerable<IError> errors) =>
+        new(errors.ToImmutableArray());
 
     // ── Filter methods ────────────────────────────────────────────────────
 
@@ -83,21 +93,21 @@ public sealed class ErrorCollection : IError, IReadOnlyList<IError>
     /// </summary>
     /// <param name="category">The category to filter by.</param>
     public ErrorCollection WithCategory(ErrorCategory category) =>
-        From(_errors.Where(e => e.Category == category));
+        FromFiltered(_errors.Where(e => e.Category == category));
 
     /// <summary>
     /// Returns a new collection containing only errors whose severity matches <paramref name="severity"/>.
     /// </summary>
     /// <param name="severity">The severity to filter by.</param>
     public ErrorCollection WithSeverity(ErrorSeverity severity) =>
-        From(_errors.Where(e => e.Severity == severity));
+        FromFiltered(_errors.Where(e => e.Severity == severity));
 
     /// <summary>
     /// Returns a new collection containing only errors whose code matches <paramref name="code"/>.
     /// </summary>
     /// <param name="code">The error code to filter by.</param>
     public ErrorCollection WithCode(ErrorCode code) =>
-        From(_errors.Where(e => e.Code == code));
+        FromFiltered(_errors.Where(e => e.Code == code));
 
     /// <summary>
     /// Returns <see langword="true"/> if any error in this collection has the specified category.
@@ -111,7 +121,7 @@ public sealed class ErrorCollection : IError, IReadOnlyList<IError>
     /// </summary>
     /// <typeparam name="TError">The concrete error type to filter by.</typeparam>
     public ErrorCollection OfType<TError>() where TError : IError =>
-        From(_errors.OfType<TError>().Cast<IError>());
+        FromFiltered(_errors.OfType<TError>().Cast<IError>());
 
     /// <summary>
     /// Returns a new flat collection with all nested <see cref="ErrorCollection"/> instances expanded.
@@ -126,7 +136,7 @@ public sealed class ErrorCollection : IError, IReadOnlyList<IError>
             else
                 flat.Add(error);
         }
-        return From(flat);
+        return FromFiltered(flat);
     }
 
     /// <summary>

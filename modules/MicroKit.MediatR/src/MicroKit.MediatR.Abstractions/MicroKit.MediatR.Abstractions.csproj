@@ -1,0 +1,23 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <AssemblyName>MicroKit.MediatR.Abstractions</AssemblyName>
+    <RootNamespace>MicroKit.MediatR</RootNamespace>
+    <Description>Typed CQRS contracts for MicroKit.MediatR — ICommand, IQuery, IStreamQuery, IEvent, handler interfaces, and behavior markers. Zero implementation.</Description>
+    <PackageTags>microkit;mediatr;cqrs;mediator;ddd;dotnet;abstractions</PackageTags>
+    <!-- CA1711: IDomainEventHandler intentionally ends in 'EventHandler' — canonical CQRS contract name -->
+    <NoWarn>$(NoWarn);CA1711</NoWarn>
+  </PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="MediatR.Contracts" />
+  </ItemGroup>
+  <!-- Cross-module references: source in dev/CI builds, published NuGet packages when packing for release.
+       Set CIReleaseBuild=true on the `dotnet pack` step to emit correct nuspec dependencies. -->
+  <ItemGroup Condition="'$(CIReleaseBuild)' != 'true'">
+    <ProjectReference Include="../../../MicroKit.Result/src/MicroKit.Result/MicroKit.Result.csproj" />
+    <ProjectReference Include="../../../MicroKit.Domain/src/MicroKit.Domain/MicroKit.Domain.csproj" />
+  </ItemGroup>
+  <ItemGroup Condition="'$(CIReleaseBuild)' == 'true'">
+    <PackageReference Include="MicroKit.Result" />
+    <PackageReference Include="MicroKit.Domain" />
+  </ItemGroup>
+</Project>

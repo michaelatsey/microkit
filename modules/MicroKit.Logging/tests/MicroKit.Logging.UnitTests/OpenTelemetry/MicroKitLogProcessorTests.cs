@@ -38,12 +38,12 @@ public sealed class MicroKitLogProcessorTests : IDisposable
 
         _logger.LogInformation("test message");
 
-        _exported.Should().ContainSingle();
-        var attrs = _exported[0];
-        attrs.Should().NotContain(kv => kv.Key == LogPropertyNames.CorrelationId);
-        attrs.Should().NotContain(kv => kv.Key == LogPropertyNames.OperationId);
-        attrs.Should().NotContain(kv => kv.Key == LogPropertyNames.TenantId);
-        attrs.Should().NotContain(kv => kv.Key == LogPropertyNames.UserId);
+        _exported.Count.ShouldBe(1);
+        var attrs = _exported[0].ShouldNotBeNull();
+        attrs.ShouldNotContain(kv => kv.Key == LogPropertyNames.CorrelationId);
+        attrs.ShouldNotContain(kv => kv.Key == LogPropertyNames.OperationId);
+        attrs.ShouldNotContain(kv => kv.Key == LogPropertyNames.TenantId);
+        attrs.ShouldNotContain(kv => kv.Key == LogPropertyNames.UserId);
     }
 
     [Fact]
@@ -54,8 +54,9 @@ public sealed class MicroKitLogProcessorTests : IDisposable
 
         _logger.LogInformation("test message");
 
-        _exported.Should().ContainSingle();
-        _exported[0].Should().Contain(kv => kv.Key == LogPropertyNames.CorrelationId && kv.Value!.ToString() == "ctx-123");
+        _exported.Count.ShouldBe(1);
+        var attrs = _exported[0].ShouldNotBeNull();
+        attrs.ShouldContain(kv => kv.Key == LogPropertyNames.CorrelationId && kv.Value!.ToString() == "ctx-123");
     }
 
     [Fact]
@@ -70,12 +71,12 @@ public sealed class MicroKitLogProcessorTests : IDisposable
 
         _logger.LogInformation("test message");
 
-        _exported.Should().ContainSingle();
+        _exported.Count.ShouldBe(1);
         var attrs = _exported[0]!;
-        attrs.Should().Contain(kv => kv.Key == LogPropertyNames.CorrelationId && kv.Value!.ToString() == "corr-1");
-        attrs.Should().Contain(kv => kv.Key == LogPropertyNames.OperationId && kv.Value!.ToString() == "op-1");
-        attrs.Should().Contain(kv => kv.Key == LogPropertyNames.TenantId && kv.Value!.ToString() == "tenant-1");
-        attrs.Should().Contain(kv => kv.Key == LogPropertyNames.UserId && kv.Value!.ToString() == "user-1");
+        attrs.ShouldContain(kv => kv.Key == LogPropertyNames.CorrelationId && kv.Value!.ToString() == "corr-1");
+        attrs.ShouldContain(kv => kv.Key == LogPropertyNames.OperationId && kv.Value!.ToString() == "op-1");
+        attrs.ShouldContain(kv => kv.Key == LogPropertyNames.TenantId && kv.Value!.ToString() == "tenant-1");
+        attrs.ShouldContain(kv => kv.Key == LogPropertyNames.UserId && kv.Value!.ToString() == "user-1");
     }
 
     [Fact]
@@ -87,13 +88,13 @@ public sealed class MicroKitLogProcessorTests : IDisposable
         // Structured log param sets CorrelationId explicitly — processor must not override it
         _logger.LogInformation("test {CorrelationId}", "from-log-statement");
 
-        _exported.Should().ContainSingle();
+        _exported.Count.ShouldBe(1);
         var correlationAttr = _exported[0]!
             .Where(kv => kv.Key == LogPropertyNames.CorrelationId)
             .ToList();
 
-        correlationAttr.Should().ContainSingle("duplicate attribute must not be added");
-        correlationAttr[0].Value.Should().Be("from-log-statement");
+        correlationAttr.Count.ShouldBe(1, "duplicate attribute must not be added");
+        correlationAttr[0].Value.ShouldBe("from-log-statement");
     }
 
     [Fact]
@@ -104,10 +105,10 @@ public sealed class MicroKitLogProcessorTests : IDisposable
 
         _logger.LogInformation("test message");
 
-        _exported.Should().ContainSingle();
-        var attrs = _exported[0];
-        attrs.Should().NotContain(kv => kv.Key == LogPropertyNames.TraceId);
-        attrs.Should().NotContain(kv => kv.Key == LogPropertyNames.SpanId);
+        _exported.Count.ShouldBe(1);
+        var attrs = _exported[0].ShouldNotBeNull();
+        attrs.ShouldNotContain(kv => kv.Key == LogPropertyNames.TraceId);
+        attrs.ShouldNotContain(kv => kv.Key == LogPropertyNames.SpanId);
     }
 
     [Fact]
@@ -121,10 +122,9 @@ public sealed class MicroKitLogProcessorTests : IDisposable
         // Log with no structured parameters — no pre-existing attributes on the record
         _logger.Log(LogLevel.Warning, "bare log with no params");
 
-        _exported.Should().ContainSingle();
-        var attrs = _exported[0];
-        attrs.Should().NotBeNull();
-        attrs.Should().Contain(kv => kv.Key == LogPropertyNames.CorrelationId && kv.Value!.ToString() == "bare-log");
+        _exported.Count.ShouldBe(1);
+        var attrs = _exported[0].ShouldNotBeNull();
+        attrs.ShouldContain(kv => kv.Key == LogPropertyNames.CorrelationId && kv.Value!.ToString() == "bare-log");
     }
 
     [Fact]
@@ -147,14 +147,14 @@ public sealed class MicroKitLogProcessorTests : IDisposable
             _logger.LogInformation("msg {TraceId} {SpanId}", "stale-trace", "stale-span");
         }
 
-        _exported.Should().ContainSingle();
-        var attrs = _exported[0];
-        attrs.Should().NotContain(kv => kv.Key == LogPropertyNames.TraceId,
+        _exported.Count.ShouldBe(1);
+        var attrs = _exported[0].ShouldNotBeNull();
+        attrs.ShouldNotContain(kv => kv.Key == LogPropertyNames.TraceId,
             "stale TraceId snapshot must be scrubbed when Activity.Current is live");
-        attrs.Should().NotContain(kv => kv.Key == LogPropertyNames.SpanId,
+        attrs.ShouldNotContain(kv => kv.Key == LogPropertyNames.SpanId,
             "stale SpanId snapshot must be scrubbed when Activity.Current is live");
         // CorrelationId from context must still be present
-        attrs.Should().Contain(kv => kv.Key == LogPropertyNames.CorrelationId);
+        attrs.ShouldContain(kv => kv.Key == LogPropertyNames.CorrelationId);
     }
 
     public void Dispose() => _loggerFactory.Dispose();

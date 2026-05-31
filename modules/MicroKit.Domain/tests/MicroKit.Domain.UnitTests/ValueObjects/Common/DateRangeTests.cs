@@ -1,6 +1,6 @@
-using FluentAssertions;
 using MicroKit.Domain.Exceptions;
 using MicroKit.Domain.ValueObjects.Common;
+using Shouldly;
 using Xunit;
 
 namespace MicroKit.Domain.UnitTests.ValueObjects.Common;
@@ -20,8 +20,8 @@ public class DateRangeTests
         var dateRange = new DateRange(start, end);
 
         // Assert
-        dateRange.Start.Should().Be(start);
-        dateRange.End.Should().Be(end);
+        dateRange.Start.ShouldBe(start);
+        dateRange.End.ShouldBe(end);
     }
 
     [Fact]
@@ -34,8 +34,8 @@ public class DateRangeTests
         var dateRange = new DateRange(date, date);
 
         // Assert
-        dateRange.Start.Should().Be(date);
-        dateRange.End.Should().Be(date);
+        dateRange.Start.ShouldBe(date);
+        dateRange.End.ShouldBe(date);
     }
 
     [Fact]
@@ -46,9 +46,8 @@ public class DateRangeTests
         var end = _baseDate;
 
         // Act & Assert
-        var act = () => new DateRange(start, end);
-        act.Should().Throw<DomainException>()
-           .WithMessage("Start date cannot be after end date.");
+        var ex = Should.Throw<DomainException>(() => new DateRange(start, end));
+        ex.Message.ShouldBe("Start date cannot be after end date.");
     }
 
     [Fact]
@@ -63,7 +62,7 @@ public class DateRangeTests
         var duration = dateRange.Duration;
 
         // Assert
-        duration.Should().Be(TimeSpan.FromHours(3.5));
+        duration.ShouldBe(TimeSpan.FromHours(3.5));
     }
 
     [Theory]
@@ -84,7 +83,7 @@ public class DateRangeTests
         var result = dateRange.Contains(testDate);
 
         // Assert
-        result.Should().Be(expected);
+        result.ShouldBe(expected);
     }
 
     [Fact]
@@ -98,7 +97,7 @@ public class DateRangeTests
         var result = range1.Overlaps(range2);
 
         // Assert
-        result.Should().BeTrue();
+        result.ShouldBeTrue();
     }
 
     [Fact]
@@ -112,7 +111,7 @@ public class DateRangeTests
         var result = range1.Overlaps(range2);
 
         // Assert
-        result.Should().BeTrue();
+        result.ShouldBeTrue();
     }
 
     [Fact]
@@ -126,7 +125,7 @@ public class DateRangeTests
         var result = range1.Overlaps(range2);
 
         // Assert
-        result.Should().BeTrue();
+        result.ShouldBeTrue();
     }
 
     [Fact]
@@ -140,7 +139,7 @@ public class DateRangeTests
         var result = range1.Overlaps(range2);
 
         // Assert
-        result.Should().BeFalse();
+        result.ShouldBeFalse();
     }
 
     [Fact]
@@ -150,8 +149,7 @@ public class DateRangeTests
         var range = new DateRange(_baseDate, _baseDate.AddHours(2));
 
         // Act & Assert
-        var act = () => range.Overlaps(null!);
-        act.Should().Throw<ArgumentNullException>();
+        Should.Throw<ArgumentNullException>(() => range.Overlaps(null!));
     }
 
     [Fact]
@@ -165,8 +163,8 @@ public class DateRangeTests
         var dateRange = DateRange.Create(start, end);
 
         // Assert
-        dateRange.Start.Should().Be(start);
-        dateRange.End.Should().Be(end);
+        dateRange.Start.ShouldBe(start);
+        dateRange.End.ShouldBe(end);
     }
 
     [Fact]
@@ -179,11 +177,13 @@ public class DateRangeTests
         var dateRange = DateRange.ForDay(date);
 
         // Assert
-        dateRange.Start.Should().Be(new DateTimeOffset(2024, 3, 15, 0, 0, 0, TimeSpan.FromHours(2)));
-        dateRange.End.Hour.Should().Be(23);
-        dateRange.End.Minute.Should().Be(59);
-        dateRange.End.Second.Should().Be(59);
-        dateRange.Duration.Should().BeCloseTo(TimeSpan.FromDays(1), TimeSpan.FromMilliseconds(1));
+        dateRange.Start.ShouldBe(new DateTimeOffset(2024, 3, 15, 0, 0, 0, TimeSpan.FromHours(2)));
+        dateRange.End.Hour.ShouldBe(23);
+        dateRange.End.Minute.ShouldBe(59);
+        dateRange.End.Second.ShouldBe(59);
+        dateRange.Duration.ShouldBeInRange(
+            TimeSpan.FromDays(1).Subtract(TimeSpan.FromMilliseconds(1)),
+            TimeSpan.FromDays(1).Add(TimeSpan.FromMilliseconds(1)));
     }
 
     [Fact]
@@ -197,9 +197,9 @@ public class DateRangeTests
         var dateRange = DateRange.FromDuration(start, duration);
 
         // Assert
-        dateRange.Start.Should().Be(start);
-        dateRange.End.Should().Be(start.Add(duration));
-        dateRange.Duration.Should().Be(duration);
+        dateRange.Start.ShouldBe(start);
+        dateRange.End.ShouldBe(start.Add(duration));
+        dateRange.Duration.ShouldBe(duration);
     }
 
     [Fact]
@@ -210,9 +210,8 @@ public class DateRangeTests
         var duration = TimeSpan.FromHours(-1);
 
         // Act & Assert
-        var act = () => DateRange.FromDuration(start, duration);
-        act.Should().Throw<DomainException>()
-           .WithMessage("Duration cannot be negative.");
+        var ex = Should.Throw<DomainException>(() => DateRange.FromDuration(start, duration));
+        ex.Message.ShouldBe("Duration cannot be negative.");
     }
 
     [Fact]
@@ -227,7 +226,7 @@ public class DateRangeTests
         var result = dateRange.ToString();
 
         // Assert
-        result.Should().Be("2024-03-15 10:30:00 +00:00 - 2024-03-15 15:45:00 +00:00");
+        result.ShouldBe("2024-03-15 10:30:00 +00:00 - 2024-03-15 15:45:00 +00:00");
     }
 
     [Fact]
@@ -240,10 +239,10 @@ public class DateRangeTests
         var range2 = new DateRange(start, end);
 
         // Act & Assert
-        range1.Should().Be(range2);
-        range1.Equals(range2).Should().BeTrue();
-        (range1 == range2).Should().BeTrue();
-        (range1 != range2).Should().BeFalse();
+        range1.ShouldBe(range2);
+        range1.Equals(range2).ShouldBeTrue();
+        (range1 == range2).ShouldBeTrue();
+        (range1 != range2).ShouldBeFalse();
     }
 
     [Fact]
@@ -254,10 +253,10 @@ public class DateRangeTests
         var range2 = new DateRange(_baseDate.AddHours(1), _baseDate.AddHours(3));
 
         // Act & Assert
-        range1.Should().NotBe(range2);
-        range1.Equals(range2).Should().BeFalse();
-        (range1 == range2).Should().BeFalse();
-        (range1 != range2).Should().BeTrue();
+        range1.ShouldNotBe(range2);
+        range1.Equals(range2).ShouldBeFalse();
+        (range1 == range2).ShouldBeFalse();
+        (range1 != range2).ShouldBeTrue();
     }
 
     [Fact]
@@ -270,6 +269,6 @@ public class DateRangeTests
         var range2 = new DateRange(start, end);
 
         // Act & Assert
-        range1.GetHashCode().Should().Be(range2.GetHashCode());
+        range1.GetHashCode().ShouldBe(range2.GetHashCode());
     }
 }

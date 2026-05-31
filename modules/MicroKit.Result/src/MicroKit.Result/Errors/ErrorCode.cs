@@ -78,7 +78,11 @@ public readonly record struct ErrorCode(string Value) : IComparable<ErrorCode>
     /// </summary>
     /// <param name="value">The error code string.</param>
     /// <returns>A new <see cref="ErrorCode"/> instance.</returns>
-    public static ErrorCode From(string value) => new(value);
+    public static ErrorCode From(string value)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(value);
+        return new(value);
+    }
 
     // ── Operators and conversions ─────────────────────────────────────────
 

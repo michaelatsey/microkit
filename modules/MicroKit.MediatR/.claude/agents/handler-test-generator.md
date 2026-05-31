@@ -1,8 +1,8 @@
 ---
 name: handler-test-generator
-description: Generates exhaustive xUnit tests for CQRS handlers in MicroKit.MediatR. Covers CommandHandlers, QueryHandlers, DomainEventHandlers, Behaviors, and full pipeline integration tests using MicroKit.MediatR.Testing harnesses.
-model: inherit
+description: Generates exhaustive xUnit tests for CQRS handlers in MicroKit.MediatR — CommandHandlers, QueryHandlers, DomainEventHandlers, Behaviors, and full pipeline integration tests using the MicroKit.MediatR.Testing harnesses. Uses Shouldly for assertions and NSubstitute for mocking. Automatically invoked by /new-handler-tests.
 tools: Read, Grep, Glob, Write, Edit
+model: sonnet
 ---
 
 # Agent: Handler Test Generator
@@ -12,12 +12,18 @@ Spécialiste des tests unitaires et d'intégration pour les handlers CQRS Mediat
 Tu génères des tests exhaustifs, isolés et lisibles pour :
 CommandHandlers, QueryHandlers, DomainEventHandlers, Behaviors, et le pipeline complet.
 
-## Stack de test
-- **Framework**: xUnit v2+
-- **Assertions**: FluentAssertions + extensions MicroKit.Result
-- **Mocking**: NSubstitute
-- **Harness**: `MicroKit.MediatR.Testing` (FakeMediator, *TestHarness)
+## Stack de test (obligatoire)
+- **Framework**: xUnit
+- **Assertions**: **Shouldly** (`result.ShouldBe(...)`) — voir `.claude/rules/testing.md` et la règle racine `testing-libraries.md`. **FluentAssertions est interdit.**
+- **Mocking**: **NSubstitute** (pas de Moq, pas de fakes manuels)
+- **Harness**: `MicroKit.MediatR.Testing` (`CommandHandlerTestHarness`, `QueryHandlerTestHarness`, `BehaviorTestHarness`, `DomainEventTestHarness`)
 - **Performance**: BenchmarkDotNet (séparé, `/benchmarks/`)
+
+## Contexte à charger
+- `.claude/rules/testing.md`
+- `.claude/rules/cqrs-patterns.md`
+- `.claude-context/templates/test-harness-template.md`
+- `.claude-context/standards/handler-contracts.md`
 
 ## Stratégie d'isolation par type
 
@@ -35,112 +41,108 @@ public sealed class CreateOrderHandlerTests
     public CreateOrderHandlerTests()
         => _harness = new(new CreateOrderHandler(_repo, _events));
 
-    public sealed class HandleShould : CreateOrderHandlerTests
+    [Fact]
+    public async Task Handle_WhenCommandIsValid_ReturnsSuccessWithOrderId()
     {
-        [Fact]
-        public async Task ReturnSuccessWithOrderId_WhenCommandIsValid()
-        {
-            // Arrange
-            var command = new CreateOrderCommand(UserId: Guid.NewGuid(), Items: [new("SKU-001", 2)]);
-            var expectedId = OrderId.New();
-            _repo.SaveAsync(Arg.Any<Order>(), Arg.Any<CancellationToken>())
-                 .Returns(expectedId);
+        // Arrange
+        var command = new CreateOrderCommand(UserId: Guid.NewGuid(), Items: [new("SKU-001", 2)]);
+        var expectedId = OrderId.New();
+        _repo.SaveAsync(Arg.Any<Order>(), Arg.Any<CancellationToken>()).Returns(expectedId);
 
-            // Act
-            var result = await _harness.SendAsync(command);
+        // Act
+        var result = await _harness.SendAsync(command);
 
-            // Assert
-            result.Should().BeSuccess().WithValue(v => v == expectedId);
-        }
+        // Assert — Shouldly
+        result.IsSuccess.ShouldBeTrue();
+        result.Value.ShouldBe(expectedId);
+    }
 
-        [Fact]
-        public async Task ReturnFailure_WhenUserNotFound()
-        {
-            // Arrange
-            var command = new CreateOrderCommand(UserId: Guid.NewGuid(), Items: []);
-            _repo.FindUserAsync(Arg.Any<Guid>(), Arg.Any<CancellationToken>())
-                 .Returns((User?)null);
+    [Fact]
+    public async Task Handle_WhenUserNotFound_ReturnsFailure()
+    {
+        // Arrange
+        var command = new CreateOrderCommand(UserId: Guid.NewGuid(), Items: []);
+        _repo.FindUserAsync(Arg.Any<Guid>(), Arg.Any<CancellationToken>()).Returns((User?)null);
 
-            // Act
-            var result = await _harness.SendAsync(command);
+        // Act
+        var result = await _harness.SendAsync(command);
 
-            // Assert
-            result.Should().BeFailure().WithError<UserNotFoundError>();
-        }
+        // Assert
+        result.IsFailure.ShouldBeTrue();
+        result.Error.ShouldBeOfType<UserNotFoundError>();
+    }
 
-        [Fact]
-        public async Task PublishOrderCreatedEvent_WhenSuccessful()
-        {
-            // ... setup ...
-            await _harness.SendAsync(command);
+    [Fact]
+    public async Task Handle_WhenSuccessful_PublishesOrderCreatedEvent()
+    {
+        var command = new CreateOrderCommand(Guid.NewGuid(), [new("SKU-001", 1)]);
 
-            // Vérifier que le domain event a été dispatché
-            _harness.AssertEventPublished<OrderCreatedEvent>();
-        }
+        await _harness.SendAsync(command);
 
-        [Fact]
-        public async Task NotPublishEvent_WhenHandlerFails()
-        {
-            // Vérifier qu'aucun event n'est publié en cas d'échec
-            _harness.AssertNoEventsPublished();
-        }
+        _harness.AssertEventPublished<OrderCreatedEvent>();
+    }
+
+    [Fact]
+    public async Task Handle_WhenHandlerFails_PublishesNoEvent()
+    {
+        var command = new CreateOrderCommand(Guid.NewGuid(), []);
+
+        await _harness.SendAsync(command);
+
+        _harness.AssertNoEventsPublished();
     }
 }
 ```
 
 ### QueryHandler → QueryHandlerTestHarness
 ```csharp
-public sealed class GetUserQueryHandlerTests
+public sealed class GetUserByIdHandlerTests
 {
     private readonly IUserReadRepository _readRepo = Substitute.For<IUserReadRepository>();
-    private readonly QueryHandlerTestHarness<GetUserQuery, Result<UserDto>> _harness;
+    private readonly QueryHandlerTestHarness<GetUserByIdQuery, Result<UserDto>> _harness;
 
-    public GetUserQueryHandlerTests()
-        => _harness = new(new GetUserQueryHandler(_readRepo));
+    public GetUserByIdHandlerTests()
+        => _harness = new(new GetUserByIdHandler(_readRepo));
 
     [Fact]
-    public async Task ReturnUserDto_WhenUserExists()
+    public async Task Handle_WhenUserExists_ReturnsUserDto()
     {
-        // Arrange
         var userId = Guid.NewGuid();
-        var user = UserFaker.Generate(userId);
+        var user = new UserEntity { Id = userId, Name = "Ada" };
         _readRepo.FindAsync(userId, Arg.Any<CancellationToken>()).Returns(user);
 
-        // Act
-        var result = await _harness.QueryAsync(new GetUserQuery(userId));
+        var result = await _harness.QueryAsync(new GetUserByIdQuery(userId));
 
-        // Assert
-        result.Should().BeSuccess()
-              .WithValue(dto => dto.Id == userId && dto.Name == user.Name);
+        result.IsSuccess.ShouldBeTrue();
+        result.Value.Id.ShouldBe(userId);
+        result.Value.Name.ShouldBe("Ada");
     }
 
     [Fact]
-    public async Task ReturnNotFoundError_WhenUserDoesNotExist()
+    public async Task Handle_WhenUserMissing_ReturnsNotFoundError()
     {
-        _readRepo.FindAsync(Arg.Any<Guid>(), Arg.Any<CancellationToken>())
-                 .Returns((UserEntity?)null);
+        _readRepo.FindAsync(Arg.Any<Guid>(), Arg.Any<CancellationToken>()).Returns((UserEntity?)null);
 
-        var result = await _harness.QueryAsync(new GetUserQuery(Guid.NewGuid()));
+        var result = await _harness.QueryAsync(new GetUserByIdQuery(Guid.NewGuid()));
 
-        result.Should().BeFailure()
-              .WithError<UserNotFoundError>()
-              .Which.UserId.Should().NotBeEmpty();
+        result.IsFailure.ShouldBeTrue();
+        result.Error.ShouldBeOfType<UserNotFoundError>();
     }
 }
 ```
 
-### DomainEventHandler
+### DomainEventHandler → DomainEventTestHarness
 ```csharp
-public sealed class UserRegisteredHandlerTests
+public sealed class SendWelcomeEmailHandlerTests
 {
     private readonly IEmailService _email = Substitute.For<IEmailService>();
     private readonly DomainEventTestHarness<UserRegisteredEvent, UserRegisteredNotification> _harness;
 
-    public UserRegisteredHandlerTests()
+    public SendWelcomeEmailHandlerTests()
         => _harness = new(new SendWelcomeEmailHandler(_email));
 
     [Fact]
-    public async Task SendWelcomeEmail_WhenUserRegistered()
+    public async Task Handle_WhenUserRegistered_SendsWelcomeEmail()
     {
         var notification = new UserRegisteredNotification(
             new UserRegisteredEvent(Guid.NewGuid(), "test@example.com", DateTimeOffset.UtcNow));
@@ -157,67 +159,53 @@ public sealed class UserRegisteredHandlerTests
 public sealed class ValidationBehaviorTests
 {
     [Fact]
-    public async Task ReturnFailure_WhenValidationFails_AndResponseIsResultT()
+    public async Task Handle_WhenValidationFails_AndResponseIsResultT_ReturnsFailure()
     {
-        // Arrange
         var validator = Substitute.For<IValidator<CreateOrderCommand>>();
         validator.ValidateAsync(Arg.Any<CreateOrderCommand>(), Arg.Any<CancellationToken>())
                  .Returns(new ValidationResult([new ValidationFailure("Items", "Cannot be empty")]));
 
-        var behavior = new ValidationBehavior<CreateOrderCommand, Result<OrderId>>(
-            new[] { validator });
-
+        var behavior = new ValidationBehavior<CreateOrderCommand, Result<OrderId>>([validator]);
         var next = Substitute.For<RequestHandlerDelegate<Result<OrderId>>>();
 
-        // Act
         var result = await behavior.Handle(
-            new CreateOrderCommand(Guid.NewGuid(), []),
-            next,
-            CancellationToken.None);
+            new CreateOrderCommand(Guid.NewGuid(), []), next, CancellationToken.None);
 
-        // Assert
-        result.Should().BeFailure().WithError<ErrorCollection>();
-        await next.DidNotReceive()(); // le handler n'est pas appelé
+        result.IsFailure.ShouldBeTrue();
+        await next.DidNotReceive()();      // le handler n'est pas appelé
     }
 
     [Fact]
-    public async Task CallNext_WhenValidationPasses()
+    public async Task Handle_WhenValidationPasses_CallsNext()
     {
         // validation success → next() appelé une fois
     }
 
     [Fact]
-    public async Task PassThrough_WhenNoValidatorRegistered()
+    public async Task Handle_WhenNoValidatorRegistered_PassesThrough()
     {
         // Aucun IValidator<T> → pass-through transparent
     }
 }
 ```
 
-### Test de pipeline complet (intégration légère)
+### Pipeline complet (intégration légère)
 ```csharp
-// Utilise FakeMediator pour tester la chaîne complète sans infrastructure réelle
 public sealed class FullPipelineTests
 {
     [Fact]
     public async Task Pipeline_ValidatesBeforeHandling()
     {
-        // Arrange
-        var mediator = FakeMediator.BuildWith(services =>
+        var mediator = BehaviorTestHarness.BuildPipeline(services =>
         {
-            services.AddMicroKitMediatR(cfg => cfg
-                .AddValidationBehavior()
-                .AddLoggingBehavior());
+            services.AddMicroKitMediatR(cfg => cfg.AddLoggingBehavior().AddValidationBehavior());
             services.AddTransient<IValidator<CreateOrderCommand>, CreateOrderCommandValidator>();
-            services.AddTransient<ICommandHandler<CreateOrderCommand, Result<OrderId>>,
-                                  CreateOrderHandler>();
+            services.AddTransient<ICommandHandler<CreateOrderCommand, Result<OrderId>>, CreateOrderHandler>();
         });
 
-        // Act
         var result = await mediator.SendCommandAsync(new CreateOrderCommand(Guid.Empty, []));
 
-        // Assert — validation a bloqué avant le handler
-        result.Should().BeFailure().WithError<ErrorCollection>();
+        result.IsFailure.ShouldBeTrue();   // validation a bloqué avant le handler
     }
 }
 ```
@@ -226,11 +214,10 @@ public sealed class FullPipelineTests
 
 ```
 {HandlerName}Tests
-  └── HandleShould (nested class)
-        ├── Return{Expected}_When{Condition}
-        ├── Publish{EventName}_When{Condition}
-        ├── NotCall{Dependency}_When{Condition}
-        └── Throw{ExceptionType}_When{Condition} (seulement si T direct)
+  ├── Handle_When{Condition}_{ExpectedResult}
+  ├── Handle_WhenSuccessful_Publishes{EventName}
+  ├── Handle_When{Condition}_DoesNotCall{Dependency}
+  └── Handle_WhenCancelled_Throws (si T direct)
 
 {BehaviorName}Tests
   ├── Handle_WhenMarkerPresent_AppliesLogic
@@ -248,17 +235,10 @@ public sealed class FullPipelineTests
 - [ ] Domain event publié (si applicable)
 - [ ] Aucun side-effect sur failure
 
-## Data builders / Fakers recommandés
+## Règles strictes
 
-```csharp
-// Utiliser Bogus ou des builders dédiés — pas de magic strings inline
-public static class UserFaker
-{
-    public static UserEntity Generate(Guid? id = null) => new()
-    {
-        Id = id ?? Guid.NewGuid(),
-        Name = new Faker().Name.FullName(),
-        Email = new Faker().Internet.Email()
-    };
-}
-```
+- **Shouldly uniquement** — jamais `.Should()` (FluentAssertions interdit), jamais `Assert.Equal`
+- **NSubstitute uniquement** pour les mocks
+- Test classes `sealed`
+- Pas de `Thread.Sleep` — `Task.Delay` avec `CancellationToken` si timing nécessaire
+- Pas de conteneur DI ni de base de données pour les tests de handler unitaires

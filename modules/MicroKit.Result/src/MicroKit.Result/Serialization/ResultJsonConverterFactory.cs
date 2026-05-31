@@ -14,6 +14,7 @@ namespace MicroKit.Result.Serialization;
 /// </code>
 /// </example>
 [RequiresUnreferencedCode("JSON serialization of Result<T> may require unreferenced code.")]
+[RequiresDynamicCode("Creating ResultJsonConverter<T> requires runtime code generation via MakeGenericType.")]
 public sealed class ResultJsonConverterFactory : JsonConverterFactory
 {
     /// <inheritdoc/>

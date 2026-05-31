@@ -1,5 +1,5 @@
 global using System.Threading.Tasks;
-global using FluentAssertions;
+global using Shouldly;
 global using Microsoft.CodeAnalysis.CSharp.Testing;
 global using Microsoft.CodeAnalysis.Testing;
 global using MicroKit.Logging.Analyzers;

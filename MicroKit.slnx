@@ -10,6 +10,19 @@
     <Project Path="modules/MicroKit.Domain/tests/MicroKit.Domain.PerformanceTests/MicroKit.Domain.PerformanceTests.csproj" />
     <Project Path="modules/MicroKit.Domain/tests/MicroKit.Domain.UnitTests/MicroKit.Domain.UnitTests.csproj" />
   </Folder>
+  <Folder Name="/modules/MicroKit.MediatR/" />
+  <Folder Name="/modules/MicroKit.MediatR/src/">
+    <Project Path="modules/MicroKit.MediatR/src/MicroKit.MediatR.Abstractions/MicroKit.MediatR.Abstractions.csproj" />
+    <Project Path="modules/MicroKit.MediatR/src/MicroKit.MediatR/MicroKit.MediatR.csproj" />
+    <Project Path="modules/MicroKit.MediatR/src/MicroKit.MediatR.Behaviors/MicroKit.MediatR.Behaviors.csproj" />
+    <Project Path="modules/MicroKit.MediatR/src/MicroKit.MediatR.Testing/MicroKit.MediatR.Testing.csproj" />
+  </Folder>
+  <Folder Name="/modules/MicroKit.MediatR/tests/">
+    <Project Path="modules/MicroKit.MediatR/tests/MicroKit.MediatR.UnitTests/MicroKit.MediatR.UnitTests.csproj" />
+    <Project Path="modules/MicroKit.MediatR/tests/MicroKit.MediatR.ArchitectureTests/MicroKit.MediatR.ArchitectureTests.csproj" />
+    <Project Path="modules/MicroKit.MediatR/tests/MicroKit.MediatR.IntegrationTests/MicroKit.MediatR.IntegrationTests.csproj" />
+    <Project Path="modules/MicroKit.MediatR/tests/MicroKit.MediatR.PerformanceTests/MicroKit.MediatR.PerformanceTests.csproj" />
+  </Folder>
   <Folder Name="/modules/MicroKit.Logging/" />
   <Folder Name="/modules/MicroKit.Logging/src/">
     <Project Path="modules/MicroKit.Logging/src/MicroKit.Logging.Abstractions/MicroKit.Logging.Abstractions.csproj" />

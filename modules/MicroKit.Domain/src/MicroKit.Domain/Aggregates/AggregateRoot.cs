@@ -10,7 +10,7 @@ namespace MicroKit.Domain.Aggregates;
 /// Manages domain events and serves as consistency boundary.
 /// </summary>
 /// <typeparam name="TId">The strongly-typed identifier type</typeparam>
-public abstract class AggregateRoot<TId> : Entity<TId>, IDomainEventsProvider
+public abstract class AggregateRoot<TId> : Entity<TId>, IDomainEventsProvider, IAggregateRoot
     where TId : IEntityId
 {
     private readonly List<IDomainEvent> _domainEvents = [];
@@ -25,7 +25,7 @@ public abstract class AggregateRoot<TId> : Entity<TId>, IDomainEventsProvider
     /// Gets all domain events raised by this aggregate.
     /// Events are read-only to prevent external modification.
     /// </summary>
-    public IReadOnlyCollection<IDomainEvent> DomainEvents =>
+    public IReadOnlyList<IDomainEvent> DomainEvents =>
         _domainEvents.Count == 0 ? Array.Empty<IDomainEvent>() : _domainEvents.AsReadOnly();
 
     /// <summary>
@@ -52,7 +52,7 @@ public abstract class AggregateRoot<TId> : Entity<TId>, IDomainEventsProvider
     /// This method should be called by the Application/Infrastructure layers
     /// after successfully persisting the aggregate's state changes.
     /// </remarks>
-    public IReadOnlyCollection<IDomainEvent> DrainDomainEvents()
+    public IReadOnlyList<IDomainEvent> DrainDomainEvents()
     {
         if (_domainEvents.Count == 0)
             return Array.Empty<IDomainEvent>();

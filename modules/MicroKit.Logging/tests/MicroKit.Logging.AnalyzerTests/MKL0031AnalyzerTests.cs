@@ -138,7 +138,7 @@ public sealed class MKL0031AnalyzerTests
     [InlineData("pin")]
     public void IsSensitiveTerm_KnownTerms_ReturnsTrue(string term)
     {
-        MKL0031Analyzer.IsSensitiveTerm(term).Should().BeTrue();
+        MKL0031Analyzer.IsSensitiveTerm(term).ShouldBeTrue();
     }
 
     [Theory]
@@ -149,6 +149,6 @@ public sealed class MKL0031AnalyzerTests
     [InlineData("RequestId")]
     public void IsSensitiveTerm_CanonicalNames_ReturnsFalse(string name)
     {
-        MKL0031Analyzer.IsSensitiveTerm(name).Should().BeFalse();
+        MKL0031Analyzer.IsSensitiveTerm(name).ShouldBeFalse();
     }
 }

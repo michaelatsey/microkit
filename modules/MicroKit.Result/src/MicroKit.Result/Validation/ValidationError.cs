@@ -13,9 +13,15 @@ namespace MicroKit.Result;
 /// </code>
 /// </example>
 public sealed record ValidationError(string PropertyName, string Message)
-    : Error(ErrorCode.From($"VALIDATION.{PropertyName.ToUpperInvariant()}"), Message),
+    : Error(ErrorCode.From($"VALIDATION.{ValidatePropertyName(PropertyName)}"), Message),
       IValidationError
 {
+    private static string ValidatePropertyName(string propertyName)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(propertyName);
+        return propertyName.ToUpperInvariant();
+    }
+
     /// <summary>Gets the error category. Always <see cref="ErrorCategory.Validation"/>.</summary>
     public override ErrorCategory Category => ErrorCategory.Validation;
 
