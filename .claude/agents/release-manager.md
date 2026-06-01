@@ -22,6 +22,7 @@ You orchestrate releases for MicroKit. You master Nerdbank.GitVersioning, Git ta
 3. No blocking TODO/FIXME in public code
 4. Version bumped in version.json if needed
 5. Dependencies on other MicroKit modules: stable versions (not pre-release)
+6. Release workflow uses `-p:PackageVersion=` extracted from tag — not Nerdbank alone
 
 ### Step 2 — Multi-module release order
 Always release in dependency graph order:
@@ -40,6 +41,35 @@ git push origin result-v1.2.0
 
 ### Step 4 — GitHub Actions takes over
 `release.yml` triggered by the tag → build → test → pack → push NuGet → GitHub Release.
+
+## Workflow version extraction (mandatory rule)
+
+Every release workflow MUST extract the package version from the Git tag and pass it
+explicitly to `dotnet pack` via `-p:PackageVersion=`. Never rely on Nerdbank.GitVersioning
+alone to compute the NuGet package version in CI — tag parsing is explicit, auditable,
+and independent of Nerdbank tooling availability on the runner.
+
+```yaml
+- name: Extract version from tag
+  run: |
+    TAG="${GITHUB_REF#refs/tags/}"
+    PACKAGE_VERSION="${TAG#<module-prefix>-v}"
+    echo "PACKAGE_VERSION=$PACKAGE_VERSION" >> "$GITHUB_ENV"
+
+- name: Pack
+  run: |
+    dotnet pack modules/MicroKit.<Module>/MicroKit.<Module>.slnx \
+      --no-build -c Release \
+      -p:PackageVersion=${{ env.PACKAGE_VERSION }} \
+      -o nupkgs
+```
+
+Module prefix per tag convention:
+- `result-v*`      → strip `result-v`
+- `domain-v*`      → strip `domain-v`
+- `logging-v*`     → strip `logging-v`
+- `mediatr-v*`     → strip `mediatr-v`
+- `persistence-v*` → strip `persistence-v`
 
 ## Semantic versioning
 - MAJOR: breaking change to public API

@@ -27,6 +27,7 @@ All 4 share the same version within a release (Nerdbank.GitVersioning from `vers
 - [ ] `CHANGELOG.md` has an entry for this version
 - [ ] `version.json` is correct for the target semver
 - [ ] `dependency-guardian` passes on all 4 `.csproj` files
+- [ ] Release workflow uses `-p:PackageVersion=` extracted from tag — not Nerdbank alone
 
 ### Build Validation
 ```bash
@@ -47,6 +48,22 @@ dotnet pack modules/MicroKit.MediatR/MicroKit.MediatR.slnx -c Release --no-build
 - [ ] `MicroKit.MediatR.Testing` declares `NSubstitute`
 - [ ] No `FluentAssertions` in any package graph
 - [ ] Symbol packages (`.snupkg`) are present for all 4
+
+### Workflow Version Extraction
+
+Every release workflow MUST extract the package version from the Git tag and pass it
+explicitly to `dotnet pack` via `-p:PackageVersion=`. Never rely on Nerdbank.GitVersioning
+alone to compute the NuGet package version in CI.
+
+Confirm `release-mediatr.yml` contains:
+```yaml
+- name: Extract version from tag
+  run: |
+    TAG="${GITHUB_REF#refs/tags/}"
+    PACKAGE_VERSION="${TAG#mediatr-v}"
+    echo "PACKAGE_VERSION=$PACKAGE_VERSION" >> "$GITHUB_ENV"
+```
+And that the Pack step passes `-p:PackageVersion=${{ env.PACKAGE_VERSION }}`.
 
 ### Tagging
 ```bash
