@@ -22,7 +22,7 @@ Ce fichier racine donne la vision globale et les conventions transversales.
 | **MicroKit.Domain** | `modules/MicroKit.Domain/` | `modules/MicroKit.Domain/.claude/` | ✅ Released 1.0.0-preview.1 |
 | **MicroKit.Logging** | `modules/MicroKit.Logging/` | `modules/MicroKit.Logging/.claude/` | ✅ Released 1.0.0-preview.1 |
 | **MicroKit.MediatR** | `modules/MicroKit.MediatR/` | `modules/MicroKit.MediatR/.claude/` | ✅ Released 1.0.0-preview.1 |
-| **MicroKit.Persistence** | `modules/MicroKit.Persistence/` | `modules/MicroKit.Persistence/.claude/` | 🔄 En cours (Abstractions ✅, Core ✅, EFCore ✅, PostgreSql ✅, SqlServer ✅, Specifications ✅, Testing ✅, Analyzers ⬜) |
+| **MicroKit.Persistence** | `modules/MicroKit.Persistence/` | `modules/MicroKit.Persistence/.claude/` | ✅ Released 1.0.0-preview.1 |
 | **MicroKit.Messaging** | `modules/MicroKit.Messaging/` | `modules/MicroKit.Messaging/.claude/` | 📋 Planifié |
 | **MicroKit.Caching** | `modules/MicroKit.Caching/` | `modules/MicroKit.Caching/.claude/` | 📋 Planifié |
 | **MicroKit.Http** | `modules/MicroKit.Http/` | `modules/MicroKit.Http/.claude/` | 📋 Planifié |
@@ -227,14 +227,14 @@ MicroKit.MediatR                                       ✅ 1.0.0-preview.1
 MicroKit.MediatR.Abstractions                          ✅ 1.0.0-preview.1
 MicroKit.MediatR.Behaviors                             ✅ 1.0.0-preview.1
 MicroKit.MediatR.Testing                               ✅ 1.0.0-preview.1
-MicroKit.Persistence.Abstractions                      🔄 en cours
-MicroKit.Persistence                                   🔄 en cours
-MicroKit.Persistence.EntityFrameworkCore               🔄 en cours
-MicroKit.Persistence.EntityFrameworkCore.PostgreSql    🔄 en cours
-MicroKit.Persistence.EntityFrameworkCore.SqlServer     🔄 en cours
-MicroKit.Persistence.Specifications                    🔄 en cours
-MicroKit.Persistence.Testing                           🔄 en cours
-MicroKit.Persistence.Analyzers                         ⬜ planifié
+MicroKit.Persistence.Abstractions                      ✅ 1.0.0-preview.1
+MicroKit.Persistence                                   ✅ 1.0.0-preview.1
+MicroKit.Persistence.EntityFrameworkCore               ✅ 1.0.0-preview.1
+MicroKit.Persistence.EntityFrameworkCore.PostgreSql    ✅ 1.0.0-preview.1
+MicroKit.Persistence.EntityFrameworkCore.SqlServer     ✅ 1.0.0-preview.1
+MicroKit.Persistence.Specifications                    ✅ 1.0.0-preview.1
+MicroKit.Persistence.Testing                           ✅ 1.0.0-preview.1
+MicroKit.Persistence.Analyzers                         ✅ 1.0.0-preview.1
 MicroKit.Messaging                                     📋 planifié
 MicroKit.Messaging.AzureServiceBus                     📋 planifié
 MicroKit.Messaging.RabbitMQ                            📋 planifié
