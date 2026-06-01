@@ -1,0 +1,25 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <AssemblyName>MicroKit.Persistence.Analyzers</AssemblyName>
+    <RootNamespace>MicroKit.Persistence.Analyzers</RootNamespace>
+    <!-- Roslyn analyzer packages must target netstandard2.0 for cross-SDK compatibility -->
+    <TargetFramework>netstandard2.0</TargetFramework>
+    <IncludeBuildOutput>false</IncludeBuildOutput>
+    <EnforceExtendedAnalyzerRules>true</EnforceExtendedAnalyzerRules>
+    <!-- Not meaningful for netstandard2.0 analyzer DLLs -->
+    <IsTrimmable>false</IsTrimmable>
+    <Description>Roslyn analyzers for MicroKit.Persistence — enforces CQRS data-access patterns, repository mutation boundaries, IUnitOfWork usage, and IQueryable containment at compile time.</Description>
+    <PackageTags>microkit;persistence;analyzers;roslyn;cqrs;repository;dotnet</PackageTags>
+    <!-- RS2008: Release tracking — will add AnalyzerReleases files before first NuGet publish. -->
+    <NoWarn>RS2008;NU5128</NoWarn>
+    <IncludeSymbols>false</IncludeSymbols>
+  </PropertyGroup>
+  <ItemGroup>
+    <!-- No code fixes in this package — CSharp (not Workspaces) is sufficient -->
+    <PackageReference Include="Microsoft.CodeAnalysis.CSharp" />
+  </ItemGroup>
+  <!-- Place the analyzer DLL in the correct NuGet package location -->
+  <ItemGroup>
+    <None Include="$(OutputPath)\$(AssemblyName).dll" Pack="true" PackagePath="analyzers/dotnet/cs" Visible="false" />
+  </ItemGroup>
+</Project>

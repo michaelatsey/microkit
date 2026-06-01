@@ -14,7 +14,7 @@ namespace MicroKit.Persistence.Abstractions;
 /// is declared in <c>MicroKit.Persistence</c> (Core) where <c>QueryOptions&lt;TAggregate&gt;</c>
 /// is also defined.
 /// Inject <see cref="IReadRepository{TAggregate}"/> in query handlers only.
-/// The PRDANA002 analyzer enforces that no mutation methods appear on implementations.
+/// The MKP002 analyzer enforces that no mutation methods appear on implementations.
 /// </remarks>
 public interface IReadRepository<TAggregate>
     where TAggregate : IAggregateRoot;

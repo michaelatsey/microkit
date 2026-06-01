@@ -7,8 +7,10 @@
     <Project Path="src/MicroKit.Persistence.EntityFrameworkCore.SqlServer/MicroKit.Persistence.EntityFrameworkCore.SqlServer.csproj" />
     <Project Path="src/MicroKit.Persistence.Specifications/MicroKit.Persistence.Specifications.csproj" />
     <Project Path="src/MicroKit.Persistence.Testing/MicroKit.Persistence.Testing.csproj" />
+    <Project Path="src/MicroKit.Persistence.Analyzers/MicroKit.Persistence.Analyzers.csproj" />
   </Folder>
   <Folder Name="/tests/">
     <Project Path="tests/MicroKit.Persistence.UnitTests/MicroKit.Persistence.UnitTests.csproj" />
+    <Project Path="tests/MicroKit.Persistence.Analyzers.Tests/MicroKit.Persistence.Analyzers.Tests.csproj" />
   </Folder>
 </Solution>

@@ -179,3 +179,91 @@ NOT in Abstractions:
   implementation detail of the EF Core integration.
 - If a future `Marten` or `Dapper` provider is added, it registers its own scoped service implementing
   `IUnitOfWork` + `ITransactionalContext` without needing a composite interface.
+
+---
+
+## DN-001: Execution Strategy Coverage Gap in EfUnitOfWork.CommitAsync
+
+**Status:** Deferred (v1.1 candidate)
+**Date:** 2026-05-31
+**Source:** Architect pre-release review — NOTE 7
+
+### Observation
+
+`EfUnitOfWork.ExecuteAsync<TState>` wraps its operation in `context.Database.CreateExecutionStrategy()`
+providing automatic retry on transient failures (e.g., Azure SQL connection drops, Npgsql transient
+errors). `EfUnitOfWork.CommitAsync` (plain `SaveChangesAsync`) does **not** use an execution strategy.
+
+### When This Matters
+
+| Call path | Protected? |
+|-----------|------------|
+| `TransactionBehavior` → `ExecuteAsync` → handler → `CommitAsync` | ✅ Yes — outer strategy covers it |
+| Command handler calling `IUnitOfWork.CommitAsync` directly (no `TransactionBehavior`) | ❌ No retry |
+
+The main command path (through `MicroKit.MediatR.Behaviors.TransactionBehavior`) is fully protected.
+Direct `CommitAsync` calls from handlers that bypass `TransactionBehavior` have no transient-failure
+retry. This is acceptable for localhost and on-premise databases; it is a gap for cloud-hosted
+databases (Azure SQL, Amazon RDS, Neon) where transient failures occur regularly.
+
+### Decision (Deferred)
+
+This is not a correctness problem for v1.0.0-preview.1 — the primary command path is covered.
+For v1.1.0, wrap `CommitAsync` in an execution strategy to provide full resilience for all callers:
+
+```csharp
+public async ValueTask CommitAsync(CancellationToken ct = default)
+{
+    var strategy = context.Database.CreateExecutionStrategy();
+    await strategy.ExecuteAsync(async () =>
+    {
+        try { await context.SaveChangesAsync(ct).ConfigureAwait(false); }
+        catch (DbUpdateConcurrencyException ex) { throw new PersistenceException("...", ex); }
+        catch (DbUpdateException ex) { throw new PersistenceException("...", ex); }
+    }).ConfigureAwait(false);
+}
+```
+
+Note: this changes `CommitAsync` from being retry-safe only inside `ExecuteAsync` to being
+independently retry-safe. The two strategies must not be nested — if `TransactionBehavior`'s
+`ExecuteAsync` is already running, EF Core will throw on strategy nesting with explicit transactions.
+A guard is required: skip the inner strategy when a transaction is already active.
+
+---
+
+## DN-002: ListPagedAsync Fallback PageSize When totalCount Is Zero
+
+**Status:** Deferred (v1.1 candidate)
+**Date:** 2026-05-31
+**Source:** Architect pre-release review — NOTE 9
+
+### Observation
+
+`EfReadRepository.ListPagedAsync` (line 124) uses this fallback when `Pagination` is not specified:
+
+```csharp
+var pagination = opts.Pagination ?? new PaginationOptions(
+    Page: 1,
+    PageSize: totalCount > 0 ? totalCount : 1
+);
+```
+
+When the result set is empty (`totalCount == 0`), `PageSize` is set to `1`. The paging math is
+correct (`TotalPages = 0/1 = 0`), but a consumer inspecting the returned `IPagedResult<T>` will see
+`PageSize = 1`, which may be misread as "only 1 item per page was requested."
+
+### Risk
+
+Low. The only consumer impacted is one that reads `IPagedResult.PageSize` from an unpaginated call
+and treats it as the requested page size. In practice, callers that want unpaginated results are
+unlikely to inspect `PageSize` at all.
+
+### Decision (Deferred)
+
+For v1.0.0-preview.1, the current behaviour is safe. For v1.1.0, either:
+- **Option A:** Use a sensible non-1 default (e.g., `PageSize: 10`) when `totalCount == 0`
+- **Option B:** Add a `<remarks>` note to `ListPagedAsync` documenting the fallback
+- **Option C:** Introduce a `PagedResult.Empty<T>()` factory that communicates intent explicitly
+
+Option B is the lowest risk. Option C is the cleanest API if the concept of "unpaginated paged result"
+is worth making explicit. Decision to be made before v1.0.0-final.

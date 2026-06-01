@@ -50,17 +50,19 @@ Specification types live in the **Domain** layer, but naming is documented here 
 
 | Type | Convention | Example |
 |---|---|---|
-| Analyzer class | `{Concern}Analyzer` | `DbContextInHandlerAnalyzer`, `ReadRepositoryMutationAnalyzer` |
-| Diagnostic ID | `PRDANA{NNN}` | `PRDANA001`, `PRDANA002`, `PRDANA003` |
-| Code fix | `{Concern}CodeFixProvider` | |
+| Analyzer class | `{Concern}Analyzer` | `ReadRepositoryMutationAnalyzer`, `DbContextInjectionAnalyzer` |
+| Diagnostic ID | `MKP{NNN}` | `MKP001`, `MKP002`, `MKP005` |
+| Code fix | `{Concern}CodeFixProvider` | (none in v1 — analyzers are diagnostic-only) |
 
 ## Registered Diagnostic IDs
 
 | ID | Severity | Description |
 |----|----------|-------------|
-| `PRDANA001` | Error | `DbContext` injected directly into a query handler |
-| `PRDANA002` | Error | `SaveChanges[Async]` called inside a read repository |
-| `PRDANA003` | Warning | Missing `AsNoTracking()` on a read repository query |
+| `MKP001` | Error | `IReadRepository<T>` implementation calls `CommitAsync` or `SaveChangesAsync` |
+| `MKP002` | Error | `IReadRepository<T>` implementation declares or calls `AddAsync`, `UpdateAsync`, or `DeleteAsync` |
+| `MKP003` | Warning | `SaveChangesAsync` / `SaveChanges` called directly on `DbContext` — bypasses `IUnitOfWork` |
+| `MKP004` | Warning | `DbContext` injected as constructor parameter outside the infrastructure layer |
+| `MKP005` | Error | Repository method exposes `IQueryable<T>` as return type |
 
 ## DI Extension Methods
 

@@ -51,5 +51,14 @@ public interface IRepository<TAggregate>
     /// Thrown when the underlying provider fails to commit (connection failure,
     /// constraint violation, or concurrency conflict).
     /// </exception>
+    /// <remarks>
+    /// Implementations delegate to the injected <see cref="IUnitOfWork.CommitAsync"/> — they do
+    /// not call the underlying provider directly. This means that calling
+    /// <c>repository.CommitAsync()</c> and <c>unitOfWork.CommitAsync()</c> from the same handler
+    /// invokes a single <c>SaveChangesAsync</c>; there is no double-commit risk.
+    /// Prefer injecting <see cref="IUnitOfWork"/> directly in handlers that coordinate multiple
+    /// repositories — <c>IRepository&lt;T&gt;.CommitAsync</c> is a convenience for single-repo
+    /// command handlers.
+    /// </remarks>
     ValueTask CommitAsync(CancellationToken ct = default);
 }
