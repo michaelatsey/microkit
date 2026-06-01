@@ -1,0 +1,33 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <AssemblyName>MicroKit.Persistence.ArchitectureTests</AssemblyName>
+    <RootNamespace>MicroKit.Persistence.ArchitectureTests</RootNamespace>
+    <IsPackable>false</IsPackable>
+    <IsTestProject>true</IsTestProject>
+    <GenerateDocumentationFile>false</GenerateDocumentationFile>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <NoWarn>CS1591;CA1707;IL2026;IL2070</NoWarn>
+  </PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="Microsoft.NET.Test.Sdk" />
+    <PackageReference Include="xunit" />
+    <PackageReference Include="xunit.runner.visualstudio" />
+    <PackageReference Include="Shouldly" />
+    <PackageReference Include="NetArchTest.Rules" />
+    <PackageReference Include="coverlet.collector">
+      <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
+      <PrivateAssets>all</PrivateAssets>
+    </PackageReference>
+  </ItemGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\MicroKit.Persistence.Abstractions\MicroKit.Persistence.Abstractions.csproj" />
+    <ProjectReference Include="..\..\src\MicroKit.Persistence\MicroKit.Persistence.csproj" />
+    <ProjectReference Include="..\..\src\MicroKit.Persistence.EntityFrameworkCore\MicroKit.Persistence.EntityFrameworkCore.csproj" />
+    <ProjectReference Include="..\..\src\MicroKit.Persistence.EntityFrameworkCore.PostgreSql\MicroKit.Persistence.EntityFrameworkCore.PostgreSql.csproj" />
+    <ProjectReference Include="..\..\src\MicroKit.Persistence.EntityFrameworkCore.SqlServer\MicroKit.Persistence.EntityFrameworkCore.SqlServer.csproj" />
+    <ProjectReference Include="..\..\src\MicroKit.Persistence.Specifications\MicroKit.Persistence.Specifications.csproj" />
+    <ProjectReference Include="..\..\src\MicroKit.Persistence.Testing\MicroKit.Persistence.Testing.csproj" />
+  </ItemGroup>
+</Project>
