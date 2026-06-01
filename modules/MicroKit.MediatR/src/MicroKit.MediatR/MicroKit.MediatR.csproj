@@ -1,0 +1,21 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <AssemblyName>MicroKit.MediatR</AssemblyName>
+    <RootNamespace>MicroKit.MediatR</RootNamespace>
+    <Description>CQRS dispatch layer for MicroKit — BehaviorBase, PipelineOrder, IDomainEventDispatcher, handler adapters, DI registration, and typed IMediator extensions. Built on MediatR 12.x (MIT).</Description>
+    <PackageTags>microkit;mediatr;cqrs;mediator;ddd;dotnet;pipeline</PackageTags>
+    <!-- CA1711: IDomainEventDispatcher — 'Dispatcher' is not a reserved analyzer suffix; suppressed -->
+    <!-- CA1716: 'next' is a VB.NET keyword but is the canonical MediatR delegate parameter name; suppressed -->
+    <!-- IL trimming codes (IL2026/IL2060/IL2067/IL2070) are now handled by targeted -->
+    <!-- [UnconditionalSuppressMessage] attributes on the specific methods that use reflection, -->
+    <!-- rather than a blanket project-wide suppression. -->
+    <NoWarn>$(NoWarn);CA1711;CA1716</NoWarn>
+  </PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="MediatR" />
+    <PackageReference Include="Microsoft.Extensions.DependencyInjection.Abstractions" />
+  </ItemGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\MicroKit.MediatR.Abstractions\MicroKit.MediatR.Abstractions.csproj" />
+  </ItemGroup>
+</Project>

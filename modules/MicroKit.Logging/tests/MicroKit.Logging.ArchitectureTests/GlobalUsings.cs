@@ -1,5 +1,5 @@
 global using System.Reflection;
-global using FluentAssertions;
+global using Shouldly;
 global using NetArchTest.Rules;
 global using Xunit;
 global using MicroKit.Logging;

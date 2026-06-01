@@ -1,0 +1,18 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <AssemblyName>MicroKit.Persistence.EntityFrameworkCore.PostgreSql</AssemblyName>
+    <RootNamespace>MicroKit.Persistence.EntityFrameworkCore.PostgreSql</RootNamespace>
+    <Description>PostgreSQL (Npgsql) provider for MicroKit.Persistence — wires UseNpgsql on EfCoreBuilder.</Description>
+    <PackageTags>persistence;ef-core;postgresql;npgsql;microkit;ddd;dotnet</PackageTags>
+    <NoWarn>$(NoWarn);IL2091</NoWarn>
+  </PropertyGroup>
+  <ItemGroup Condition="'$(CIReleaseBuild)' != 'true'">
+    <ProjectReference Include="..\MicroKit.Persistence.EntityFrameworkCore\MicroKit.Persistence.EntityFrameworkCore.csproj" />
+  </ItemGroup>
+  <ItemGroup Condition="'$(CIReleaseBuild)' == 'true'">
+    <PackageReference Include="MicroKit.Persistence.EntityFrameworkCore" />
+  </ItemGroup>
+  <ItemGroup>
+    <PackageReference Include="Npgsql.EntityFrameworkCore.PostgreSQL" />
+  </ItemGroup>
+</Project>

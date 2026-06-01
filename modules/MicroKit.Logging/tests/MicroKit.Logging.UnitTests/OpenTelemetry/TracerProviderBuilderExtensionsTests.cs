@@ -14,7 +14,7 @@ public sealed class TracerProviderBuilderExtensionsTests
 
         var result = builder.AddMicroKitLoggingSources();
 
-        result.Should().BeSameAs(builder);
+        result.ShouldBeSameAs(builder);
     }
 
     [Fact]
@@ -25,7 +25,7 @@ public sealed class TracerProviderBuilderExtensionsTests
             .Build();
 
         // After registration, the source should have listeners
-        MicroKitActivitySources.Logging.HasListeners().Should().BeTrue();
+        MicroKitActivitySources.Logging.HasListeners().ShouldBeTrue();
     }
 
     [Fact]
@@ -35,7 +35,7 @@ public sealed class TracerProviderBuilderExtensionsTests
             .AddMicroKitLoggingSources()
             .Build();
 
-        MicroKitActivitySources.Enrichment.HasListeners().Should().BeTrue();
+        MicroKitActivitySources.Enrichment.HasListeners().ShouldBeTrue();
     }
 
     [Fact]
@@ -55,6 +55,6 @@ public sealed class TracerProviderBuilderExtensionsTests
         // Create a fresh ActivitySource not known to any provider — StartActivity must return null.
         using var isolatedSource = new ActivitySource("MicroKit.Test.Isolated." + Guid.NewGuid());
         using var activity = isolatedSource.StartActivity("probe");
-        activity.Should().BeNull("an unregistered source must not produce activities");
+        activity.ShouldBeNull("an unregistered source must not produce activities");
     }
 }

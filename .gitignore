@@ -17,3 +17,8 @@ Thumbs.db
 **/BenchmarkDotNet.Artifacts/
 .mcp.json
 .claude/worktrees/
+artifacts/
+.claude/CONTEXT-DEV.md
+.gitignore
+.claude/SESSION-MICROKIT-LOGGING.md
+.claude-context/sessions/

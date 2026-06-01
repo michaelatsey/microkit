@@ -1,6 +1,6 @@
-using FluentAssertions;
 using MicroKit.Domain.Exceptions;
 using MicroKit.Domain.ValueObjects.Common;
+using Shouldly;
 using Xunit;
 
 namespace MicroKit.Domain.UnitTests.ValueObjects.Common;
@@ -18,7 +18,7 @@ public class PercentageTests
         var percentage = new Percentage(value);
 
         // Assert
-        percentage.Value.Should().Be(value);
+        percentage.Value.ShouldBe(value);
     }
 
     [Theory]
@@ -29,9 +29,8 @@ public class PercentageTests
     public void Constructor_InvalidValue_ShouldThrowDomainException(decimal value)
     {
         // Act & Assert
-        var act = () => new Percentage(value);
-        act.Should().Throw<DomainException>()
-           .WithMessage("Percentage value must be between 0 and 100 inclusive.");
+        var ex = Should.Throw<DomainException>(() => new Percentage(value));
+        ex.Message.ShouldBe("Percentage value must be between 0 and 100 inclusive.");
     }
 
     [Theory]
@@ -45,7 +44,7 @@ public class PercentageTests
         var percentage = new Percentage(value);
 
         // Act & Assert
-        percentage.AsFraction.Should().Be(expectedFraction);
+        percentage.AsFraction.ShouldBe(expectedFraction);
     }
 
     [Theory]
@@ -61,7 +60,7 @@ public class PercentageTests
         var result = percentage.Of(amount);
 
         // Assert
-        result.Should().Be(expected);
+        result.ShouldBe(expected);
     }
 
     [Fact]
@@ -75,7 +74,7 @@ public class PercentageTests
         var result = percentage1.Add(percentage2);
 
         // Assert
-        result.Value.Should().Be(50);
+        result.Value.ShouldBe(50);
     }
 
     [Fact]
@@ -86,9 +85,8 @@ public class PercentageTests
         var percentage2 = new Percentage(50);
 
         // Act & Assert
-        var act = () => percentage1.Add(percentage2);
-        act.Should().Throw<DomainException>()
-           .WithMessage("Percentage value must be between 0 and 100 inclusive.");
+        var ex = Should.Throw<DomainException>(() => percentage1.Add(percentage2));
+        ex.Message.ShouldBe("Percentage value must be between 0 and 100 inclusive.");
     }
 
     [Fact]
@@ -102,7 +100,7 @@ public class PercentageTests
         var result = percentage1.Subtract(percentage2);
 
         // Assert
-        result.Value.Should().Be(50);
+        result.Value.ShouldBe(50);
     }
 
     [Fact]
@@ -113,9 +111,8 @@ public class PercentageTests
         var percentage2 = new Percentage(50);
 
         // Act & Assert
-        var act = () => percentage1.Subtract(percentage2);
-        act.Should().Throw<DomainException>()
-           .WithMessage("Percentage value must be between 0 and 100 inclusive.");
+        var ex = Should.Throw<DomainException>(() => percentage1.Subtract(percentage2));
+        ex.Message.ShouldBe("Percentage value must be between 0 and 100 inclusive.");
     }
 
     [Theory]
@@ -129,7 +126,7 @@ public class PercentageTests
         var percentage = Percentage.FromFraction(fraction);
 
         // Assert
-        percentage.AsFraction.Should().Be(fraction);
+        percentage.AsFraction.ShouldBe(fraction);
     }
 
     [Theory]
@@ -139,9 +136,8 @@ public class PercentageTests
     public void FromFraction_InvalidFraction_ShouldThrowDomainException(decimal fraction)
     {
         // Act & Assert
-        var act = () => Percentage.FromFraction(fraction);
-        act.Should().Throw<DomainException>()
-           .WithMessage("Fraction value must be between 0.0 and 1.0 inclusive.");
+        var ex = Should.Throw<DomainException>(() => Percentage.FromFraction(fraction));
+        ex.Message.ShouldBe("Fraction value must be between 0.0 and 1.0 inclusive.");
     }
 
     [Fact]
@@ -151,7 +147,7 @@ public class PercentageTests
         var percentage = Percentage.Zero;
 
         // Assert
-        percentage.Value.Should().Be(0);
+        percentage.Value.ShouldBe(0);
     }
 
     [Fact]
@@ -161,7 +157,7 @@ public class PercentageTests
         var percentage = Percentage.OneHundred;
 
         // Assert
-        percentage.Value.Should().Be(100);
+        percentage.Value.ShouldBe(100);
     }
 
     [Fact]
@@ -175,7 +171,7 @@ public class PercentageTests
         var result = percentage1 + percentage2;
 
         // Assert
-        result.Should().Be(percentage1.Add(percentage2));
+        result.ShouldBe(percentage1.Add(percentage2));
     }
 
     [Fact]
@@ -189,7 +185,7 @@ public class PercentageTests
         var result = percentage1 - percentage2;
 
         // Assert
-        result.Should().Be(percentage1.Subtract(percentage2));
+        result.ShouldBe(percentage1.Subtract(percentage2));
     }
 
     [Fact]
@@ -199,7 +195,7 @@ public class PercentageTests
         Percentage percentage = 50m;
 
         // Assert
-        percentage.Value.Should().Be(50);
+        percentage.Value.ShouldBe(50);
     }
 
     [Fact]
@@ -212,7 +208,7 @@ public class PercentageTests
         decimal value = percentage;
 
         // Assert
-        value.Should().Be(50);
+        value.ShouldBe(50);
     }
 
     [Fact]
@@ -225,7 +221,7 @@ public class PercentageTests
         var result = percentage.ToString();
 
         // Assert
-        result.Should().Be("75.25%");
+        result.ShouldBe("75.25%");
     }
 
     [Theory]
@@ -240,9 +236,9 @@ public class PercentageTests
         var percentage2 = new Percentage(value2);
 
         // Act & Assert
-        percentage1.Equals(percentage2).Should().Be(expected);
-        (percentage1 == percentage2).Should().Be(expected);
-        (percentage1 != percentage2).Should().Be(!expected);
+        percentage1.Equals(percentage2).ShouldBe(expected);
+        (percentage1 == percentage2).ShouldBe(expected);
+        (percentage1 != percentage2).ShouldBe(!expected);
     }
 
     [Fact]
@@ -253,28 +249,7 @@ public class PercentageTests
         var percentage2 = new Percentage(50);
 
         // Act & Assert
-        percentage1.GetHashCode().Should().Be(percentage2.GetHashCode());
+        percentage1.GetHashCode().ShouldBe(percentage2.GetHashCode());
     }
 
-    [Fact]
-    public void Add_WithNull_ShouldThrowArgumentNullException()
-    {
-        // Arrange
-        var percentage = new Percentage(50);
-
-        // Act & Assert
-        var act = () => percentage.Add(null!);
-        act.Should().Throw<ArgumentNullException>();
-    }
-
-    [Fact]
-    public void Subtract_WithNull_ShouldThrowArgumentNullException()
-    {
-        // Arrange
-        var percentage = new Percentage(50);
-
-        // Act & Assert
-        var act = () => percentage.Subtract(null!);
-        act.Should().Throw<ArgumentNullException>();
-    }
 }

@@ -1,0 +1,18 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <AssemblyName>MicroKit.Persistence.EntityFrameworkCore.SqlServer</AssemblyName>
+    <RootNamespace>MicroKit.Persistence.EntityFrameworkCore.SqlServer</RootNamespace>
+    <Description>SQL Server provider for MicroKit.Persistence — wires UseSqlServer on EfCoreBuilder.</Description>
+    <PackageTags>persistence;ef-core;sqlserver;microkit;ddd;dotnet</PackageTags>
+    <NoWarn>$(NoWarn);IL2091</NoWarn>
+  </PropertyGroup>
+  <ItemGroup Condition="'$(CIReleaseBuild)' != 'true'">
+    <ProjectReference Include="..\MicroKit.Persistence.EntityFrameworkCore\MicroKit.Persistence.EntityFrameworkCore.csproj" />
+  </ItemGroup>
+  <ItemGroup Condition="'$(CIReleaseBuild)' == 'true'">
+    <PackageReference Include="MicroKit.Persistence.EntityFrameworkCore" />
+  </ItemGroup>
+  <ItemGroup>
+    <PackageReference Include="Microsoft.EntityFrameworkCore.SqlServer" />
+  </ItemGroup>
+</Project>

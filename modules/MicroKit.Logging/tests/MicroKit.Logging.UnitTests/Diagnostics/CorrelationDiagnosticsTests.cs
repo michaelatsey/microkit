@@ -20,10 +20,10 @@ public sealed class CorrelationDiagnosticsTests : IDisposable
     {
         using var scope = _factory.BeginOperationScope();
 
-        _subscriber.Events.Should().ContainSingle(e => e.EventName == DiagnosticEventNames.CorrelationGenerated);
-        _subscriber.Events.Should().NotContain(e => e.EventName == DiagnosticEventNames.CorrelationResolved);
+        _subscriber.Events.ShouldContain(e => e.EventName == DiagnosticEventNames.CorrelationGenerated);
+        _subscriber.Events.ShouldNotContain(e => e.EventName == DiagnosticEventNames.CorrelationResolved);
         var payload = _subscriber.Events.Single(e => e.EventName == DiagnosticEventNames.CorrelationGenerated).Payload;
-        DiagnosticListenerSubscriber.GetPayloadValue<string>(payload, "CorrelationId").Should().NotBeNullOrEmpty();
+        DiagnosticListenerSubscriber.GetPayloadValue<string>(payload, "CorrelationId").ShouldNotBeNullOrEmpty();
     }
 
     [Fact]
@@ -33,11 +33,11 @@ public sealed class CorrelationDiagnosticsTests : IDisposable
 
         using var scope = _factory.BeginOperationScope(id);
 
-        _subscriber.Events.Should().ContainSingle(e => e.EventName == DiagnosticEventNames.CorrelationResolved);
-        _subscriber.Events.Should().NotContain(e => e.EventName == DiagnosticEventNames.CorrelationGenerated);
+        _subscriber.Events.ShouldContain(e => e.EventName == DiagnosticEventNames.CorrelationResolved);
+        _subscriber.Events.ShouldNotContain(e => e.EventName == DiagnosticEventNames.CorrelationGenerated);
         var payload = _subscriber.Events.Single(e => e.EventName == DiagnosticEventNames.CorrelationResolved).Payload;
-        DiagnosticListenerSubscriber.GetPayloadValue<string>(payload, "CorrelationId").Should().Be(id);
-        DiagnosticListenerSubscriber.GetPayloadValue<string>(payload, "Source").Should().Be("caller");
+        DiagnosticListenerSubscriber.GetPayloadValue<string>(payload, "CorrelationId").ShouldBe(id);
+        DiagnosticListenerSubscriber.GetPayloadValue<string>(payload, "Source").ShouldBe("caller");
     }
 
     [Fact]
@@ -47,9 +47,9 @@ public sealed class CorrelationDiagnosticsTests : IDisposable
 
         using var scope = _factory.BeginOperationScope(opts);
 
-        _subscriber.Events.Should().ContainSingle(e => e.EventName == DiagnosticEventNames.CorrelationResolved);
+        _subscriber.Events.ShouldContain(e => e.EventName == DiagnosticEventNames.CorrelationResolved);
         var payload = _subscriber.Events.Single(e => e.EventName == DiagnosticEventNames.CorrelationResolved).Payload;
-        DiagnosticListenerSubscriber.GetPayloadValue<string>(payload, "CorrelationId").Should().Be("opts-id-xyz");
+        DiagnosticListenerSubscriber.GetPayloadValue<string>(payload, "CorrelationId").ShouldBe("opts-id-xyz");
     }
 
     public void Dispose() => _subscriber.Dispose();

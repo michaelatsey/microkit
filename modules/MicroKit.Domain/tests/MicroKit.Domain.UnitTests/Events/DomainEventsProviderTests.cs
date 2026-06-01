@@ -1,7 +1,7 @@
-using FluentAssertions;
 using MicroKit.Domain.Aggregates;
 using MicroKit.Domain.Events;
 using MicroKit.Domain.Identifiers;
+using Shouldly;
 using Xunit;
 
 namespace MicroKit.Domain.UnitTests.Events;
@@ -15,7 +15,7 @@ public class DomainEventsProviderTests
         var aggregate = new TestAggregateRoot(new TestId(Guid.NewGuid()));
 
         // Assert
-        aggregate.DomainEvents.Should().BeEmpty();
+        aggregate.DomainEvents.ShouldBeEmpty();
     }
 
     [Fact]
@@ -29,8 +29,8 @@ public class DomainEventsProviderTests
         aggregate.RaiseEvent(domainEvent);
 
         // Assert
-        aggregate.DomainEvents.Should().HaveCount(1);
-        aggregate.DomainEvents.Should().Contain(domainEvent);
+        aggregate.DomainEvents.Count.ShouldBe(1);
+        aggregate.DomainEvents.ShouldContain(domainEvent);
     }
 
     [Fact]
@@ -48,8 +48,10 @@ public class DomainEventsProviderTests
         aggregate.RaiseEvent(event3);
 
         // Assert
-        aggregate.DomainEvents.Should().HaveCount(3);
-        aggregate.DomainEvents.Should().ContainInOrder(event1, event2, event3);
+        aggregate.DomainEvents.Count.ShouldBe(3);
+        aggregate.DomainEvents[0].ShouldBe(event1);
+        aggregate.DomainEvents[1].ShouldBe(event2);
+        aggregate.DomainEvents[2].ShouldBe(event3);
     }
 
     [Fact]
@@ -62,8 +64,8 @@ public class DomainEventsProviderTests
         var events = aggregate.DrainDomainEvents();
 
         // Assert
-        events.Should().BeEmpty();
-        events.Should().BeSameAs(Array.Empty<IDomainEvent>());
+        events.ShouldBeEmpty();
+        events.ShouldBeSameAs(Array.Empty<IDomainEvent>());
     }
 
     [Fact]
@@ -81,9 +83,10 @@ public class DomainEventsProviderTests
         var events = aggregate.DrainDomainEvents();
 
         // Assert
-        events.Should().HaveCount(2);
-        events.Should().ContainInOrder(event1, event2);
-        aggregate.DomainEvents.Should().BeEmpty();
+        events.Count.ShouldBe(2);
+        events[0].ShouldBe(event1);
+        events[1].ShouldBe(event2);
+        aggregate.DomainEvents.ShouldBeEmpty();
     }
 
     [Fact]
@@ -100,8 +103,8 @@ public class DomainEventsProviderTests
         var events = aggregate.DrainDomainEvents(); // Second drain
 
         // Assert
-        events.Should().BeEmpty();
-        events.Should().BeSameAs(Array.Empty<IDomainEvent>());
+        events.ShouldBeEmpty();
+        events.ShouldBeSameAs(Array.Empty<IDomainEvent>());
     }
 
     [Fact]
@@ -117,13 +120,12 @@ public class DomainEventsProviderTests
         var events = aggregate.DrainDomainEvents();
 
         // Assert
-        events.Should().BeAssignableTo<IReadOnlyCollection<IDomainEvent>>();
+        events.ShouldBeAssignableTo<IReadOnlyCollection<IDomainEvent>>();
 
         // Verify that even if cast to IList, modifications would throw
         if (events is IList<IDomainEvent> list)
         {
-            var act = () => list.Add(new TestDomainEvent("Should fail"));
-            act.Should().Throw<NotSupportedException>();
+            Should.Throw<NotSupportedException>(() => list.Add(new TestDomainEvent("Should fail")));
         }
     }
 }

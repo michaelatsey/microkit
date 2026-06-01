@@ -1,6 +1,6 @@
-using FluentAssertions;
 using MicroKit.Domain.Exceptions;
 using MicroKit.Domain.ValueObjects.Common;
+using Shouldly;
 using Xunit;
 
 namespace MicroKit.Domain.UnitTests.ValueObjects.Common;
@@ -17,8 +17,8 @@ public class MoneyTests
         var money = new Money(amount, currency);
 
         // Assert
-        money.Amount.Should().Be(amount);
-        money.Currency.Should().Be(currency.ToUpperInvariant());
+        money.Amount.ShouldBe(amount);
+        money.Currency.ShouldBe(currency.ToUpperInvariant());
     }
 
     [Theory]
@@ -28,9 +28,8 @@ public class MoneyTests
     public void Constructor_InvalidCurrency_ShouldThrowDomainException(string? currency)
     {
         // Act & Assert
-        var act = () => new Money(100, currency!);
-        act.Should().Throw<DomainException>()
-           .WithMessage("Currency code cannot be null or empty.");
+        var ex = Should.Throw<DomainException>(() => new Money(100, currency!));
+        ex.Message.ShouldBe("Currency code cannot be null or empty.");
     }
 
     [Theory]
@@ -41,8 +40,7 @@ public class MoneyTests
     public void Constructor_InvalidCurrencyFormat_ShouldThrowDomainException(string currency)
     {
         // Act & Assert
-        var act = () => new Money(100, currency);
-        act.Should().Throw<DomainException>();
+        Should.Throw<DomainException>(() => new Money(100, currency));
     }
 
     [Theory]
@@ -55,7 +53,7 @@ public class MoneyTests
         var money = new Money(100, input);
 
         // Assert
-        money.Currency.Should().Be(expected);
+        money.Currency.ShouldBe(expected);
     }
 
     [Fact]
@@ -65,7 +63,7 @@ public class MoneyTests
         var money = new Money(0, "USD");
 
         // Act & Assert
-        money.IsZero.Should().BeTrue();
+        money.IsZero.ShouldBeTrue();
     }
 
     [Fact]
@@ -75,7 +73,7 @@ public class MoneyTests
         var money = new Money(100, "USD");
 
         // Act & Assert
-        money.IsZero.Should().BeFalse();
+        money.IsZero.ShouldBeFalse();
     }
 
     [Fact]
@@ -85,9 +83,9 @@ public class MoneyTests
         var money = Money.Zero("EUR");
 
         // Assert
-        money.Amount.Should().Be(0);
-        money.Currency.Should().Be("EUR");
-        money.IsZero.Should().BeTrue();
+        money.Amount.ShouldBe(0);
+        money.Currency.ShouldBe("EUR");
+        money.IsZero.ShouldBeTrue();
     }
 
     [Fact]
@@ -101,8 +99,8 @@ public class MoneyTests
         var result = money1.Add(money2);
 
         // Assert
-        result.Amount.Should().Be(150);
-        result.Currency.Should().Be("USD");
+        result.Amount.ShouldBe(150);
+        result.Currency.ShouldBe("USD");
     }
 
     [Fact]
@@ -113,9 +111,8 @@ public class MoneyTests
         var money2 = new Money(50, "EUR");
 
         // Act & Assert
-        var act = () => money1.Add(money2);
-        act.Should().Throw<DomainException>()
-           .WithMessage("Cannot perform operation on different currencies: USD and EUR.");
+        var ex = Should.Throw<DomainException>(() => money1.Add(money2));
+        ex.Message.ShouldBe("Cannot perform operation on different currencies: USD and EUR.");
     }
 
     [Fact]
@@ -129,8 +126,8 @@ public class MoneyTests
         var result = money1.Add(money2);
 
         // Assert
-        result.Amount.Should().Be(150);
-        result.Currency.Should().Be("USD");
+        result.Amount.ShouldBe(150);
+        result.Currency.ShouldBe("USD");
     }
 
     [Fact]
@@ -144,8 +141,8 @@ public class MoneyTests
         var result = money1.Subtract(money2);
 
         // Assert
-        result.Amount.Should().Be(70);
-        result.Currency.Should().Be("USD");
+        result.Amount.ShouldBe(70);
+        result.Currency.ShouldBe("USD");
     }
 
     [Fact]
@@ -158,8 +155,8 @@ public class MoneyTests
         var result = money.Multiply(1.5m);
 
         // Assert
-        result.Amount.Should().Be(150);
-        result.Currency.Should().Be("USD");
+        result.Amount.ShouldBe(150);
+        result.Currency.ShouldBe("USD");
     }
 
     [Fact]
@@ -173,7 +170,7 @@ public class MoneyTests
         var result = money1 + money2;
 
         // Assert
-        result.Should().Be(money1.Add(money2));
+        result.ShouldBe(money1.Add(money2));
     }
 
     [Fact]
@@ -187,7 +184,7 @@ public class MoneyTests
         var result = money1 - money2;
 
         // Assert
-        result.Should().Be(money1.Subtract(money2));
+        result.ShouldBe(money1.Subtract(money2));
     }
 
     [Fact]
@@ -201,8 +198,8 @@ public class MoneyTests
         var result2 = 1.5m * money;
 
         // Assert
-        result1.Should().Be(money.Multiply(1.5m));
-        result2.Should().Be(money.Multiply(1.5m));
+        result1.ShouldBe(money.Multiply(1.5m));
+        result2.ShouldBe(money.Multiply(1.5m));
     }
 
     [Fact]
@@ -215,7 +212,7 @@ public class MoneyTests
         var result = money.ToString();
 
         // Assert
-        result.Should().Be("123.45 USD");
+        result.ShouldBe("123.45 USD");
     }
 
     [Theory]
@@ -230,9 +227,9 @@ public class MoneyTests
         var money2 = new Money(amount2, currency2);
 
         // Act & Assert
-        money1.Equals(money2).Should().Be(expected);
-        (money1 == money2).Should().Be(expected);
-        (money1 != money2).Should().Be(!expected);
+        money1.Equals(money2).ShouldBe(expected);
+        (money1 == money2).ShouldBe(expected);
+        (money1 != money2).ShouldBe(!expected);
     }
 
     [Fact]
@@ -243,7 +240,7 @@ public class MoneyTests
         var money2 = new Money(100, "usd");
 
         // Act & Assert
-        money1.GetHashCode().Should().Be(money2.GetHashCode());
+        money1.GetHashCode().ShouldBe(money2.GetHashCode());
     }
 
     [Fact]
@@ -254,7 +251,7 @@ public class MoneyTests
         var money2 = new Money(100, "EUR");
 
         // Act & Assert
-        money1.GetHashCode().Should().NotBe(money2.GetHashCode());
+        money1.GetHashCode().ShouldNotBe(money2.GetHashCode());
     }
 
     [Fact]
@@ -264,8 +261,7 @@ public class MoneyTests
         var money = new Money(100, "USD");
 
         // Act & Assert
-        var act = () => money.Add(null!);
-        act.Should().Throw<ArgumentNullException>();
+        Should.Throw<ArgumentNullException>(() => money.Add(null!));
     }
 
     [Fact]
@@ -275,7 +271,6 @@ public class MoneyTests
         var money = new Money(100, "USD");
 
         // Act & Assert
-        var act = () => money.Subtract(null!);
-        act.Should().Throw<ArgumentNullException>();
+        Should.Throw<ArgumentNullException>(() => money.Subtract(null!));
     }
 }

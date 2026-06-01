@@ -25,7 +25,7 @@ public sealed class NamingConventionTests
             .Should().ImplementInterface(typeof(ILogEnricher))
             .GetResult();
 
-        result.IsSuccessful.Should().BeTrue(because: FailingNames(result));
+        result.IsSuccessful.ShouldBeTrue(FailingNames(result));
     }
 
     [Fact]
@@ -38,7 +38,7 @@ public sealed class NamingConventionTests
             .Should().BeSealed()
             .GetResult();
 
-        result.IsSuccessful.Should().BeTrue(because: FailingNames(result));
+        result.IsSuccessful.ShouldBeTrue(FailingNames(result));
     }
 
     [Fact]
@@ -51,7 +51,7 @@ public sealed class NamingConventionTests
             .Should().BeStatic()
             .GetResult();
 
-        result.IsSuccessful.Should().BeTrue(because: FailingNames(result));
+        result.IsSuccessful.ShouldBeTrue(FailingNames(result));
     }
 
     [Fact]
@@ -64,6 +64,6 @@ public sealed class NamingConventionTests
             .Should().BeSealed()
             .GetResult();
 
-        result.IsSuccessful.Should().BeTrue(because: FailingNames(result));
+        result.IsSuccessful.ShouldBeTrue(FailingNames(result));
     }
 }
