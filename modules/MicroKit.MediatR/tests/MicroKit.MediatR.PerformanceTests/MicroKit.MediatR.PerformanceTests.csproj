@@ -25,8 +25,7 @@
     <PackageReference Include="coverlet.collector" />
   </ItemGroup>
   <ItemGroup>
-    <ProjectReference Include="../../src/MicroKit.MediatR.Abstractions/MicroKit.MediatR.Abstractions.csproj" />
-    <ProjectReference Include="../../src/MicroKit.MediatR/MicroKit.MediatR.csproj" />
+<ProjectReference Include="../../src/MicroKit.MediatR/MicroKit.MediatR.csproj" />
     <ProjectReference Include="../../src/MicroKit.MediatR.Behaviors/MicroKit.MediatR.Behaviors.csproj" />
   </ItemGroup>
 </Project>
