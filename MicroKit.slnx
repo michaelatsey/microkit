@@ -53,4 +53,18 @@
     <Project Path="modules/MicroKit.Persistence/tests/MicroKit.Persistence.Analyzers.Tests/MicroKit.Persistence.Analyzers.Tests.csproj" />
     <Project Path="modules/MicroKit.Persistence/tests/MicroKit.Persistence.ArchitectureTests/MicroKit.Persistence.ArchitectureTests.csproj" />
   </Folder>
+  <Folder Name="/modules/MicroKit.Multitenancy/" />
+  <Folder Name="/modules/MicroKit.Multitenancy/src/">
+    <Project Path="modules/MicroKit.Multitenancy/src/MicroKit.Multitenancy.Abstractions/MicroKit.Multitenancy.Abstractions.csproj" />
+    <Project Path="modules/MicroKit.Multitenancy/src/MicroKit.Multitenancy/MicroKit.Multitenancy.csproj" />
+    <Project Path="modules/MicroKit.Multitenancy/src/MicroKit.Multitenancy.AspNetCore/MicroKit.Multitenancy.AspNetCore.csproj" />
+    <Project Path="modules/MicroKit.Multitenancy/src/MicroKit.Multitenancy.EntityFrameworkCore/MicroKit.Multitenancy.EntityFrameworkCore.csproj" />
+    <Project Path="modules/MicroKit.Multitenancy/src/MicroKit.Multitenancy.Analyzers/MicroKit.Multitenancy.Analyzers.csproj" />
+  </Folder>
+  <Folder Name="/modules/MicroKit.Multitenancy/tests/">
+    <Project Path="modules/MicroKit.Multitenancy/tests/MicroKit.Multitenancy.UnitTests/MicroKit.Multitenancy.UnitTests.csproj" />
+    <Project Path="modules/MicroKit.Multitenancy/tests/MicroKit.Multitenancy.IntegrationTests/MicroKit.Multitenancy.IntegrationTests.csproj" />
+    <Project Path="modules/MicroKit.Multitenancy/tests/MicroKit.Multitenancy.ArchitectureTests/MicroKit.Multitenancy.ArchitectureTests.csproj" />
+    <Project Path="modules/MicroKit.Multitenancy/tests/MicroKit.Multitenancy.PerformanceTests/MicroKit.Multitenancy.PerformanceTests.csproj" />
+  </Folder>
 </Solution>
