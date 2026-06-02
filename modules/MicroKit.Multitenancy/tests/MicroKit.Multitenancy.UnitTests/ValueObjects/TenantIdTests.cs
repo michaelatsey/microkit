@@ -2,7 +2,7 @@ using MicroKit.Multitenancy;
 using Shouldly;
 using Xunit;
 
-namespace MicroKit.Multitenancy.UnitTests.TenantId;
+namespace MicroKit.Multitenancy.UnitTests.ValueObjects;
 
 public sealed class TenantIdTests
 {
