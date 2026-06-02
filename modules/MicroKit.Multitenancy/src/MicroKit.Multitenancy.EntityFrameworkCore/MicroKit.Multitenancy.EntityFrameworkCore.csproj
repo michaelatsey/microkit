@@ -1,0 +1,30 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <AssemblyName>MicroKit.Multitenancy.EntityFrameworkCore</AssemblyName>
+    <RootNamespace>MicroKit.Multitenancy.EntityFrameworkCore</RootNamespace>
+    <Description>EF Core tenant isolation for MicroKit.Multitenancy — automatic query filters on ITenantEntity, SaveChanges stamp interceptor, and IgnoreTenantScope for admin queries.</Description>
+    <PackageTags>microkit;multitenancy;tenant;ef-core;dotnet</PackageTags>
+    <Authors>Ange-Michaël Atsé</Authors>
+    <PackageProjectUrl>https://github.com/michaelatsey/microkit</PackageProjectUrl>
+    <RepositoryUrl>https://github.com/michaelatsey/microkit</RepositoryUrl>
+    <PackageLicenseExpression>MIT</PackageLicenseExpression>
+    <IncludeSymbols>true</IncludeSymbols>
+    <SymbolPackageFormat>snupkg</SymbolPackageFormat>
+    <!-- EF Core generic type parameters generate IL2091 trim warnings -->
+    <NoWarn>$(NoWarn);IL2091</NoWarn>
+  </PropertyGroup>
+  <ItemGroup Condition="'$(CIReleaseBuild)' != 'true'">
+    <ProjectReference Include="..\MicroKit.Multitenancy\MicroKit.Multitenancy.csproj" />
+    <ProjectReference Include="../../../MicroKit.Persistence/src/MicroKit.Persistence.Abstractions/MicroKit.Persistence.Abstractions.csproj" />
+    <ProjectReference Include="../../../MicroKit.Persistence/src/MicroKit.Persistence.EntityFrameworkCore/MicroKit.Persistence.EntityFrameworkCore.csproj" />
+  </ItemGroup>
+  <ItemGroup Condition="'$(CIReleaseBuild)' == 'true'">
+    <PackageReference Include="MicroKit.Multitenancy" />
+    <PackageReference Include="MicroKit.Persistence.Abstractions" />
+    <PackageReference Include="MicroKit.Persistence.EntityFrameworkCore" />
+  </ItemGroup>
+  <ItemGroup>
+    <PackageReference Include="Microsoft.EntityFrameworkCore" />
+    <PackageReference Include="Microsoft.Extensions.DependencyInjection.Abstractions" />
+  </ItemGroup>
+</Project>

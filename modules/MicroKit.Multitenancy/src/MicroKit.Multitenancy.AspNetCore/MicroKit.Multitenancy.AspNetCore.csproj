@@ -1,0 +1,23 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <AssemblyName>MicroKit.Multitenancy.AspNetCore</AssemblyName>
+    <RootNamespace>MicroKit.Multitenancy.AspNetCore</RootNamespace>
+    <Description>ASP.NET Core integration for MicroKit.Multitenancy — HTTP middleware and resolution strategies: header, route, subdomain, claims, host.</Description>
+    <PackageTags>microkit;multitenancy;tenant;aspnetcore;middleware;dotnet</PackageTags>
+    <Authors>Ange-Michaël Atsé</Authors>
+    <PackageProjectUrl>https://github.com/michaelatsey/microkit</PackageProjectUrl>
+    <RepositoryUrl>https://github.com/michaelatsey/microkit</RepositoryUrl>
+    <PackageLicenseExpression>MIT</PackageLicenseExpression>
+    <IncludeSymbols>true</IncludeSymbols>
+    <SymbolPackageFormat>snupkg</SymbolPackageFormat>
+  </PropertyGroup>
+  <ItemGroup Condition="'$(CIReleaseBuild)' != 'true'">
+    <ProjectReference Include="..\MicroKit.Multitenancy\MicroKit.Multitenancy.csproj" />
+  </ItemGroup>
+  <ItemGroup Condition="'$(CIReleaseBuild)' == 'true'">
+    <PackageReference Include="MicroKit.Multitenancy" />
+  </ItemGroup>
+  <ItemGroup>
+    <FrameworkReference Include="Microsoft.AspNetCore.App" />
+  </ItemGroup>
+</Project>
