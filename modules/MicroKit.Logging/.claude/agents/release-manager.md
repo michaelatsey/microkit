@@ -28,6 +28,7 @@ You orchestrate releases for all packages in the MicroKit.Logging module. You do
 - [ ] No uncommitted changes: `git status --porcelain`
 - [ ] `CHANGELOG.md` has an entry for this version
 - [ ] `version.json` is correct for the target semver
+- [ ] Release workflow uses `-p:PackageVersion=` extracted from tag — not Nerdbank alone
 
 ### Build Validation
 ```bash
@@ -45,6 +46,22 @@ dotnet pack modules/MicroKit.Logging/MicroKit.Logging.slnx -c Release --no-build
 - [ ] No pre-release suffix unless intentional
 - [ ] `MicroKit.Logging.Abstractions` has no unexpected dependencies
 - [ ] Symbol packages (`.snupkg`) are present
+
+### Workflow Version Extraction
+
+Every release workflow MUST extract the package version from the Git tag and pass it
+explicitly to `dotnet pack` via `-p:PackageVersion=`. Never rely on Nerdbank.GitVersioning
+alone to compute the NuGet package version in CI.
+
+Confirm `release-logging.yml` contains:
+```yaml
+- name: Extract version from tag
+  run: |
+    TAG="${GITHUB_REF#refs/tags/}"
+    PACKAGE_VERSION="${TAG#logging-v}"
+    echo "PACKAGE_VERSION=$PACKAGE_VERSION" >> "$GITHUB_ENV"
+```
+And that the Pack step passes `-p:PackageVersion=${{ env.PACKAGE_VERSION }}`.
 
 ### Tagging
 ```bash

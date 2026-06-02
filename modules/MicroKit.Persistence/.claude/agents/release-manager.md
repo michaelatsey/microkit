@@ -28,6 +28,7 @@ MicroKit.Persistence.Analyzers
 - [ ] `CHANGELOG.md` entry complete for this version
 - [ ] No uncommitted changes
 - [ ] `version.json` is set correctly
+- [ ] Release workflow uses `-p:PackageVersion=` extracted from tag — not Nerdbank alone
 
 ### 2. Build all packages (Release)
 ```bash
@@ -55,7 +56,19 @@ Confirm all 8 `.nupkg` files are present.
 - `Analyzers` is a build-only package — no `lib/` in the nupkg
 - No `FluentAssertions` anywhere in the package graph
 
-### 6. Tag and push
+### 6. Verify workflow version extraction
+Confirm `release-persistence.yml` contains:
+```yaml
+- name: Extract version from tag
+  run: |
+    TAG="${GITHUB_REF#refs/tags/}"
+    PACKAGE_VERSION="${TAG#persistence-v}"
+    echo "PACKAGE_VERSION=$PACKAGE_VERSION" >> "$GITHUB_ENV"
+```
+And that the Pack step passes `-p:PackageVersion=${{ env.PACKAGE_VERSION }}`.
+Never rely on Nerdbank.GitVersioning alone to compute the NuGet package version in CI.
+
+### 7. Tag and push
 Present tag: `persistence-v{version}` — wait for human confirmation.
 ```bash
 git tag persistence-v{version} -m "MicroKit.Persistence {version}"
