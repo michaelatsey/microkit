@@ -48,13 +48,15 @@ public interface ITenantStore
 
 ## Built-in HTTP Strategies (AspNetCore)
 
-| Strategy | Order | Source | Header/Claim/Route |
-|----------|-------|--------|--------------------|
-| `HeaderTenantResolutionStrategy` | 1 | HTTP Header | `X-Tenant-Id` |
-| `RouteDataTenantResolutionStrategy` | 2 | Route parameter | `{tenantId}` |
-| `SubdomainTenantResolutionStrategy` | 3 | Subdomain | `{tenant}.app.example.com` |
-| `ClaimsTenantResolutionStrategy` | 4 | JWT Claim | `tenant_id` |
-| `HostTenantResolutionStrategy` | 5 | Full host | hostname → TenantId mapping |
+| Strategy | Order | Source | Header/Claim/Route | Default |
+|----------|-------|--------|--------------------|---------|
+| `HeaderTenantResolutionStrategy` | 10 | HTTP Header | `X-Tenant-Id` | ON |
+| `RouteDataTenantResolutionStrategy` | 20 | Route parameter | `{tenantId}` | ON |
+| `SubdomainTenantResolutionStrategy` | 30 | Subdomain | `{guid}.app.example.com` | **opt-in** |
+| `ClaimsTenantResolutionStrategy` | 40 | JWT Claim | `tenant_id` | ON |
+| `HostTenantResolutionStrategy` | 50 | Full host | hostname → TenantId mapping | **opt-in** |
+
+Order spacing of 10 allows inserting custom strategies between built-ins without renumbering.
 
 ## Resolution pipeline error codes
 
