@@ -10,8 +10,8 @@
     <PackageLicenseExpression>MIT</PackageLicenseExpression>
     <IncludeSymbols>true</IncludeSymbols>
     <SymbolPackageFormat>snupkg</SymbolPackageFormat>
-    <!-- EF Core generic type parameters generate IL2091 trim warnings -->
-    <NoWarn>$(NoWarn);IL2091</NoWarn>
+    <!-- EF Core generic type parameters and MakeGenericMethod generate trim warnings -->
+    <NoWarn>$(NoWarn);IL2026;IL2060;IL2091</NoWarn>
   </PropertyGroup>
   <!-- DEV: source ProjectReferences — CI/Release: published NuGet packages -->
   <!-- ⚠ Any new cross-module dependency must be added to BOTH ItemGroups -->

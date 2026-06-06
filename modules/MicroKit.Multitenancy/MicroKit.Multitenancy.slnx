@@ -12,4 +12,11 @@
     <Project Path="tests/MicroKit.Multitenancy.ArchitectureTests/MicroKit.Multitenancy.ArchitectureTests.csproj" />
     <Project Path="tests/MicroKit.Multitenancy.PerformanceTests/MicroKit.Multitenancy.PerformanceTests.csproj" />
   </Folder>
+  <Folder Name="/deps/">
+    <Project Path="../MicroKit.Result/src/MicroKit.Result/MicroKit.Result.csproj" />
+    <Project Path="../MicroKit.Domain/src/MicroKit.Domain/MicroKit.Domain.csproj" />
+    <Project Path="../MicroKit.Persistence/src/MicroKit.Persistence.Abstractions/MicroKit.Persistence.Abstractions.csproj" />
+    <Project Path="../MicroKit.Persistence/src/MicroKit.Persistence/MicroKit.Persistence.csproj" />
+    <Project Path="../MicroKit.Persistence/src/MicroKit.Persistence.EntityFrameworkCore/MicroKit.Persistence.EntityFrameworkCore.csproj" />
+  </Folder>
 </Solution>

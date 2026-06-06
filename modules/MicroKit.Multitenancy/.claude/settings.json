@@ -8,15 +8,15 @@
                 "hooks": [
                     {
                         "type": "command",
-                        "command": "bash .claude/hooks/scripts/architecture-check.sh \"$CLAUDE_TOOL_INPUT_PATH\""
+                        "command": "bash .claude/hooks/scripts/multitenancy-architecture-check.sh \"$CLAUDE_TOOL_INPUT_PATH\""
                     },
                     {
                         "type": "command",
-                        "command": "bash .claude/hooks/scripts/dependency-check.sh \"$CLAUDE_TOOL_INPUT_PATH\""
+                        "command": "bash .claude/hooks/scripts/multitenancy-dependency-check.sh \"$CLAUDE_TOOL_INPUT_PATH\""
                     },
                     {
                         "type": "command",
-                        "command": "bash .claude/hooks/scripts/isolation-check.sh \"$CLAUDE_TOOL_INPUT_PATH\""
+                        "command": "bash .claude/hooks/scripts/multitenancy-isolation-check.sh \"$CLAUDE_TOOL_INPUT_PATH\""
                     }
                 ]
             }

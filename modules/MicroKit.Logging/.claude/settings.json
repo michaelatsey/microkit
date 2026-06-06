@@ -8,19 +8,19 @@
                 "hooks": [
                     {
                         "type": "command",
-                        "command": "bash .claude/hooks/scripts/architecture-check.sh \"$CLAUDE_TOOL_INPUT_PATH\""
+                        "command": "bash .claude/hooks/scripts/logging-architecture-check.sh \"$CLAUDE_TOOL_INPUT_PATH\""
                     },
                     {
                         "type": "command",
-                        "command": "bash .claude/hooks/scripts/dependency-check.sh \"$CLAUDE_TOOL_INPUT_PATH\""
+                        "command": "bash .claude/hooks/scripts/logging-dependency-check.sh \"$CLAUDE_TOOL_INPUT_PATH\""
                     },
                     {
                         "type": "command",
-                        "command": "bash .claude/hooks/scripts/performance-check.sh \"$CLAUDE_TOOL_INPUT_PATH\""
+                        "command": "bash .claude/hooks/scripts/logging-performance-check.sh \"$CLAUDE_TOOL_INPUT_PATH\""
                     },
                     {
                         "type": "command",
-                        "command": "bash .claude/hooks/scripts/analyzer-check.sh \"$CLAUDE_TOOL_INPUT_PATH\""
+                        "command": "bash .claude/hooks/scripts/logging-analyzer-check.sh \"$CLAUDE_TOOL_INPUT_PATH\""
                     }
                 ]
             }
