@@ -41,11 +41,12 @@ The pipeline short-circuits on the **first** successful `Result<TenantId>`.
 
 ```csharp
 // ✅ Strategy ordering example
-// Order 1: HeaderTenantResolutionStrategy   — X-Tenant-Id header
-// Order 2: RouteDataTenantResolutionStrategy — {tenantId} route parameter
-// Order 3: SubdomainTenantResolutionStrategy — {tenant}.app.example.com
-// Order 4: ClaimsTenantResolutionStrategy   — JWT claim
-// Order 5: HostTenantResolutionStrategy     — full host name mapping
+// Order 10: HeaderTenantResolutionStrategy      — X-Tenant-Id header
+// Order 20: RouteDataTenantResolutionStrategy   — {tenantId} route parameter
+// Order 30: SubdomainTenantResolutionStrategy   — {guid}.app.example.com (opt-in)
+// Order 40: ClaimsTenantResolutionStrategy      — JWT claim
+// Order 50: HostTenantResolutionStrategy        — full host name mapping (opt-in)
+// Spacing of 10 allows inserting custom strategies between built-ins without renumbering.
 ```
 
 ## No-throw contract
@@ -76,17 +77,29 @@ public async ValueTask<Result<TenantId>> TryResolveAsync(CancellationToken ct = 
 
 ```csharp
 // ✅ Middleware resolves tenant once per request and sets context
-public sealed class TenantResolutionMiddleware(RequestDelegate next, ITenantResolver resolver,
-    ITenantContextAccessor accessor)
+// IMPORTANT: ITenantResolver and ITenantContextAccessor are Scoped. Middleware is effectively
+// Singleton-lifetime. Use InvokeAsync method injection for scoped deps — NOT constructor injection.
+// Constructor injection of Scoped services here would create a captive dependency (MKT003 violation).
+public sealed partial class TenantResolutionMiddleware(RequestDelegate next)
 {
-    public async Task InvokeAsync(HttpContext context)
+    public async Task InvokeAsync(
+        HttpContext context,
+        ITenantResolver resolver,
+        ITenantContextAccessor accessor,
+        ILogger<TenantResolutionMiddleware> logger)
     {
         var result = await resolver.ResolveAsync(context.RequestAborted).ConfigureAwait(false);
         if (result.IsSuccess)
             accessor.SetTenant(result.Value);
+        else
+            LogTenantNotResolved(logger, context.Request.Path.ToString());
 
         await next(context).ConfigureAwait(false);
     }
+
+    [LoggerMessage(EventId = 2001, Level = LogLevel.Warning,
+        Message = "Tenant could not be resolved for request '{Path}'. Proceeding without tenant context.")]
+    private static partial void LogTenantNotResolved(ILogger logger, string path);
 }
 ```
 

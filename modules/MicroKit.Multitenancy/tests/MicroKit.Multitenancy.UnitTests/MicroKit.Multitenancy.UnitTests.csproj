@@ -9,6 +9,10 @@
   <ItemGroup>
     <ProjectReference Include="..\..\src\MicroKit.Multitenancy.Abstractions\MicroKit.Multitenancy.Abstractions.csproj" />
     <ProjectReference Include="..\..\src\MicroKit.Multitenancy\MicroKit.Multitenancy.csproj" />
+    <ProjectReference Include="..\..\src\MicroKit.Multitenancy.AspNetCore\MicroKit.Multitenancy.AspNetCore.csproj" />
+  </ItemGroup>
+  <ItemGroup>
+    <FrameworkReference Include="Microsoft.AspNetCore.App" />
   </ItemGroup>
   <ItemGroup>
     <PackageReference Include="Microsoft.NET.Test.Sdk" />
