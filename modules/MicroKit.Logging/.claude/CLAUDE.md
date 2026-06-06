@@ -16,17 +16,17 @@ Always load the relevant file before working on a specific concern:
 
 | Task | Load first | Agent |
 |------|-----------|-------|
-| **Implementing anything new** | `.claude/CLAUDE.md` + relevant rule file | `implementer` — plan before code |
-| Architecture decision | `.claude/rules/architecture.md` + `.claude-context/context/architectural-decisions.md` | `architect` |
-| Adding an enricher | `.claude/workflows/adding-enricher.md` + `/new-enricher` command | `implementer` → `performance-reviewer` |
-| Adding a provider | `.claude/workflows/adding-provider.md` + `/new-provider` command | `implementer` → `dependency-guardian` |
-| Adding a Roslyn analyzer | `.claude/workflows/creating-analyzer.md` + `/new-analyzer` command | `implementer` → `analyzer-reviewer` |
-| Performance concern | `.claude/rules/performance.md` + `.claude/skills/profiling/SKILL.md` | `performance-reviewer` |
-| OpenTelemetry work | `.claude/rules/opentelemetry.md` + `.claude/skills/opentelemetry/SKILL.md` | `observability-reviewer` |
-| Public API change | `.claude/rules/abstractions.md` + `.claude/rules/naming.md` | `api-reviewer` — required before merge |
-| Dependency / `.csproj` change | `.claude/rules/dependencies.md` + `.claude-context/context/dependency-graph.md` | `dependency-guardian` — auto on `.csproj` edit |
-| Release | `.claude/workflows/releasing-module.md` + `/release` command | `release-manager` |
-| Naming a property/event | `.claude-context/standards/log-properties.md` + `.claude-context/standards/event-ids.md` | `api-reviewer` if Abstractions touched |
+| **Implementing anything new** | `.claude/CLAUDE.md` + relevant rule file | `logging-implementer` — plan before code |
+| Architecture decision | `.claude/rules/logging-architecture.md` + `.claude-context/context/logging-architectural-decisions.md` | `logging-architect` |
+| Adding an enricher | `.claude/workflows/logging-adding-enricher.md` + `/logging-new-enricher` command | `logging-implementer` → `logging-performance-reviewer` |
+| Adding a provider | `.claude/workflows/logging-adding-provider.md` + `/logging-new-provider` command | `logging-implementer` → `logging-dependency-guardian` |
+| Adding a Roslyn analyzer | `.claude/workflows/logging-creating-analyzer.md` + `/logging-new-analyzer` command | `logging-implementer` → `logging-analyzer-reviewer` |
+| Performance concern | `.claude/rules/logging-performance.md` + `.claude/skills/logging-profiling/SKILL.md` | `logging-performance-reviewer` |
+| OpenTelemetry work | `.claude/rules/logging-opentelemetry.md` + `.claude/skills/logging-opentelemetry/SKILL.md` | `logging-observability-reviewer` |
+| Public API change | `.claude/rules/logging-abstractions.md` + `.claude/rules/logging-naming.md` | `logging-api-reviewer` — required before merge |
+| Dependency / `.csproj` change | `.claude/rules/logging-dependencies.md` + `.claude-context/context/logging-dependency-graph.md` | `logging-dependency-guardian` — auto on `.csproj` edit |
+| Release | `.claude/workflows/logging-releasing-module.md` + `/logging-release` command | `logging-release-manager` |
+| Naming a property/event | `.claude-context/standards/log-properties.md` + `.claude-context/standards/logging-event-ids.md` | `logging-api-reviewer` if Abstractions touched |
 
 ---
 
@@ -112,14 +112,14 @@ MicroKit.Logging                     ← core pipeline
 
 | Agent | Model | Trigger |
 |-------|-------|---------|
-| `implementer` | Opus | **First agent to invoke** before writing any new code — produces a plan and waits for approval. active plan mode when triggered |
-| `architect` | Opus | Architecture decisions, new abstractions, dependency graph changes |
-| `api-reviewer` | Opus | Public API surface changes in Abstractions or Core — required before merge |
-| `performance-reviewer` | Sonnet | Any hot-path code, enrichment pipeline changes, benchmark deltas |
-| `observability-reviewer` | Sonnet | OTEL bridge, ActivitySource, DiagnosticSource, tracing |
-| `analyzer-reviewer` | Sonnet | Roslyn analyzer rules, diagnostics IDs, code fixes |
-| `release-manager` | Sonnet | `/release` command, NuGet packaging, tag preparation |
-| `dependency-guardian` | Haiku | Any `<PackageReference>` or project reference change — fast PASS/BLOCK |
+| `logging-implementer` | Opus | **First agent to invoke** before writing any new code — produces a plan and waits for approval. active plan mode when triggered |
+| `logging-architect` | Opus | Architecture decisions, new abstractions, dependency graph changes |
+| `logging-api-reviewer` | Opus | Public API surface changes in Abstractions or Core — required before merge |
+| `logging-performance-reviewer` | Sonnet | Any hot-path code, enrichment pipeline changes, benchmark deltas |
+| `logging-observability-reviewer` | Sonnet | OTEL bridge, ActivitySource, DiagnosticSource, tracing |
+| `logging-analyzer-reviewer` | Sonnet | Roslyn analyzer rules, diagnostics IDs, code fixes |
+| `logging-release-manager` | Sonnet | `/logging-release` command, NuGet packaging, tag preparation |
+| `logging-dependency-guardian` | Haiku | Any `<PackageReference>` or project reference change — fast PASS/BLOCK |
 
 ---
 
@@ -127,16 +127,16 @@ MicroKit.Logging                     ← core pipeline
 
 | Command | Purpose |
 |---------|---------|
-| `/new-provider` | Scaffold a new logging provider integration |
-| `/new-enricher` | Scaffold a new `ILogEnricher` implementation |
-| `/new-analyzer` | Scaffold a new Roslyn analyzer + code fix |
-| `/new-generator` | Scaffold a new source generator |
-| `/review-architecture` | Run architecture review agent |
-| `/review-performance` | Run performance review agent |
-| `/review-observability` | Run observability review agent |
-| `/generate-tests` | Generate test suite for a target class |
-| `/generate-benchmarks` | Generate BenchmarkDotNet suite |
-| `/release` | Prepare and validate release |
+| `/logging-new-provider` | Scaffold a new logging provider integration |
+| `/logging-new-enricher` | Scaffold a new `ILogEnricher` implementation |
+| `/logging-new-analyzer` | Scaffold a new Roslyn analyzer + code fix |
+| `/logging-new-generator` | Scaffold a new source generator |
+| `/logging-review-architecture` | Run architecture review agent |
+| `/logging-review-performance` | Run performance review agent |
+| `/logging-review-observability` | Run observability review agent |
+| `/logging-generate-tests` | Generate test suite for a target class |
+| `/logging-generate-benchmarks` | Generate BenchmarkDotNet suite |
+| `/logging-release` | Prepare and validate release |
 
 ---
 

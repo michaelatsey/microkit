@@ -25,16 +25,16 @@ Always load the relevant file before working on a specific concern:
 
 | Task | Load first | Agent |
 |------|-----------|-------|
-| **Implementing anything new** | `.claude/CLAUDE.md` + relevant rule | `implementer` — plan before code |
-| Architecture / contract decision | `.claude/rules/architecture.md` + `.claude-context/context/architectural-decisions.md` | `architect` |
+| **Implementing anything new** | `.claude/CLAUDE.md` + relevant rule | `multitenancy-implementer` — plan before code |
+| Architecture / contract decision | `.claude/rules/multitenancy-architecture.md` + `.claude-context/context/multitenancy-architectural-decisions.md` | `multitenancy-architect` |
 | EF Core isolation concern | `.claude/rules/tenant-isolation.md` + `.claude-context/standards/ef-core-tenant-isolation.md` | `tenant-isolation-guardian` |
-| Async context / propagation concern | `.claude/rules/async-context.md` + `.claude-context/standards/tenant-context-contracts.md` | `distributed-context-specialist` |
-| Resolution strategy | `.claude/rules/resolution-pipeline.md` + `.claude-context/standards/resolution-strategy-contracts.md` | `architect` |
-| Adding a resolver strategy | `.claude/workflows/adding-resolver.md` | `implementer` |
-| Public API change | `.claude/rules/abstractions.md` + `.claude/rules/naming.md` | `api-reviewer` — required before merge |
-| Dependency / `.csproj` change | `.claude/rules/dependencies.md` + `.claude-context/context/dependency-graph.md` | `dependency-guardian` |
-| Analyzer concern | `.claude/rules/analyzers.md` | `implementer` → `api-reviewer` |
-| Release | `.claude/workflows/releasing-module.md` + `/release` | `release-manager` |
+| Async context / propagation concern | `.claude/rules/multitenancy-async-context.md` + `.claude-context/standards/tenant-context-contracts.md` | `multitenancy-distributed-context-specialist` |
+| Resolution strategy | `.claude/rules/multitenancy-resolution-pipeline.md` + `.claude-context/standards/multitenancy-resolution-strategy-contracts.md` | `multitenancy-architect` |
+| Adding a resolver strategy | `.claude/workflows/multitenancy-adding-resolver.md` | `multitenancy-implementer` |
+| Public API change | `.claude/rules/multitenancy-abstractions.md` + `.claude/rules/multitenancy-naming.md` | `api-reviewer` — required before merge |
+| Dependency / `.csproj` change | `.claude/rules/multitenancy-dependencies.md` + `.claude-context/context/multitenancy-dependency-graph.md` | `multitenancy-dependency-guardian` |
+| Analyzer concern | `.claude/rules/multitenancy-analyzers.md` | `multitenancy-implementer` → `multitenancy-api-reviewer` |
+| Release | `.claude/workflows/multitenancy-releasing-module.md` + `/multitenancy-release` | `multitenancy-release-manager` |
 
 ---
 
@@ -138,13 +138,13 @@ MultitenancyDbContextOptionsExtensions // .UseMultitenancy(ctx)
 
 | Agent | Model | Trigger |
 |-------|-------|---------|
-| `implementer` | Opus | **First agent to invoke** before writing new code |
-| `architect` | Opus | Contract decisions, module boundary changes, resolution pipeline design |
+| `multitenancy-implementer` | Opus | **First agent to invoke** before writing new code |
+| `multitenancy-architect` | Opus | Contract decisions, module boundary changes, resolution pipeline design |
 | `tenant-isolation-guardian` | Opus | EF Core query filters, interceptors, cross-tenant leak detection |
-| `distributed-context-specialist` | Opus | AsyncLocal propagation, async context capture/restore, distributed scenarios |
-| `api-reviewer` | Opus | Public API surface in Abstractions or Core — required before merge |
-| `dependency-guardian` | Haiku | Any `.csproj` / project-reference change — fast PASS/BLOCK |
-| `release-manager` | Sonnet | `/release` — 5-package release lifecycle |
+| `multitenancy-distributed-context-specialist` | Opus | AsyncLocal propagation, async context capture/restore, distributed scenarios |
+| `multitenancy-api-reviewer` | Opus | Public API surface in Abstractions or Core — required before merge |
+| `multitenancy-dependency-guardian` | Haiku | Any `.csproj` / project-reference change — fast PASS/BLOCK |
+| `multitenancy-release-manager` | Sonnet | `/multitenancy-release` — 5-package release lifecycle |
 
 ---
 
@@ -155,7 +155,7 @@ MultitenancyDbContextOptionsExtensions // .UseMultitenancy(ctx)
 | `/new-tenant-resolver` | Scaffold a custom `ITenantResolutionStrategy` implementation |
 | `/new-tenant-store` | Scaffold a custom `ITenantStore` implementation |
 | `/audit-tenant-isolation` | Detect EF query filter bypasses and cross-tenant leaks |
-| `/review-architecture` | Run the architect agent against the module |
+| `/multitenancy-review-architecture` | Run the architect agent against the module |
 
 ---
 
