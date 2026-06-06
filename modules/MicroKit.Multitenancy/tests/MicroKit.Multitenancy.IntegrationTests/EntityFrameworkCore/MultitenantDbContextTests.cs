@@ -345,52 +345,66 @@ public sealed class MultitenantDbContextTests : IDisposable
         var tenantA = MakeTenant(tenantAId);
         var tenantB = MakeTenant(tenantBId);
 
-        // Seed both tenants using a dedicated connection for seeding
-        using var seedConn = new SqliteConnection("Data Source=:memory:");
-        seedConn.Open();
-        var seedAccessor = new AsyncLocalTenantContextAccessor();
-        var seedInterceptor = new TenantStampInterceptor(seedAccessor);
-
-        var seedOptions = new DbContextOptionsBuilder<TestMultitenantDbContext>()
-            .UseSqlite(seedConn)
-            .AddInterceptors(seedInterceptor)
-            .Options;
-
-        using (var seedCtx = new TestMultitenantDbContext(seedOptions, seedAccessor))
-        {
-            seedCtx.Database.EnsureCreated();
-            seedAccessor.SetTenant(tenantA);
-            seedCtx.Entities.Add(new TenantTestEntity { Name = "A" });
-            await seedCtx.SaveChangesAsync();
-
-            seedAccessor.SetTenant(tenantB);
-            seedCtx.Entities.Add(new TenantTestEntity { Name = "B" });
-            await seedCtx.SaveChangesAsync();
-        }
-
-        // Run two concurrent "requests", each with their own accessor/context pair
+        // Each task gets its own isolated SQLite connection (unique DataSource) to avoid
+        // SQLite Error 5 (SQLITE_BUSY) when two threads concurrently access the same connection.
         IReadOnlyList<TenantTestEntity>? seenByA = null;
         IReadOnlyList<TenantTestEntity>? seenByB = null;
 
         var taskA = Task.Run(async () =>
         {
+            // Unique per-task in-memory DB — fully isolated from taskB
+            using var conn = new SqliteConnection($"Data Source={Guid.NewGuid():N};Mode=Memory;Cache=Shared");
+            conn.Open();
             var acc = new AsyncLocalTenantContextAccessor();
-            acc.SetTenant(tenantA);
-            var opts = new DbContextOptionsBuilder<TestMultitenantDbContext>()
-                .UseSqlite(seedConn)
+            var interceptor = new TenantStampInterceptor(acc);
+            var seedOpts = new DbContextOptionsBuilder<TestMultitenantDbContext>()
+                .UseSqlite(conn)
+                .AddInterceptors(interceptor)
                 .Options;
-            using var ctx = new TestMultitenantDbContext(opts, acc);
+            using (var seedCtx = new TestMultitenantDbContext(seedOpts, acc))
+            {
+                seedCtx.Database.EnsureCreated();
+                acc.SetTenant(tenantA);
+                seedCtx.Entities.Add(new TenantTestEntity { Name = "A" });
+                await seedCtx.SaveChangesAsync();
+                acc.SetTenant(tenantB);
+                seedCtx.Entities.Add(new TenantTestEntity { Name = "B" });
+                await seedCtx.SaveChangesAsync();
+            }
+            acc.SetTenant(tenantA);
+            var queryOpts = new DbContextOptionsBuilder<TestMultitenantDbContext>()
+                .UseSqlite(conn)
+                .Options;
+            using var ctx = new TestMultitenantDbContext(queryOpts, acc);
             seenByA = await ctx.Entities.ToListAsync();
         });
 
         var taskB = Task.Run(async () =>
         {
+            // Unique per-task in-memory DB — fully isolated from taskA
+            using var conn = new SqliteConnection($"Data Source={Guid.NewGuid():N};Mode=Memory;Cache=Shared");
+            conn.Open();
             var acc = new AsyncLocalTenantContextAccessor();
-            acc.SetTenant(tenantB);
-            var opts = new DbContextOptionsBuilder<TestMultitenantDbContext>()
-                .UseSqlite(seedConn)
+            var interceptor = new TenantStampInterceptor(acc);
+            var seedOpts = new DbContextOptionsBuilder<TestMultitenantDbContext>()
+                .UseSqlite(conn)
+                .AddInterceptors(interceptor)
                 .Options;
-            using var ctx = new TestMultitenantDbContext(opts, acc);
+            using (var seedCtx = new TestMultitenantDbContext(seedOpts, acc))
+            {
+                seedCtx.Database.EnsureCreated();
+                acc.SetTenant(tenantA);
+                seedCtx.Entities.Add(new TenantTestEntity { Name = "A" });
+                await seedCtx.SaveChangesAsync();
+                acc.SetTenant(tenantB);
+                seedCtx.Entities.Add(new TenantTestEntity { Name = "B" });
+                await seedCtx.SaveChangesAsync();
+            }
+            acc.SetTenant(tenantB);
+            var queryOpts = new DbContextOptionsBuilder<TestMultitenantDbContext>()
+                .UseSqlite(conn)
+                .Options;
+            using var ctx = new TestMultitenantDbContext(queryOpts, acc);
             seenByB = await ctx.Entities.ToListAsync();
         });
 
