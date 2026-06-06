@@ -1,4 +1,6 @@
-namespace MicroKit.MediatR;
+using MicroKit.MediatR.Events;
+
+namespace MicroKit.MediatR.Handlers;
 
 /// <summary>
 /// Handles a MediatR notification that wraps a <typeparamref name="TEvent"/> domain event.

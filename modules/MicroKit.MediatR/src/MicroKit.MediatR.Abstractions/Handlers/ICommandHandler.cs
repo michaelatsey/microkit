@@ -1,4 +1,6 @@
-namespace MicroKit.MediatR;
+using MicroKit.MediatR.Requests;
+
+namespace MicroKit.MediatR.Handlers;
 
 /// <summary>
 /// Handles <typeparamref name="TCommand"/> commands that return no value.

@@ -1,4 +1,4 @@
-namespace MicroKit.MediatR;
+namespace MicroKit.MediatR.Markers;
 
 /// <summary>
 /// Opts a command into <c>IdempotencyBehavior</c> (pipeline order 400).

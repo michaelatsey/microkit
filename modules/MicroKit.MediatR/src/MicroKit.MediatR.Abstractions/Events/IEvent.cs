@@ -1,4 +1,4 @@
-namespace MicroKit.MediatR;
+namespace MicroKit.MediatR.Events;
 
 /// <summary>
 /// Marks a domain fact that has already happened.

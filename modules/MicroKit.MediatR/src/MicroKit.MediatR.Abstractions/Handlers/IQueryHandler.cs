@@ -1,4 +1,6 @@
-namespace MicroKit.MediatR;
+using MicroKit.MediatR.Requests;
+
+namespace MicroKit.MediatR.Handlers;
 
 /// <summary>
 /// Handles <typeparamref name="TQuery"/> queries that return <typeparamref name="TResult"/>.

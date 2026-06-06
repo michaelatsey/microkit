@@ -14,15 +14,20 @@
          Used by CIReleaseBuild=true pack step to emit correct NuGet dependencies
          instead of the git-height versions produced by cross-module ProjectReferences. -->
     <PackageVersion Include="MicroKit.Result" Version="1.0.0-preview.1" />
-    <PackageVersion Include="MicroKit.Domain" Version="1.0.0-preview.1" />
+    <PackageVersion Include="MicroKit.Domain" Version="1.0.0-preview.4" />
     <PackageVersion Include="MicroKit.Logging.Abstractions" Version="1.0.0-preview.1" />
     <PackageVersion Include="MicroKit.Persistence.Abstractions" Version="1.0.0-preview.1" />
+    <PackageVersion Include="MicroKit.Multitenancy.Abstractions" Version="1.0.0-preview.1" />
+  </ItemGroup>
+  <ItemGroup Label="Multitenancy">
+    <PackageVersion Include="MicroKit.Multitenancy" Version="1.0.0-preview.1" />
   </ItemGroup>
   <ItemGroup Label="Persistence">
     <PackageVersion Include="MicroKit.Persistence" Version="1.0.0-preview.1" />
     <PackageVersion Include="MicroKit.Persistence.EntityFrameworkCore" Version="1.0.0-preview.1" />
     <PackageVersion Include="Microsoft.EntityFrameworkCore" Version="10.0.8" />
     <PackageVersion Include="Microsoft.EntityFrameworkCore.Relational" Version="10.0.8" />
+    <PackageVersion Include="Microsoft.EntityFrameworkCore.Sqlite" Version="10.0.8" />
     <PackageVersion Include="Microsoft.EntityFrameworkCore.SqlServer" Version="10.0.8" />
     <PackageVersion Include="Npgsql.EntityFrameworkCore.PostgreSQL" Version="10.0.2" />
   </ItemGroup>

@@ -1,4 +1,4 @@
-namespace MicroKit.MediatR;
+namespace MicroKit.MediatR.Events;
 
 /// <summary>
 /// Drains all domain events accumulated on aggregates and dispatches them through the

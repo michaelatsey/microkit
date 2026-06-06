@@ -3,7 +3,7 @@ using System.Reflection;
 using MicroKit.Result;
 using ResultStatic = MicroKit.Result.Result;
 
-namespace MicroKit.MediatR;
+namespace MicroKit.MediatR.Pipeline;
 
 /// <summary>
 /// Mandatory base class for all MicroKit pipeline behaviors. Inherit from this — never implement

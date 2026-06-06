@@ -6,6 +6,8 @@
     <PackageTags>persistence;ef-core;postgresql;npgsql;microkit;ddd;dotnet</PackageTags>
     <NoWarn>$(NoWarn);IL2091</NoWarn>
   </PropertyGroup>
+  <!-- DEV: source ProjectReferences — CI/Release: published NuGet packages -->
+  <!-- ⚠ Any new cross-module dependency must be added to BOTH ItemGroups -->
   <ItemGroup Condition="'$(CIReleaseBuild)' != 'true'">
     <ProjectReference Include="..\MicroKit.Persistence.EntityFrameworkCore\MicroKit.Persistence.EntityFrameworkCore.csproj" />
   </ItemGroup>

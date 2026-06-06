@@ -1,4 +1,6 @@
-namespace MicroKit.MediatR;
+using MicroKit.MediatR.Handlers;
+
+namespace MicroKit.MediatR.Requests;
 
 /// <summary>
 /// Marks a request that reads state and returns <typeparamref name="TResult"/>. Must not mutate state.

@@ -1,4 +1,6 @@
-namespace MicroKit.MediatR;
+using MicroKit.MediatR.Handlers;
+
+namespace MicroKit.MediatR.Requests;
 
 /// <summary>
 /// Marks a request that reads state and streams <typeparamref name="TResult"/> items as <see cref="IAsyncEnumerable{T}"/>.

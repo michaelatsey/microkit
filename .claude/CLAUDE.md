@@ -28,7 +28,7 @@ Ce fichier racine donne la vision globale et les conventions transversales.
 | **MicroKit.Http** | `modules/MicroKit.Http/` | `modules/MicroKit.Http/.claude/` | 📋 Planifié |
 | **MicroKit.Auth** | `modules/MicroKit.Auth/` | `modules/MicroKit.Auth/.claude/` | 📋 Planifié |
 | **MicroKit.Observability** | `modules/MicroKit.Observability/` | `modules/MicroKit.Observability/.claude/` | 📋 Planifié |
-| **MicroKit.Multitenancy** | `modules/MicroKit.Multitenancy/` | `modules/MicroKit.Multitenancy/.claude/` | 📋 Planifié |
+| **MicroKit.Multitenancy** | `modules/MicroKit.Multitenancy/` | `modules/MicroKit.Multitenancy/.claude/` | 🚧 Bootstrapped |
 
 ### Règle de navigation pour Claude Code
 ```
@@ -37,6 +37,7 @@ Tâche transversale (build, CI)  → lire ce fichier + .claude/rules/monorepo-co
 Nouvelle feature cross-module   → lire ce fichier + les .claude/ des modules concernés
 Ajout d'un nouveau module       → lire .claude/skills/new-module-bootstrap.md
 Écriture de tests               → lire .claude/rules/testing-libraries.md (Shouldly obligatoire)
+Ajout/modif dep cross-module    → lire .claude/rules/cross-module-references.md (pattern obligatoire)
 ```
 
 ---

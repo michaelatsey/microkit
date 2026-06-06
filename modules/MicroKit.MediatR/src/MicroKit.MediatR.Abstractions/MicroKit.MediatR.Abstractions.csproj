@@ -10,8 +10,8 @@
   <ItemGroup>
     <PackageReference Include="MediatR.Contracts" />
   </ItemGroup>
-  <!-- Cross-module references: source in dev/CI builds, published NuGet packages when packing for release.
-       Set CIReleaseBuild=true on the `dotnet pack` step to emit correct nuspec dependencies. -->
+  <!-- DEV: source ProjectReferences — CI/Release: published NuGet packages -->
+  <!-- ⚠ Any new cross-module dependency must be added to BOTH ItemGroups -->
   <ItemGroup Condition="'$(CIReleaseBuild)' != 'true'">
     <ProjectReference Include="../../../MicroKit.Result/src/MicroKit.Result/MicroKit.Result.csproj" />
     <ProjectReference Include="../../../MicroKit.Domain/src/MicroKit.Domain/MicroKit.Domain.csproj" />

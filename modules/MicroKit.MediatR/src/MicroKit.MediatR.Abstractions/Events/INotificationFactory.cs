@@ -1,4 +1,4 @@
-namespace MicroKit.MediatR;
+namespace MicroKit.MediatR.Events;
 
 /// <summary>
 /// Resolves the <see cref="IDomainEventNotification{TEvent}"/> associated with a domain event.

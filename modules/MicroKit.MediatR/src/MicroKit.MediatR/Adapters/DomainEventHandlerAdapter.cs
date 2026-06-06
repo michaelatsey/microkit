@@ -1,4 +1,4 @@
-namespace MicroKit.MediatR;
+namespace MicroKit.MediatR.Adapters;
 
 internal sealed class DomainEventHandlerAdapter<TEvent, TNotification>(
     IDomainEventHandler<TEvent, TNotification> inner)

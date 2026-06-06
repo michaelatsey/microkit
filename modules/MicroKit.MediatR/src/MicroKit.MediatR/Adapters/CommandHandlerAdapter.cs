@@ -1,4 +1,4 @@
-namespace MicroKit.MediatR;
+namespace MicroKit.MediatR.Adapters;
 
 internal sealed class CommandHandlerAdapter<TCommand>(ICommandHandler<TCommand> inner)
     : IRequestHandler<TCommand>

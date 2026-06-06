@@ -5,8 +5,8 @@
     <Description>EF Core bridge for MicroKit.Persistence — EfRepository, EfReadRepository, EfUnitOfWork, EfSpecificationEvaluator, ITransactionalUnitOfWork, and the DI registration entry point (PersistenceBuilder).</Description>
     <PackageTags>persistence;ef-core;repository;unit-of-work;microkit;ddd;dotnet</PackageTags>
   </PropertyGroup>
-  <!-- Cross-module references: ProjectReference in dev/CI builds, PackageReference when packing for release.
-       Set CIReleaseBuild=true on the `dotnet pack` step to emit correct nuspec dependencies. -->
+  <!-- DEV: source ProjectReferences — CI/Release: published NuGet packages -->
+  <!-- ⚠ Any new cross-module dependency must be added to BOTH ItemGroups -->
   <ItemGroup Condition="'$(CIReleaseBuild)' != 'true'">
     <ProjectReference Include="..\MicroKit.Persistence\MicroKit.Persistence.csproj" />
   </ItemGroup>
