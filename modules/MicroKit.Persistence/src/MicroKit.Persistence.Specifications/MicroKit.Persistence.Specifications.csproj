@@ -5,6 +5,8 @@
     <Description>QueryOptions ordering and specification-swap extensions for MicroKit.Persistence. Provides property-selector OrderBy/ThenBy overloads and WithSpec composition.</Description>
     <PackageTags>persistence;specifications;query-options;ordering;microkit;ddd;dotnet</PackageTags>
   </PropertyGroup>
+  <!-- DEV: source ProjectReferences — CI/Release: published NuGet packages -->
+  <!-- ⚠ Any new cross-module dependency must be added to BOTH ItemGroups -->
   <ItemGroup Condition="'$(CIReleaseBuild)' != 'true'">
     <ProjectReference Include="..\MicroKit.Persistence\MicroKit.Persistence.csproj" />
   </ItemGroup>

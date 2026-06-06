@@ -28,6 +28,28 @@ model: haiku
 8. **NSubstitute confined** — appears only in `Testing` project
 9. **Analyzers build-only** — `MicroKit.Persistence.Analyzers` referenced with `OutputItemType="Analyzer" ReferenceOutputAssembly="false"` only
 
+## Cross-Module Reference Pattern (rule: `/.claude/rules/cross-module-references.md`)
+
+MicroKit.Persistence.Abstractions depends on `MicroKit.Result` and `MicroKit.Domain.Abstractions`;
+Core depends on `MicroKit.Logging.Abstractions`. All must follow the canonical two-ItemGroup pattern.
+Run on every cross-module reference found:
+
+```bash
+# Detect Condition= placed on individual items instead of ItemGroups (violation)
+grep -n 'ProjectReference.*Condition=\|PackageReference.*Condition=' modules/MicroKit.Persistence/src/**/*.csproj
+```
+
+Checklist:
+- [ ] `Condition=` is on `<ItemGroup>`, never on individual `<ProjectReference>` or `<PackageReference>` items
+- [ ] Both warning comments appear above the two `<ItemGroup>` blocks:
+      `<!-- DEV: source ProjectReferences — CI/Release: published NuGet packages -->`
+      `<!-- ⚠ Any new cross-module dependency must be added to BOTH ItemGroups -->`
+- [ ] Strict symmetry: every `ProjectReference` has a matching `PackageReference` twin and vice versa
+- [ ] No `Version=` on cross-module `<PackageReference>` (CPM via `Directory.Packages.props`)
+- [ ] All `<ProjectReference>` paths are relative (never absolute)
+- [ ] All newly referenced modules are listed in `MicroKit.Persistence.slnx`
+- [ ] Test/non-packable projects use unconditional `<ProjectReference>` — never conditional
+
 ## Output format
 ```
 ✅ PASS [ProjectName]: All dependency rules satisfied.

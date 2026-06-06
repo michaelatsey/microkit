@@ -37,6 +37,7 @@ Tâche transversale (build, CI)  → lire ce fichier + .claude/rules/monorepo-co
 Nouvelle feature cross-module   → lire ce fichier + les .claude/ des modules concernés
 Ajout d'un nouveau module       → lire .claude/skills/new-module-bootstrap.md
 Écriture de tests               → lire .claude/rules/testing-libraries.md (Shouldly obligatoire)
+Ajout/modif dep cross-module    → lire .claude/rules/cross-module-references.md (pattern obligatoire)
 ```
 
 ---

@@ -11,4 +11,7 @@
     <Project Path="tests/MicroKit.MediatR.ArchitectureTests/MicroKit.MediatR.ArchitectureTests.csproj" />
     <Project Path="tests/MicroKit.MediatR.PerformanceTests/MicroKit.MediatR.PerformanceTests.csproj" />
   </Folder>
+  <Project Path="../MicroKit.Domain/src/MicroKit.Domain/MicroKit.Domain.csproj" />
+  <Project Path="../MicroKit.Logging/src/MicroKit.Logging.Abstractions/MicroKit.Logging.Abstractions.csproj" />
+  <Project Path="../MicroKit.Result/src/MicroKit.Result/MicroKit.Result.csproj" />
 </Solution>

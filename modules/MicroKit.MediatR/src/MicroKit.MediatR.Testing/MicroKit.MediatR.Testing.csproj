@@ -10,6 +10,7 @@
     <PackageReference Include="Shouldly" />
   </ItemGroup>
   <ItemGroup>
-<ProjectReference Include="..\MicroKit.MediatR\MicroKit.MediatR.csproj" />
+    <ProjectReference Include="..\MicroKit.MediatR.Abstractions\MicroKit.MediatR.Abstractions.csproj" />
+    <ProjectReference Include="..\MicroKit.MediatR\MicroKit.MediatR.csproj" />
   </ItemGroup>
 </Project>

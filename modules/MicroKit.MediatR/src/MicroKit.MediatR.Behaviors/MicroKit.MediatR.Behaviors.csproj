@@ -16,11 +16,17 @@
     <PackageReference Include="Microsoft.Extensions.Options" />
   </ItemGroup>
   <ItemGroup>
-<ProjectReference Include="..\MicroKit.MediatR\MicroKit.MediatR.csproj" />
-    <!-- Cross-module reference: source in dev/CI builds, published NuGet package when packing for release. -->
-    <ProjectReference Include="..\..\..\..\modules\MicroKit.Logging\src\MicroKit.Logging.Abstractions\MicroKit.Logging.Abstractions.csproj"
-                      Condition="'$(CIReleaseBuild)' != 'true'" />
-    <PackageReference Include="MicroKit.Logging.Abstractions"
-                      Condition="'$(CIReleaseBuild)' == 'true'" />
+    <ProjectReference Include="..\MicroKit.MediatR.Abstractions\MicroKit.MediatR.Abstractions.csproj" />
+    <ProjectReference Include="..\MicroKit.MediatR\MicroKit.MediatR.csproj" />
+  </ItemGroup>
+  <!-- DEV: source ProjectReferences — CI/Release: published NuGet packages -->
+  <!-- ⚠ Any new cross-module dependency must be added to BOTH ItemGroups -->
+  <ItemGroup Condition="'$(CIReleaseBuild)' != 'true'">
+    <ProjectReference Include="../../../MicroKit.Result/src/MicroKit.Result/MicroKit.Result.csproj" />
+    <ProjectReference Include="../../../MicroKit.Logging/src/MicroKit.Logging.Abstractions/MicroKit.Logging.Abstractions.csproj" />
+  </ItemGroup>
+  <ItemGroup Condition="'$(CIReleaseBuild)' == 'true'">
+    <PackageReference Include="MicroKit.Result" />
+    <PackageReference Include="MicroKit.Logging.Abstractions" />
   </ItemGroup>
 </Project>
