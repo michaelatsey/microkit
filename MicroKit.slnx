@@ -13,16 +13,8 @@
   <Folder Name="/modules/MicroKit.MediatR/" />
   <Folder Name="/modules/MicroKit.MediatR/src/">
     <Project Path="modules/MicroKit.MediatR/src/MicroKit.MediatR.Abstractions/MicroKit.MediatR.Abstractions.csproj" />
-    <Project Path="modules/MicroKit.MediatR/src/MicroKit.MediatR/MicroKit.MediatR.csproj" />
-    <Project Path="modules/MicroKit.MediatR/src/MicroKit.MediatR.Behaviors/MicroKit.MediatR.Behaviors.csproj" />
-    <Project Path="modules/MicroKit.MediatR/src/MicroKit.MediatR.Testing/MicroKit.MediatR.Testing.csproj" />
   </Folder>
-  <Folder Name="/modules/MicroKit.MediatR/tests/">
-    <Project Path="modules/MicroKit.MediatR/tests/MicroKit.MediatR.UnitTests/MicroKit.MediatR.UnitTests.csproj" />
-    <Project Path="modules/MicroKit.MediatR/tests/MicroKit.MediatR.ArchitectureTests/MicroKit.MediatR.ArchitectureTests.csproj" />
-    <Project Path="modules/MicroKit.MediatR/tests/MicroKit.MediatR.IntegrationTests/MicroKit.MediatR.IntegrationTests.csproj" />
-    <Project Path="modules/MicroKit.MediatR/tests/MicroKit.MediatR.PerformanceTests/MicroKit.MediatR.PerformanceTests.csproj" />
-  </Folder>
+  <Folder Name="/modules/MicroKit.MediatR/tests/" />
   <Folder Name="/modules/MicroKit.Logging/" />
   <Folder Name="/modules/MicroKit.Logging/src/">
     <Project Path="modules/MicroKit.Logging/src/MicroKit.Logging.Abstractions/MicroKit.Logging.Abstractions.csproj" />
@@ -39,20 +31,9 @@
   </Folder>
   <Folder Name="/modules/MicroKit.Persistence/" />
   <Folder Name="/modules/MicroKit.Persistence/src/">
-    <Project Path="modules/MicroKit.Persistence/src/MicroKit.Persistence.Abstractions/MicroKit.Persistence.Abstractions.csproj" />
     <Project Path="modules/MicroKit.Persistence/src/MicroKit.Persistence/MicroKit.Persistence.csproj" />
-    <Project Path="modules/MicroKit.Persistence/src/MicroKit.Persistence.EntityFrameworkCore/MicroKit.Persistence.EntityFrameworkCore.csproj" />
-    <Project Path="modules/MicroKit.Persistence/src/MicroKit.Persistence.EntityFrameworkCore.PostgreSql/MicroKit.Persistence.EntityFrameworkCore.PostgreSql.csproj" />
-    <Project Path="modules/MicroKit.Persistence/src/MicroKit.Persistence.EntityFrameworkCore.SqlServer/MicroKit.Persistence.EntityFrameworkCore.SqlServer.csproj" />
-    <Project Path="modules/MicroKit.Persistence/src/MicroKit.Persistence.Specifications/MicroKit.Persistence.Specifications.csproj" />
-    <Project Path="modules/MicroKit.Persistence/src/MicroKit.Persistence.Testing/MicroKit.Persistence.Testing.csproj" />
-    <Project Path="modules/MicroKit.Persistence/src/MicroKit.Persistence.Analyzers/MicroKit.Persistence.Analyzers.csproj" />
   </Folder>
-  <Folder Name="/modules/MicroKit.Persistence/tests/">
-    <Project Path="modules/MicroKit.Persistence/tests/MicroKit.Persistence.UnitTests/MicroKit.Persistence.UnitTests.csproj" />
-    <Project Path="modules/MicroKit.Persistence/tests/MicroKit.Persistence.Analyzers.Tests/MicroKit.Persistence.Analyzers.Tests.csproj" />
-    <Project Path="modules/MicroKit.Persistence/tests/MicroKit.Persistence.ArchitectureTests/MicroKit.Persistence.ArchitectureTests.csproj" />
-  </Folder>
+  <Folder Name="/modules/MicroKit.Persistence/tests/" />
   <Folder Name="/modules/MicroKit.Multitenancy/" />
   <Folder Name="/modules/MicroKit.Multitenancy/src/">
     <Project Path="modules/MicroKit.Multitenancy/src/MicroKit.Multitenancy.Abstractions/MicroKit.Multitenancy.Abstractions.csproj" />

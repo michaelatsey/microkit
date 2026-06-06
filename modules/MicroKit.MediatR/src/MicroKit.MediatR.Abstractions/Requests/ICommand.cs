@@ -1,4 +1,6 @@
-namespace MicroKit.MediatR;
+using MicroKit.MediatR.Handlers;
+
+namespace MicroKit.MediatR.Requests;
 
 /// <summary>
 /// Marks a request that mutates state and returns no value.

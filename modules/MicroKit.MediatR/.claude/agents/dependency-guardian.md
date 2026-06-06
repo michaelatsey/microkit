@@ -77,6 +77,28 @@ dotnet list modules/MicroKit.MediatR/MicroKit.MediatR.slnx reference
 dotnet test modules/MicroKit.MediatR/tests/MicroKit.MediatR.ArchitectureTests/ --no-build
 ```
 
+## Cross-Module Reference Pattern (rule: `/.claude/rules/cross-module-references.md`)
+
+MicroKit.MediatR.Abstractions depends on `MicroKit.Result`, `MicroKit.Domain.Abstractions`, and
+`MicroKit.Logging.Abstractions`. All three must follow the canonical two-ItemGroup pattern.
+Run on every cross-module reference found:
+
+```bash
+# Detect Condition= placed on individual items instead of ItemGroups (violation)
+grep -n 'ProjectReference.*Condition=\|PackageReference.*Condition=' modules/MicroKit.MediatR/src/**/*.csproj
+```
+
+Checklist:
+- [ ] `Condition=` is on `<ItemGroup>`, never on individual `<ProjectReference>` or `<PackageReference>` items
+- [ ] Both warning comments appear above the two `<ItemGroup>` blocks:
+      `<!-- DEV: source ProjectReferences — CI/Release: published NuGet packages -->`
+      `<!-- ⚠ Any new cross-module dependency must be added to BOTH ItemGroups -->`
+- [ ] Strict symmetry: every `ProjectReference` has a matching `PackageReference` twin and vice versa
+- [ ] No `Version=` on cross-module `<PackageReference>` (CPM via `Directory.Packages.props`)
+- [ ] All `<ProjectReference>` paths are relative (never absolute)
+- [ ] All newly referenced modules are listed in `MicroKit.MediatR.slnx`
+- [ ] Test/non-packable projects use unconditional `<ProjectReference>` — never conditional
+
 ## Output Format
 
 ```

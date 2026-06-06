@@ -11,6 +11,8 @@
     <IncludeSymbols>true</IncludeSymbols>
     <SymbolPackageFormat>snupkg</SymbolPackageFormat>
   </PropertyGroup>
+  <!-- DEV: source ProjectReferences — CI/Release: published NuGet packages -->
+  <!-- ⚠ Any new cross-module dependency must be added to BOTH ItemGroups -->
   <ItemGroup Condition="'$(CIReleaseBuild)' != 'true'">
     <ProjectReference Include="..\MicroKit.Multitenancy.Abstractions\MicroKit.Multitenancy.Abstractions.csproj" />
   </ItemGroup>
@@ -19,6 +21,7 @@
   </ItemGroup>
   <ItemGroup>
     <PackageReference Include="Microsoft.Extensions.DependencyInjection.Abstractions" />
+    <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" />
     <PackageReference Include="Microsoft.Extensions.Options" />
   </ItemGroup>
 </Project>

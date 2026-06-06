@@ -58,12 +58,33 @@ public interface ITenantStore
 
 ## Resolution pipeline error codes
 
+Each error is a concrete `sealed record` inheriting from `Error`. Static instances are
+exposed via `MultitenancyErrors` for convenient usage in strategy implementations.
+
 ```csharp
+// Concrete error types (in MicroKit.Multitenancy.Abstractions/Errors/)
+public sealed record TenantNotFoundError()
+    : Error(ErrorCode.From("MULTITENANCY.TENANT.NOT_FOUND"), "Tenant not found.")
+{ public override ErrorCategory Category => ErrorCategory.NotFound; }
+
+public sealed record InvalidTenantIdError()
+    : Error(ErrorCode.From("MULTITENANCY.TENANT.INVALID_ID"), "The provided tenant identifier is invalid.")
+{ public override ErrorCategory Category => ErrorCategory.Validation; }
+
+public sealed record TenantInactiveError()
+    : Error(ErrorCode.From("MULTITENANCY.TENANT.INACTIVE"), "The tenant is inactive.")
+{ public override ErrorCategory Category => ErrorCategory.Forbidden; }
+
+public sealed record ResolutionFailedError()
+    : Error(ErrorCode.From("MULTITENANCY.RESOLUTION.FAILED"), "No strategy could resolve the current tenant.")
+{ public override ErrorCategory Category => ErrorCategory.NotFound; }
+
+// Static accessor (use this in strategy implementations)
 public static class MultitenancyErrors
 {
-    public static readonly Error TenantNotFound   = Error.From("TENANT_NOT_FOUND");
-    public static readonly Error InvalidTenantId  = Error.From("INVALID_TENANT_ID");
-    public static readonly Error TenantInactive   = Error.From("TENANT_INACTIVE");
-    public static readonly Error ResolutionFailed = Error.From("TENANT_RESOLUTION_FAILED");
+    public static readonly Error TenantNotFound   = new TenantNotFoundError();
+    public static readonly Error InvalidTenantId  = new InvalidTenantIdError();
+    public static readonly Error TenantInactive   = new TenantInactiveError();
+    public static readonly Error ResolutionFailed = new ResolutionFailedError();
 }
 ```

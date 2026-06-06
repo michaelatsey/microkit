@@ -9,7 +9,8 @@
     <NoWarn>$(NoWarn);IL2026;IL2090</NoWarn>
   </PropertyGroup>
 
-  <!-- Core: project ref for local dev; package ref when building for NuGet release -->
+  <!-- DEV: source ProjectReferences — CI/Release: published NuGet packages -->
+  <!-- ⚠ Any new cross-module dependency must be added to BOTH ItemGroups -->
   <ItemGroup Condition="'$(CIReleaseBuild)' != 'true'">
     <ProjectReference Include="..\MicroKit.Persistence\MicroKit.Persistence.csproj" />
   </ItemGroup>

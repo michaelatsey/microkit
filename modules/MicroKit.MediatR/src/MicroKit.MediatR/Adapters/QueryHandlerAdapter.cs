@@ -1,4 +1,4 @@
-namespace MicroKit.MediatR;
+namespace MicroKit.MediatR.Adapters;
 
 internal sealed class QueryHandlerAdapter<TQuery, TResult>(IQueryHandler<TQuery, TResult> inner)
     : IRequestHandler<TQuery, TResult>

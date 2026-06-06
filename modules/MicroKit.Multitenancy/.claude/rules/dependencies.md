@@ -24,7 +24,7 @@ MicroKit.Multitenancy.Analyzers         ← build-time only (no runtime dependen
 | Project | Allowed Packages |
 |---------|-----------------|
 | `Abstractions` | `MicroKit.Result` |
-| `Core` | Abstractions (project) + `Microsoft.Extensions.DependencyInjection.Abstractions` + `Microsoft.Extensions.Options` |
+| `Core` | Abstractions (project) + `Microsoft.Extensions.DependencyInjection.Abstractions` + `Microsoft.Extensions.Options` + `Microsoft.Extensions.Logging.Abstractions` |
 | `AspNetCore` | Core (project) + `FrameworkReference Microsoft.AspNetCore.App` |
 | `EntityFrameworkCore` | Core (project) + `MicroKit.Persistence.Abstractions` + `MicroKit.Persistence.EntityFrameworkCore` + `Microsoft.EntityFrameworkCore` |
 | `Analyzers` | `Microsoft.CodeAnalysis.CSharp` (build-time attribute only) |

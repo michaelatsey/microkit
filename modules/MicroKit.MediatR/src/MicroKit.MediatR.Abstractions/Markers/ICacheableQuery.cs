@@ -1,4 +1,4 @@
-namespace MicroKit.MediatR;
+namespace MicroKit.MediatR.Markers;
 
 /// <summary>
 /// Opts a query into <c>CachingBehavior</c> (pipeline order 500).

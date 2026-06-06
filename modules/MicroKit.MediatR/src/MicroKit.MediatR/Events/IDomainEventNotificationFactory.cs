@@ -1,4 +1,4 @@
-namespace MicroKit.MediatR;
+namespace MicroKit.MediatR.Events;
 
 /// <summary>
 /// Internal singleton that maps domain event types to their registered notification factories.
