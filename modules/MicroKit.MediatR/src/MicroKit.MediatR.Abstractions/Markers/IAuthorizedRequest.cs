@@ -1,4 +1,4 @@
-namespace MicroKit.MediatR;
+namespace MicroKit.MediatR.Markers;
 
 /// <summary>
 /// Opts a request into <c>AuthorizationBehavior</c> (pipeline order 200).

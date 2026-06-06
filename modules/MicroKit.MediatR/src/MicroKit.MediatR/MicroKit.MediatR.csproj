@@ -16,5 +16,6 @@
     <PackageReference Include="Microsoft.Extensions.DependencyInjection.Abstractions" />
   </ItemGroup>
   <ItemGroup>
-</ItemGroup>
+    <ProjectReference Include="..\MicroKit.MediatR.Abstractions\MicroKit.MediatR.Abstractions.csproj" />
+  </ItemGroup>
 </Project>

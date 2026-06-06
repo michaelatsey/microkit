@@ -1,4 +1,4 @@
-namespace MicroKit.MediatR;
+namespace MicroKit.MediatR.Markers;
 
 /// <summary>
 /// Opts a request into <c>RetryBehavior</c> (pipeline order 600).

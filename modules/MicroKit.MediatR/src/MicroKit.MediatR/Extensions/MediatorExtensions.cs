@@ -1,4 +1,4 @@
-namespace MicroKit.MediatR;
+namespace MicroKit.MediatR.Extensions;
 
 /// <summary>
 /// Typed dispatch extensions on <see cref="IMediator"/> for MicroKit CQRS contracts.

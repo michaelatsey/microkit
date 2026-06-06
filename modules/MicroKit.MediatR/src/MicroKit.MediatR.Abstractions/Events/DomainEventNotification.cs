@@ -1,4 +1,4 @@
-namespace MicroKit.MediatR;
+namespace MicroKit.MediatR.Events;
 
 /// <summary>
 /// Abstract base class for notifications that wrap a domain event of type <typeparamref name="TEvent"/>.

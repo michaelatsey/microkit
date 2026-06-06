@@ -1,4 +1,4 @@
-namespace MicroKit.MediatR;
+namespace MicroKit.MediatR.Pipeline;
 
 /// <summary>
 /// Canonical pipeline order registry for MicroKit.MediatR behaviors.

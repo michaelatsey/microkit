@@ -2,7 +2,7 @@ using System.Diagnostics.CodeAnalysis;
 using System.Linq.Expressions;
 using System.Reflection;
 
-namespace MicroKit.MediatR;
+namespace MicroKit.MediatR.DependencyInjection;
 
 /// <summary>
 /// Fluent builder for MicroKit.MediatR configuration.

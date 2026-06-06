@@ -1,6 +1,6 @@
 using System.Runtime.CompilerServices;
 
-namespace MicroKit.MediatR;
+namespace MicroKit.MediatR.Adapters;
 
 internal sealed class StreamQueryHandlerAdapter<TQuery, TResult>(IStreamQueryHandler<TQuery, TResult> inner)
     : IStreamRequestHandler<TQuery, TResult>
