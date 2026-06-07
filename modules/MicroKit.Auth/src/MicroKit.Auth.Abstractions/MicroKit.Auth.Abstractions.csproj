@@ -2,6 +2,9 @@
   <PropertyGroup>
     <AssemblyName>MicroKit.Auth.Abstractions</AssemblyName>
     <RootNamespace>MicroKit.Auth</RootNamespace>
+    <!-- CA1711: Permission is an intentional domain name, not a reserved-suffix misuse.
+         CA1716: Get/Set on ICurrentUserAccessor are unambiguous in context; VB conflict is not a concern for this C#-first library. -->
+    <NoWarn>$(NoWarn);CA1711;CA1716</NoWarn>
     <Description>Pure contracts for MicroKit.Auth — ICurrentUser, ISecurityContext, ICurrentUserAccessor, IPermissionChecker, Permission, Role. Zero framework dependency.</Description>
     <PackageTags>microkit;auth;authorization;security;abstractions;dotnet</PackageTags>
     <Authors>Ange-Michaël Atsé</Authors>
