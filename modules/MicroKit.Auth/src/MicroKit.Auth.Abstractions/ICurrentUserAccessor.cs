@@ -41,4 +41,21 @@ public interface ICurrentUserAccessor
     /// After calling this method, <see cref="Get"/> returns <see langword="null"/>.
     /// </summary>
     void Clear();
+
+    /// <summary>
+    /// Sets <paramref name="user"/> as the current user for the duration of the returned scope
+    /// and restores the previous user when the scope is disposed.
+    /// </summary>
+    /// <param name="user">The user to associate with this scope.</param>
+    /// <returns>
+    /// An <see cref="IDisposable"/> that, when disposed, restores the user that was active
+    /// before this scope was created. Nested scopes restore correctly — disposing the inner
+    /// scope always restores to the outer user, never to <see langword="null"/>.
+    /// </returns>
+    /// <remarks>
+    /// Use this method instead of a raw <see cref="Set"/> call when the user context must be
+    /// established for background work (<c>Task.Run</c>, <c>Parallel.ForEachAsync</c>) or
+    /// for nested impersonation scenarios where the original user must be restored.
+    /// </remarks>
+    IDisposable CreateScope(ICurrentUser user);
 }

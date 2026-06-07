@@ -4,7 +4,7 @@
     <RootNamespace>MicroKit.Auth.UnitTests</RootNamespace>
     <IsPackable>false</IsPackable>
     <GenerateDocumentationFile>false</GenerateDocumentationFile>
-    <NoWarn>CS1591;CA1707</NoWarn>
+    <NoWarn>CS1591;CA1707;CA2012</NoWarn>
   </PropertyGroup>
   <ItemGroup>
     <ProjectReference Include="../../src/MicroKit.Auth.Abstractions/MicroKit.Auth.Abstractions.csproj" />

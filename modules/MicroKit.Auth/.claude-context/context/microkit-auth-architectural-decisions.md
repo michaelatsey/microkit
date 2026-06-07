@@ -181,3 +181,49 @@ public sealed record Permission
 - `microkit-auth-architecture.md` — "All contracts are interfaces or sealed records" — `sealed record`
   preserved ✅
 - CLAUDE.md rule: "Permission is a VO — never pass raw permission strings across boundaries" ✅
+
+---
+
+## ADR-AUTH-003: ICurrentUserAccessor temporary duplication with MicroKit.MediatR.Abstractions
+
+**Date:** 2026-06-07
+**Status:** Accepted — temporary
+**Decided by:** Ange-Michaël Atsé
+**Phase:** 1
+
+### Context
+
+`ICurrentUserAccessor` was previously declared in `MicroKit.MediatR.Abstractions` as a pragmatic
+v1 placement (ADR-008 in MicroKit.MediatR). ADR-008 explicitly documented the trigger condition
+for promotion to a future `MicroKit.Abstractions` package:
+
+> "A second module (e.g., MicroKit.Auth) needs to reference ICurrentUserAccessor and would
+> otherwise take a dependency on MicroKit.MediatR.Abstractions purely for this interface."
+
+During MicroKit.Auth.Abstractions implementation, `ICurrentUserAccessor` was declared independently
+in `MicroKit.Auth.Abstractions`. This triggered the ADR-008 condition.
+
+### Decision
+
+Accept the temporary duplication. Do NOT make `MicroKit.Auth.Abstractions` depend on
+`MicroKit.MediatR.Abstractions` to resolve it — that would create an incorrect dependency edge
+(Auth is Level 1, MediatR is Level 2; Auth → MediatR is forbidden by the dependency graph).
+
+The correct resolution is to create a `MicroKit.Abstractions` package (Level 0) and move
+`ICurrentUserAccessor` there. Both `MicroKit.MediatR.Abstractions` and `MicroKit.Auth.Abstractions`
+would then depend on it.
+
+### Trigger for resolution
+
+Bootstrap `MicroKit.Abstractions` when any of the following is true:
+- A third module needs `ICurrentUserAccessor`
+- Any other cross-cutting primitive emerges that spans 2+ modules
+- MicroKit.Auth Phase 1 is complete and stable
+
+### Consequences
+
+- Two incompatible `ICurrentUserAccessor` interfaces exist temporarily
+- Consumers integrating both MicroKit.MediatR and MicroKit.Auth must register both
+- `microkit-auth-dependency-guardian` must flag any attempt to resolve this via
+  Auth → MediatR dependency
+- This ADR is superseded when `MicroKit.Abstractions` is bootstrapped
