@@ -1,73 +1,80 @@
 # MicroKit — Monorepo Root Brain
 
 ## 🎯 Vision
-MicroKit est un écosystème de librairies .NET 10+ modulaires, opinionées et production-ready.
-Chaque module est autonome, versionnée indépendamment, publiée sur NuGet, et conçue pour
-s'assembler sans friction dans une architecture hexagonale / DDD / CQRS / microservices.
+MicroKit is an ecosystem of modular, opinionated, production-ready .NET 10+ libraries.
+Each module is autonomous, independently versioned, published to NuGet, and designed to
+compose without friction in a hexagonal / DDD / CQRS / microservices architecture.
 
-> **Principe fondamental :** chaque module doit valoir seul. L'intégration est un bonus, pas un prérequis.
+> **Core principle:** each module must stand alone. Integration is a bonus, not a prerequisite.
 
 ---
 
-## 🗺️ Navigation — Où trouver le contexte
+## 🗺️ Navigation — Where to find context
 
-Quand tu travailles sur un module spécifique, **charge toujours son `.claude/CLAUDE.md`** en priorité.
-Ce fichier racine donne la vision globale et les conventions transversales.
+Always load the relevant module's `.claude/CLAUDE.md` first when working on a specific module.
+This root file provides the global vision and cross-cutting conventions.
 
-### Carte des modules
+### Module map
 
-| Module | Chemin | .claude/ | Statut |
-|--------|--------|----------|--------|
+| Module | Path | .claude/ | Status |
+|--------|------|----------|--------|
 | **MicroKit.Result** | `modules/MicroKit.Result/` | `modules/MicroKit.Result/.claude/` | ✅ Released 1.0.0-preview.1 |
 | **MicroKit.Domain** | `modules/MicroKit.Domain/` | `modules/MicroKit.Domain/.claude/` | ✅ Released 1.0.0-preview.4 |
 | **MicroKit.Logging** | `modules/MicroKit.Logging/` | `modules/MicroKit.Logging/.claude/` | ✅ Released 1.0.0-preview.1 |
 | **MicroKit.MediatR** | `modules/MicroKit.MediatR/` | `modules/MicroKit.MediatR/.claude/` | ✅ Released 1.0.0-preview.1 |
 | **MicroKit.Persistence** | `modules/MicroKit.Persistence/` | `modules/MicroKit.Persistence/.claude/` | ✅ Released 1.0.0-preview.1 |
 | **MicroKit.Multitenancy** | `modules/MicroKit.Multitenancy/` | `modules/MicroKit.Multitenancy/.claude/` | ✅ Released 1.0.0-preview.1 |
-| **MicroKit.Messaging** | `modules/MicroKit.Messaging/` | `modules/MicroKit.Messaging/.claude/` | 📋 Planifié |
-| **MicroKit.Caching** | `modules/MicroKit.Caching/` | `modules/MicroKit.Caching/.claude/` | 📋 Planifié |
-| **MicroKit.Http** | `modules/MicroKit.Http/` | `modules/MicroKit.Http/.claude/` | 📋 Planifié |
-| **MicroKit.Auth** | `modules/MicroKit.Auth/` | `modules/MicroKit.Auth/.claude/` | 📋 Planifié |
-| **MicroKit.Observability** | `modules/MicroKit.Observability/` | `modules/MicroKit.Observability/.claude/` | 📋 Planifié |
+| **MicroKit.Auth** | `modules/MicroKit.Auth/` | `modules/MicroKit.Auth/.claude/` | 🚧 In progress — Abstractions ✅ merged dev |
+| **MicroKit.Messaging** | `modules/MicroKit.Messaging/` | `modules/MicroKit.Messaging/.claude/` | 📋 Planned |
+| **MicroKit.Caching** | `modules/MicroKit.Caching/` | `modules/MicroKit.Caching/.claude/` | 📋 Planned |
+| **MicroKit.Http** | `modules/MicroKit.Http/` | `modules/MicroKit.Http/.claude/` | 📋 Planned |
+| **MicroKit.Observability** | `modules/MicroKit.Observability/` | `modules/MicroKit.Observability/.claude/` | 📋 Planned |
 
-### Règle de navigation pour Claude Code
-```
-Tâche sur un module spécifique  → lire modules/MicroKit.[X]/.claude/CLAUDE.md EN PREMIER
-Tâche transversale (build, CI)  → lire ce fichier + .claude/rules/monorepo-conventions.md
-Nouvelle feature cross-module   → lire ce fichier + les .claude/ des modules concernés
-Ajout d'un nouveau module       → lire .claude/skills/new-module-bootstrap.md
-Écriture de tests               → lire .claude/rules/testing-libraries.md (Shouldly obligatoire)
-Ajout/modif dep cross-module    → lire .claude/rules/cross-module-references.md (pattern obligatoire)
-```
+### Navigation rules for Claude Code
+
+| Task | Load first | Agent |
+|------|-----------|-------|
+| **Implementing anything new** | `.claude/CLAUDE.md` + module `.claude/CLAUDE.md` + relevant rule | `microkit-[module]-implementer` — plan before code |
+| Architecture / contract decision | `.claude/CLAUDE.md` + module `.claude-context/context/*-architectural-decisions.md` | `microkit-[module]-architect` |
+| Cross-module ADR | `.claude/CLAUDE.md` + `.claude-context/context/microkit-architectural-decisions.md` | `microkit-[module]-architect` |
+| Public API change | module `rules/*-naming.md` + module `rules/*-architecture.md` | `microkit-[module]-api-reviewer` — required before merge |
+| Dependency / `.csproj` change | `.claude/rules/cross-module-references.md` + module dependency graph | `microkit-[module]-dependency-guardian` |
+| New module bootstrap | `.claude/skills/new-module-bootstrap.md` | — |
+| Writing tests | `.claude/rules/testing-libraries.md` (Shouldly mandatory) | — |
+| Release | module `workflows/*-releasing.md` + `/[module]-release` command | `microkit-[module]-release-manager` |
+| Transversal build / CI | `.claude/CLAUDE.md` + `.claude/rules/monorepo-conventions.md` | — |
 
 ---
 
-## 🏛️ Architecture du Monorepo
+## 🏛️ Monorepo Architecture
 
-### Structure physique
-```
+### Physical structure
+
+```txt
 MicroKit/
-├── .claude/                          ← cerveau global (conventions transversales)
-│   ├── CLAUDE.md                     ← ce fichier
-│   ├── agents/                       ← agents globaux (release, cross-module)
-│   ├── commands/                     ← commandes globales (/new-module, /release, etc.)
-│   ├── hooks/                        ← hooks monorepo (pre-commit global, etc.)
-│   ├── rules/                        ← règles transversales
-│   └── skills/                       ← skills globaux (build, versioning, CI)
+├── .claude/                          ← global brain (cross-cutting conventions)
+│   ├── CLAUDE.md                     ← this file
+│   ├── agents/                       ← global agents (release, cross-module)
+│   ├── commands/                     ← global commands (/new-module, /release, etc.)
+│   ├── hooks/                        ← monorepo hooks (pre-commit global, etc.)
+│   ├── rules/                        ← cross-cutting rules
+│   └── skills/                       ← global skills (build, versioning, CI)
 │
 ├── .claude-context/
-│   └── sessions/                     ← résumés de sessions (lire le plus récent)
+│   ├── sessions/                     ← session summaries (read the most recent)
+│   └── context/
+│       └── microkit-architectural-decisions.md  ← cross-module ADRs
 │
 ├── .github/
 │   ├── workflows/
-│   │   ├── ci-*.yml                  ← CI par module
-│   │   └── release-*.yml             ← Release par module
+│   │   ├── ci-*.yml                  ← per-module CI
+│   │   └── release-*.yml             ← per-module release
 │   ├── CODEOWNERS
 │   └── pull_request_template.md
 │
 ├── build/
-│   ├── Directory.Build.props         ← props communs à tous les projets
-│   ├── Directory.Build.targets       ← targets communs
+│   ├── Directory.Build.props         ← shared props for all projects
+│   ├── Directory.Build.targets       ← shared targets
 │   ├── Directory.Packages.props      ← NuGet Central Package Management
 │   └── version.json                  ← Nerdbank.GitVersioning config
 │
@@ -78,29 +85,31 @@ MicroKit/
 │   ├── MicroKit.MediatR/
 │   ├── MicroKit.Persistence/
 │   ├── MicroKit.Multitenancy/
+│   ├── MicroKit.Auth/
 │   └── ...
 │
 ├── .editorconfig
 ├── .gitignore
-├── global.json                       ← SDK .NET version fixée
-├── MicroKit.slnx                     ← solution racine (tous modules)
+├── global.json                       ← pinned .NET SDK version
+├── MicroKit.slnx                     ← root solution (all modules)
 └── README.md
 ```
 
-### Structure interne de chaque module
-```
+### Internal structure of each module
+
+```txt
 modules/MicroKit.[Module]/
-├── .claude/                          ← cerveau du module (indépendant)
-├── .claude-context/                  ← standards, templates, ADRs (chargés par les agents)
+├── .claude/                          ← module brain (independent)
+├── .claude-context/                  ← standards, templates, ADRs (loaded by agents)
 │   ├── standards/
 │   ├── templates/
 │   └── context/
 ├── src/
-│   ├── MicroKit.[Module].Abstractions/   ← contrats purs, zéro dépendance tierce
-│   ├── MicroKit.[Module]/                ← implémentation core
-│   ├── MicroKit.[Module].[Provider]/     ← intégrations optionnelles
-│   ├── MicroKit.[Module].Analyzers/      ← Roslyn analyzers (optionnel)
-│   └── MicroKit.[Module].Generators/     ← source generators (optionnel)
+│   ├── MicroKit.[Module].Abstractions/   ← pure contracts, zero third-party dependency
+│   ├── MicroKit.[Module]/                ← core implementation
+│   ├── MicroKit.[Module].[Provider]/     ← optional integrations
+│   ├── MicroKit.[Module].Analyzers/      ← Roslyn analyzers (optional)
+│   └── MicroKit.[Module].Generators/     ← source generators (optional)
 ├── tests/
 │   ├── MicroKit.[Module].UnitTests/
 │   ├── MicroKit.[Module].IntegrationTests/
@@ -114,30 +123,32 @@ modules/MicroKit.[Module]/
 
 ---
 
-## 📦 Dépendances inter-modules
+## 📦 Inter-module dependencies
 
-### Graphe de dépendances (autorisées)
+### Dependency graph (allowed)
+
+```txt
+MicroKit.Domain          ← no dependency on other modules
+MicroKit.Result          ← no dependency on other modules
+MicroKit.Logging         ← ADR-006: does NOT depend on Result (permanent)
+MicroKit.Observability   ← may depend on Result, Logging
+MicroKit.Auth            ← may depend on Result, Domain
+MicroKit.Caching         ← may depend on Result
+MicroKit.Persistence     ← may depend on Result, Domain
+MicroKit.Messaging       ← may depend on Result, Domain, Persistence (outbox)
+MicroKit.Http            ← may depend on Result, Observability
+MicroKit.MediatR         ← may depend on Result, Domain, Logging.Abstractions
+MicroKit.Multitenancy    ← may depend on Result, Auth, Persistence
 ```
-MicroKit.Domain          ← aucune dépendance sur les autres modules
-MicroKit.Result          ← aucune dépendance sur les autres modules
-MicroKit.Logging         ← ADR-006: ne dépend PAS de Result (permanent)
-MicroKit.Observability   ← peut dépendre de Result, Logging
-MicroKit.Auth            ← peut dépendre de Result, Domain
-MicroKit.Caching         ← peut dépendre de Result
-MicroKit.Persistence     ← peut dépendre de Result, Domain
-MicroKit.Messaging       ← peut dépendre de Result, Domain, Persistence (outbox)
-MicroKit.Http            ← peut dépendre de Result, Observability
-MicroKit.MediatR         ← peut dépendre de Result, Domain, Logging.Abstractions
-MicroKit.Multitenancy    ← peut dépendre de Result, Auth, Persistence
-```
 
-### Règle de dépendance
-> Un module **Abstractions** ne dépend **jamais** d'un autre module non-Abstractions.
-> Les dépendances circulaires entre modules sont **interdites**.
-> Toute nouvelle dépendance inter-module nécessite une mise à jour de ce graphe.
+### Dependency rules
 
-### Pattern cross-module pour NuGet publish (CIReleaseBuild)
-Les ProjectReferences cross-module dans les `.csproj` utilisent le pattern canonique deux ItemGroups :
+> An **Abstractions** module never depends on another non-Abstractions module.
+> Circular dependencies between modules are **forbidden**.
+> Any new inter-module dependency requires an update to this graph.
+
+### Cross-module pattern for NuGet publish (CIReleaseBuild)
+
 ```xml
 <!-- Local dev: source ProjectReferences -->
 <!-- ⚠ Any new cross-module dependency must be added to BOTH ItemGroups -->
@@ -149,66 +160,74 @@ Les ProjectReferences cross-module dans les `.csproj` utilisent le pattern canon
   <PackageReference Include="MicroKit.Result" />
 </ItemGroup>
 ```
-Voir `.claude/rules/cross-module-references.md` pour le pattern complet obligatoire.
+
+See `.claude/rules/cross-module-references.md` for the full mandatory pattern.
 
 ---
 
 ## 🔢 Versioning — Nerdbank.GitVersioning
 
-Chaque module est versionné **indépendamment** via `version.json` dans son répertoire.
+Each module is versioned **independently** via `version.json` in its directory.
 
-### Convention de tags Git pour les releases
-```
-result-v1.0.0-preview.1        → release MicroKit.Result
-domain-v1.0.0-preview.1        → release MicroKit.Domain
-logging-v1.0.0-preview.1       → release MicroKit.Logging
-mediatr-v1.0.0-preview.1       → release MicroKit.MediatR
-persistence-v1.0.0-preview.1   → release MicroKit.Persistence
-multitenancy-v1.0.0-preview.1  → release MicroKit.Multitenancy
+### Git tag convention for releases
+
+```txt
+result-v1.0.0-preview.1        → MicroKit.Result release
+domain-v1.0.0-preview.1        → MicroKit.Domain release
+logging-v1.0.0-preview.1       → MicroKit.Logging release
+mediatr-v1.0.0-preview.1       → MicroKit.MediatR release
+persistence-v1.0.0-preview.1   → MicroKit.Persistence release
+multitenancy-v1.0.0-preview.1  → MicroKit.Multitenancy release
+auth-v1.0.0-preview.1          → MicroKit.Auth release
 ```
 
 ### Branches
-```
-main              ← toujours stable, protégée
-dev               ← intégration continue
+
+```txt
+main              ← always stable, protected
+dev               ← continuous integration
 feature/*         ← features (scope: result/fix-map, mediatr/add-streaming)
-release/*         ← préparation de release (release/result-1.2)
+release/*         ← release preparation (release/result-1.2)
 fix/*             ← bugfixes (fix/multitenancy/parallel-sqlite-flaky-test)
 ```
 
 ---
 
-## 🏗️ Build partagé — Directory.Build.props
+## 🏗️ Shared build — Directory.Build.props
 
 ```xml
 Nullable: enable
 ImplicitUsings: enable
 LangVersion: latest
-TreatWarningsAsErrors: true (Release uniquement)
+TreatWarningsAsErrors: true (Release only)
 AnalysisLevel: latest-recommended
 NuGet: Central Package Management via Directory.Packages.props
 ```
 
 ---
 
-## ✅ Conventions globales (valables pour tous les modules)
+## ✅ Global conventions (all modules)
 
-### Règles non négociables (tous modules)
-- `sealed record` pour erreurs/VO/events | `sealed class` pour handlers/behaviors
-- `ValueTask<T>` async | `ConfigureAwait(false)` dans les libs
-- `CancellationToken ct = default` toujours en dernier
-- `Console.WriteLine` interdit → `ILogger<T>`
-- Zéro dépendance circulaire | `.Abstractions` → uniquement autres `.Abstractions`
-- Tests : `GenerateDocumentationFile=false` + `NoWarn CS1591;CA1707`
-- CPM : toutes les versions dans `Directory.Packages.props` racine
-- **`Shouldly` (MIT) obligatoire** — FluentAssertions INTERDIT (licence commerciale Xceed v8+)
-- **`NSubstitute`** pour les mocks
-- **`NetArchTest`** pour les tests d'architecture
-- `.claude/` complet AVANT toute implémentation
-- **Cross-module references** : pattern deux ItemGroups CIReleaseBuild canonique obligatoire
+### Non-negotiable rules
 
-### Conventions de commit
-```
+- `sealed record` for errors/VOs/events | `sealed class` for handlers/behaviors
+- `ValueTask<T>` async | `ConfigureAwait(false)` in libraries
+- `CancellationToken ct = default` always last
+- `Console.WriteLine` forbidden → `ILogger<T>`
+- Zero circular dependencies | `.Abstractions` → only other `.Abstractions`
+- Tests: `GenerateDocumentationFile=false` + `NoWarn CS1591;CA1707`
+- CPM: all versions in root `Directory.Packages.props`
+- **`Shouldly` (MIT) mandatory** — FluentAssertions FORBIDDEN (Xceed commercial license v8+)
+- **`NSubstitute`** for mocks
+- **`NetArchTest`** for architecture tests
+- `.claude/` complete BEFORE any implementation
+- **Cross-module references**: canonical two-ItemGroup CIReleaseBuild pattern mandatory
+- **ArchitectureTests mandatory** before any release (empty project = blocking)
+- **Integration tests SQLite**: each `Task.Run` must have its own isolated connection
+
+### Commit conventions
+
+```txt
 feat(result): add EnsureAsync overload
 fix(mediatr): correct pipeline order with custom behaviors
 chore(build): update Directory.Packages.props
@@ -216,8 +235,9 @@ docs(domain): add aggregate root design guide
 test(multitenancy): implement ArchitectureTests
 ```
 
-### Nommage des packages NuGet publiés
-```
+### Published NuGet package names
+
+```txt
 MicroKit.Result                                        ✅ 1.0.0-preview.1
 MicroKit.Result.AspNetCore                             ✅ 1.0.0-preview.1
 MicroKit.Domain                                        ✅ 1.0.0-preview.4
@@ -245,11 +265,20 @@ MicroKit.Multitenancy                                  ✅ 1.0.0-preview.1
 MicroKit.Multitenancy.AspNetCore                       ✅ 1.0.0-preview.1
 MicroKit.Multitenancy.EntityFrameworkCore              ✅ 1.0.0-preview.1
 MicroKit.Multitenancy.Analyzers                        ✅ 1.0.0-preview.1
-MicroKit.Messaging                                     📋 planifié
-MicroKit.Messaging.AzureServiceBus                     📋 planifié
-MicroKit.Messaging.RabbitMQ                            📋 planifié
+MicroKit.Auth.Abstractions                             🚧 In progress (merged dev)
+MicroKit.Auth                                          📋 Planned Phase 1
+MicroKit.Auth.AspNetCore                               📋 Planned Phase 1
+MicroKit.Auth.Permissions                              📋 Planned Phase 1
+MicroKit.Auth.Roles                                    📋 Planned Phase 1
+MicroKit.Auth.Jwt                                      📋 Planned Phase 1
+MicroKit.Auth.Supabase                                 📋 Planned Phase 1
+MicroKit.Auth.Multitenancy                             📋 Planned Phase 1
+MicroKit.Auth.Testing                                  📋 Planned Phase 1
+MicroKit.Messaging                                     📋 Planned
+MicroKit.Messaging.AzureServiceBus                     📋 Planned
+MicroKit.Messaging.RabbitMQ                            📋 Planned
 ```
 
 ## Sessions
-Lire le fichier de session le plus récent dans `.claude-context/sessions/`
-avant de commencer tout travail.
+
+Read the most recent file in `.claude-context/sessions/` before starting any work.
