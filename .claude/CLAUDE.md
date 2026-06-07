@@ -23,12 +23,12 @@ Ce fichier racine donne la vision globale et les conventions transversales.
 | **MicroKit.Logging** | `modules/MicroKit.Logging/` | `modules/MicroKit.Logging/.claude/` | ✅ Released 1.0.0-preview.1 |
 | **MicroKit.MediatR** | `modules/MicroKit.MediatR/` | `modules/MicroKit.MediatR/.claude/` | ✅ Released 1.0.0-preview.1 |
 | **MicroKit.Persistence** | `modules/MicroKit.Persistence/` | `modules/MicroKit.Persistence/.claude/` | ✅ Released 1.0.0-preview.1 |
+| **MicroKit.Multitenancy** | `modules/MicroKit.Multitenancy/` | `modules/MicroKit.Multitenancy/.claude/` | ✅ Released 1.0.0-preview.1 |
 | **MicroKit.Messaging** | `modules/MicroKit.Messaging/` | `modules/MicroKit.Messaging/.claude/` | 📋 Planifié |
 | **MicroKit.Caching** | `modules/MicroKit.Caching/` | `modules/MicroKit.Caching/.claude/` | 📋 Planifié |
 | **MicroKit.Http** | `modules/MicroKit.Http/` | `modules/MicroKit.Http/.claude/` | 📋 Planifié |
 | **MicroKit.Auth** | `modules/MicroKit.Auth/` | `modules/MicroKit.Auth/.claude/` | 📋 Planifié |
 | **MicroKit.Observability** | `modules/MicroKit.Observability/` | `modules/MicroKit.Observability/.claude/` | 📋 Planifié |
-| **MicroKit.Multitenancy** | `modules/MicroKit.Multitenancy/` | `modules/MicroKit.Multitenancy/.claude/` | 🚧 Bootstrapped |
 
 ### Règle de navigation pour Claude Code
 ```
@@ -60,14 +60,8 @@ MicroKit/
 │
 ├── .github/
 │   ├── workflows/
-│   │   ├── ci-domain.yml             ← CI MicroKit.Domain
-│   │   ├── ci-result.yml             ← CI MicroKit.Result
-│   │   ├── ci-logging.yml            ← CI MicroKit.Logging
-│   │   ├── ci-mediatr.yml            ← CI MicroKit.MediatR
-│   │   ├── release-domain.yml
-│   │   ├── release-result.yml
-│   │   ├── release-logging.yml
-│   │   └── release-mediatr.yml
+│   │   ├── ci-*.yml                  ← CI par module
+│   │   └── release-*.yml             ← Release par module
 │   ├── CODEOWNERS
 │   └── pull_request_template.md
 │
@@ -83,6 +77,7 @@ MicroKit/
 │   ├── MicroKit.Logging/
 │   ├── MicroKit.MediatR/
 │   ├── MicroKit.Persistence/
+│   ├── MicroKit.Multitenancy/
 │   └── ...
 │
 ├── .editorconfig
@@ -141,6 +136,21 @@ MicroKit.Multitenancy    ← peut dépendre de Result, Auth, Persistence
 > Les dépendances circulaires entre modules sont **interdites**.
 > Toute nouvelle dépendance inter-module nécessite une mise à jour de ce graphe.
 
+### Pattern cross-module pour NuGet publish (CIReleaseBuild)
+Les ProjectReferences cross-module dans les `.csproj` utilisent le pattern canonique deux ItemGroups :
+```xml
+<!-- Local dev: source ProjectReferences -->
+<!-- ⚠ Any new cross-module dependency must be added to BOTH ItemGroups -->
+<ItemGroup Condition="'$(CIReleaseBuild)' != 'true'">
+  <ProjectReference Include="..." />
+</ItemGroup>
+<!-- CI/Release: published NuGet packages -->
+<ItemGroup Condition="'$(CIReleaseBuild)' == 'true'">
+  <PackageReference Include="MicroKit.Result" />
+</ItemGroup>
+```
+Voir `.claude/rules/cross-module-references.md` pour le pattern complet obligatoire.
+
 ---
 
 ## 🔢 Versioning — Nerdbank.GitVersioning
@@ -149,11 +159,12 @@ Chaque module est versionné **indépendamment** via `version.json` dans son ré
 
 ### Convention de tags Git pour les releases
 ```
-result-v1.0.0-preview.1   → release MicroKit.Result
-domain-v1.0.0-preview.1   → release MicroKit.Domain
-logging-v1.0.0-preview.1  → release MicroKit.Logging
-mediatr-v1.0.0-preview.1  → release MicroKit.MediatR
-persistence-v1.0.0-preview.1 → release MicroKit.Persistence
+result-v1.0.0-preview.1        → release MicroKit.Result
+domain-v1.0.0-preview.1        → release MicroKit.Domain
+logging-v1.0.0-preview.1       → release MicroKit.Logging
+mediatr-v1.0.0-preview.1       → release MicroKit.MediatR
+persistence-v1.0.0-preview.1   → release MicroKit.Persistence
+multitenancy-v1.0.0-preview.1  → release MicroKit.Multitenancy
 ```
 
 ### Branches
@@ -162,6 +173,7 @@ main              ← toujours stable, protégée
 dev               ← intégration continue
 feature/*         ← features (scope: result/fix-map, mediatr/add-streaming)
 release/*         ← préparation de release (release/result-1.2)
+fix/*             ← bugfixes (fix/multitenancy/parallel-sqlite-flaky-test)
 ```
 
 ---
@@ -193,6 +205,7 @@ NuGet: Central Package Management via Directory.Packages.props
 - **`NSubstitute`** pour les mocks
 - **`NetArchTest`** pour les tests d'architecture
 - `.claude/` complet AVANT toute implémentation
+- **Cross-module references** : pattern deux ItemGroups CIReleaseBuild canonique obligatoire
 
 ### Conventions de commit
 ```
@@ -200,6 +213,7 @@ feat(result): add EnsureAsync overload
 fix(mediatr): correct pipeline order with custom behaviors
 chore(build): update Directory.Packages.props
 docs(domain): add aggregate root design guide
+test(multitenancy): implement ArchitectureTests
 ```
 
 ### Nommage des packages NuGet publiés
@@ -226,6 +240,11 @@ MicroKit.Persistence.EntityFrameworkCore.SqlServer     ✅ 1.0.0-preview.1
 MicroKit.Persistence.Specifications                    ✅ 1.0.0-preview.1
 MicroKit.Persistence.Testing                           ✅ 1.0.0-preview.1
 MicroKit.Persistence.Analyzers                         ✅ 1.0.0-preview.1
+MicroKit.Multitenancy.Abstractions                     ✅ 1.0.0-preview.1
+MicroKit.Multitenancy                                  ✅ 1.0.0-preview.1
+MicroKit.Multitenancy.AspNetCore                       ✅ 1.0.0-preview.1
+MicroKit.Multitenancy.EntityFrameworkCore              ✅ 1.0.0-preview.1
+MicroKit.Multitenancy.Analyzers                        ✅ 1.0.0-preview.1
 MicroKit.Messaging                                     📋 planifié
 MicroKit.Messaging.AzureServiceBus                     📋 planifié
 MicroKit.Messaging.RabbitMQ                            📋 planifié

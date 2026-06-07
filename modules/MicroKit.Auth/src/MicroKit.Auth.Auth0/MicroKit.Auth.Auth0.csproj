@@ -1,0 +1,9 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <AssemblyName>MicroKit.Auth.Auth0</AssemblyName>
+    <RootNamespace>MicroKit.Auth.Auth0</RootNamespace>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="../MicroKit.Auth.Abstractions/MicroKit.Auth.Abstractions.csproj" />
+  </ItemGroup>
+</Project>

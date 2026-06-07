@@ -1,0 +1,18 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <AssemblyName>MicroKit.Auth.Roles</AssemblyName>
+    <RootNamespace>MicroKit.Auth.Roles</RootNamespace>
+    <Description>Role definitions, inheritance, and permission mapping for MicroKit.Auth.</Description>
+    <PackageTags>microkit;auth;authorization;roles;rbac;dotnet</PackageTags>
+    <Authors>Ange-Michaël Atsé</Authors>
+    <PackageProjectUrl>https://github.com/michaelatsey/microkit</PackageProjectUrl>
+    <RepositoryUrl>https://github.com/michaelatsey/microkit</RepositoryUrl>
+    <PackageLicenseExpression>MIT</PackageLicenseExpression>
+    <IncludeSymbols>true</IncludeSymbols>
+    <SymbolPackageFormat>snupkg</SymbolPackageFormat>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="../MicroKit.Auth.Abstractions/MicroKit.Auth.Abstractions.csproj" />
+    <ProjectReference Include="../MicroKit.Auth.Permissions/MicroKit.Auth.Permissions.csproj" />
+  </ItemGroup>
+</Project>

@@ -1,0 +1,18 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <AssemblyName>MicroKit.Auth.Testing</AssemblyName>
+    <RootNamespace>MicroKit.Auth.Testing</RootNamespace>
+    <Description>Test helpers for MicroKit.Auth — FakeCurrentUser, FakeCurrentUserBuilder, FakePermissionChecker.</Description>
+    <PackageTags>microkit;auth;testing;fakes;dotnet</PackageTags>
+    <Authors>Ange-Michaël Atsé</Authors>
+    <PackageProjectUrl>https://github.com/michaelatsey/microkit</PackageProjectUrl>
+    <RepositoryUrl>https://github.com/michaelatsey/microkit</RepositoryUrl>
+    <PackageLicenseExpression>MIT</PackageLicenseExpression>
+    <IncludeSymbols>true</IncludeSymbols>
+    <SymbolPackageFormat>snupkg</SymbolPackageFormat>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="../../src/MicroKit.Auth.Abstractions/MicroKit.Auth.Abstractions.csproj" />
+    <ProjectReference Include="../../src/MicroKit.Auth.Permissions/MicroKit.Auth.Permissions.csproj" />
+  </ItemGroup>
+</Project>
