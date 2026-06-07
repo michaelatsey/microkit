@@ -1,0 +1,18 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <AssemblyName>MicroKit.Auth.Supabase</AssemblyName>
+    <RootNamespace>MicroKit.Auth.Supabase</RootNamespace>
+    <Description>Supabase JWT and OIDC adapter for MicroKit.Auth — Supabase claims mapping, JWKS integration, and JWT Bearer configuration.</Description>
+    <PackageTags>microkit;auth;supabase;jwt;oidc;dotnet</PackageTags>
+    <Authors>Ange-Michaël Atsé</Authors>
+    <PackageProjectUrl>https://github.com/michaelatsey/microkit</PackageProjectUrl>
+    <RepositoryUrl>https://github.com/michaelatsey/microkit</RepositoryUrl>
+    <PackageLicenseExpression>MIT</PackageLicenseExpression>
+    <IncludeSymbols>true</IncludeSymbols>
+    <SymbolPackageFormat>snupkg</SymbolPackageFormat>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="../MicroKit.Auth.Jwt/MicroKit.Auth.Jwt.csproj" />
+    <ProjectReference Include="../MicroKit.Auth.AspNetCore/MicroKit.Auth.AspNetCore.csproj" />
+  </ItemGroup>
+</Project>
