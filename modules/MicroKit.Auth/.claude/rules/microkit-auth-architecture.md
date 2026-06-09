@@ -54,7 +54,8 @@
 ❌ Raw permission strings passed across layer boundaries
 ❌ Provider packages depending on each other
 ❌ Identity management (users, passwords, sessions) anywhere in this module
-❌ JWT generation — validation only
+❌ JWT generation in Core, AspNetCore, or any provider/integration package
+   (Exception: MicroKit.Auth.Jwt may generate HMAC tokens from ICurrentUser — see ADR-AUTH-007)
 ❌ Console.WriteLine — use ILogger<T>
 ❌ Circular dependency between any two packages
 ```

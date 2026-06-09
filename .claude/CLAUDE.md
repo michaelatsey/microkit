@@ -266,8 +266,8 @@ MicroKit.Auth.Abstractions                             🚧 In progress (merged 
 MicroKit.Auth                                          🚧 In progress (merged dev)
 MicroKit.Auth.AspNetCore                               🚧 In progress (merged dev)
 MicroKit.Auth.Permissions                              🚧 In progress (merged dev)
-MicroKit.Auth.Roles                                    📋 Planned Phase 1
-MicroKit.Auth.Jwt                                      📋 Planned Phase 1
+MicroKit.Auth.Roles                                    🚧 In progress (merged dev)
+MicroKit.Auth.Jwt                                      🚧 In progress (merged dev)
 MicroKit.Auth.Supabase                                 📋 Planned Phase 1
 MicroKit.Auth.Multitenancy                             📋 Planned Phase 1
 MicroKit.Auth.Testing                                  📋 Planned Phase 1
