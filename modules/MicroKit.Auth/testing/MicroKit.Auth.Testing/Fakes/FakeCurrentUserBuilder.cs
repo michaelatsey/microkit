@@ -11,7 +11,7 @@ namespace MicroKit.Auth.Testing.Fakes;
 /// To configure which permissions are granted, pair the built user with a
 /// <see cref="FakePermissionChecker"/>:
 /// <code>
-/// var user = FakeCurrentUserBuilder.Create().WithRole(new Role("auditor")).Build();
+/// var user = FakeCurrentUserBuilder.Create().WithRole(Role.Of("auditor")).Build();
 /// var checker = new FakePermissionChecker().Allow(AuditPermissions.Read);
 /// </code>
 /// </para>

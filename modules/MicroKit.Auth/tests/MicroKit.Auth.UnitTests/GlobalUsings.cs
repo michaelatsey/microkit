@@ -1,6 +1,7 @@
 global using MicroKit.Auth;
 global using MicroKit.Auth.AspNetCore;
 global using MicroKit.Auth.Permissions;
+global using MicroKit.Auth.Roles;
 global using MicroKit.Auth.Errors;
 global using MicroKit.Auth.Testing.Fakes;
 global using MicroKit.Result;

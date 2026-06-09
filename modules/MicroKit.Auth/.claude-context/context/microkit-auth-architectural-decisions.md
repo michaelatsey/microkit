@@ -353,3 +353,160 @@ Population only ever occurs during DI setup (single-threaded), so the live refer
 
 - `microkit-auth-permission-model.md` — "All permissions registered in PermissionRegistry at startup" ✅
 - `microkit-auth-naming.md` — `sealed class` for services ✅ (registry is not a VO)
+
+---
+
+## ADR-AUTH-006: Role-to-permission expansion in PermissionEvaluator — Option B (complete)
+
+**Date:** 2026-06-09
+**Status:** Accepted
+**Decided by:** microkit-auth-architect
+**Phase:** 1
+
+### Context
+
+The `microkit-auth-permission-model.md` rule defines a four-step permission evaluation order:
+
+```
+1. SuperAdmin check   → bypass all permission checks
+2. Direct permission  → user has explicit permission assignment
+3. Role permission    → user's role grants the permission
+4. Wildcard match     → e.g. audits:* matches audits:create
+5. Deny
+```
+
+After the initial Core (`MicroKit.Auth`) and Permissions (`MicroKit.Auth.Permissions`) packages were
+merged to `dev`, `PermissionEvaluator` implemented steps 1, 2, and 4 (wildcard is part of `Matches()`),
+but step 3 — role-based permission expansion — was not implemented. No contract existed for
+mapping a `Role` to its granted `Permission` values.
+
+When the `MicroKit.Auth.Roles` package was planned, two options were evaluated for resolving this gap:
+
+**Option A — Defer (smaller scope)**
+Deliver role plumbing only (`IRoleStore`, `RoleRegistry`, `SystemRoles`, `InMemoryRoleStore`).
+`PermissionEvaluator` remains unchanged. Step 3 is deferred to a follow-up PR once a role→permission
+bridge contract has been independently designed and reviewed.
+
+**Option B — Complete (same PR)**
+Deliver role plumbing and the role→permission bridge in the same PR:
+- Add `IRolePermissionMap` to Abstractions
+- Add `NullRolePermissionMap` to Core (null-object for step 3)
+- Update `PermissionEvaluator` constructor: add `IRolePermissionMap roleMap`; after store check,
+  iterate `ICurrentUser.Roles` and expand via `roleMap.GetPermissionsForRole(role)`
+- Add `InMemoryRolePermissionMap` + `InMemoryRolePermissionMapOptions` in Roles
+- `AddInMemoryRoles()` accepts an optional `configureMap` parameter for the map
+
+### Decision
+
+**Option B was selected.** Role-to-permission expansion is delivered in the same PR as `MicroKit.Auth.Roles`.
+
+### Rationale
+
+1. **Option A leaves the permission evaluation order permanently broken.** Shipping `MicroKit.Auth.Roles`
+   without step 3 means roles assigned to users via `IRoleStore` or JWT claims would have no effect on
+   permission checks — a misleading API. Consumers would call `HasRoleAsync` and find roles working, but
+   `HasPermissionAsync` would ignore them silently.
+
+2. **`IRolePermissionMap` is a natural Abstractions contract.** It depends only on `Permission` and `Role`,
+   both already in Abstractions. Adding it introduces no new dependencies and produces no layer-boundary
+   violation.
+
+3. **Delivering both in one PR reduces the blast radius.** The `PermissionEvaluator` constructor change
+   (adding `IRolePermissionMap` as a third parameter) is a breaking change at preview. Deferring it to a
+   second PR would mean two separate breaking-change windows for a single logical feature.
+
+### Key Design Choices
+
+#### 1. `IRolePermissionMap` is synchronous
+
+```csharp
+IReadOnlyList<Permission> GetPermissionsForRole(Role role);
+```
+
+Role-to-permission mapping is static configuration resolved once during the DI setup phase — it is not
+a data-access operation. Making the contract synchronous avoids unnecessary async overhead in the
+`PermissionEvaluator` hot path and signals clearly to implementors that this map is not a live query.
+A tenant-scoped async overload may be added in Phase 2 if per-tenant role customisation from a data
+source is required.
+
+#### 2. Tenant-agnostic in Phase 1
+
+`IRolePermissionMap.GetPermissionsForRole(Role role)` takes no `tenantId` parameter. In Phase 1, all
+roles grant the same permissions regardless of tenant. This assumption is encoded in the XML docs as an
+explicit Phase 1 scope note. A future `GetPermissionsForRole(Role role, Guid tenantId, CancellationToken ct)`
+overload is deferred to Phase 2.
+
+#### 3. Role expansion uses `ICurrentUser.Roles` (JWT), not `IRoleStore`
+
+`PermissionEvaluator` iterates `user.Roles` (populated from JWT claims by `ClaimsMapper`) for role
+expansion. It does **not** call `IRoleStore`. This is an intentional scope boundary:
+
+- `IRoleStore` / `IRoleChecker` / `ITenantRoleChecker` answer: "Does this user have this role?"
+- `IRolePermissionMap` / `PermissionEvaluator` answer: "Does this role grant this permission?"
+
+Consulting `IRoleStore` during permission evaluation would add an async store round-trip to every
+`HasPermissionAsync` call, even when the store is a no-op. JWT roles are already resolved synchronously
+from the token before the evaluator is invoked. Phase 1 role-based permission expansion therefore relies
+exclusively on JWT roles; dynamically assigned roles from the store affect role membership checks only.
+
+#### 4. Both `HasPermissionAsync` overloads receive role expansion
+
+Both the system-level and tenant-scoped overloads of `PermissionEvaluator` include the same role-expansion
+loop after the store check. The role→permission map is tenant-agnostic in Phase 1, so the same expansion
+logic is correct in both contexts.
+
+#### 5. `InMemoryRoleStoreOptions` and `InMemoryRolePermissionMapOptions` are separate classes
+
+Role assignment (who has a role) and role-to-permission mapping (what a role grants) are distinct concerns
+with different configuration shapes and different consumers. Merging them into a single options class would
+couple the two concerns and prevent registering a custom `IRolePermissionMap` independently of `IRoleStore`.
+`AddInMemoryRoles()` accepts a second optional `Action<InMemoryRolePermissionMapOptions>? configureMap`
+parameter; when `null`, the existing `IRolePermissionMap` registration (i.e. `NullRolePermissionMap`) is
+left unchanged, allowing consumers to supply their own map via a different extension.
+
+### Tracked Technical Debt: `SuperAdminRoleName` raw string in Core
+
+`PermissionEvaluator` contains:
+
+```csharp
+private const string SuperAdminRoleName = "superadmin";
+```
+
+The semantically correct reference is `SystemRoles.SuperAdmin.Name` from `MicroKit.Auth.Roles`. However,
+`MicroKit.Auth` (Core) must not reference `MicroKit.Auth.Roles` — that direction would invert the
+dependency graph (Core is lower than Roles in the layer hierarchy). The raw string constant is therefore
+intentional and correct for Phase 1.
+
+Resolution path: when `MicroKit.Abstractions` (Level 0 package) is bootstrapped per ADR-AUTH-003, a
+`SystemRoleNames` or equivalent constants class can be placed there and referenced by both Core and Roles.
+
+### Impact
+
+**`MicroKit.Auth.Abstractions`**
+- New `IRolePermissionMap` interface: `IReadOnlyList<Permission> GetPermissionsForRole(Role role)`
+- All existing Abstractions contracts remain unchanged
+
+**`MicroKit.Auth` (Core)**
+- `PermissionEvaluator` constructor gains `IRolePermissionMap roleMap` as a third parameter.
+  This is a breaking change for any code constructing `PermissionEvaluator` with `new`. At preview
+  stage the blast radius is zero (no published consumers; monorepo-internal callers updated in the
+  same PR). DI registration via `AddMicroKitAuthCore()` auto-resolves the new parameter transparently.
+- `NullRolePermissionMap` added: `internal sealed class`, always returns `Array.Empty<Permission>()`.
+  Registered as singleton in `AddMicroKitAuthCore()` via `TryAddSingleton<IRolePermissionMap, NullRolePermissionMap>()`.
+- `ServiceCollectionExtensions.AddMicroKitAuthCore()` additionally registers: `IRoleStore` (scoped, NullRoleStore),
+  `RoleEvaluator` (scoped), `IRoleChecker` and `ITenantRoleChecker` (both delegate to the scoped `RoleEvaluator`),
+  and `IRolePermissionMap` (singleton, NullRolePermissionMap).
+
+**`MicroKit.Auth.Roles`**
+- `InMemoryRolePermissionMapOptions`: public `sealed class`, `Map(Role, params Permission[])` fluent API
+- `InMemoryRolePermissionMap`: `internal sealed class` implementing `IRolePermissionMap`
+- `ServiceCollectionExtensions.AddInMemoryRoles()`: optional `configureMap` parameter added;
+  when provided, replaces the singleton `IRolePermissionMap` via `services.Replace()` (same pattern as ADR-AUTH-004)
+
+### Constraints Applied
+
+- `microkit-auth-permission-model.md` — Step 3 of the permission evaluation order is now fully implemented ✅
+- `microkit-auth-architecture.md` — `IRolePermissionMap` in Abstractions, `NullRolePermissionMap` in Core, implementation in Roles — correct layer assignments ✅
+- `microkit-auth-dependencies.md` — No forbidden dependency edges introduced ✅
+- ADR-AUTH-004 — `services.Replace()` pattern reused for `IRolePermissionMap` registration ✅
+- ADR-AUTH-005 — `InMemoryRolePermissionMapOptions` accumulates permissions with deduplication via `HashSet<Permission>` ✅

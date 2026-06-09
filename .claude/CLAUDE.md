@@ -279,3 +279,17 @@ MicroKit.Messaging.RabbitMQ                            📋 Planned
 ## Sessions
 
 Read the most recent file in `.claude-context/sessions/` before starting any work.
+
+---
+
+## MicroKit immutable flow (agents)
+
+```
+PRE-CODE  : implementer /plan → architect review → implementation
+POST-CODE : distributed-context-specialist (if AsyncLocal / propagation)
+            dependency-guardian (if .csproj modified)
+            api-reviewer (if public API changed)
+            → in the same Claude Code session
+            → "Do not commit anything" mandatory in all post-code prompts
+MERGE     : only after all relevant agents approved
+/compact  : after full package implementation, before new session

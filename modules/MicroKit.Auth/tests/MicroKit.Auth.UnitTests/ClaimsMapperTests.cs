@@ -138,8 +138,8 @@ public sealed class ClaimsMapperTests
     public void MapToClaims_WhenRolesPresent_IncludesRoleClaims()
     {
         var user = FakeCurrentUserBuilder.Create()
-            .WithRole(new Role("admin"))
-            .WithRole(new Role("auditor"))
+            .WithRole(Role.Of("admin"))
+            .WithRole(Role.Of("auditor"))
             .Build();
 
         var claims = _sut.MapToClaims(user).ToList();

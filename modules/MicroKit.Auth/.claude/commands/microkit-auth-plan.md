@@ -10,8 +10,9 @@ Load in order:
 3. `.claude/rules/microkit-auth-naming.md`
 4. `.claude/rules/microkit-auth-dependencies.md`
 5. `.claude/rules/microkit-auth-testing.md`
+6. `.claude-context/context/microkit-auth-architectural-decisions.md`
 
 Then produce a complete implementation plan for: $ARGUMENTS
 
-Wait for explicit approval before writing any code.
+Do not write any code yet. Produce the plan only.
 Do not commit anything.
