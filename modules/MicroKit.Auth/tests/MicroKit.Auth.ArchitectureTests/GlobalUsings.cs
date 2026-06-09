@@ -1,4 +1,5 @@
 global using MicroKit.Auth;
+global using MicroKit.Auth.Jwt;
 global using MicroKit.Auth.AspNetCore;
 global using MicroKit.Auth.Permissions;
 global using MicroKit.Auth.Roles;

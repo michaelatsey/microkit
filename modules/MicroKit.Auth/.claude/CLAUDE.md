@@ -300,8 +300,8 @@ All Phase 1 packages share one version per release.
 | `MicroKit.Auth` | 1 | ✅ merged dev |
 | `MicroKit.Auth.AspNetCore` | 1 | ✅ merged dev |
 | `MicroKit.Auth.Permissions` | 1 | ✅ merged dev |
-| `MicroKit.Auth.Roles` | 1 | 🚧 In progress |
-| `MicroKit.Auth.Jwt` | 1 | 📋 Planned |
+| `MicroKit.Auth.Roles` | 1 | ✅ merged dev |
+| `MicroKit.Auth.Jwt` | 1 | 🚧 In progress |
 | `MicroKit.Auth.Supabase` | 1 | 📋 Planned |
 | `MicroKit.Auth.Multitenancy` | 1 | 📋 Planned |
 | `MicroKit.Auth.Testing` | 1 | 📋 Planned |
@@ -317,3 +317,18 @@ All Phase 1 packages share one version per release.
 | `MicroKit.Auth.Auth0` | 3 | ⏳ Scaffold only |
 | `MicroKit.Auth.EntraId` | 3 | ⏳ Scaffold only |
 | `MicroKit.Auth.IdentityServer` | 3 | ⏳ Scaffold only |
+
+---
+
+## 🔮 Deferred Features
+
+When working on a package, always check the corresponding deferred file before implementing.
+It contains features explicitly deferred from Phase 1 with rationale and implementation hints.
+
+| Package | Deferred file |
+|---------|--------------|
+| `MicroKit.Auth.Jwt` | `.claude-context/deferred/microkit-auth-jwt-deferred.md` |
+| `MicroKit.Auth.Roles` | `.claude-context/deferred/microkit-auth-roles-deferred.md` |
+| `MicroKit.Auth.Permissions` | `.claude-context/deferred/microkit-auth-permissions-deferred.md` |
+
+> If no deferred file exists for a package, nothing was explicitly deferred.

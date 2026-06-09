@@ -510,3 +510,153 @@ Resolution path: when `MicroKit.Abstractions` (Level 0 package) is bootstrapped 
 - `microkit-auth-dependencies.md` — No forbidden dependency edges introduced ✅
 - ADR-AUTH-004 — `services.Replace()` pattern reused for `IRolePermissionMap` registration ✅
 - ADR-AUTH-005 — `InMemoryRolePermissionMapOptions` accumulates permissions with deduplication via `HashSet<Permission>` ✅
+
+---
+
+## ADR-AUTH-007: MicroKit.Auth.Jwt Phase 1 scope — HS256 only, token generation permitted for internal use
+
+**Date:** 2026-06-09
+**Status:** Accepted
+**Decided by:** Ange-Michaël Atsé
+**Phase:** 1
+
+### Context
+
+Before implementing `MicroKit.Auth.Jwt`, two conflicts were identified between existing rules and the
+intended Phase 1 scope:
+
+#### Conflict 1 — Algorithm support
+
+`microkit-auth-jwt.md` states:
+
+> RS256 — Required (standard for OIDC providers)  
+> ES256 — Required (Supabase default)  
+> HS256 — Optional (internal/dev scenarios only)
+
+The deferred feature file (`microkit-auth-jwt-deferred.md`) states:
+
+> "RSA/ECDSA support in JwtOptions (HMAC sufficient for Phase 1)"
+
+The Phase 1 plan request for `MicroKit.Auth.Jwt` specifies "HMAC only — RSA deferred".
+
+These three sources are inconsistent. The rule file and the deferred file cannot both be correct for
+Phase 1.
+
+#### Conflict 2 — Token generation
+
+`microkit-auth-architecture.md` Forbidden Patterns includes:
+
+> ❌ JWT generation — validation only
+
+The Phase 1 plan request for `MicroKit.Auth.Jwt` includes:
+
+> `IJwtTokenGenerator` — generates a signed JWT from `ICurrentUser` context  
+> `JwtTokenGenerator` — sealed class, implements `IJwtTokenGenerator`
+
+The architecture rule and the plan are in direct contradiction.
+
+### Root Cause
+
+Both rules were written at a time when `MicroKit.Auth.Jwt` was conceived primarily as a **provider
+validation adapter** — a thin layer that validates JWTs issued by Supabase, Keycloak, or Auth0 using
+JWKS remote key discovery. In that context:
+
+- RS256/ES256 are indeed required — OIDC providers use asymmetric keys.
+- Token generation is indeed forbidden — `MicroKit.Auth` does not issue tokens on behalf of an IdP.
+
+`MicroKit.Auth.Jwt` has since evolved to serve a second, distinct purpose: providing HMAC-based JWT
+generation and validation for **internal service-to-service authentication** (M2M tokens, test
+infrastructure, dev-mode scenarios). These two concerns have different algorithm requirements and
+different generation responsibilities.
+
+### Decision
+
+**Conflict 1 — Algorithm scope:**
+
+Phase 1 `MicroKit.Auth.Jwt` supports **HS256 (HMAC-SHA256) only**.
+
+RS256 and ES256 via JWKS are deferred to the provider packages that require them:
+- `MicroKit.Auth.Supabase` — ES256 + JWKS (Phase 1, separate implementation)
+- `MicroKit.Auth.OpenIdConnect` — RS256/ES256 + JWKS discovery (Phase 2)
+
+`MicroKit.Auth.Jwt` is the internal HMAC token package. Provider-facing asymmetric validation
+lives in provider packages, not in the base Jwt package.
+
+**Conflict 2 — Token generation:**
+
+The blanket "JWT generation — validation only" rule in `microkit-auth-architecture.md` is superseded
+for `MicroKit.Auth.Jwt` specifically.
+
+`MicroKit.Auth.Jwt` **may generate tokens** under the following constraints:
+- Generation uses only `ICurrentUser` context (no raw user/password, no session state)
+- The generated token is signed with the same HMAC key used for validation — fully self-contained
+- Generation is available for internal service use (M2M, test scenarios, dev-mode gateway tokens)
+- `MicroKit.Auth.Jwt` does **not** manage token lifecycle (no refresh, no revocation, no storage) —
+  these remain deferred per `microkit-auth-jwt-deferred.md`
+
+The rule "JWT generation — validation only" retains its full meaning in every other package:
+`MicroKit.Auth` (Core), `MicroKit.Auth.Supabase`, `MicroKit.Auth.OpenIdConnect`, and all Phase 3
+providers must not generate tokens. Only `MicroKit.Auth.Jwt` is granted this exception, and only
+under the constraints above.
+
+### Rationale
+
+1. **JWKS complexity is not justified for Phase 1.** HMAC is sufficient for internal tokens.
+   Adding JWKS fetching, caching, and key-rotation logic to Phase 1 would deliver complexity without
+   consumer value — no Phase 1 consumer uses RS256/ES256 internally. Provider JWKS validation is
+   shipped in the provider packages where it belongs (`Supabase`, `OpenIdConnect`).
+
+2. **Token generation is a legitimate internal concern.** Service-to-service authentication, test
+   harnesses, and dev-mode proxies all need to produce JWTs with a known structure. Forcing these
+   consumers to depend on an external IdP would couple them unnecessarily to infrastructure. An HMAC
+   generator with a shared secret is the standard pattern for this use case and has a well-understood
+   threat model (secret rotation handled at the infrastructure layer).
+
+3. **The architecture rule was over-broad.** "JWT generation — validation only" was written to prevent
+   `MicroKit.Auth` from becoming an identity provider. That intent is preserved: only `MicroKit.Auth.Jwt`
+   generates tokens, using a typed `ICurrentUser` input, with no state management. The rule in
+   `microkit-auth-architecture.md` will be annotated to reflect this scoped exception.
+
+4. **`Microsoft.Extensions.Http` is not needed in Phase 1.** The existing `MicroKit.Auth.Jwt.csproj`
+   includes this package in anticipation of JWKS HTTP fetching. Since JWKS is deferred, it is removed
+   from the project file for Phase 1. It will be restored when Supabase or OpenIdConnect JWKS support
+   is added.
+
+### Impact
+
+**`microkit-auth-jwt.md`** — Add a Phase 1 scope note clarifying:
+- Phase 1 = HS256 only, via `JwtOptions.Secret`
+- RS256/ES256 via JWKS is a Phase 2+ concern owned by provider packages
+- Token generation is permitted in `MicroKit.Auth.Jwt` for internal use (scoped exception to Forbidden list)
+
+**`microkit-auth-architecture.md`** — Annotate the "JWT generation — validation only" forbidden pattern:
+- Clarify that this applies to all packages **except** `MicroKit.Auth.Jwt`
+- `MicroKit.Auth.Jwt` may generate HMAC-signed tokens from `ICurrentUser` context
+
+**`MicroKit.Auth.Jwt.csproj`**:
+- Remove `Microsoft.Extensions.Http` (JWKS fetch deferred)
+- Update `Description` to reflect Phase 1 HMAC-only scope
+
+**`MicroKit.Auth.Abstractions`**:
+- Add `IJwtTokenGenerator` — `ValueTask<Result<string>> GenerateAsync(ICurrentUser, CancellationToken)`
+- Add `IJwtRefreshTokenProvider` — contract only, no implementation (Phase 2 deferred per `microkit-auth-jwt-deferred.md`)
+
+**`MicroKit.Auth.Jwt`** (Phase 1 deliverables):
+- `JwtOptions` — `sealed record`: Issuer, Audience, Secret, Expiry, ClockSkew
+- `JwtValidator` — `sealed class`: HMAC validation via `JsonWebTokenHandler`, returns `Result<ClaimsPrincipal>`
+- `JwtTokenGenerator` — `sealed class`: HMAC signing via `JsonWebTokenHandler`, depends on `IClaimsMapper`
+- `ServiceCollectionExtensions.AddMicroKitAuthJwt(Action<JwtOptions>)` — fast-fail validation at startup
+
+### Deferred (tracked in `microkit-auth-jwt-deferred.md`)
+
+- JWKS remote key discovery and caching
+- RS256 / ES256 asymmetric key support (`IJwtKeyProvider`)
+- Refresh token implementation (`IJwtRefreshTokenProvider` impl)
+- Token revocation (`IJwtRevocationStore`)
+- Claims enrichment pipeline (`IJwtClaimsEnricher`)
+
+### Constraints Applied
+
+- `microkit-auth-dependencies.md` — `MicroKit.Auth.Jwt` depends on Abstractions only (no Core dep) ✅
+- `microkit-auth-architecture.md` — scoped exception to "JWT generation" rule documented here ✅
+- `microkit-auth-jwt-deferred.md` — JWKS, RSA, refresh deferred ✅

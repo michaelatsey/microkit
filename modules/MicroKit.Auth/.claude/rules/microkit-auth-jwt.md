@@ -16,15 +16,36 @@ ClaimsPrincipal Validate(string token); // throws on failure
 
 ## Supported Algorithms
 
-| Algorithm | Support | Notes |
+> **Phase 1 scope (ADR-AUTH-007):** `MicroKit.Auth.Jwt` supports **HS256 only**.
+> RS256/ES256 via JWKS are implemented in provider packages (`MicroKit.Auth.Supabase`,
+> `MicroKit.Auth.OpenIdConnect`), not in this base package.
+
+| Algorithm | Package | Phase |
 |-----------|---------|-------|
-| RS256 | ✅ Required | Standard for OIDC providers |
-| ES256 | ✅ Required | Supabase default |
-| HS256 | ⚠️ Optional | Only for internal/dev scenarios |
+| HS256 | `MicroKit.Auth.Jwt` | Phase 1 ✅ |
+| ES256 (JWKS) | `MicroKit.Auth.Supabase` | Phase 1 ✅ |
+| RS256 (JWKS) | `MicroKit.Auth.OpenIdConnect` | Phase 2 📋 |
 
 ---
 
-## JWKS Strategy
+## Phase 1 Options (`MicroKit.Auth.Jwt`)
+
+```csharp
+public sealed record JwtOptions
+{
+    public string Issuer { get; init; }
+    public string Audience { get; init; }
+    public string Secret { get; init; }        // HMAC secret, minimum 32 characters
+    public TimeSpan Expiry { get; init; }       // default: 1 hour
+    public TimeSpan ClockSkew { get; init; }    // default: 5 minutes
+}
+```
+
+---
+
+## JWKS Strategy (Phase 2+ — provider packages only)
+
+> Not applicable to `MicroKit.Auth.Jwt`. Applies to `Supabase` and `OpenIdConnect` packages.
 
 - Remote JWKS endpoint fetched on startup + cached
 - Key rotation: automatic refresh on `kid` mismatch (max 1 refresh per 5 min)
@@ -95,12 +116,28 @@ Rules:
 
 ---
 
+## Token Generation (scoped exception — ADR-AUTH-007)
+
+`MicroKit.Auth.Jwt` **may** generate HMAC-signed tokens via `IJwtTokenGenerator` / `JwtTokenGenerator`
+for internal service-to-service use. This is a scoped exception to the general "validation only" rule.
+
+Constraints that apply to this exception:
+- Input must be `ICurrentUser` — no raw user/password, no session state
+- HMAC key only (`Secret` from `JwtOptions`) — no asymmetric key generation
+- No lifecycle management (no refresh, no revocation, no storage)
+
+All **other** packages (`Core`, `AspNetCore`, `Supabase`, `OpenIdConnect`, all Phase 3 providers)
+retain the original prohibition: they must never generate tokens.
+
+---
+
 ## Forbidden
 
 ```
-❌ Token generation (signing, issuing) — belongs to identity provider
-❌ Refresh token handling — belongs to identity provider
+❌ Token generation in any package other than MicroKit.Auth.Jwt
+❌ Refresh token implementation (deferred to Phase 2 — IJwtRefreshTokenProvider contract only)
 ❌ Token storage — stateless validation only
 ❌ Exception thrown on invalid token — always Result<T>.Failure
 ❌ Hardcoded signing keys in source code
+❌ JWKS fetching in MicroKit.Auth.Jwt (deferred — belongs in provider packages)
 ```

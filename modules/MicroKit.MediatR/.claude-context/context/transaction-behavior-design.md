@@ -37,7 +37,7 @@ sequenceDiagram
     participant UOW as UnitOfWork
     participant DB as Database
 
-    rect rgb(235, 245, 255)
+    rect rgb(52, 56, 59)
         Note over TB,DB: TRANSACTION SCOPE
 
         Client->>TB: Send(CreateOrderCommand)
