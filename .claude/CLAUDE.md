@@ -24,7 +24,7 @@ This root file provides the global vision and cross-cutting conventions.
 | **MicroKit.MediatR** | `modules/MicroKit.MediatR/` | `modules/MicroKit.MediatR/.claude/` | ✅ Released 1.0.0-preview.1 |
 | **MicroKit.Persistence** | `modules/MicroKit.Persistence/` | `modules/MicroKit.Persistence/.claude/` | ✅ Released 1.0.0-preview.1 |
 | **MicroKit.Multitenancy** | `modules/MicroKit.Multitenancy/` | `modules/MicroKit.Multitenancy/.claude/` | ✅ Released 1.0.0-preview.1 |
-| **MicroKit.Auth** | `modules/MicroKit.Auth/` | `modules/MicroKit.Auth/.claude/` | 🚧 In progress — Abstractions ✅ merged dev |
+| **MicroKit.Auth** | `modules/MicroKit.Auth/` | `modules/MicroKit.Auth/.claude/` | 🚧 In progress — Abstractions ✅ Core ✅ AspNetCore ✅ Permissions ✅ merged dev |
 | **MicroKit.Messaging** | `modules/MicroKit.Messaging/` | `modules/MicroKit.Messaging/.claude/` | 📋 Planned |
 | **MicroKit.Caching** | `modules/MicroKit.Caching/` | `modules/MicroKit.Caching/.claude/` | 📋 Planned |
 | **MicroKit.Http** | `modules/MicroKit.Http/` | `modules/MicroKit.Http/.claude/` | 📋 Planned |
@@ -72,12 +72,6 @@ MicroKit/
 │   ├── CODEOWNERS
 │   └── pull_request_template.md
 │
-├── build/
-│   ├── Directory.Build.props         ← shared props for all projects
-│   ├── Directory.Build.targets       ← shared targets
-│   ├── Directory.Packages.props      ← NuGet Central Package Management
-│   └── version.json                  ← Nerdbank.GitVersioning config
-│
 ├── modules/
 │   ├── MicroKit.Result/
 │   ├── MicroKit.Domain/
@@ -88,6 +82,9 @@ MicroKit/
 │   ├── MicroKit.Auth/
 │   └── ...
 │
+├── Directory.Build.props             ← shared props for all projects
+├── Directory.Build.targets           ← shared targets
+├── Directory.Packages.props          ← NuGet Central Package Management
 ├── .editorconfig
 ├── .gitignore
 ├── global.json                       ← pinned .NET SDK version
@@ -266,9 +263,9 @@ MicroKit.Multitenancy.AspNetCore                       ✅ 1.0.0-preview.1
 MicroKit.Multitenancy.EntityFrameworkCore              ✅ 1.0.0-preview.1
 MicroKit.Multitenancy.Analyzers                        ✅ 1.0.0-preview.1
 MicroKit.Auth.Abstractions                             🚧 In progress (merged dev)
-MicroKit.Auth                                          📋 Planned Phase 1
-MicroKit.Auth.AspNetCore                               📋 Planned Phase 1
-MicroKit.Auth.Permissions                              📋 Planned Phase 1
+MicroKit.Auth                                          🚧 In progress (merged dev)
+MicroKit.Auth.AspNetCore                               🚧 In progress (merged dev)
+MicroKit.Auth.Permissions                              🚧 In progress (merged dev)
 MicroKit.Auth.Roles                                    📋 Planned Phase 1
 MicroKit.Auth.Jwt                                      📋 Planned Phase 1
 MicroKit.Auth.Supabase                                 📋 Planned Phase 1
