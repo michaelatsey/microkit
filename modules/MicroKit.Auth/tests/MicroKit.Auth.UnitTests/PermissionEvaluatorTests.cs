@@ -7,11 +7,13 @@ public sealed class PermissionEvaluatorTests
 
     private readonly FakeCurrentUserAccessor _accessor = new();
     private readonly IPermissionStore _store = Substitute.For<IPermissionStore>();
+    private readonly IRolePermissionMap _roleMap = Substitute.For<IRolePermissionMap>();
     private readonly PermissionEvaluator _sut;
 
     public PermissionEvaluatorTests()
     {
-        _sut = new PermissionEvaluator(_accessor, _store);
+        _roleMap.GetPermissionsForRole(Arg.Any<Role>()).Returns(Array.Empty<Permission>());
+        _sut = new PermissionEvaluator(_accessor, _store, _roleMap);
     }
 
     // ── System-level (IPermissionChecker) ─────────────────────────────────
@@ -28,7 +30,7 @@ public sealed class PermissionEvaluatorTests
     [Fact]
     public async Task HasPermissionAsync_WhenUserIsSuperAdmin_ReturnsTrueWithoutStoreLookup()
     {
-        _accessor.Set(FakeCurrentUserBuilder.Create().WithRole(new Role("superadmin")).Build());
+        _accessor.Set(FakeCurrentUserBuilder.Create().WithRole(Role.Of("superadmin")).Build());
 
         var result = await _sut.HasPermissionAsync(ReadPerm);
 
@@ -127,6 +129,40 @@ public sealed class PermissionEvaluatorTests
         result.IsFailure.ShouldBeTrue();
     }
 
+    [Fact]
+    public async Task HasPermissionAsync_WhenRoleGrantsPermission_ReturnsTrue()
+    {
+        var role = Role.Of("editor");
+        var user = FakeCurrentUserBuilder.Create().WithRole(role).Build();
+        _accessor.Set(user);
+        IReadOnlyList<Permission> storePerms = [];
+        _store.GetPermissionsAsync(user.UserId, Arg.Any<CancellationToken>())
+            .Returns(ValueTask.FromResult(Success(storePerms)));
+        IReadOnlyList<Permission> rolePerms = [ReadPerm];
+        _roleMap.GetPermissionsForRole(role).Returns(rolePerms);
+
+        var result = await _sut.HasPermissionAsync(ReadPerm);
+
+        result.IsSuccess.ShouldBeTrue();
+        result.Value.ShouldBeTrue();
+    }
+
+    [Fact]
+    public async Task HasPermissionAsync_WhenRoleMapReturnsEmpty_DoesNotGrantPermission()
+    {
+        var role = Role.Of("viewer");
+        var user = FakeCurrentUserBuilder.Create().WithRole(role).Build();
+        _accessor.Set(user);
+        IReadOnlyList<Permission> storePerms = [];
+        _store.GetPermissionsAsync(user.UserId, Arg.Any<CancellationToken>())
+            .Returns(ValueTask.FromResult(Success(storePerms)));
+
+        var result = await _sut.HasPermissionAsync(ReadPerm);
+
+        result.IsSuccess.ShouldBeTrue();
+        result.Value.ShouldBeFalse();
+    }
+
     // ── Tenant-scoped (ITenantPermissionChecker) ──────────────────────────
 
     [Fact]
@@ -141,7 +177,7 @@ public sealed class PermissionEvaluatorTests
     [Fact]
     public async Task HasPermissionAsync_TenantScoped_WhenUserIsSuperAdmin_ReturnsTrueWithoutStoreLookup()
     {
-        _accessor.Set(FakeCurrentUserBuilder.Create().WithRole(new Role("superadmin")).Build());
+        _accessor.Set(FakeCurrentUserBuilder.Create().WithRole(Role.Of("superadmin")).Build());
 
         var result = await _sut.HasPermissionAsync(Guid.NewGuid(), ReadPerm);
 
@@ -181,5 +217,24 @@ public sealed class PermissionEvaluatorTests
 
         result.IsSuccess.ShouldBeTrue();
         result.Value.ShouldBeFalse();
+    }
+
+    [Fact]
+    public async Task HasPermissionAsync_TenantOverload_WhenRoleGrantsPermission_ReturnsTrue()
+    {
+        var tenantId = Guid.NewGuid();
+        var role = Role.Of("editor");
+        var user = FakeCurrentUserBuilder.Create().WithTenantId(tenantId).WithRole(role).Build();
+        _accessor.Set(user);
+        IReadOnlyList<Permission> storePerms = [];
+        _store.GetPermissionsAsync(user.UserId, tenantId, Arg.Any<CancellationToken>())
+            .Returns(ValueTask.FromResult(Success(storePerms)));
+        IReadOnlyList<Permission> rolePerms = [ReadPerm];
+        _roleMap.GetPermissionsForRole(role).Returns(rolePerms);
+
+        var result = await _sut.HasPermissionAsync(tenantId, ReadPerm);
+
+        result.IsSuccess.ShouldBeTrue();
+        result.Value.ShouldBeTrue();
     }
 }

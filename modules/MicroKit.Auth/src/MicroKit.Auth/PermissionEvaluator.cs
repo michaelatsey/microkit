@@ -8,7 +8,11 @@ namespace MicroKit.Auth;
 /// </summary>
 /// <param name="accessor">Provides the current user for this execution scope.</param>
 /// <param name="store">Retrieves the permission set for a given user / tenant pair.</param>
-public sealed class PermissionEvaluator(ICurrentUserAccessor accessor, IPermissionStore store)
+/// <param name="roleMap">Maps roles to their granted permissions for role-based permission expansion.</param>
+public sealed class PermissionEvaluator(
+    ICurrentUserAccessor accessor,
+    IPermissionStore store,
+    IRolePermissionMap roleMap)
     : IPermissionChecker, ITenantPermissionChecker
 {
     private const string SuperAdminRoleName = "superadmin";
@@ -32,7 +36,16 @@ public sealed class PermissionEvaluator(ICurrentUserAccessor accessor, IPermissi
         if (storeResult.IsFailure)
             return Failure<bool>(storeResult.Error);
 
-        return Success(Matches(storeResult.Value, permission));
+        if (Matches(storeResult.Value, permission))
+            return Success(true);
+
+        foreach (var role in user.Roles)
+        {
+            if (Matches(roleMap.GetPermissionsForRole(role), permission))
+                return Success(true);
+        }
+
+        return Success(false);
     }
 
     /// <inheritdoc />
@@ -55,7 +68,16 @@ public sealed class PermissionEvaluator(ICurrentUserAccessor accessor, IPermissi
         if (storeResult.IsFailure)
             return Failure<bool>(storeResult.Error);
 
-        return Success(Matches(storeResult.Value, permission));
+        if (Matches(storeResult.Value, permission))
+            return Success(true);
+
+        foreach (var role in user.Roles)
+        {
+            if (Matches(roleMap.GetPermissionsForRole(role), permission))
+                return Success(true);
+        }
+
+        return Success(false);
     }
 
     private static bool IsSuperAdmin(ICurrentUser user) =>

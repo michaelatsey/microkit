@@ -69,7 +69,7 @@ public sealed class ClaimsMapper : IClaimsMapper
     {
         var roles = principal.FindAll(RoleClaim)
             .Concat(principal.FindAll(ClaimTypes.Role))
-            .Select(c => new Role(c.Value))
+            .Select(c => Role.Of(c.Value))
             .DistinctBy(r => r.Name)
             .ToList();
 

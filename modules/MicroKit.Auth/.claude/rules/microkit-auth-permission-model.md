@@ -62,12 +62,12 @@ public sealed record Role(string Name);
 
 public static class SystemRoles
 {
-    public static readonly Role SuperAdmin   = new("superadmin");
-    public static readonly Role Admin        = new("admin");
-    public static readonly Role Manager      = new("manager");
-    public static readonly Role Operator     = new("operator");
-    public static readonly Role Auditor      = new("auditor");
-    public static readonly Role Viewer       = new("viewer");
+    public static readonly Role SuperAdmin   = Role.Of("superadmin");
+    public static readonly Role Admin        = Role.Of("admin");
+    public static readonly Role Manager      = Role.Of("manager");
+    public static readonly Role Operator     = Role.Of("operator");
+    public static readonly Role Auditor      = Role.Of("auditor");
+    public static readonly Role Viewer       = Role.Of("viewer");
 }
 ```
 
