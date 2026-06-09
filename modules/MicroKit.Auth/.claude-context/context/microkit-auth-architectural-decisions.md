@@ -227,3 +227,129 @@ Bootstrap `MicroKit.Abstractions` when any of the following is true:
 - `microkit-auth-dependency-guardian` must flag any attempt to resolve this via
   Auth → MediatR dependency
 - This ADR is superseded when `MicroKit.Abstractions` is bootstrapped
+
+---
+
+## ADR-AUTH-004: InMemoryPermissionStore registered as singleton via services.Replace()
+
+**Date:** 2026-06-09
+**Status:** Accepted
+**Decided by:** microkit-auth-architect
+**Phase:** 1
+
+### Context
+
+`AddMicroKitAuthCore()` registers `NullPermissionStore` as `IPermissionStore` via `TryAddScoped`.
+The scoped lifetime is correct for production stores that read from request-scoped services (e.g. EF Core
+`DbContext`). `InMemoryPermissionStore` is different: it holds all mappings in memory, resolved once at
+startup, and is inherently safe as a singleton.
+
+Three registration strategies were evaluated for `AddInMemoryPermissions()`:
+
+**Option A — `services.TryAddSingleton<IPermissionStore, InMemoryPermissionStore>()`**  
+Would leave the scoped `NullPermissionStore` descriptor in place (TryAdd is no-op when any descriptor
+for the service type already exists). Result: two conflicting descriptors; the scoped NullPermissionStore
+wins in scoped contexts, making InMemoryPermissionStore unreachable.
+
+**Option B — `services.AddSingleton<IPermissionStore, InMemoryPermissionStore>()`**  
+Adds a second descriptor alongside the scoped NullPermissionStore. Both are returned by
+`GetServices<IPermissionStore>()`. `GetRequiredService<IPermissionStore>()` returns the last one
+registered (InMemoryPermissionStore). Fragile: ordering-dependent behaviour, plus two descriptors remain.
+
+**Option C — `services.Replace(ServiceDescriptor.Singleton<IPermissionStore>(factory))`**  
+Removes the existing descriptor entirely before registering the singleton. Result: exactly one
+descriptor for `IPermissionStore`, correct singleton lifetime, no leftover scoped entry.
+
+### Decision
+
+**Option C was selected.** `AddInMemoryPermissions()` uses `services.Replace()` to ensure a clean,
+unambiguous registration with the correct lifetime.
+
+### Rationale
+
+`Replace()` is the authoritative way to swap a DI registration. It makes intent explicit: "I am
+replacing whatever was registered before". Options A and B produce subtle, order-dependent behaviour
+that is difficult to diagnose when `IPermissionStore` is resolved unexpectedly.
+
+The `ServiceCollectionDescriptorExtensions.Replace()` method is part of
+`Microsoft.Extensions.DependencyInjection.Abstractions` — no dependency on the full DI package is
+required.
+
+### Impact
+
+- `MicroKit.Auth.Permissions.csproj` adds `Microsoft.Extensions.DependencyInjection.Abstractions`
+  (already version-pinned in CPM).
+- `AddInMemoryPermissions()` XML documentation explains the Replace() rationale to prevent future
+  maintainers from "simplifying" it to `AddSingleton()`.
+- Any future `IPermissionStore` implementation (EF Core, Redis) that also calls `Replace()` will
+  correctly supersede InMemoryPermissionStore.
+
+### Constraints Applied
+
+- `microkit-auth-architecture.md` — Authorization packages depend on Abstractions only ✅
+- `microkit-auth-dependencies.md` — Approved NuGet: `Microsoft.Extensions.DependencyInjection.Abstractions` ✅
+
+---
+
+## ADR-AUTH-005: PermissionRegistry deduplication and immutability contract
+
+**Date:** 2026-06-09
+**Status:** Accepted
+**Decided by:** microkit-auth-architect
+**Phase:** 1
+
+### Context
+
+`PermissionRegistry` is a compile-time catalog of all `Permission` values declared by the application.
+Two design questions required explicit decisions:
+
+1. **Deduplication strategy** — How to handle duplicate `Register()` calls for the same permission.
+2. **Immutability contract** — Whether the registry snapshot is frozen after startup.
+
+Two approaches were evaluated for deduplication:
+
+**Option A — Parallel `HashSet<Permission>` + `List<Permission>`**  
+`HashSet` provides O(1) duplicate detection using `Permission`'s auto-generated structural equality
+(from `sealed record`). `List` preserves insertion order for stable enumeration. Both are updated in
+`Register()`: add to `HashSet` first; if `true` (new entry), also add to `List`. Zero duplicate entries,
+stable order, O(1) lookup.
+
+**Option B — `List<Permission>` with `.Contains()` guard**  
+Simpler structure but O(n) per insert. Acceptable for small catalogs (< 100 permissions) but inconsistent
+with the O(1) contract implied by `Contains()`.
+
+For immutability:
+
+**Option X — Snapshot on first read** — Build a frozen copy lazily.  
+**Option Y — Live reference** — `All` returns the live `List<Permission>` as `IReadOnlyList<Permission>`.
+Population only ever occurs during DI setup (single-threaded), so the live reference is safe at runtime.
+
+### Decision
+
+**Option A + Option Y.** Parallel `HashSet` + `List` for deduplication; live reference for `All`.
+
+### Rationale
+
+1. **Option A** is the correct choice when `Contains()` is part of the public API. The `Contains()`
+   contract implies O(1) lookup; a `List`-backed implementation would violate that implicit contract
+   for large registries.
+
+2. **`sealed record` structural equality is sufficient.** `Permission` auto-generates `Equals` and
+   `GetHashCode` from `Resource` + `Action`. No custom equality comparer is needed.
+
+3. **Live reference is safe.** The registry is populated once during the DI configuration phase
+   (single-threaded `WebApplication.CreateBuilder` → `services.AddPermissionRegistry()`). After startup,
+   `All` is treated as read-only. Documenting this contract in XML docs (REVISE 3 from architect review)
+   is sufficient; adding a frozen snapshot would add complexity with no real-world benefit.
+
+### Impact
+
+- `PermissionRegistry` is not thread-safe for concurrent `Register()` calls. XML docs state this.
+- `All` returns a live reference — reflects any subsequent `Register()` calls. This is intentional
+  and documented.
+- `Contains()` is O(1) — suitable for use in hot paths (e.g., policy validation at startup).
+
+### Constraints Applied
+
+- `microkit-auth-permission-model.md` — "All permissions registered in PermissionRegistry at startup" ✅
+- `microkit-auth-naming.md` — `sealed class` for services ✅ (registry is not a VO)
