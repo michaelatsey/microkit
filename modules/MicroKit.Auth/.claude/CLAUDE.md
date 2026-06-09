@@ -296,11 +296,11 @@ All Phase 1 packages share one version per release.
 
 | Package | Phase | Status |
 |---------|-------|--------|
-| `MicroKit.Auth.Abstractions` | 1 | 📋 Planned |
-| `MicroKit.Auth` | 1 | 📋 Planned |
-| `MicroKit.Auth.AspNetCore` | 1 | 📋 Planned |
-| `MicroKit.Auth.Permissions` | 1 | 📋 Planned |
-| `MicroKit.Auth.Roles` | 1 | 📋 Planned |
+| `MicroKit.Auth.Abstractions` | 1 | ✅ merged dev |
+| `MicroKit.Auth` | 1 | ✅ merged dev |
+| `MicroKit.Auth.AspNetCore` | 1 | ✅ merged dev |
+| `MicroKit.Auth.Permissions` | 1 | ✅ merged dev |
+| `MicroKit.Auth.Roles` | 1 | 🚧 In progress |
 | `MicroKit.Auth.Jwt` | 1 | 📋 Planned |
 | `MicroKit.Auth.Supabase` | 1 | 📋 Planned |
 | `MicroKit.Auth.Multitenancy` | 1 | 📋 Planned |
