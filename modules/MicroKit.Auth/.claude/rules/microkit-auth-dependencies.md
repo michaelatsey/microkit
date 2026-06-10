@@ -32,8 +32,11 @@ MicroKit.Auth.Jwt
     ← System.IdentityModel.Tokens.Jwt
 
 MicroKit.Auth.Supabase
-    ← MicroKit.Auth.Jwt
+    ← MicroKit.Auth (Core)         # was MicroKit.Auth.Jwt — updated per ADR-AUTH-007
     ← MicroKit.Auth.AspNetCore
+    ← Microsoft.IdentityModel.JsonWebTokens (JWKS / ES256)
+    ← Microsoft.IdentityModel.Tokens
+    ← Microsoft.Extensions.Http
 
 MicroKit.Auth.OpenIdConnect                       [Phase 2]
     ← MicroKit.Auth.Jwt
@@ -109,13 +112,14 @@ See monorepo root `.claude/rules/cross-module-references.md` for the full canoni
 
 | Package | Allowed in |
 |---------|-----------|
-| `Microsoft.IdentityModel.Tokens` | Jwt only |
+| `Microsoft.IdentityModel.Tokens` | Jwt, Supabase |
+| `Microsoft.IdentityModel.JsonWebTokens` | Supabase (JWKS / ES256) |
 | `System.IdentityModel.Tokens.Jwt` | Jwt only |
 | `Microsoft.AspNetCore.Authentication.JwtBearer` | AspNetCore, Supabase |
 | `Microsoft.AspNetCore.Authentication.OpenIdConnect` | OpenIdConnect only |
 | `Microsoft.Extensions.DependencyInjection.Abstractions` | Abstractions, Core |
 | `Microsoft.Extensions.Options` | Core, AspNetCore |
-| `Microsoft.Extensions.Http` | Jwt (JWKS fetch) |
+| `Microsoft.Extensions.Http` | Supabase (JWKS fetch) |
 
 > Any package not on this list requires `microkit-auth-dependency-guardian` approval before adding.
 
