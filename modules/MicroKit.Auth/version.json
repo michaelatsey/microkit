@@ -1,0 +1,17 @@
+{
+  "version": "1.0",
+  "publicReleaseRefSpec": [
+    "^refs/heads/main$",
+    "^refs/tags/auth-v\\d+\\.\\d+\\.\\d+(-.+)?$"
+  ],
+  "pathFilters": [
+    "modules/MicroKit.Auth/"
+  ],
+  "cloudBuild": {
+    "setVersionVariables": true
+  },
+  "release": {
+    "tagName": "auth-v{version}",
+    "branchName": "release/auth/{version}"
+  }
+}

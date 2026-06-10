@@ -1,0 +1,23 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <AssemblyName>MicroKit.Auth.Jwt</AssemblyName>
+    <RootNamespace>MicroKit.Auth.Jwt</RootNamespace>
+    <!-- Phase 1: HS256 (HMAC-SHA256) only. RS256/ES256 via JWKS is deferred to provider packages. See ADR-AUTH-007. -->
+    <Description>HMAC-SHA256 JWT validation and generation for MicroKit.Auth — internal service-to-service tokens, dev-mode scenarios. Phase 1 scope: HS256 only.</Description>
+    <PackageTags>microkit;auth;jwt;token;validation;hmac;dotnet</PackageTags>
+    <Authors>Ange-Michaël Atsé</Authors>
+    <PackageProjectUrl>https://github.com/michaelatsey/microkit</PackageProjectUrl>
+    <RepositoryUrl>https://github.com/michaelatsey/microkit</RepositoryUrl>
+    <PackageLicenseExpression>MIT</PackageLicenseExpression>
+    <IncludeSymbols>true</IncludeSymbols>
+    <SymbolPackageFormat>snupkg</SymbolPackageFormat>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="../MicroKit.Auth.Abstractions/MicroKit.Auth.Abstractions.csproj" />
+  </ItemGroup>
+  <ItemGroup>
+    <PackageReference Include="Microsoft.IdentityModel.Tokens" />
+    <PackageReference Include="System.IdentityModel.Tokens.Jwt" />
+    <!-- Microsoft.Extensions.Http removed — JWKS remote fetch is deferred to Phase 2 provider packages. See ADR-AUTH-007. -->
+  </ItemGroup>
+</Project>

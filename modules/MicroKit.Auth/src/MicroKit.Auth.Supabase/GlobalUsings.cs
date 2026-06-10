@@ -1,0 +1,11 @@
+global using System.Diagnostics.CodeAnalysis;
+global using MicroKit.Result;
+global using static MicroKit.Result.Result;
+global using MicroKit.Auth;
+global using MicroKit.Auth.Errors;
+global using System.Security.Claims;
+global using System.Text.Json;
+global using Microsoft.Extensions.DependencyInjection;
+global using Microsoft.Extensions.DependencyInjection.Extensions;
+global using Microsoft.IdentityModel.JsonWebTokens;
+global using Microsoft.IdentityModel.Tokens;

@@ -1,0 +1,11 @@
+global using MicroKit.Auth;
+global using MicroKit.Auth.Jwt;
+global using MicroKit.Auth.AspNetCore;
+global using MicroKit.Auth.Permissions;
+global using MicroKit.Auth.Roles;
+global using MicroKit.Auth.Supabase;
+global using MicroKit.Auth.Multitenancy;
+global using MicroKit.Auth.Testing.Fakes;
+global using NetArchTest.Rules;
+global using Shouldly;
+global using Xunit;

@@ -1,0 +1,12 @@
+global using MicroKit.Auth;
+global using MicroKit.Auth.AspNetCore;
+global using MicroKit.Auth.Errors;
+global using MicroKit.Result;
+global using static MicroKit.Result.Result;
+global using System.Security.Claims;
+global using Microsoft.AspNetCore.Authorization;
+global using Microsoft.AspNetCore.Builder;
+global using Microsoft.AspNetCore.Http;
+global using Microsoft.Extensions.DependencyInjection;
+global using Microsoft.Extensions.Logging;
+global using Microsoft.Extensions.Options;

@@ -18,6 +18,9 @@
     <PackageVersion Include="MicroKit.Logging.Abstractions" Version="1.0.0-preview.1" />
     <PackageVersion Include="MicroKit.Persistence.Abstractions" Version="1.0.0-preview.1" />
     <PackageVersion Include="MicroKit.Multitenancy.Abstractions" Version="1.0.0-preview.1" />
+    <PackageVersion Include="MicroKit.Auth.Abstractions" Version="1.0.0-preview.1" />
+    <PackageVersion Include="MicroKit.Auth.Permissions" Version="1.0.0-preview.1" />
+    <PackageVersion Include="MicroKit.MediatR.Abstractions" Version="1.0.0-preview.1" />
   </ItemGroup>
   <ItemGroup Label="Multitenancy">
     <PackageVersion Include="MicroKit.Multitenancy" Version="1.0.0-preview.1" />
@@ -64,8 +67,16 @@
     <PackageVersion Include="Microsoft.CodeAnalysis.CSharp.CodeFix.Testing" Version="1.1.2" />
     <PackageVersion Include="Microsoft.CodeAnalysis.CSharp.SourceGenerators.Testing" Version="1.1.2" />
   </ItemGroup>
+  <ItemGroup Label="Auth">
+    <PackageVersion Include="Microsoft.IdentityModel.Tokens" Version="8.9.0" />
+    <PackageVersion Include="Microsoft.IdentityModel.JsonWebTokens" Version="8.9.0" />
+    <PackageVersion Include="System.IdentityModel.Tokens.Jwt" Version="8.9.0" />
+    <PackageVersion Include="Microsoft.AspNetCore.Authentication.JwtBearer" Version="10.0.8" />
+    <PackageVersion Include="Microsoft.Extensions.Http" Version="10.0.8" />
+  </ItemGroup>
   <ItemGroup Label="Framework">
     <PackageVersion Include="Microsoft.AspNetCore.Http.Abstractions" Version="2.3.10" />
     <PackageVersion Include="Microsoft.AspNetCore.Authorization" Version="10.0.8" />
+    <PackageVersion Include="Microsoft.AspNetCore.Mvc.Testing" Version="10.0.8" />
   </ItemGroup>
 </Project>

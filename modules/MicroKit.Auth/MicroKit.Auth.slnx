@@ -1,0 +1,40 @@
+<Solution>
+  <Folder Name="/src/">
+    <!-- Phase 1 -->
+    <Project Path="src/MicroKit.Auth.Abstractions/MicroKit.Auth.Abstractions.csproj" />
+    <Project Path="src/MicroKit.Auth/MicroKit.Auth.csproj" />
+    <Project Path="src/MicroKit.Auth.AspNetCore/MicroKit.Auth.AspNetCore.csproj" />
+    <Project Path="src/MicroKit.Auth.Permissions/MicroKit.Auth.Permissions.csproj" />
+    <Project Path="src/MicroKit.Auth.Roles/MicroKit.Auth.Roles.csproj" />
+    <Project Path="src/MicroKit.Auth.Jwt/MicroKit.Auth.Jwt.csproj" />
+    <Project Path="src/MicroKit.Auth.Supabase/MicroKit.Auth.Supabase.csproj" />
+    <Project Path="src/MicroKit.Auth.Multitenancy/MicroKit.Auth.Multitenancy.csproj" />
+    <!-- Phase 2 scaffolds -->
+    <Project Path="src/MicroKit.Auth.Policies/MicroKit.Auth.Policies.csproj" />
+    <Project Path="src/MicroKit.Auth.ApiKeys/MicroKit.Auth.ApiKeys.csproj" />
+    <Project Path="src/MicroKit.Auth.ServiceAccounts/MicroKit.Auth.ServiceAccounts.csproj" />
+    <Project Path="src/MicroKit.Auth.OpenIdConnect/MicroKit.Auth.OpenIdConnect.csproj" />
+    <Project Path="src/MicroKit.Auth.MediatR/MicroKit.Auth.MediatR.csproj" />
+    <Project Path="src/MicroKit.Auth.Logging/MicroKit.Auth.Logging.csproj" />
+    <Project Path="src/MicroKit.Auth.Audit/MicroKit.Auth.Audit.csproj" />
+    <!-- Phase 3 scaffolds -->
+    <Project Path="src/MicroKit.Auth.Cognito/MicroKit.Auth.Cognito.csproj" />
+    <Project Path="src/MicroKit.Auth.Keycloak/MicroKit.Auth.Keycloak.csproj" />
+    <Project Path="src/MicroKit.Auth.Auth0/MicroKit.Auth.Auth0.csproj" />
+    <Project Path="src/MicroKit.Auth.EntraId/MicroKit.Auth.EntraId.csproj" />
+    <Project Path="src/MicroKit.Auth.IdentityServer/MicroKit.Auth.IdentityServer.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/MicroKit.Auth.UnitTests/MicroKit.Auth.UnitTests.csproj" />
+    <Project Path="tests/MicroKit.Auth.IntegrationTests/MicroKit.Auth.IntegrationTests.csproj" />
+    <Project Path="tests/MicroKit.Auth.ArchitectureTests/MicroKit.Auth.ArchitectureTests.csproj" />
+    <Project Path="tests/MicroKit.Auth.PerformanceTests/MicroKit.Auth.PerformanceTests.csproj" />
+  </Folder>
+  <Folder Name="/testing/">
+    <Project Path="testing/MicroKit.Auth.Testing/MicroKit.Auth.Testing.csproj" />
+  </Folder>
+  <Folder Name="/deps/">
+    <Project Path="../MicroKit.Result/src/MicroKit.Result/MicroKit.Result.csproj" />
+    <Project Path="../MicroKit.Multitenancy/src/MicroKit.Multitenancy.Abstractions/MicroKit.Multitenancy.Abstractions.csproj" />
+  </Folder>
+</Solution>
