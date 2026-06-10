@@ -6,6 +6,24 @@ namespace MicroKit.Auth;
 /// instance via <see cref="ServiceCollectionExtensions.AddMicroKitAuthCore"/> so both
 /// interfaces share the same instance per scope.
 /// </summary>
+/// <remarks>
+/// <para><b>Evaluation strategy — single pass per permission source:</b></para>
+/// <list type="number">
+///   <item>Unauthenticated or missing user → <c>Result.Failure(UnauthenticatedError)</c>.</item>
+///   <item>SuperAdmin role present → <c>true</c> (bypasses all further checks).</item>
+///   <item>Store permissions (direct grants) — one pass through <see cref="IPermissionStore"/>
+///         results: exact match OR wildcard (<c>resource:*</c>, <c>*:action</c>, <c>*:*</c>)
+///         evaluated together in a single scan.</item>
+///   <item>Role permissions — one pass per role from <see cref="IRolePermissionMap"/>:
+///         same exact + wildcard logic applied to each role's grant set.</item>
+///   <item>No source matched → <c>false</c>.</item>
+/// </list>
+/// <para>
+/// Within each source (store or role), exact and wildcard matches are resolved in a single
+/// scan — there is no separate wildcard-only pass. The conceptual "5-step sequence" describes
+/// source priority (store before roles), not the matching algorithm within a source.
+/// </para>
+/// </remarks>
 /// <param name="accessor">Provides the current user for this execution scope.</param>
 /// <param name="store">Retrieves the permission set for a given user / tenant pair.</param>
 /// <param name="roleMap">Maps roles to their granted permissions for role-based permission expansion.</param>
