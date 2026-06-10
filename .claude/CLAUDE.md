@@ -262,15 +262,15 @@ MicroKit.Multitenancy                                  ✅ 1.0.0-preview.1
 MicroKit.Multitenancy.AspNetCore                       ✅ 1.0.0-preview.1
 MicroKit.Multitenancy.EntityFrameworkCore              ✅ 1.0.0-preview.1
 MicroKit.Multitenancy.Analyzers                        ✅ 1.0.0-preview.1
-MicroKit.Auth.Abstractions                             🚧 In progress (merged dev)
-MicroKit.Auth                                          🚧 In progress (merged dev)
-MicroKit.Auth.AspNetCore                               🚧 In progress (merged dev)
-MicroKit.Auth.Permissions                              🚧 In progress (merged dev)
-MicroKit.Auth.Roles                                    🚧 In progress (merged dev)
-MicroKit.Auth.Jwt                                      🚧 In progress (merged dev)
-MicroKit.Auth.Supabase                                 🚧 In progress (merged dev)
-MicroKit.Auth.Multitenancy                             🚧 In progress (merged dev)
-MicroKit.Auth.Testing                                  🚧 In progress (merged dev)
+MicroKit.Auth.Abstractions                             ✅ 1.0.0-preview.1
+MicroKit.Auth                                          ✅ 1.0.0-preview.1
+MicroKit.Auth.AspNetCore                               ✅ 1.0.0-preview.1
+MicroKit.Auth.Permissions                              ✅ 1.0.0-preview.1
+MicroKit.Auth.Roles                                    ✅ 1.0.0-preview.1
+MicroKit.Auth.Jwt                                      ✅ 1.0.0-preview.1
+MicroKit.Auth.Supabase                                 ✅ 1.0.0-preview.1
+MicroKit.Auth.Multitenancy                             ✅ 1.0.0-preview.1
+MicroKit.Auth.Testing                                  ✅ 1.0.0-preview.1
 MicroKit.Messaging                                     📋 Planned
 MicroKit.Messaging.AzureServiceBus                     📋 Planned
 MicroKit.Messaging.RabbitMQ                            📋 Planned
