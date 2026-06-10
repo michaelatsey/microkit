@@ -2,6 +2,7 @@
   <PropertyGroup>
     <AssemblyName>MicroKit.Auth.Audit</AssemblyName>
     <RootNamespace>MicroKit.Auth.Audit</RootNamespace>
+    <IsPackable>false</IsPackable>
   </PropertyGroup>
   <ItemGroup>
     <ProjectReference Include="../MicroKit.Auth.Abstractions/MicroKit.Auth.Abstractions.csproj" />
