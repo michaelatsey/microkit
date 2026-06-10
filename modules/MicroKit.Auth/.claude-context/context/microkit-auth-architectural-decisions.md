@@ -660,3 +660,96 @@ under the constraints above.
 - `microkit-auth-dependencies.md` — `MicroKit.Auth.Jwt` depends on Abstractions only (no Core dep) ✅
 - `microkit-auth-architecture.md` — scoped exception to "JWT generation" rule documented here ✅
 - `microkit-auth-jwt-deferred.md` — JWKS, RSA, refresh deferred ✅
+
+---
+
+## ADR-AUTH-008: MicroKit.Auth.Multitenancy Phase 1 — additive ITenantResolutionStrategy design, package boundaries, and deferred scope
+
+**Date:** 2026-06-10
+**Status:** Accepted
+**Decided by:** microkit-auth-architect
+**Phase:** 1
+
+### Context
+
+During the architectural review of the `MicroKit.Auth.Multitenancy` Phase 1 implementation plan,
+four design questions required explicit decisions before implementation could proceed:
+
+1. The plan proposed `AuthTenantResolver` implementing `ITenantResolver` (the full orchestrator contract).
+2. The plan proposed `services.Replace(ServiceDescriptor.Scoped<ITenantResolver, ...>())`.
+3. The user spec listed `MicroKit.Auth (Core)` as a required dependency.
+4. The plan included `CurrentUserTenantSynchronizer` as a Phase 1 deliverable.
+
+The architect review (2026-06-10) returned REVISE on all four points.
+
+### Decision 1 — `ITenantResolutionStrategy`, not `ITenantResolver`
+
+`ITenantResolver` is the orchestrator: it iterates registered `ITenantResolutionStrategy` instances
+in `Order` ascending, short-circuits on first success, and calls `ITenantStore.FindAsync` to project
+`Result<TenantId>` → `Result<ITenantInfo>`. The bridge's job — derive a `TenantId` from the
+authenticated user — is exactly one step in that pipeline.
+
+**Accepted design:** `sealed class AuthTenantResolutionStrategy : ITenantResolutionStrategy`
+- Returns `Result<TenantId>` (not `Result<ITenantInfo>`)
+- `int Order => 40` — after HTTP strategies (10–30), before host-mapping (50)
+- Constructor: `(ICurrentUserAccessor userAccessor)` — no `ITenantStore` (store lookup belongs to orchestrator)
+- Method: `ValueTask<Result<TenantId>> TryResolveAsync(CancellationToken ct = default)`
+
+### Decision 2 — Additive registration, not Replace
+
+Replacing `ITenantResolver` with a single-purpose implementation would silently destroy the entire
+HTTP strategy chain (header, route, subdomain, claim, host) for any consumer also using
+`MicroKit.Multitenancy.AspNetCore`. This is a severe, silent regression.
+
+**Accepted registration:**
+```csharp
+services.AddScoped<ITenantResolutionStrategy, AuthTenantResolutionStrategy>();
+```
+
+Additive, composes into the existing pipeline by `Order`. An opt-in "auth-is-sole-authority" mode
+that replaces the pipeline is not approved for Phase 1 and requires a dedicated ADR if needed.
+
+### Decision 3 — `MicroKit.Auth (Core)` excluded from bridge dependencies
+
+All types required by `AuthTenantResolutionStrategy` (`ICurrentUserAccessor`, `ICurrentUser`) are
+in `MicroKit.Auth.Abstractions`. The `microkit-auth-architecture.md` rule is explicit:
+
+> Integration packages — `Multitenancy` depends on `MicroKit.Auth.Abstractions` +
+> `MicroKit.Multitenancy.Abstractions` only.
+
+Adding Core would violate the rule with no functional benefit. The user spec line listing
+`MicroKit.Auth (Core)` as a dependency is incorrect and has been removed from the plan.
+
+### Decision 4 — `Microsoft.Extensions.DependencyInjection.Abstractions` approved for bridge package
+
+`AddMicroKitAuthMultitenancy()` uses `IServiceCollection.AddScoped()`, which lives in
+`Microsoft.Extensions.DependencyInjection.Abstractions`. This is the standard extension-method
+package used across all MicroKit DI registration helpers. No inline `Version=` — version managed
+by root `Directory.Packages.props`.
+
+### Decision 5 — `CurrentUserTenantSynchronizer` deferred to Phase 2
+
+The synchronizer's HTTP-path responsibility (read current user → push to `ITenantContextAccessor`)
+is already handled by `TenantResolutionMiddleware` once `AuthTenantResolutionStrategy` is in the
+pipeline. Its non-HTTP niche (jobs, queues) requires a `ITenantContextAccessor.CreateScope`-based
+API design (per `multitenancy-async-context.md`), which is a distinct concern warranting its own
+design. Deferred to Phase 2; documented in `microkit-auth-multitenancy-deferred.md`.
+
+### Impact
+
+**`MicroKit.Auth.Multitenancy`:**
+- `AuthTenantResolutionStrategy` — new sealed class, `ITenantResolutionStrategy`, `Order = 40`
+- `ServiceCollectionExtensions.AddMicroKitAuthMultitenancy()` — additive `AddScoped<ITenantResolutionStrategy>`
+- `MicroKit.Auth.Multitenancy.csproj` — Description updated; `Microsoft.Extensions.DependencyInjection.Abstractions` added
+
+**`MicroKit.Auth.UnitTests`:**
+- Tests for `TryResolveAsync` (authenticated/unauthenticated/no-tenant) and `Order = 40`
+
+### Constraints Applied
+
+- `microkit-auth-architecture.md` — Integration packages depend on Abstractions only ✅
+- `microkit-auth-dependencies.md` — Authoritative graph: bridge ← Auth.Abstractions + Multitenancy.Abstractions ✅
+- `multitenancy-resolution-pipeline.md` — `ITenantResolutionStrategy` = single step, no-throw, returns `Result<TenantId>`, `Order` ascending ✅
+- `multitenancy-async-context.md` — Scoped lifetime for `ICurrentUserAccessor`-dependent services; `CreateScope` for non-HTTP propagation ✅
+- `cross-module-references.md` — Same-module `ProjectReference` (Auth.Abstractions) unconditional; cross-module (Multitenancy.Abstractions) uses symmetric two-ItemGroup CIReleaseBuild pattern ✅
+- ADR-AUTH-004 — `Replace()` is the authoritative swap mechanism; additive `AddScoped` is correct here (not a swap) ✅

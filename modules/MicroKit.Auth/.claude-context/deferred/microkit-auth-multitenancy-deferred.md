@@ -32,3 +32,25 @@ Read this file before implementing any Phase 2+ work on MicroKit.Auth.Multitenan
 ### Tenant-Scoped Token Claims
 - Inject `tenantId` into JWT claims at generation time
 - Requires `MicroKit.Auth.Jwt` + `IJwtClaimsEnricher` (deferred in Jwt)
+
+### CurrentUserTenantSynchronizer — Non-HTTP Tenant Context Push
+
+**Deferred by:** ADR-AUTH-008 (2026-06-10)
+
+**What:** A `CurrentUserTenantSynchronizer` service that reads the current user via
+`ICurrentUserAccessor` and explicitly pushes the resolved `ITenantInfo` into `ITenantContextAccessor`.
+
+**Why deferred:** In the HTTP path, `TenantResolutionMiddleware` (from `MicroKit.Multitenancy.AspNetCore`)
+already handles this via the standard pipeline once `AuthTenantResolutionStrategy` is registered.
+The non-HTTP niche (background jobs, queues, gRPC workers) requires a `CreateScope`-based design per
+`multitenancy-async-context.md` — the correct pattern is to capture the tenant context before spawning
+background work and restore it via `ITenantContextAccessor.CreateScope(tenant)`, not to push ad-hoc.
+
+**Phase 2 design hints:**
+- Constructor: `(ICurrentUserAccessor userAccessor, ITenantContextAccessor tenantAccessor, ITenantStore tenantStore)`
+- Method: `ValueTask SynchronizeAsync(CancellationToken ct = default)`
+  - If user has TenantId → `tenantStore.FindAsync(new TenantId(user.TenantId.Value), ct)` → `tenantAccessor.SetTenant(info)`
+  - If user has no TenantId or is unauthenticated → `tenantAccessor.SetTenant(null)`
+- Lifetime: `Scoped` — depends on Scoped `ICurrentUserAccessor` and `ITenantContextAccessor`
+- Provide a companion middleware or `IHostedService` integration point for non-HTTP hosts
+- See `multitenancy-async-context.md` §"Background work — must use CreateScope" before implementing

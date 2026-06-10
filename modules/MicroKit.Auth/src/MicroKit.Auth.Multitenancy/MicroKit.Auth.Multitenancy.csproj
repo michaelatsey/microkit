@@ -2,7 +2,7 @@
   <PropertyGroup>
     <AssemblyName>MicroKit.Auth.Multitenancy</AssemblyName>
     <RootNamespace>MicroKit.Auth.Multitenancy</RootNamespace>
-    <Description>Bridge between MicroKit.Auth and MicroKit.Multitenancy — tenant-scoped permission checks via ITenantPermissionChecker.</Description>
+    <Description>Auth-to-Multitenancy bridge — ITenantResolutionStrategy that derives the current tenant from the authenticated user's identity claims.</Description>
     <PackageTags>microkit;auth;multitenancy;tenant;authorization;dotnet</PackageTags>
     <Authors>Ange-Michaël Atsé</Authors>
     <PackageProjectUrl>https://github.com/michaelatsey/microkit</PackageProjectUrl>
@@ -13,6 +13,9 @@
   </PropertyGroup>
   <ItemGroup>
     <ProjectReference Include="../MicroKit.Auth.Abstractions/MicroKit.Auth.Abstractions.csproj" />
+  </ItemGroup>
+  <ItemGroup>
+    <PackageReference Include="Microsoft.Extensions.DependencyInjection.Abstractions" />
   </ItemGroup>
   <!-- DEV: source ProjectReferences — CI/Release: published NuGet packages -->
   <!-- ⚠ Any new cross-module dependency must be added to BOTH ItemGroups -->
