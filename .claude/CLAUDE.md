@@ -24,7 +24,7 @@ This root file provides the global vision and cross-cutting conventions.
 | **MicroKit.MediatR** | `modules/MicroKit.MediatR/` | `modules/MicroKit.MediatR/.claude/` | ✅ Released 1.0.0-preview.1 |
 | **MicroKit.Persistence** | `modules/MicroKit.Persistence/` | `modules/MicroKit.Persistence/.claude/` | ✅ Released 1.0.0-preview.1 |
 | **MicroKit.Multitenancy** | `modules/MicroKit.Multitenancy/` | `modules/MicroKit.Multitenancy/.claude/` | ✅ Released 1.0.0-preview.1 |
-| **MicroKit.Auth** | `modules/MicroKit.Auth/` | `modules/MicroKit.Auth/.claude/` | 🚧 In progress — Abstractions ✅ Core ✅ AspNetCore ✅ Permissions ✅ Supabase ✅ merged dev |
+| **MicroKit.Auth** | `modules/MicroKit.Auth/` | `modules/MicroKit.Auth/.claude/` | 🚧 In progress — Abstractions ✅ Core ✅ AspNetCore ✅ Permissions ✅ Supabase ✅ Multitenancy ✅ merged dev |
 | **MicroKit.Messaging** | `modules/MicroKit.Messaging/` | `modules/MicroKit.Messaging/.claude/` | 📋 Planned |
 | **MicroKit.Caching** | `modules/MicroKit.Caching/` | `modules/MicroKit.Caching/.claude/` | 📋 Planned |
 | **MicroKit.Http** | `modules/MicroKit.Http/` | `modules/MicroKit.Http/.claude/` | 📋 Planned |
@@ -269,7 +269,7 @@ MicroKit.Auth.Permissions                              🚧 In progress (merged 
 MicroKit.Auth.Roles                                    🚧 In progress (merged dev)
 MicroKit.Auth.Jwt                                      🚧 In progress (merged dev)
 MicroKit.Auth.Supabase                                 🚧 In progress (merged dev)
-MicroKit.Auth.Multitenancy                             📋 Planned Phase 1
+MicroKit.Auth.Multitenancy                             🚧 In progress (merged dev)
 MicroKit.Auth.Testing                                  📋 Planned Phase 1
 MicroKit.Messaging                                     📋 Planned
 MicroKit.Messaging.AzureServiceBus                     📋 Planned
