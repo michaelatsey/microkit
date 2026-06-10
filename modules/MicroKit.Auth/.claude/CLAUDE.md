@@ -301,10 +301,10 @@ All Phase 1 packages share one version per release.
 | `MicroKit.Auth.AspNetCore` | 1 | ✅ merged dev |
 | `MicroKit.Auth.Permissions` | 1 | ✅ merged dev |
 | `MicroKit.Auth.Roles` | 1 | ✅ merged dev |
-| `MicroKit.Auth.Jwt` | 1 | 🚧 In progress |
-| `MicroKit.Auth.Supabase` | 1 | 📋 Planned |
-| `MicroKit.Auth.Multitenancy` | 1 | 📋 Planned |
-| `MicroKit.Auth.Testing` | 1 | 📋 Planned |
+| `MicroKit.Auth.Jwt` | 1 | ✅ merged dev |
+| `MicroKit.Auth.Supabase` | 1 | ✅ merged dev |
+| `MicroKit.Auth.Multitenancy` | 1 | ✅ merged dev |
+| `MicroKit.Auth.Testing` | 1 | ✅ merged dev |
 | `MicroKit.Auth.Policies` | 2 | ⏳ Scaffold only |
 | `MicroKit.Auth.ApiKeys` | 2 | ⏳ Scaffold only |
 | `MicroKit.Auth.MediatR` | 2 | ⏳ Scaffold only |

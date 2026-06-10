@@ -2,7 +2,7 @@
   <PropertyGroup>
     <AssemblyName>MicroKit.Auth.Testing</AssemblyName>
     <RootNamespace>MicroKit.Auth.Testing</RootNamespace>
-    <Description>Test helpers for MicroKit.Auth — FakeCurrentUser, FakeCurrentUserBuilder, FakePermissionChecker.</Description>
+    <Description>Test helpers for MicroKit.Auth — FakeCurrentUser, FakeCurrentUserBuilder, FakePermissionChecker, FakePermissionStore, FakeRoleStore, FakeRolePermissionMap.</Description>
     <PackageTags>microkit;auth;testing;fakes;dotnet</PackageTags>
     <Authors>Ange-Michaël Atsé</Authors>
     <PackageProjectUrl>https://github.com/michaelatsey/microkit</PackageProjectUrl>
