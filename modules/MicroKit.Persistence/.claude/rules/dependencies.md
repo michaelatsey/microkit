@@ -25,7 +25,7 @@ MicroKit.Persistence.Analyzers         ← build-time only (no runtime dependenc
 
 | Project | Allowed Packages |
 |---------|-----------------|
-| `Abstractions` | `MicroKit.Result`, `MicroKit.Domain.Abstractions`, `MediatR.Contracts` ¹ |
+| `Abstractions` | `MicroKit.Result`, `MicroKit.Domain.Abstractions` |
 | `Core` | Abstractions (project) + `MicroKit.Logging.Abstractions` |
 | `EntityFrameworkCore` | Core (project) + `Microsoft.EntityFrameworkCore` + `Microsoft.Extensions.DependencyInjection.Abstractions` |
 | `PostgreSql` | EntityFrameworkCore (project) + `Npgsql.EntityFrameworkCore.PostgreSQL` |
@@ -58,18 +58,10 @@ MicroKit.Persistence is a **Level 2** module:
 ```
 MicroKit.Persistence.Abstractions → MicroKit.Result              (production)
 MicroKit.Persistence.Abstractions → MicroKit.Domain.Abstractions (IAggregateRoot constraint)
-MicroKit.Persistence.Abstractions → MediatR.Contracts            (IOutboxStore — see ¹ below)
 MicroKit.Persistence (core)       → MicroKit.Logging.Abstractions (structured log property names)
 ```
 
-> ¹ **MediatR.Contracts in Abstractions — deliberate cross-module contract point.**
-> `IOutboxStore.Add(INotification)` takes `MediatR.Contracts.INotification` directly so that
-> domain events and integration events stored in the outbox are typed identically to what
-> MediatR dispatches. This is the only permitted cross-module reference in Abstractions.
-> It is allowed because `MediatR.Contracts` is a pure-interface package (no implementation,
-> no EF Core, no DI) and because the outbox pattern intrinsically couples Persistence with
-> the messaging contract. Any other cross-module addition to Abstractions requires
-> `api-reviewer` approval and a new footnote here.
+> Any addition to Abstractions requires explicit `api-reviewer` approval.
 
 **Forbidden:**
 - Dependency on Level 3 modules (Messaging, Http, Multitenancy)

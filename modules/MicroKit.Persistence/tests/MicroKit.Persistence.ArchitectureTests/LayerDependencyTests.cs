@@ -62,14 +62,6 @@ public sealed class LayerDependencyTests
         refs.Any(a => a.Name!.Contains("MicroKit.Persistence.EntityFrameworkCore")).ShouldBeFalse();
     }
 
-    [Fact]
-    public void Abstractions_References_MediatRContracts()
-    {
-        // IOutboxStore.Add(INotification) — intentional cross-module contract point per dependencies.md
-        var refs = AbstractionsAssembly.GetReferencedAssemblies();
-        refs.Any(a => a.Name!.Contains("MediatR.Contracts")).ShouldBeTrue();
-    }
-
     // --- Core assembly ---
 
     [Fact]
