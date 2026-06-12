@@ -5,10 +5,6 @@
     <Description>Repository, Unit of Work, and transaction contracts for MicroKit.Persistence. Zero implementation — no EF Core, no infrastructure dependency.</Description>
     <PackageTags>persistence;repository;unit-of-work;transactions;microkit;ddd;dotnet;abstractions</PackageTags>
   </PropertyGroup>
-  <ItemGroup>
-    <!-- MediatR.Contracts provides INotification, required by IOutboxStore. -->
-    <PackageReference Include="MediatR.Contracts" />
-  </ItemGroup>
   <!-- DEV: source ProjectReferences — CI/Release: published NuGet packages -->
   <!-- ⚠ Any new cross-module dependency must be added to BOTH ItemGroups -->
   <ItemGroup Condition="'$(CIReleaseBuild)' != 'true'">
