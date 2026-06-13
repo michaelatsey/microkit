@@ -1,0 +1,22 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <AssemblyName>MicroKit.Messaging.Abstractions</AssemblyName>
+    <RootNamespace>MicroKit.Messaging</RootNamespace>
+    <Description>Pure contracts for MicroKit.Messaging — IIntegrationEvent, IMessagePublisher, IMessageHandler, IOutboxWriter, IOutboxProcessorStore, IInboxStore, OutboxMessage, InboxMessage, MessageEnvelope. Zero framework dependency.</Description>
+    <PackageTags>microkit;messaging;outbox;inbox;integration-events;abstractions;dotnet</PackageTags>
+    <Authors>Ange-Michaël Atsé</Authors>
+    <PackageProjectUrl>https://github.com/michaelatsey/microkit</PackageProjectUrl>
+    <RepositoryUrl>https://github.com/michaelatsey/microkit</RepositoryUrl>
+    <PackageLicenseExpression>MIT</PackageLicenseExpression>
+    <IncludeSymbols>true</IncludeSymbols>
+    <SymbolPackageFormat>snupkg</SymbolPackageFormat>
+  </PropertyGroup>
+  <!-- DEV: source ProjectReferences — CI/Release: published NuGet packages -->
+  <!-- ⚠ Any new cross-module dependency must be added to BOTH ItemGroups -->
+  <ItemGroup Condition="'$(CIReleaseBuild)' != 'true'">
+    <ProjectReference Include="../../../MicroKit.Result/src/MicroKit.Result/MicroKit.Result.csproj" />
+  </ItemGroup>
+  <ItemGroup Condition="'$(CIReleaseBuild)' == 'true'">
+    <PackageReference Include="MicroKit.Result" />
+  </ItemGroup>
+</Project>

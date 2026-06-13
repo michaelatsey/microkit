@@ -21,6 +21,7 @@
     <PackageVersion Include="MicroKit.Auth.Abstractions" Version="1.0.0-preview.1" />
     <PackageVersion Include="MicroKit.Auth.Permissions" Version="1.0.0-preview.1" />
     <PackageVersion Include="MicroKit.MediatR.Abstractions" Version="1.0.0-preview.1" />
+    <PackageVersion Include="MicroKit.Messaging.Abstractions" Version="1.0.0-preview.1" />
   </ItemGroup>
   <ItemGroup Label="Multitenancy">
     <PackageVersion Include="MicroKit.Multitenancy" Version="1.0.0-preview.1" />

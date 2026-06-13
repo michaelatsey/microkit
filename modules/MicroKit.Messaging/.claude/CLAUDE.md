@@ -88,7 +88,8 @@ MicroKit.Messaging/
 ```
 MicroKit.Messaging.Abstractions
     ← MicroKit.Result
-    ← MicroKit.Domain.Abstractions    (IIntegrationEvent extends IDomainEvent)
+    (no MicroKit.Domain dep — ADR-MSG-001: IIntegrationEvent is a standalone transport
+     contract, not a domain event; no IDomainEvent inheritance)
 
 MicroKit.Messaging (Core)
     ← MicroKit.Messaging.Abstractions
@@ -250,7 +251,7 @@ All v1 packages share one version per release.
 
 | Package | Phase | Status |
 |---------|-------|--------|
-| `MicroKit.Messaging.Abstractions` | 1 | 📋 Planned |
+| `MicroKit.Messaging.Abstractions` | 1 | ✅ Implemented — build verified, all agents approved |
 | `MicroKit.Messaging` | 1 | 📋 Planned |
 | `MicroKit.Messaging.EntityFrameworkCore` | 1 | 📋 Planned |
 | `MicroKit.Messaging.Testing` | 1 | 📋 Planned |

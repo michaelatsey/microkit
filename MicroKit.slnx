@@ -80,4 +80,11 @@
   <Folder Name="/modules/MicroKit.Auth/testing/">
     <Project Path="modules/MicroKit.Auth/testing/MicroKit.Auth.Testing/MicroKit.Auth.Testing.csproj" />
   </Folder>
+  <Folder Name="/modules/MicroKit.Messaging/" />
+  <Folder Name="/modules/MicroKit.Messaging/src/">
+    <Project Path="modules/MicroKit.Messaging/src/MicroKit.Messaging.Abstractions/MicroKit.Messaging.Abstractions.csproj" />
+  </Folder>
+  <Folder Name="/modules/MicroKit.Messaging/tests/">
+    <Project Path="modules/MicroKit.Messaging/tests/MicroKit.Messaging.ArchitectureTests/MicroKit.Messaging.ArchitectureTests.csproj" />
+  </Folder>
 </Solution>

@@ -1,0 +1,12 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/MicroKit.Messaging.Abstractions/MicroKit.Messaging.Abstractions.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/MicroKit.Messaging.ArchitectureTests/MicroKit.Messaging.ArchitectureTests.csproj" />
+  </Folder>
+  <Folder Name="/deps/">
+    <!-- Required for dotnet restore in dev mode (CIReleaseBuild=false ProjectReference) -->
+    <Project Path="../MicroKit.Result/src/MicroKit.Result/MicroKit.Result.csproj" />
+  </Folder>
+</Solution>
