@@ -150,10 +150,15 @@ public sealed class InboxMessage
     public DateTimeOffset? ProcessedAtUtc { get; set; }
     public DateTimeOffset? LockedUntilUtc { get; set; }       // lease expiry for concurrent processors
     public string? ErrorMessage { get; set; }
-    public CorrelationId CorrelationId { get; set; } = null!;
+    public CorrelationId? CorrelationId { get; set; }          // nullable — inbound messages from external systems may lack correlation context
     public CausationId? CausationId { get; set; }             // nullable — root events have no cause
 }
 ```
+
+> **Nullability asymmetry:** `OutboxMessage.CorrelationId` is non-nullable (`= null!`) because
+> outbound messages must always be traceable — set to `CorrelationId.New()` if no upstream context.
+> `InboxMessage.CorrelationId` is nullable because inbound messages arrive from external systems
+> that may not carry correlation context. Do NOT "fix" this asymmetry — it is intentional.
 
 ---
 
@@ -191,8 +196,9 @@ async ValueTask ProcessAsync<T>(
         return; // unique constraint violation — another processor won, skip
     }
 
-    // 3. Acquire lease
-    await _inboxStore.MarkProcessingAsync(envelope.MessageId, consumerType, ct).ConfigureAwait(false);
+    // 3. Acquire lease — lockUntil derived from InboxProcessorOptions.LeaseDuration
+    var lockUntil = DateTimeOffset.UtcNow.Add(_options.LeaseDuration);
+    await _inboxStore.MarkProcessingAsync(envelope.MessageId, consumerType, lockUntil, ct).ConfigureAwait(false);
 
     // 4. Invoke handler
     await handler.HandleAsync(envelope.Event, ct).ConfigureAwait(false);
@@ -311,9 +317,14 @@ public interface IInboxStore
     ValueTask<IReadOnlyList<InboxMessage>> GetPendingAsync(
         int batchSize, string tenantId, CancellationToken ct = default);
 
-    /// <summary>Acquires processing lease on an inbox message.</summary>
+    /// <summary>
+    /// Acquires a processing lease. Returns plain ValueTask — throws on failure
+    /// (e.g. database error). This is a non-optional precondition: a failure here
+    /// means the inbox row is in an inconsistent state and must not be silently swallowed.
+    /// </summary>
     ValueTask MarkProcessingAsync(
-        MessageId messageId, string consumerType, CancellationToken ct = default);
+        MessageId messageId, string consumerType, DateTimeOffset lockUntil,
+        CancellationToken ct = default);
 
     /// <summary>Marks message as successfully processed.</summary>
     ValueTask<Result> MarkProcessedAsync(

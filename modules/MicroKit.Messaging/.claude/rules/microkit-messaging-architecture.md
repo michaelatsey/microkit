@@ -6,7 +6,7 @@
 
 ### Abstractions (`MicroKit.Messaging.Abstractions`)
 - Zero dependency on ASP.NET Core, EF Core, or any broker package
-- Only allowed deps: `MicroKit.Result`, `MicroKit.Domain.Abstractions`, BCL types
+- Only allowed deps: `MicroKit.Result`, BCL types — no `MicroKit.Domain.Abstractions` (ADR-MSG-001)
 - All contracts are interfaces; entities are `sealed class`; VOs are `sealed record`
 - Contains: `IIntegrationEvent`, `IMessagePublisher`, `IMessageHandler<T>`,
   `IOutboxWriter`, `IOutboxProcessorStore`, `IInboxStore`,

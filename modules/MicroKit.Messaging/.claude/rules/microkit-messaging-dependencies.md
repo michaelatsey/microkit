@@ -5,7 +5,7 @@
 ```
 MicroKit.Messaging.Abstractions
     ← MicroKit.Result
-    ← MicroKit.Domain.Abstractions
+    (ADR-MSG-001: no MicroKit.Domain.Abstractions — IIntegrationEvent is standalone)
 
 MicroKit.Messaging (Core)
     ← MicroKit.Messaging.Abstractions
@@ -53,14 +53,15 @@ Any cross-module dependency MUST use the two-ItemGroup CIReleaseBuild pattern:
 <!-- DEV: source ProjectReferences — CI/Release: published NuGet packages -->
 <!-- ⚠ Any new cross-module dependency must be added to BOTH ItemGroups -->
 <ItemGroup Condition="'$(CIReleaseBuild)' != 'true'">
-  <ProjectReference Include="../../../../modules/MicroKit.Result/src/MicroKit.Result/MicroKit.Result.csproj" />
-  <ProjectReference Include="../../../../modules/MicroKit.Domain/src/MicroKit.Domain.Abstractions/MicroKit.Domain.Abstractions.csproj" />
+  <ProjectReference Include="../../../MicroKit.Result/src/MicroKit.Result/MicroKit.Result.csproj" />
 </ItemGroup>
 <ItemGroup Condition="'$(CIReleaseBuild)' == 'true'">
   <PackageReference Include="MicroKit.Result" />
-  <PackageReference Include="MicroKit.Domain.Abstractions" />
 </ItemGroup>
 ```
+
+> ADR-MSG-001: `MicroKit.Domain.Abstractions` is NOT a dependency of Abstractions.
+> `IIntegrationEvent` is a standalone transport contract — it does not extend `IDomainEvent`.
 
 See monorepo root `.claude/rules/cross-module-references.md` for the full canonical pattern.
 
@@ -70,7 +71,7 @@ See monorepo root `.claude/rules/cross-module-references.md` for the full canoni
 
 | Project | Allowed packages |
 |---------|-----------------|
-| `Abstractions` | `MicroKit.Result`, `MicroKit.Domain.Abstractions` |
+| `Abstractions` | `MicroKit.Result` only — no Domain dep per ADR-MSG-001 |
 | `Core` | Abstractions + `Microsoft.Extensions.{DI,Hosting,Logging}.Abstractions` |
 | `EntityFrameworkCore` | Core + `MicroKit.Persistence.EntityFrameworkCore` + `Microsoft.EntityFrameworkCore` |
 | `Testing` | Abstractions only — `xunit`, `Shouldly`, `NSubstitute` belong in the consumer's test project, NOT in this library |
