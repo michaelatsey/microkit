@@ -5,14 +5,17 @@
   <ItemGroup Label="Framework">
     <PackageVersion Include="Microsoft.Extensions.DependencyInjection" Version="10.0.8" />
     <PackageVersion Include="Microsoft.Extensions.DependencyInjection.Abstractions" Version="10.0.8" />
+    <PackageVersion Include="Microsoft.Extensions.Logging" Version="10.0.8" />
     <PackageVersion Include="Microsoft.Extensions.Logging.Abstractions" Version="10.0.8" />
     <PackageVersion Include="Microsoft.Extensions.Caching.Abstractions" Version="10.0.8" />
+    <PackageVersion Include="Microsoft.Extensions.Hosting.Abstractions" Version="10.0.8" />
     <PackageVersion Include="Microsoft.Extensions.Options" Version="10.0.8" />
   </ItemGroup>
   <ItemGroup Label="MicroKit">
     <!-- Published versions of sibling MicroKit modules.
          Used by CIReleaseBuild=true pack step to emit correct NuGet dependencies
          instead of the git-height versions produced by cross-module ProjectReferences. -->
+    <PackageVersion Include="MicroKit.Execution.Abstractions" Version="1.0.0-preview.1" />
     <PackageVersion Include="MicroKit.Result" Version="1.0.0-preview.1" />
     <PackageVersion Include="MicroKit.Domain" Version="1.0.0-preview.4" />
     <PackageVersion Include="MicroKit.Logging.Abstractions" Version="1.0.0-preview.1" />

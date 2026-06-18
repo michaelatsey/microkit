@@ -1,10 +1,13 @@
 namespace MicroKit.Messaging.ArchitectureTests;
 
-// Full architecture tests added after all packages implemented
-
 public sealed class MessagingAbstractionsArchitectureTests
 {
     private static readonly Assembly AbstractionsAssembly = typeof(IIntegrationEvent).Assembly;
+    private static readonly Assembly CoreAssembly = typeof(MessagingBuilder).Assembly;
+
+    // ---------------------------------------------------------------------------
+    // Abstractions layer checks
+    // ---------------------------------------------------------------------------
 
     [Fact]
     public void Abstractions_HasNoEfCoreDependency()
@@ -50,11 +53,71 @@ public sealed class MessagingAbstractionsArchitectureTests
             .ShouldBeTrue();
     }
 
+    // ---------------------------------------------------------------------------
+    // Core layer checks (Ruling 8 + architecture requirements)
+    // ---------------------------------------------------------------------------
+
     [Fact]
-    public void Placeholder_AlwaysPasses()
+    public void Core_HasNoEfCoreDependency()
     {
-        // Placeholder — full cross-package architecture tests will be added
-        // once all MicroKit.Messaging packages (Core, EFCore, Testing) are implemented.
-        true.ShouldBeTrue();
+        Types.InAssembly(CoreAssembly)
+            .ShouldNot()
+            .HaveDependencyOn("Microsoft.EntityFrameworkCore")
+            .GetResult()
+            .IsSuccessful
+            .ShouldBeTrue();
+    }
+
+    [Fact]
+    public void Core_HasNoMediatRContractsDependency()
+    {
+        Types.InAssembly(CoreAssembly)
+            .ShouldNot()
+            .HaveDependencyOn("MediatR.Contracts")
+            .GetResult()
+            .IsSuccessful
+            .ShouldBeTrue();
+    }
+
+    [Fact]
+    public void Core_HasNoBrokerDependency()
+    {
+        var result = Types.InAssembly(CoreAssembly).ShouldNot()
+            .HaveDependencyOn("RabbitMQ.Client").GetResult();
+        result.IsSuccessful.ShouldBeTrue("Core must not reference RabbitMQ.Client");
+
+        var result2 = Types.InAssembly(CoreAssembly).ShouldNot()
+            .HaveDependencyOn("Azure.Messaging.ServiceBus").GetResult();
+        result2.IsSuccessful.ShouldBeTrue("Core must not reference Azure.Messaging.ServiceBus");
+
+        var result3 = Types.InAssembly(CoreAssembly).ShouldNot()
+            .HaveDependencyOn("Confluent.Kafka").GetResult();
+        result3.IsSuccessful.ShouldBeTrue("Core must not reference Confluent.Kafka");
+    }
+
+    [Fact]
+    public void Core_DoesNotContainTypeNamedMessageDispatcher()
+    {
+        // MessageDispatcher was eliminated by Ruling 5 in favour of the IOutboxDispatcher seam.
+        // This test prevents accidental re-introduction.
+        Types.InAssembly(CoreAssembly)
+            .That()
+            .HaveNameEndingWith("MessageDispatcher")
+            .GetTypes()
+            .ShouldBeEmpty("MessageDispatcher was eliminated — use IOutboxDispatcher instead");
+    }
+
+    [Fact]
+    public void AllAssemblies_HaveNoMediatRContractsDependency()
+    {
+        foreach (var assembly in new[] { AbstractionsAssembly, CoreAssembly })
+        {
+            Types.InAssembly(assembly)
+                .ShouldNot()
+                .HaveDependencyOn("MediatR.Contracts")
+                .GetResult()
+                .IsSuccessful
+                .ShouldBeTrue($"{assembly.GetName().Name} must not reference MediatR.Contracts");
+        }
     }
 }

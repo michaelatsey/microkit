@@ -30,9 +30,9 @@ publisher.ShouldHavePublished<OrderPlacedEvent>(e => e.OrderId == orderId);
 var outboxStore = new InMemoryOutboxStore();
 await sut.CommitAsync(ct);
 
-var pending = await outboxStore.GetPendingAsync(batchSize: 10, tenantId: "tenant-abc", ct);
+var pending = await outboxStore.GetPendingAsync(batchSize: 10, ct);
 pending.Count.ShouldBe(1);
-pending[0].TenantId.ShouldBe("tenant-abc");
+pending[0].TenantId.ShouldBe("tenant-abc"); // TenantId is on the row, not a filter parameter
 
 // ✅ InMemoryInboxStore — in-memory inbox for dedup tests
 var inboxStore = new InMemoryInboxStore();
@@ -110,7 +110,7 @@ AddAsync_StoresMessage_WithTenantId
 GetPendingAsync_OnlyReturnsPendingMessages
 GetPendingAsync_RespectsLease_DoesNotReturnLockedMessages
 GetPendingAsync_FiltersExpiredLocks_ReturnsStaleLockedMessages
-GetPendingAsync_RespectsTenantIsolation_DoesNotReturnOtherTenantMessages
+GetPendingAsync_ReturnsAllTenants_TenantIdOnEachRow
 AcquireLeaseAsync_WhenPending_ReturnsTrue
 AcquireLeaseAsync_WhenAlreadyLocked_ReturnsFalse
 MarkPublishedAsync_UpdatesStatusToPublished

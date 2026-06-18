@@ -20,13 +20,14 @@ public interface IOutboxProcessorStore
     /// This is a read-only query — no lease is acquired. Call
     /// <see cref="AcquireLeaseAsync"/> on individual candidates afterwards.
     /// Expired leases (<c>LockedUntilUtc &lt; UtcNow</c>) are included.
+    /// Processes all tenants — tenant context is read from each
+    /// <see cref="OutboxMessage.TenantId"/> row, not passed as a filter.
     /// </summary>
     /// <param name="batchSize">Maximum number of candidates to return.</param>
-    /// <param name="tenantId">Tenant scope for this query. Required.</param>
     /// <param name="ct">A cancellation token.</param>
     /// <returns>A read-only list of pending <see cref="OutboxMessage"/> instances.</returns>
     ValueTask<IReadOnlyList<OutboxMessage>> GetPendingAsync(
-        int batchSize, string tenantId, CancellationToken ct = default);
+        int batchSize, CancellationToken ct = default);
 
     /// <summary>
     /// Atomically acquires a processing lease on a single pending message using a

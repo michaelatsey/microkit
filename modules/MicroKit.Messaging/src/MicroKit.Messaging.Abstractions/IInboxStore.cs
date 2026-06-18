@@ -39,13 +39,14 @@ public interface IInboxStore
 
     /// <summary>
     /// Returns pending inbox messages eligible for handler invocation.
+    /// Processes all tenants — tenant context is read from each
+    /// <see cref="InboxMessage.TenantId"/> row, not passed as a filter.
     /// </summary>
     /// <param name="batchSize">Maximum number of messages to return.</param>
-    /// <param name="tenantId">Tenant scope for this query.</param>
     /// <param name="ct">A cancellation token.</param>
     /// <returns>A read-only list of pending <see cref="InboxMessage"/> instances.</returns>
     ValueTask<IReadOnlyList<InboxMessage>> GetPendingAsync(
-        int batchSize, string tenantId, CancellationToken ct = default);
+        int batchSize, CancellationToken ct = default);
 
     /// <summary>
     /// Acquires a processing lease on an inbox message, transitioning its status to
@@ -78,14 +79,37 @@ public interface IInboxStore
         MessageId messageId, string consumerType, CancellationToken ct = default);
 
     /// <summary>
-    /// Marks an inbox message as failed after a handler invocation error.
+    /// Resets an inbox message to <see cref="InboxMessageStatus.Received"/> after a
+    /// transient handler failure. Increments <c>RetryCount</c>, clears
+    /// <c>LockedUntilUtc</c>, and sets <c>NextRetryAtUtc = UtcNow + 2^retryCount</c>
+    /// seconds (capped at 3600 s). Symmetric with
+    /// <see cref="IOutboxProcessorStore.MarkFailedAsync"/>.
     /// </summary>
     /// <param name="messageId">The identifier of the original message.</param>
     /// <param name="consumerType">The assembly-qualified CLR type name of the consuming handler.</param>
     /// <param name="errorMessage">The error message from the failed handler invocation.</param>
+    /// <param name="retryCount">
+    /// The updated retry count after this failure. The caller provides
+    /// <c>InboxMessage.RetryCount + 1</c> to avoid an extra database read.
+    /// </param>
     /// <param name="ct">A cancellation token.</param>
     /// <returns>A <see cref="Result"/> indicating success or failure of the update.</returns>
     ValueTask<Result> MarkFailedAsync(
         MessageId messageId, string consumerType, string errorMessage,
+        int retryCount, CancellationToken ct = default);
+
+    /// <summary>
+    /// Permanently dead-letters an inbox message when <c>MaxRetries</c> has been
+    /// exceeded. Sets <c>Status = Failed</c>, <c>DeadLettered = true</c>, and
+    /// <c>ProcessedAtUtc = UtcNow</c>. Terminal — no further retry will be attempted.
+    /// Symmetric with <see cref="IOutboxProcessorStore.DeadLetterAsync"/>.
+    /// </summary>
+    /// <param name="messageId">The identifier of the original message.</param>
+    /// <param name="consumerType">The assembly-qualified CLR type name of the consuming handler.</param>
+    /// <param name="reason">The reason for dead-lettering (last error message).</param>
+    /// <param name="ct">A cancellation token.</param>
+    /// <returns>A <see cref="Result"/> indicating success or failure of the update.</returns>
+    ValueTask<Result> DeadLetterAsync(
+        MessageId messageId, string consumerType, string reason,
         CancellationToken ct = default);
 }

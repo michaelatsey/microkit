@@ -73,6 +73,22 @@ public sealed class InboxMessage
     public string? ErrorMessage { get; set; }
 
     /// <summary>
+    /// Gets or sets the earliest UTC time at which this message becomes eligible for
+    /// re-processing after a transient handler failure. <see langword="null"/> until the
+    /// first failure. Set by <c>IInboxStore.MarkFailedAsync</c> using the same exponential
+    /// back-off formula as the outbox: <c>2^retryCount</c> seconds, capped at 3600 s.
+    /// </summary>
+    public DateTimeOffset? NextRetryAtUtc { get; set; }
+
+    /// <summary>
+    /// Gets or sets a value indicating whether this message has been permanently
+    /// dead-lettered (i.e. <c>MaxRetries</c> was exceeded). When <see langword="true"/>,
+    /// <see cref="Status"/> is <see cref="InboxMessageStatus.Failed"/> and no further
+    /// retry will be attempted. Symmetric with <c>OutboxMessage.DeadLettered</c>.
+    /// </summary>
+    public bool DeadLettered { get; set; }
+
+    /// <summary>
     /// Gets or sets the correlation identifier propagated from the originating message chain.
     /// <see langword="null"/> when no correlation context was available on the inbound message.
     /// </summary>

@@ -28,11 +28,12 @@ scoped, propagated, and isolated in all async scenarios — including parallel b
 
 ## Mandatory Loading Sequence
 
-1. `.claude/rules/microkit-messaging-architecture.md` — layer boundaries and processor rules
-2. `.claude/rules/microkit-messaging-outbox-inbox.md` — outbox/inbox processing patterns
-3. `modules/MicroKit.Messaging/src/MicroKit.Messaging/OutboxProcessor.cs` — if present
-4. `modules/MicroKit.Messaging/src/MicroKit.Messaging/InboxProcessor.cs` — if present
-5. `modules/MicroKit.Messaging/src/MicroKit.Messaging/MessageDispatcher.cs` — if present
+1. `.claude/rules/microkit-messaging-architecture.md` — architecture rules
+2. `.claude/rules/microkit-messaging-architecture.md` — layer boundaries and processor rules
+3. `.claude/rules/microkit-messaging-outbox-inbox.md` — outbox/inbox processing patterns
+4. `modules/MicroKit.Messaging/src/MicroKit.Messaging/OutboxProcessor.cs` — if present
+5. `modules/MicroKit.Messaging/src/MicroKit.Messaging/InboxProcessor.cs` — if present
+6. `modules/MicroKit.Messaging/src/MicroKit.Messaging/MessageDispatcher.cs` — if present
 
 ---
 
