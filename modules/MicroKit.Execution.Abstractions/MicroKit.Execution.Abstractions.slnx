@@ -1,0 +1,5 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/MicroKit.Execution.Abstractions/MicroKit.Execution.Abstractions.csproj" />
+  </Folder>
+</Solution>

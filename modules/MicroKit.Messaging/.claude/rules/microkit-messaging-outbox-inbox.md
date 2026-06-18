@@ -245,10 +245,10 @@ public interface IOutboxProcessorStore
     /// Returns pending message candidates (read-only — does not acquire a lease).
     /// Filter: Status=Pending AND (LockedUntilUtc IS NULL OR LockedUntilUtc &lt; now)
     ///         AND (NextRetryAtUtc IS NULL OR NextRetryAtUtc &lt;= now).
-    /// Always tenant-scoped.
+    /// Processes ALL tenants — TenantId is read from each OutboxMessage row, not passed as a filter.
     /// </summary>
     ValueTask<IReadOnlyList<OutboxMessage>> GetPendingAsync(
-        int batchSize, string tenantId, CancellationToken ct = default);
+        int batchSize, CancellationToken ct = default);
 
     /// <summary>
     /// Atomically acquires a lease on a single message using a single UPDATE WHERE.
@@ -313,9 +313,12 @@ public interface IInboxStore
     /// </summary>
     ValueTask AddAsync(InboxMessage message, CancellationToken ct = default);
 
-    /// <summary>Returns pending inbox messages. Tenant-scoped.</summary>
+    /// <summary>
+    /// Returns pending inbox messages.
+    /// Processes ALL tenants — TenantId is read from each InboxMessage row, not passed as a filter.
+    /// </summary>
     ValueTask<IReadOnlyList<InboxMessage>> GetPendingAsync(
-        int batchSize, string tenantId, CancellationToken ct = default);
+        int batchSize, CancellationToken ct = default);
 
     /// <summary>
     /// Acquires a processing lease. Returns plain ValueTask — throws on failure

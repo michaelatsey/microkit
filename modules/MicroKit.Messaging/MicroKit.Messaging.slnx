@@ -1,12 +1,15 @@
 <Solution>
   <Folder Name="/src/">
     <Project Path="src/MicroKit.Messaging.Abstractions/MicroKit.Messaging.Abstractions.csproj" />
+    <Project Path="src/MicroKit.Messaging/MicroKit.Messaging.csproj" />
   </Folder>
   <Folder Name="/tests/">
     <Project Path="tests/MicroKit.Messaging.ArchitectureTests/MicroKit.Messaging.ArchitectureTests.csproj" />
+    <Project Path="tests/MicroKit.Messaging.UnitTests/MicroKit.Messaging.UnitTests.csproj" />
   </Folder>
   <Folder Name="/deps/">
     <!-- Required for dotnet restore in dev mode (CIReleaseBuild=false ProjectReference) -->
     <Project Path="../MicroKit.Result/src/MicroKit.Result/MicroKit.Result.csproj" />
+    <Project Path="../MicroKit.Execution.Abstractions/src/MicroKit.Execution.Abstractions/MicroKit.Execution.Abstractions.csproj" />
   </Folder>
 </Solution>

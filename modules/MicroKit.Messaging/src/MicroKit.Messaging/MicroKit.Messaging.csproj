@@ -1,0 +1,37 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <AssemblyName>MicroKit.Messaging</AssemblyName>
+    <RootNamespace>MicroKit.Messaging</RootNamespace>
+    <Description>In-process messaging core for MicroKit — OutboxProcessor, InboxProcessor,
+    InProcessMessagePublisher, InProcessIntegrationDispatcher, DI extensions.</Description>
+    <PackageTags>microkit;messaging;outbox;inbox;integration-events;dotnet</PackageTags>
+    <Authors>Ange-Michaël Atsé</Authors>
+    <PackageLicenseExpression>MIT</PackageLicenseExpression>
+    <IncludeSymbols>true</IncludeSymbols>
+    <SymbolPackageFormat>snupkg</SymbolPackageFormat>
+    <!-- CA1848/CA1873: simple logging is intentional for v1 polling workload.
+         IL2026/IL2057: SystemTextJsonMessageSerializer uses reflection-based serialization — v2 will use source generators.
+         IL2091: AddTransient<THandler> is covered by DynamicallyAccessedMembers on the type param. -->
+    <NoWarn>$(NoWarn);CA1848;CA1873;IL2026;IL2057</NoWarn>
+  </PropertyGroup>
+  <ItemGroup>
+    <InternalsVisibleTo Include="MicroKit.Messaging.UnitTests" />
+  </ItemGroup>
+  <!-- Same-module reference — Abstractions is in the same solution, no CIReleaseBuild pattern needed -->
+  <ItemGroup>
+    <ProjectReference Include="../MicroKit.Messaging.Abstractions/MicroKit.Messaging.Abstractions.csproj" />
+  </ItemGroup>
+  <!-- DEV: source ProjectReferences — CI/Release: published NuGet packages -->
+  <!-- ⚠ Any new cross-module dependency must be added to BOTH ItemGroups -->
+  <ItemGroup Condition="'$(CIReleaseBuild)' != 'true'">
+    <ProjectReference Include="../../../MicroKit.Execution.Abstractions/src/MicroKit.Execution.Abstractions/MicroKit.Execution.Abstractions.csproj" />
+  </ItemGroup>
+  <ItemGroup Condition="'$(CIReleaseBuild)' == 'true'">
+    <PackageReference Include="MicroKit.Execution.Abstractions" />
+  </ItemGroup>
+  <ItemGroup>
+    <PackageReference Include="Microsoft.Extensions.DependencyInjection.Abstractions" />
+    <PackageReference Include="Microsoft.Extensions.Hosting.Abstractions" />
+    <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" />
+  </ItemGroup>
+</Project>

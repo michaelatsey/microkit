@@ -1,10 +1,10 @@
 <Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup>
-    <AssemblyName>MicroKit.Messaging.ArchitectureTests</AssemblyName>
-    <RootNamespace>MicroKit.Messaging.ArchitectureTests</RootNamespace>
+    <AssemblyName>MicroKit.Messaging.UnitTests</AssemblyName>
+    <RootNamespace>MicroKit.Messaging.UnitTests</RootNamespace>
     <IsPackable>false</IsPackable>
     <GenerateDocumentationFile>false</GenerateDocumentationFile>
-    <NoWarn>CS1591;CA1707</NoWarn>
+    <NoWarn>CS1591;CA1707;CA2012;CA1859;CA2201</NoWarn>
   </PropertyGroup>
   <ItemGroup>
     <!-- Same-module, IsPackable=false — unconditional ProjectReferences (no CIReleaseBuild pattern needed) -->
@@ -12,6 +12,8 @@
     <ProjectReference Include="../../src/MicroKit.Messaging/MicroKit.Messaging.csproj" />
   </ItemGroup>
   <ItemGroup>
+    <PackageReference Include="Microsoft.Extensions.DependencyInjection" />
+    <PackageReference Include="Microsoft.Extensions.Logging" />
     <PackageReference Include="Microsoft.NET.Test.Sdk" />
     <PackageReference Include="xunit" />
     <PackageReference Include="xunit.runner.visualstudio">
@@ -19,7 +21,7 @@
       <PrivateAssets>all</PrivateAssets>
     </PackageReference>
     <PackageReference Include="Shouldly" />
-    <PackageReference Include="NetArchTest.Rules" />
+    <PackageReference Include="NSubstitute" />
     <PackageReference Include="coverlet.collector">
       <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
       <PrivateAssets>all</PrivateAssets>

@@ -1,0 +1,17 @@
+{
+  "version": "1.0",
+  "publicReleaseRefSpec": [
+    "^refs/heads/main$",
+    "^refs/tags/execution-v\\d+\\.\\d+\\.\\d+(-.+)?$"
+  ],
+  "pathFilters": [
+    "modules/MicroKit.Execution.Abstractions/"
+  ],
+  "cloudBuild": {
+    "setVersionVariables": true
+  },
+  "release": {
+    "tagName": "execution-v{version}",
+    "branchName": "release/execution/{version}"
+  }
+}
