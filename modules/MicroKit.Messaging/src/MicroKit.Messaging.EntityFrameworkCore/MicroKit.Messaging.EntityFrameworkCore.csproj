@@ -1,0 +1,38 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <AssemblyName>MicroKit.Messaging.EntityFrameworkCore</AssemblyName>
+    <RootNamespace>MicroKit.Messaging.EntityFrameworkCore</RootNamespace>
+    <Description>EF Core persistence adapter for MicroKit.Messaging — EfOutboxStore, EfInboxStore,
+    entity configurations, and ModelBuilder extensions for the transactional outbox/inbox pattern.</Description>
+    <PackageTags>microkit;messaging;outbox;inbox;entityframeworkcore;dotnet</PackageTags>
+    <Authors>Ange-Michaël Atsé</Authors>
+    <PackageLicenseExpression>MIT</PackageLicenseExpression>
+    <IncludeSymbols>true</IncludeSymbols>
+    <SymbolPackageFormat>snupkg</SymbolPackageFormat>
+    <!-- IL2091: generic DbContext constraint is trim-safe in relational providers at runtime. -->
+    <NoWarn>$(NoWarn);IL2091</NoWarn>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- Expose internal stores to integration tests -->
+    <InternalsVisibleTo Include="MicroKit.Messaging.IntegrationTests" />
+  </ItemGroup>
+
+  <!-- DEV: source ProjectReferences — CI/Release: published NuGet packages -->
+  <!-- ⚠ Any new cross-module dependency must be added to BOTH ItemGroups -->
+  <ItemGroup Condition="'$(CIReleaseBuild)' != 'true'">
+    <ProjectReference Include="../MicroKit.Messaging/MicroKit.Messaging.csproj" />
+    <ProjectReference Include="../../../MicroKit.Persistence/src/MicroKit.Persistence.EntityFrameworkCore/MicroKit.Persistence.EntityFrameworkCore.csproj" />
+  </ItemGroup>
+  <ItemGroup Condition="'$(CIReleaseBuild)' == 'true'">
+    <PackageReference Include="MicroKit.Messaging" />
+    <PackageReference Include="MicroKit.Persistence.EntityFrameworkCore" />
+  </ItemGroup>
+
+  <!-- Microsoft.EntityFrameworkCore.Relational: ToTable/HasIndex are relational-only APIs;
+       ExecuteUpdateAsync/ExecuteDeleteAsync SQL generation lives in this package. -->
+  <ItemGroup>
+    <PackageReference Include="Microsoft.EntityFrameworkCore.Relational" />
+    <PackageReference Include="Microsoft.Extensions.DependencyInjection.Abstractions" />
+  </ItemGroup>
+</Project>

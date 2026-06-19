@@ -1,10 +1,10 @@
 <Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup>
-    <AssemblyName>MicroKit.Messaging.ArchitectureTests</AssemblyName>
-    <RootNamespace>MicroKit.Messaging.ArchitectureTests</RootNamespace>
+    <AssemblyName>MicroKit.Messaging.IntegrationTests</AssemblyName>
+    <RootNamespace>MicroKit.Messaging.IntegrationTests</RootNamespace>
     <IsPackable>false</IsPackable>
     <GenerateDocumentationFile>false</GenerateDocumentationFile>
-    <NoWarn>CS1591;CA1707</NoWarn>
+    <NoWarn>CS1591;CA1707;IL2026;IL2091</NoWarn>
   </PropertyGroup>
   <ItemGroup>
     <!-- Same-module, IsPackable=false — unconditional ProjectReferences (no CIReleaseBuild pattern needed) -->
@@ -12,7 +12,14 @@
     <ProjectReference Include="../../src/MicroKit.Messaging/MicroKit.Messaging.csproj" />
     <ProjectReference Include="../../src/MicroKit.Messaging.EntityFrameworkCore/MicroKit.Messaging.EntityFrameworkCore.csproj" />
   </ItemGroup>
+  <!-- SQLitePCLRaw.lib.e_sqlite3 2.1.11 has a known vulnerability (GHSA-2m69-gcr7-jv3q).
+       This is a transitive test-only dependency of Microsoft.EntityFrameworkCore.Sqlite;
+       it does not affect production binaries. Suppress until EFCore ships a patched version. -->
   <ItemGroup>
+    <NuGetAuditSuppress Include="https://github.com/advisories/GHSA-2m69-gcr7-jv3q" />
+  </ItemGroup>
+  <ItemGroup>
+    <PackageReference Include="Microsoft.EntityFrameworkCore.Sqlite" />
     <PackageReference Include="Microsoft.NET.Test.Sdk" />
     <PackageReference Include="xunit" />
     <PackageReference Include="xunit.runner.visualstudio">
@@ -20,7 +27,7 @@
       <PrivateAssets>all</PrivateAssets>
     </PackageReference>
     <PackageReference Include="Shouldly" />
-    <PackageReference Include="NetArchTest.Rules" />
+    <PackageReference Include="NSubstitute" />
     <PackageReference Include="coverlet.collector">
       <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
       <PrivateAssets>all</PrivateAssets>

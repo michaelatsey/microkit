@@ -90,10 +90,15 @@ Pending
 //   UPDATE outbox_messages
 //   SET Status = 'Processing', LockedUntilUtc = @expiry
 //   WHERE Id = @id
-//     AND Status = 'Pending'
-//     AND (NextRetryAtUtc IS NULL OR NextRetryAtUtc <= GETUTCDATE())
+//     AND (Status = 'Pending' OR (Status = 'Processing' AND LockedUntilUtc <= @callTime))
+//     AND (NextRetryAtUtc IS NULL OR NextRetryAtUtc <= @callTime)
 //
 // Returns true if 1 row was updated (lease acquired), false if 0 rows (another processor won).
+//
+// ⚠ Stale-lease recovery: the OR clause on Status = 'Processing' AND LockedUntilUtc <= @callTime
+// is mandatory. GetPendingAsync re-surfaces stale Processing messages; without this OR,
+// AcquireLeaseAsync would always return false on those rows, leaving crashed-processor messages
+// permanently stuck. @callTime = DateTimeOffset.UtcNow captured once before the call.
 //
 // ⚠ EF Core LINQ (SELECT + foreach mutate + SaveChanges) is NOT atomic under concurrent
 // processors — do not use it for lease acquisition. Use ExecuteUpdateAsync or raw SQL.
@@ -252,6 +257,8 @@ public interface IOutboxProcessorStore
 
     /// <summary>
     /// Atomically acquires a lease on a single message using a single UPDATE WHERE.
+    /// Matches both fresh Pending messages and stale Processing messages whose
+    /// LockedUntilUtc has expired (crashed-processor recovery).
     /// Returns true if acquired (1 row updated), false if another processor won (0 rows).
     /// </summary>
     ValueTask<bool> AcquireLeaseAsync(
