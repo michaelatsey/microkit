@@ -21,7 +21,7 @@ public interface IOutboxWriter
     /// The message is not persisted until the enclosing transaction commits.
     /// </summary>
     /// <param name="message">The outbox message to persist.
-    /// <see cref="OutboxMessage.TenantId"/> must not be <see langword="null"/> or empty.</param>
+    /// <see cref="OutboxMessage.TenantId"/> is optional. Null in single-tenant deployments.</param>
     /// <param name="ct">A cancellation token.</param>
     /// <returns>A <see cref="ValueTask"/> that completes when the message has been
     /// added to the unit of work.</returns>

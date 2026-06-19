@@ -32,7 +32,7 @@ public interface IInboxStore
     /// <c>DbUpdateException</c> on a unique constraint violation is the real idempotency gate.
     /// </summary>
     /// <param name="message">The inbox message to persist.
-    /// <see cref="InboxMessage.TenantId"/> must not be <see langword="null"/> or empty.</param>
+    /// <see cref="InboxMessage.TenantId"/> is optional. Null in single-tenant deployments.</param>
     /// <param name="ct">A cancellation token.</param>
     /// <returns>A <see cref="ValueTask"/> that completes when the row has been added.</returns>
     ValueTask AddAsync(InboxMessage message, CancellationToken ct = default);
