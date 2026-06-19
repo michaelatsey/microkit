@@ -16,7 +16,7 @@ MicroKit.Messaging (Core)
 MicroKit.Messaging.EntityFrameworkCore
     ← MicroKit.Messaging (Core)
     ← MicroKit.Persistence.EntityFrameworkCore       ← cross-module (Level 2)
-    ← Microsoft.EntityFrameworkCore
+    ← Microsoft.EntityFrameworkCore.Relational       ← ToTable/HasIndex + ExecuteUpdateAsync/DeleteAsync SQL generation
 
 MicroKit.Messaging.Testing
     ← MicroKit.Messaging.Abstractions                ← Abstractions only, never Core
@@ -73,13 +73,22 @@ See monorepo root `.claude/rules/cross-module-references.md` for the full canoni
 |---------|-----------------|
 | `Abstractions` | `MicroKit.Result` only — no Domain dep per ADR-MSG-001 |
 | `Core` | Abstractions + `Microsoft.Extensions.{DI,Hosting,Logging}.Abstractions` |
-| `EntityFrameworkCore` | Core + `MicroKit.Persistence.EntityFrameworkCore` + `Microsoft.EntityFrameworkCore` |
+| `EntityFrameworkCore` | Core + `MicroKit.Persistence.EntityFrameworkCore` + `Microsoft.EntityFrameworkCore.Relational` |
 | `Testing` | Abstractions only — `xunit`, `Shouldly`, `NSubstitute` belong in the consumer's test project, NOT in this library |
 | `RabbitMQ` | Core + `RabbitMQ.Client` |
 | `AzureServiceBus` | Core + `Azure.Messaging.ServiceBus` |
 | `Kafka` | Core + `Confluent.Kafka` |
 | `OpenTelemetry` | Core + `OpenTelemetry.Api` |
 | `Serialization` | Abstractions (System.Text.Json is BCL in net10.0) |
+
+---
+
+> **Why `Microsoft.EntityFrameworkCore.Relational` and not base `Microsoft.EntityFrameworkCore`:**
+> `ToTable()` and `HasIndex()` with database-specific options are relational-only APIs defined in
+> `Microsoft.EntityFrameworkCore.Relational`. `ExecuteUpdateAsync` and `ExecuteDeleteAsync` generate
+> SQL — their implementation lives in the relational assembly. The EFCore package only targets
+> relational databases (PostgreSQL, SQL Server, SQLite); the in-memory provider is never a target,
+> so depending on `.Relational` directly is the correct choice.
 
 ---
 

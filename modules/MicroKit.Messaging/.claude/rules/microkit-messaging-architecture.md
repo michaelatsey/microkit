@@ -207,3 +207,76 @@ terminal after `MaxRetries`.
 | `MicroKit.MediatR.Messaging` (glue) | planned | `DomainEventsDispatcher`, `MediatorOutboxDispatcher`, `TransactionBehavior`; sources current `TenantId`, passes it explicitly to `IOutboxWriter.AddAsync` |
 | `MicroKit.Multitenancy(.Abstractions/.EFCore)` | deferred | `ITenantSource`, tenant-aware `IExecutionScopeFactory` impl |
 | `MicroKit.Messaging.Multitenancy` | deferred | PerTenant coordinators (integration, reuses Core `IOutboxProcessor`/`IInboxProcessor`) |
+
+---
+
+## ADR-MSG-008 — OutboxMessageFactory construction: metadata origin, TenantId nullability, stateless design, placement
+
+### Status
+Accepted.
+
+### Context
+OutboxMessage must be constructed from three sources: the event payload (intrinsic), the ambient
+execution context (TenantId, CorrelationId, CausationId), and the serializer. The placement
+question (Core vs EFCore vs caller), whether TenantId is mandatory, and whether an abstraction
+(IOutboxMessageMapper) is warranted were all contested.
+
+### Decision
+
+1. **Placement: MicroKit.Messaging (Core), not MicroKit.Messaging.EntityFrameworkCore.**
+   EFCore has no IMessageSerializer dependency. The factory belongs in Core where both
+   IMessageSerializer and IExecutionContext are already first-class dependencies.
+
+2. **No IOutboxMessageMapper interface until a second implementation exists.**
+   YAGNI. A direct `OutboxMessageFactory` sealed class is sufficient for v1. An interface is
+   additive later — it is not a breaking change to introduce one.
+
+3. **Signature:**
+   `OutboxMessage Create(object payload, Guid messageId, DateTimeOffset occurredOnUtc, IExecutionContext context)`
+   - `EventType` = `payload.GetType().AssemblyQualifiedName` — always the runtime type, never `typeof(T)`.
+     Using `typeof(T)` in a generic call would resolve the open generic or the declared parameter type,
+     not the concrete event type, and break deserialization on the processor side.
+   - `Payload` = serialized by `IMessageSerializer` (injected via constructor).
+   - `messageId` and `occurredOnUtc` are **intrinsic to the event** — passed by the caller (MediatR glue),
+     not generated inside the factory. `MessageId` is the end-to-end stable identity and the inbox dedup key
+     (`MessageId + ConsumerType`); it must not be regenerated at outbox-write.
+
+4. **Metadata origin split:**
+   - **Intrinsic** (from the message/event, passed as parameters): `MessageId`, `OccurredOnUtc`.
+   - **Ambient** (from `IExecutionContext`, passed as parameter): `TenantId`, `CorrelationId`, `CausationId`.
+
+5. **TenantId is passed through as-is — the factory does NOT throw on null.**
+   `IExecutionContext.TenantId` is `string?`. Messaging must operate without Multitenancy
+   (ADR-EXEC-001 inversion). A single-tenant app running without Multitenancy will have
+   `TenantId = null`; this is valid. The factory passes `context.TenantId` directly to
+   `OutboxMessage.TenantId`. It is the responsibility of the host to populate TenantId when
+   multi-tenancy is required — not the factory's responsibility to enforce it.
+   The EF Core entity configurations treat TenantId as optional (nullable column, no `IsRequired()`).
+   **Pending Abstractions change:** `OutboxMessage.TenantId` and `InboxMessage.TenantId` are currently
+   declared as `string` (non-nullable) in the entity classes — a separate PR must change them to
+   `string?` and update the XML docs to remove the "never null" constraint.
+
+6. **Ambient metadata stamped exactly once, at outbox-write, BEFORE serialization.**
+   The values written to `OutboxMessage` columns MUST equal the values embedded in the serialized
+   payload, because the processor re-reads them from the deserialized event downstream. A second
+   context read at a later stage would risk drift under concurrent scope changes.
+
+7. **`IExecutionContext` passed as method parameter, not constructor-injected.**
+   `OutboxMessageFactory` is registered as `Singleton`. `IExecutionContext` is scoped. Injecting
+   a scoped dependency into a singleton creates a captive dependency — the scoped value is captured
+   at first resolution and never refreshed. Passing `IExecutionContext` as a method argument keeps
+   the factory stateless and singleton-safe.
+
+8. **MediatR-specific glue is out of scope for this decision.**
+   Extracting `MessageId`/`OccurredOn` from the MediatR notification and stamping ambient context
+   before calling the factory is the responsibility of `DomainEventsDispatcher` in
+   `MicroKit.Messaging.MediatR` — a separate package implemented in a later session.
+
+### Consequences
+- `OutboxMessageFactory` is a simple sealed singleton with two collaborators: `IMessageSerializer`
+  (constructor) and `IExecutionContext` (method parameter).
+- No breaking change when an `IOutboxMessageMapper` interface is introduced later (additive).
+- The EFCore package has zero serializer dependency — confirmed.
+- Processors read `EventType` from the `OutboxMessage` row and use it for runtime deserialization;
+  `AssemblyQualifiedName` guarantees the concrete type is resolved correctly.
+- TenantId null is valid at the persistence layer; Multitenancy enforcement is a host concern.

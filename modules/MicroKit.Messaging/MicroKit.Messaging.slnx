@@ -2,14 +2,17 @@
   <Folder Name="/src/">
     <Project Path="src/MicroKit.Messaging.Abstractions/MicroKit.Messaging.Abstractions.csproj" />
     <Project Path="src/MicroKit.Messaging/MicroKit.Messaging.csproj" />
+    <Project Path="src/MicroKit.Messaging.EntityFrameworkCore/MicroKit.Messaging.EntityFrameworkCore.csproj" />
   </Folder>
   <Folder Name="/tests/">
     <Project Path="tests/MicroKit.Messaging.ArchitectureTests/MicroKit.Messaging.ArchitectureTests.csproj" />
     <Project Path="tests/MicroKit.Messaging.UnitTests/MicroKit.Messaging.UnitTests.csproj" />
+    <Project Path="tests/MicroKit.Messaging.IntegrationTests/MicroKit.Messaging.IntegrationTests.csproj" />
   </Folder>
   <Folder Name="/deps/">
     <!-- Required for dotnet restore in dev mode (CIReleaseBuild=false ProjectReference) -->
     <Project Path="../MicroKit.Result/src/MicroKit.Result/MicroKit.Result.csproj" />
     <Project Path="../MicroKit.Execution.Abstractions/src/MicroKit.Execution.Abstractions/MicroKit.Execution.Abstractions.csproj" />
+    <Project Path="../MicroKit.Persistence/src/MicroKit.Persistence.EntityFrameworkCore/MicroKit.Persistence.EntityFrameworkCore.csproj" />
   </Folder>
 </Solution>

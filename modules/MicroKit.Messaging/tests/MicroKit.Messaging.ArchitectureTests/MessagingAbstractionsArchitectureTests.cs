@@ -4,6 +4,7 @@ public sealed class MessagingAbstractionsArchitectureTests
 {
     private static readonly Assembly AbstractionsAssembly = typeof(IIntegrationEvent).Assembly;
     private static readonly Assembly CoreAssembly = typeof(MessagingBuilder).Assembly;
+    private static readonly Assembly EfCoreAssembly = typeof(MessagingBuilderExtensions).Assembly;
 
     // ---------------------------------------------------------------------------
     // Abstractions layer checks
@@ -110,7 +111,7 @@ public sealed class MessagingAbstractionsArchitectureTests
     [Fact]
     public void AllAssemblies_HaveNoMediatRContractsDependency()
     {
-        foreach (var assembly in new[] { AbstractionsAssembly, CoreAssembly })
+        foreach (var assembly in new[] { AbstractionsAssembly, CoreAssembly, EfCoreAssembly })
         {
             Types.InAssembly(assembly)
                 .ShouldNot()
@@ -119,5 +120,31 @@ public sealed class MessagingAbstractionsArchitectureTests
                 .IsSuccessful
                 .ShouldBeTrue($"{assembly.GetName().Name} must not reference MediatR.Contracts");
         }
+    }
+
+    // ---------------------------------------------------------------------------
+    // EntityFrameworkCore layer checks
+    // ---------------------------------------------------------------------------
+
+    [Fact]
+    public void EfCore_HasNoMediatRDependency()
+    {
+        Types.InAssembly(EfCoreAssembly)
+            .ShouldNot()
+            .HaveDependencyOn("MediatR")
+            .GetResult()
+            .IsSuccessful
+            .ShouldBeTrue();
+    }
+
+    [Fact]
+    public void EfCore_HasNoAspNetCoreDependency()
+    {
+        Types.InAssembly(EfCoreAssembly)
+            .ShouldNot()
+            .HaveDependencyOn("Microsoft.AspNetCore")
+            .GetResult()
+            .IsSuccessful
+            .ShouldBeTrue();
     }
 }
