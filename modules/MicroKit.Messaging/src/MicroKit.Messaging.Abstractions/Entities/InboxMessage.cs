@@ -13,7 +13,7 @@ namespace MicroKit.Messaging;
 /// requires mutable <c>{ get; set; }</c> properties.
 /// </para>
 /// <para>
-/// <c>TenantId</c> is mandatory — never <see langword="null"/> or empty.
+/// <c>TenantId</c> is optional. <see langword="null"/> in single-tenant deployments.
 /// </para>
 /// </remarks>
 public sealed class InboxMessage
@@ -33,9 +33,9 @@ public sealed class InboxMessage
 
     /// <summary>
     /// Gets or sets the identifier of the tenant this message belongs to.
-    /// Required — never <see langword="null"/> or empty.
+    /// Optional. Null in single-tenant deployments.
     /// </summary>
-    public string TenantId { get; set; } = null!;
+    public string? TenantId { get; set; }
 
     /// <summary>
     /// Gets or sets the assembly-qualified CLR type name of the integration event.
