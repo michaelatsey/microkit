@@ -1,6 +1,8 @@
 using MicroKit.Messaging.Execution;
+using MicroKit.Messaging.Outbox;
 using MicroKit.Messaging.Processing;
 using MicroKit.Messaging.Registry;
+using Microsoft.Extensions.DependencyInjection.Extensions;
 
 namespace MicroKit.Messaging;
 
@@ -57,6 +59,15 @@ public static class ServiceCollectionExtensions
         services.AddSingleton(outboxOptions);
         services.AddSingleton(inboxOptions);
         services.AddSingleton<IExecutionScopeFactory, PassThroughExecutionScopeFactory>();
+        services.AddSingleton<OutboxMessageFactory>();
+
+        // Default pass-through IExecutionContext (ADR-EXEC-001 / ADR-MSG-008 §7): one stable
+        // CorrelationId per DI scope, TenantId/CausationId null. A tenant-aware host (e.g.
+        // MicroKit.Multitenancy) overrides this via a non-Try AddScoped<IExecutionContext>().
+        // Scoped — never injected into the singleton OutboxMessageFactory (it takes IExecutionContext
+        // as a method parameter), so there is no captive dependency.
+        services.TryAddScoped<IExecutionContext>(
+            _ => new Execution.ExecutionContext { CorrelationId = Guid.NewGuid().ToString() });
 
         services.AddScoped<IOutboxProcessor, OutboxProcessor>();
         services.AddScoped<IOutboxCoordinator, SharedDbOutboxCoordinator>();

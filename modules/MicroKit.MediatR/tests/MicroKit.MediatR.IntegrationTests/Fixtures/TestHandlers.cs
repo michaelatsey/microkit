@@ -76,11 +76,11 @@ internal sealed class ItemCreatedNotification(ItemCreatedEvent domainEvent)
     : DomainEventNotification<ItemCreatedEvent>(domainEvent);
 
 internal sealed class RecordItemCreatedHandler(DomainEventLog log)
-    : IDomainEventHandler<ItemCreatedEvent, ItemCreatedNotification>
+    : IDomainEventHandler<ItemCreatedEvent>
 {
-    public Task Handle(ItemCreatedNotification notification, CancellationToken cancellationToken)
+    public Task Handle(ItemCreatedEvent domainEvent, CancellationToken cancellationToken)
     {
-        log.ItemCreatedIds.Add(notification.DomainEvent.ItemId);
+        log.ItemCreatedIds.Add(domainEvent.ItemId);
         return Task.CompletedTask;
     }
 }
@@ -93,9 +93,9 @@ internal sealed class OrderPlacedNotification(OrderPlacedEvent domainEvent)
     : DomainEventNotification<OrderPlacedEvent>(domainEvent);
 
 internal sealed class OrderPlacedHandlerOne(DomainEventLog log)
-    : IDomainEventHandler<OrderPlacedEvent, OrderPlacedNotification>
+    : IDomainEventHandler<OrderPlacedEvent>
 {
-    public Task Handle(OrderPlacedNotification notification, CancellationToken cancellationToken)
+    public Task Handle(OrderPlacedEvent domainEvent, CancellationToken cancellationToken)
     {
         log.OrderPlacedInvocations++;
         return Task.CompletedTask;
@@ -103,9 +103,9 @@ internal sealed class OrderPlacedHandlerOne(DomainEventLog log)
 }
 
 internal sealed class OrderPlacedHandlerTwo(DomainEventLog log)
-    : IDomainEventHandler<OrderPlacedEvent, OrderPlacedNotification>
+    : IDomainEventHandler<OrderPlacedEvent>
 {
-    public Task Handle(OrderPlacedNotification notification, CancellationToken cancellationToken)
+    public Task Handle(OrderPlacedEvent domainEvent, CancellationToken cancellationToken)
     {
         log.OrderPlacedInvocations++;
         return Task.CompletedTask;

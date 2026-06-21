@@ -1,14 +1,13 @@
 namespace MicroKit.Messaging;
 
 /// <summary>
-/// Serializes and deserializes <see cref="IIntegrationEvent"/> instances to and from
-/// their wire format (JSON by default).
+/// Serializes and deserializes messaging payloads to and from their wire format (JSON by default).
 /// </summary>
 /// <remarks>
 /// <para>
-/// Both methods operate on the runtime type of the event (<c>evt.GetType()</c>), never
-/// on a static generic type parameter, to ensure that concrete subtype properties are
-/// preserved when an event is referenced through an interface.
+/// <see cref="Serialize"/> operates on the runtime type of the payload (<c>payload.GetType()</c>),
+/// never on a static generic type parameter, to ensure that concrete subtype properties are
+/// preserved when the payload is referenced through an interface.
 /// </para>
 /// <para>
 /// The default implementation (<c>SystemTextJsonMessageSerializer</c> in
@@ -28,31 +27,33 @@ namespace MicroKit.Messaging;
 public interface IMessageSerializer
 {
     /// <summary>
-    /// Serializes <paramref name="evt"/> to its JSON wire representation.
-    /// Uses <c>evt.GetType()</c> as the serialization type so that properties defined
-    /// on the concrete subtype are included even when the reference is typed as
-    /// <see cref="IIntegrationEvent"/>.
+    /// Serializes <paramref name="payload"/> to its JSON wire representation.
+    /// Uses <c>payload.GetType()</c> as the serialization type so that properties defined
+    /// on the concrete runtime type are included even when the reference is typed as an interface.
+    /// Accepts any object: <see cref="IIntegrationEvent"/>, domain event notifications, or
+    /// any other serializable payload.
     /// </summary>
-    /// <param name="evt">The integration event to serialize. Must not be <see langword="null"/>.</param>
-    /// <returns>The JSON string representation of <paramref name="evt"/>.</returns>
-    string Serialize(IIntegrationEvent evt);
+    /// <param name="payload">The payload to serialize. Must not be <see langword="null"/>.</param>
+    /// <returns>The JSON string representation of <paramref name="payload"/>.</returns>
+    string Serialize(object payload);
 
     /// <summary>
-    /// Deserializes a JSON <paramref name="payload"/> back to an
-    /// <see cref="IIntegrationEvent"/> instance of the type identified by
-    /// <paramref name="eventType"/>.
+    /// Deserializes a JSON <paramref name="payload"/> back to an instance of the type identified
+    /// by <paramref name="eventType"/>. The returned object may be an
+    /// <see cref="IIntegrationEvent"/>, a domain-event notification, or any other payload type;
+    /// callers re-narrow to the kind they expect.
     /// </summary>
     /// <param name="payload">The JSON string to deserialize.</param>
     /// <param name="eventType">
-    /// The assembly-qualified CLR type name of the target event type
+    /// The assembly-qualified CLR type name of the target type
     /// (e.g. the value stored in <c>OutboxMessage.EventType</c> or
     /// <c>InboxMessage.EventType</c>).
     /// </param>
     /// <returns>
-    /// The deserialized <see cref="IIntegrationEvent"/>, or <see langword="null"/> if
+    /// The deserialized payload, or <see langword="null"/> if
     /// <paramref name="eventType"/> cannot be resolved or <paramref name="payload"/>
     /// is malformed. Never throws — callers must handle a <see langword="null"/> return
     /// as a deserialization failure.
     /// </returns>
-    IIntegrationEvent? Deserialize(string payload, string eventType);
+    object? Deserialize(string payload, string eventType);
 }

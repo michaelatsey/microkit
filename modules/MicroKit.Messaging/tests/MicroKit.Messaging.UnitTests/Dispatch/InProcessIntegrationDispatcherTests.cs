@@ -27,7 +27,7 @@ public sealed class InProcessIntegrationDispatcherTests
     public async Task DispatchAsync_WhenDeserializeReturnsNull_ThrowsInvalidOperation()
     {
         var message = MakeOutboxMessage("SomeType", "{}");
-        _serializer.Deserialize(Arg.Any<string>(), Arg.Any<string>()).Returns((IIntegrationEvent?)null);
+        _serializer.Deserialize(Arg.Any<string>(), Arg.Any<string>()).Returns((object?)null);
 
         var ex = await Should.ThrowAsync<InvalidOperationException>(
             async () => await _sut.DispatchAsync(message));

@@ -89,18 +89,19 @@ internal sealed class InboxProcessor : IInboxProcessor
             await _store.MarkProcessingAsync(message.MessageId, message.ConsumerType, lockUntil, cancellationToken)
                 .ConfigureAwait(false);
 
-            // 3 — deserialize
-            var evt = _serializer.Deserialize(message.Payload, message.EventType);
-            if (evt is null)
+            // 3 — deserialize and re-narrow to IIntegrationEvent (the inbox only ever holds
+            // integration events; domain-event notifications never enter the inbox path).
+            if (_serializer.Deserialize(message.Payload, message.EventType) is not IIntegrationEvent evt)
             {
                 _logger.LogError(
-                    "Inbox message {MessageId}: deserialization returned null for EventType '{EventType}'. " +
-                    "Verify the event type is resolvable in the current assembly context.",
+                    "Inbox message {MessageId}: deserialization returned null or a non-IIntegrationEvent " +
+                    "payload for EventType '{EventType}'. Verify the event type is resolvable in the " +
+                    "current assembly context and implements IIntegrationEvent.",
                     message.MessageId.Value,
                     message.EventType);
 
                 await ApplyFailurePolicyAsync(
-                    message, "Deserialization returned null for EventType: " + message.EventType, cancellationToken)
+                    message, "Deserialization failed for EventType: " + message.EventType, cancellationToken)
                     .ConfigureAwait(false);
                 continue;
             }

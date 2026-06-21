@@ -30,11 +30,12 @@ internal sealed class InProcessIntegrationDispatcher : IOutboxDispatcher
     /// <inheritdoc />
     public async ValueTask DispatchAsync(OutboxMessage message, CancellationToken ct = default)
     {
-        var evt = _serializer.Deserialize(message.Payload, message.EventType);
+        var evt = _serializer.Deserialize(message.Payload, message.EventType) as IIntegrationEvent;
         if (evt is null)
             throw new InvalidOperationException(
-                $"Cannot deserialize EventType '{message.EventType}' from outbox message {message.Id}. " +
-                "Ensure the event type is resolvable in the current assembly context.");
+                $"Cannot deserialize EventType '{message.EventType}' from outbox message {message.Id} " +
+                "as an IIntegrationEvent. Ensure the event type is resolvable in the current assembly " +
+                "context and implements IIntegrationEvent.");
 
         await _publisher.PublishAsync(evt, ct).ConfigureAwait(false);
     }

@@ -1,0 +1,43 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <AssemblyName>MicroKit.Messaging.MediatR</AssemblyName>
+    <RootNamespace>MicroKit.Messaging.MediatR</RootNamespace>
+    <Description>MediatR glue for MicroKit.Messaging — DomainEventsDispatcher (IDomainEventDispatcher)
+    drains domain events into the transactional outbox as MediatR notifications; MediatROutboxDispatcher
+    is a routing IOutboxDispatcher decorator that publishes notifications via IPublisher.Publish and
+    delegates integration events to the wrapped Core dispatcher.</Description>
+    <PackageTags>microkit;messaging;mediatr;outbox;domain-events;dotnet</PackageTags>
+    <Authors>Ange-Michaël Atsé</Authors>
+    <PackageLicenseExpression>MIT</PackageLicenseExpression>
+    <IncludeSymbols>true</IncludeSymbols>
+    <SymbolPackageFormat>snupkg</SymbolPackageFormat>
+    <!-- CA1848/CA1873: simple logging is intentional for v1.
+         IL2072/IL3050: the outbox-dispatcher decorator rebuilds the inner (internal) dispatcher via
+         ActivatorUtilities.CreateInstance on a runtime Type; trim/AOT-safe construction is v2. -->
+    <NoWarn>$(NoWarn);CA1848;CA1873;IL2072;IL3050</NoWarn>
+  </PropertyGroup>
+  <ItemGroup>
+    <InternalsVisibleTo Include="MicroKit.Messaging.MediatR.UnitTests" />
+  </ItemGroup>
+
+  <!-- Same-module reference — co-versioned with Messaging Core; no CIReleaseBuild pattern needed -->
+  <ItemGroup>
+    <ProjectReference Include="../MicroKit.Messaging/MicroKit.Messaging.csproj" />
+  </ItemGroup>
+
+  <!-- DEV: source ProjectReferences — CI/Release: published NuGet packages -->
+  <!-- ⚠ Any new cross-module dependency must be added to BOTH ItemGroups -->
+  <ItemGroup Condition="'$(CIReleaseBuild)' != 'true'">
+    <ProjectReference Include="../../../MicroKit.MediatR/src/MicroKit.MediatR/MicroKit.MediatR.csproj" />
+    <ProjectReference Include="../../../MicroKit.Domain/src/MicroKit.Domain/MicroKit.Domain.csproj" />
+  </ItemGroup>
+  <ItemGroup Condition="'$(CIReleaseBuild)' == 'true'">
+    <PackageReference Include="MicroKit.MediatR" />
+    <PackageReference Include="MicroKit.Domain" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.Extensions.DependencyInjection.Abstractions" />
+    <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" />
+  </ItemGroup>
+</Project>

@@ -118,7 +118,8 @@ MicroKit.Messaging.Serialization       ← MicroKit.Messaging.Abstractions + Sys
 - Level 2: `MicroKit.Persistence.EntityFrameworkCore` (in `.EntityFrameworkCore` package only)
 
 **Forbidden:** any dependency on `MicroKit.Auth`, `MicroKit.Multitenancy`, `MicroKit.MediatR`,
-`MicroKit.Http`, or `MediatR.Contracts`.
+`MicroKit.Http`, or `MediatR.Contracts` — **except the `MicroKit.Messaging.MediatR` glue package**,
+which may reference `MicroKit.MediatR` / `MediatR` / `MediatR.Contracts` (ADR-MSG-009 carve-out).
 
 ---
 
@@ -179,7 +180,7 @@ MessageEnvelope<T>                 // sealed record — wraps T with metadata (M
 11. **`Console.WriteLine` forbidden** → `ILogger<T>`
 12. **No inline `Version=`** on `PackageReference` — CPM via root `Directory.Packages.props`
 13. **XML docs on all public members** in `src/` projects
-14. **`MediatR.Contracts` forbidden everywhere** — in all packages, production and test
+14. **`MediatR.Contracts` forbidden everywhere** — in all packages, production and test, **except the `MicroKit.Messaging.MediatR` glue** (ADR-MSG-009 carve-out: the glue bridges domain-event notifications onto the outbox via `IPublisher.Publish`)
 15. **`FluentAssertions` forbidden** — use Shouldly (MIT)
 16. **Scope-per-message mandatory** in `OutboxProcessor` and `InboxProcessor` — never share one scope across a batch
 17. **`AcquireLeaseAsync` must be atomic** — single `UPDATE WHERE` via `ExecuteUpdateAsync`; SELECT+mutate+SaveChanges is forbidden

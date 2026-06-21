@@ -18,11 +18,11 @@ internal sealed class SystemTextJsonMessageSerializer : IMessageSerializer
     private static readonly JsonSerializerOptions _options = new(JsonSerializerDefaults.Web);
 
     /// <inheritdoc />
-    public string Serialize(IIntegrationEvent evt)
-        => JsonSerializer.Serialize(evt, evt.GetType(), _options);
+    public string Serialize(object payload)
+        => JsonSerializer.Serialize(payload, payload.GetType(), _options);
 
     /// <inheritdoc />
-    public IIntegrationEvent? Deserialize(string payload, string eventType)
+    public object? Deserialize(string payload, string eventType)
     {
         var type = Type.GetType(eventType);
         if (type is null)
@@ -30,7 +30,7 @@ internal sealed class SystemTextJsonMessageSerializer : IMessageSerializer
 
         try
         {
-            return JsonSerializer.Deserialize(payload, type, _options) as IIntegrationEvent;
+            return JsonSerializer.Deserialize(payload, type, _options);
         }
         catch (JsonException)
         {
