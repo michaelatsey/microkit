@@ -13,7 +13,7 @@ namespace MicroKit.Messaging;
 /// MediatR type. <c>MicroKit.Messaging</c> has zero MediatR dependency (ADR-MSG-001).
 /// </para>
 /// </remarks>
-public interface IIntegrationEvent
+public interface IIntegrationEvent : IEvent
 {
     /// <summary>
     /// Gets the unique identifier of this specific event instance.
