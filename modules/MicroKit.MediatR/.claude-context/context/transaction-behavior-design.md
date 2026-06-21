@@ -1,10 +1,25 @@
 # Transaction Behavior Design — v4
 
-> **Status:** Revised. Aligns the transaction/outbox/notification design with the
+> **⚠ SUPERSEDED (2026-06-20) by ADR-MSG-008 §5 and ADR-MSG-009**
+> (`MicroKit.Messaging/.claude/rules/microkit-messaging-architecture.md`).
+> This document is retained for history only — **do not implement from it as-is**. Two parts are
+> now obsolete and MUST NOT be re-introduced:
+> 1. **No synchronous in-transaction publish (P3).** The implemented topology has
+>    `DomainEventsDispatcher` only drain → build notification → write outbox; domain-event handlers
+>    run exactly once on the outbox path (`MediatROutboxDispatcher` → `IPublisher.Publish`). A
+>    synchronous publish alongside the outbox republish would double-execute every handler
+>    (ADR-MSG-008 §5). Any "levels 1–2 synchronous handler" / "P3 publish" text and diagrams below
+>    are obsolete.
+> 2. **No `IOutboxMessageMapper`.** ADR-MSG-008 §2 mandates a concrete `OutboxMessageFactory`
+>    (no interface until a second impl exists). Any `IOutboxMessageMapper` reference below is obsolete.
+>
+> ---
+>
+> **Status (historical):** Revised. Aligns the transaction/outbox/notification design with the
 > MicroKit.Messaging architecture: MediatR-free Messaging, three queues
 > (Outbox / IntegrationEvent / Inbox), a single generic outbox-draining engine in
 > Messaging Core driven by a swappable dispatch seam, and the MediatR coupling
-> confined to the glue package `MicroKit.MediatR.Messaging`.
+> confined to the glue package `MicroKit.Messaging.MediatR`.
 >
 > Supersedes v3. v3 wrongly typed `IOutboxWriter` on `IIntegrationEvent` and created the
 > integration event inside Phase 4. Corrected here.
@@ -25,7 +40,7 @@
 5. **Drainer Outbox→MediatR = split** : le **moteur de drain générique reste dans Messaging Core**
    (MediatR-free : drain + lease + back-off + retry + dead-letter), appelant une **couture de dispatch
    `IOutboxDispatcher`**. L'**impl de dispatch « republish notification via MediatR » vit dans la glu**
-   `MicroKit.MediatR.Messaging`.
+   `MicroKit.Messaging.MediatR`.
 6. **`DomainEventsDispatcher`** vit dans la glu (pas Persistence — éviterait un cycle Messaging↔Persistence).
 7. **`EfOutboxWriter`** vit dans `MicroKit.Messaging.EntityFrameworkCore` (réutilise
    `MicroKit.Persistence.EntityFrameworkCore`). Direction `Messaging → Persistence` (autorisée).
@@ -86,7 +101,7 @@ MicroKit.Messaging  (Core)                                                   (Me
 MicroKit.Messaging.EntityFrameworkCore  (réutilise Persistence.EntityFrameworkCore)  (MediatR-free)
   └─ EfOutboxWriter, EfOutboxProcessorStore, EfInboxStore
 
-MicroKit.MediatR.Messaging  (GLU — seul point de rencontre MediatR ↔ Messaging)
+MicroKit.Messaging.MediatR  (GLU — seul point de rencontre MediatR ↔ Messaging)
   ├─ DomainEventsDispatcher                  (implémente IDomainEventDispatcher)
   ├─ MediatorOutboxDispatcher : IOutboxDispatcher  (deserialize→notification→IPublisher.Publish)  ← MediatR
   └─ deps : MediatR + MediatR.Abstractions + Messaging.Abstractions + Domain.Abstractions + Persistence.Abstractions
@@ -277,7 +292,7 @@ public interface INotificationFactory
 ## DomainEventsDispatcher — implémentation (glu)
 
 ```csharp
-// MicroKit.MediatR.Messaging
+// MicroKit.Messaging.MediatR
 public sealed class DomainEventsDispatcher : IDomainEventDispatcher
 {
     private readonly IDomainEventsProvider _domainEventsProvider;
@@ -395,7 +410,7 @@ public sealed class TransactionBehavior<TRequest, TResponse>(
 ### MicroKit.Messaging.EntityFrameworkCore (réutilise Persistence.EFCore)
 - [ ] `EfOutboxWriter`, `EfOutboxProcessorStore`, `EfInboxStore`
 
-### MicroKit.MediatR.Messaging (glu — NOUVEAU)
+### MicroKit.Messaging.MediatR (glu — NOUVEAU)
 - [ ] `DomainEventsDispatcher` (4 phases + reentrancy guard)
 - [ ] `IOutboxMessageMapper` (notification → OutboxMessage)
 - [ ] `MediatorOutboxDispatcher : IOutboxDispatcher` (deserialize→notification→IPublisher.Publish)

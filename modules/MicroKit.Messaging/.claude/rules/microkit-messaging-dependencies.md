@@ -94,9 +94,15 @@ See monorepo root `.claude/rules/cross-module-references.md` for the full canoni
 
 ## Forbidden Dependencies (non-negotiable)
 
+> **ADR-MSG-009 carve-out:** the `MicroKit.Messaging.MediatR` glue package is the SINGLE exception
+> to the `MediatR` / `MediatR.Contracts` bans below — it bridges domain-event notifications onto the
+> outbox via `IPublisher.Publish`. The bans still apply to Abstractions, Core, EFCore, Testing,
+> broker providers, and all test projects.
+
 ```
-❌ MediatR.Contracts — in ANY package (Abstractions, Core, EFCore, Testing, providers, tests)
-❌ MediatR — in ANY package (messaging has its own IIntegrationEvent, not INotification)
+❌ MediatR.Contracts — in ANY package EXCEPT the MicroKit.Messaging.MediatR glue (ADR-MSG-009)
+❌ MediatR — in ANY package EXCEPT the MicroKit.Messaging.MediatR glue (ADR-MSG-009)
+            (messaging has its own IIntegrationEvent, not INotification)
 ❌ MicroKit.Auth — in any package
 ❌ MicroKit.Multitenancy — in any package
 ❌ MicroKit.Http — in any package

@@ -323,3 +323,76 @@ Until the trigger fires, the current placement is correct. Do not promote premat
   `.claude/CLAUDE.md` module boundaries section).
 - **No action required today.** This ADR exists to document intent and prevent ad-hoc duplication
   of the interface in other modules before the centralized package is ready.
+
+---
+
+## ADR-MEDIATR-009: IDomainEventHandler Redesigned to Single Type Parameter
+
+**Status:** Accepted  
+**Date:** 2026-06-21  
+
+### Decision
+
+`IDomainEventHandler<TEvent, TNotification>` (two type parameters) is replaced by
+`IDomainEventHandler<TEvent>` (single type parameter). Handlers receive the raw domain event
+directly rather than a MediatR notification wrapper. A new `IDomainEventHandlerDispatcher`
+interface (scoped) enables direct, synchronous handler dispatch without MediatR's notification
+pipeline.
+
+### Context
+
+The two-parameter signature forced handler authors to know MicroKit MediatR internals
+(`DomainEventNotification<TEvent>`) and coupled the handler contract to the MediatR transport
+layer. This made it impossible to invoke handlers directly (e.g., synchronously within a
+transaction before the outbox write) without going through MediatR's `IPublisher`, which would
+require instantiating a notification wrapper at each call site. The constraint was explicitly
+blocking the `MicroKit.Messaging.MediatR` glue layer's P3 phase (synchronous handler dispatch
+inside the persistence transaction).
+
+### Rationale
+
+1. **Handler authors must not know MediatR internals.** The notification type is an infrastructure
+   concern. The only contract a handler needs is: "handle this domain event".
+2. **Direct dispatch without MediatR's pipeline.** `IDomainEventHandlerDispatcher.DispatchAsync`
+   invokes `IDomainEventHandler<TEvent>.Handle` directly via pre-compiled Expression tree delegates
+   built at DI startup. No `IPublisher.Publish`, no reflection per-dispatch.
+3. **Captive dependency safety.** `HandlerDispatchMap` (singleton) holds the compiled delegates.
+   `DomainEventHandlerDispatcher` (scoped) resolves handlers from its scope's `IServiceProvider`.
+   This split avoids the singleton-wrapping-scoped-service captive dependency problem.
+4. **Phase B scan remains independent.** `DomainEventNotification<TEvent>` subclasses are still
+   scanned at startup to build the `INotificationFactory` map for the MediatR fan-out path
+   (P4 / outbox). This scan is now separate from the handler scan — handler types no longer
+   declare their notification type.
+
+### The two dispatch paths post-ADR-MEDIATR-009
+
+| Path | Trigger | Interface | Use |
+|------|---------|-----------|-----|
+| **P3 — sync direct** | Transaction behavior, Messaging.MediatR glue | `IDomainEventHandlerDispatcher` | In-process, in-transaction, raw event |
+| **P4 — MediatR fan-out** | `INotificationFactory` → `IPublisher.Publish` | `INotificationHandler<TNotification>` | Decoupled, can span transports |
+
+The two paths coexist. An event can have both a `IDomainEventHandler<TEvent>` (P3) and a
+`DomainEventNotification<TEvent>` with `INotificationHandler<TNotification>` handlers (P4).
+ADR-MEDIATR-005 still applies to P4: exactly one notification type per event type.
+
+### Breaking change
+
+- **`IDomainEventHandler<TEvent, TNotification>`** → **`IDomainEventHandler<TEvent>`** in
+  `MicroKit.MediatR.Abstractions`. All implementing classes must drop the second type parameter
+  and change `Handle(TNotification notification, ...)` to `Handle(TEvent domainEvent, ...)`.
+- **`DomainEventTestHarness<TEvent, TNotification>`** → **`DomainEventTestHarness<TEvent>`** in
+  `MicroKit.MediatR.Testing`. All test usages must drop the second type parameter and pass
+  a raw domain event to `HandleAsync(TEvent domainEvent, ...)`.
+- Package version bump: `1.0.0-preview.1` → `1.0.0-preview.2`.
+- `DomainEventHandlerAdapter` (internal) is deleted — the adapter pattern is no longer needed.
+
+### Consequences
+
+- Handler registrations remain scoped (unchanged).
+- `IDomainEventDispatcher` is now scoped (was previously resolved through a transient adapter).
+  The `DomainEventDispatcher` implementation drains `IDomainEventsProvider` and delegates to
+  `IDomainEventHandlerDispatcher`, keeping the pipeline integration point unchanged.
+- Consumers who only use `INotificationHandler<TNotification>` (pure MediatR fan-out) are
+  unaffected — notification classes and `DomainEventNotification<TEvent>` are unchanged.
+- The `dependency-guardian` must verify that no module depends on `DomainEventHandlerAdapter`
+  (deleted) and that all `IDomainEventHandler<,>` (two-param) usages are migrated.

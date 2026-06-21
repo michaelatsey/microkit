@@ -5,6 +5,7 @@ public sealed class MessagingAbstractionsArchitectureTests
     private static readonly Assembly AbstractionsAssembly = typeof(IIntegrationEvent).Assembly;
     private static readonly Assembly CoreAssembly = typeof(MessagingBuilder).Assembly;
     private static readonly Assembly EfCoreAssembly = typeof(MessagingBuilderExtensions).Assembly;
+    private static readonly Assembly MediatRGlueAssembly = typeof(MessagingMediatRExtensions).Assembly;
 
     // ---------------------------------------------------------------------------
     // Abstractions layer checks
@@ -109,8 +110,25 @@ public sealed class MessagingAbstractionsArchitectureTests
     }
 
     [Fact]
+    public void Core_HasNoMediatRDependency()
+    {
+        // ADR-MSG-002: Core stays MediatR-free. Only the glue (MicroKit.Messaging.MediatR)
+        // is permitted to reference MediatR / MediatR.Contracts (ADR-MSG-009 carve-out).
+        Types.InAssembly(CoreAssembly)
+            .ShouldNot()
+            .HaveDependencyOn("MediatR")
+            .GetResult()
+            .IsSuccessful
+            .ShouldBeTrue();
+    }
+
+    [Fact]
     public void AllAssemblies_HaveNoMediatRContractsDependency()
     {
+        // ADR-MSG-009: the MediatR glue (MediatRGlueAssembly) is the ONLY Messaging package
+        // permitted to reference MediatR.Contracts, so it is intentionally excluded here.
+        // NOTE: MicroKit.Messaging.Testing does not exist yet (Phase 1, planned). When it is
+        // implemented it MUST be added to this array (ADR-MSG-009 keeps Testing clean).
         foreach (var assembly in new[] { AbstractionsAssembly, CoreAssembly, EfCoreAssembly })
         {
             Types.InAssembly(assembly)
@@ -119,6 +137,48 @@ public sealed class MessagingAbstractionsArchitectureTests
                 .GetResult()
                 .IsSuccessful
                 .ShouldBeTrue($"{assembly.GetName().Name} must not reference MediatR.Contracts");
+        }
+    }
+
+    // ---------------------------------------------------------------------------
+    // MediatR glue layer checks (ADR-MSG-009: glue MAY reference MediatR / MediatR.Contracts;
+    // it must still stay free of EF Core, ASP.NET Core, and broker dependencies)
+    // ---------------------------------------------------------------------------
+
+    [Fact]
+    public void MediatRGlue_HasNoEfCoreDependency()
+    {
+        Types.InAssembly(MediatRGlueAssembly)
+            .ShouldNot()
+            .HaveDependencyOn("Microsoft.EntityFrameworkCore")
+            .GetResult()
+            .IsSuccessful
+            .ShouldBeTrue();
+    }
+
+    [Fact]
+    public void MediatRGlue_HasNoAspNetCoreDependency()
+    {
+        Types.InAssembly(MediatRGlueAssembly)
+            .ShouldNot()
+            .HaveDependencyOn("Microsoft.AspNetCore")
+            .GetResult()
+            .IsSuccessful
+            .ShouldBeTrue();
+    }
+
+    [Fact]
+    public void MediatRGlue_HasNoBrokerDependency()
+    {
+        var brokers = new[] { "RabbitMQ.Client", "Azure.Messaging.ServiceBus", "Confluent.Kafka" };
+        foreach (var broker in brokers)
+        {
+            Types.InAssembly(MediatRGlueAssembly)
+                .ShouldNot()
+                .HaveDependencyOn(broker)
+                .GetResult()
+                .IsSuccessful
+                .ShouldBeTrue($"MediatR glue must not reference {broker}");
         }
     }
 

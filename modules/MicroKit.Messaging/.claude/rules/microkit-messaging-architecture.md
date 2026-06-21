@@ -204,7 +204,7 @@ terminal after `MaxRetries`.
 | `MicroKit.Messaging.Abstractions` | patch | add `IOutboxDispatcher`, `IOutboxCoordinator`/`IInboxCoordinator`, `IOutboxProcessor`/`IInboxProcessor`; remove `tenantId` from `GetPendingAsync` |
 | `MicroKit.Messaging` (Core) | in progress | Worker + SharedDb coordinator + Processor engine + in-process dispatch + pass-through scope factory |
 | `MicroKit.Messaging.EntityFrameworkCore` | planned | EF stores (Shared-DB reservation, optimistic lease, inbox dedup); outbox/inbox entity configuration without tenant filter |
-| `MicroKit.MediatR.Messaging` (glue) | planned | `DomainEventsDispatcher`, `MediatorOutboxDispatcher`, `TransactionBehavior`; sources current `TenantId`, passes it explicitly to `IOutboxWriter.AddAsync` |
+| `MicroKit.Messaging.MediatR` (glue) | planned | `DomainEventsDispatcher`, `MediatorOutboxDispatcher`, `TransactionBehavior`; sources current `TenantId`, passes it explicitly to `IOutboxWriter.AddAsync` |
 | `MicroKit.Multitenancy(.Abstractions/.EFCore)` | deferred | `ITenantSource`, tenant-aware `IExecutionScopeFactory` impl |
 | `MicroKit.Messaging.Multitenancy` | deferred | PerTenant coordinators (integration, reuses Core `IOutboxProcessor`/`IInboxProcessor`) |
 
@@ -280,3 +280,52 @@ question (Core vs EFCore vs caller), whether TenantId is mandatory, and whether 
 - Processors read `EventType` from the `OutboxMessage` row and use it for runtime deserialization;
   `AssemblyQualifiedName` guarantees the concrete type is resolved correctly.
 - TenantId null is valid at the persistence layer; Multitenancy enforcement is a host concern.
+
+---
+
+## ADR-MSG-009 — MediatR.Contracts carve-out for the MediatR glue + notification idempotency
+
+### Status
+Proposed (to be ratified at architect review).
+
+### Context
+The general Messaging rule (CLAUDE.md rule #14, ADR-MSG-002) is "no MediatR / MediatR.Contracts
+anywhere": Messaging transports `IIntegrationEvent`, never `INotification`. The MediatR glue
+package `MicroKit.Messaging.MediatR` exists precisely to bridge MicroKit.MediatR domain-event
+notifications onto the Messaging outbox. The decided topology is:
+
+- `DomainEventsDispatcher` (glue) drains domain events and writes each **notification** to the
+  transactional outbox (payload = serialized `IDomainEventNotification`). It does NOT publish
+  synchronously (ADR-MSG-008 §5 rationale: a synchronous publish here plus the outbox republish
+  would double-execute every handler).
+- `MediatROutboxDispatcher` (glue) is a **routing decorator** over the Core `IOutboxDispatcher`:
+  payload `is INotification` → `IPublisher.Publish`; otherwise delegate to the wrapped Core
+  dispatcher (`InProcessIntegrationDispatcher`), preserving integration-events-via-outbox
+  (ADR-MSG-002).
+
+This requires the glue to reference `MediatR` (`IPublisher`) and, transitively,
+`MediatR.Contracts` (`INotification`, since `IDomainEventNotification<out TEvent> : INotification`).
+
+### Decision
+1. **Carve-out:** `MicroKit.Messaging.MediatR` is the **only** Messaging package permitted to
+   reference `MediatR` / `MediatR.Contracts`. `Abstractions`, `Core`, `EntityFrameworkCore`, and
+   `Testing` stay MediatR-free — enforced by ArchitectureTests
+   (`AllAssemblies_HaveNoMediatRContractsDependency` includes Abstractions/Core/EfCore and, once it
+   exists, Testing; the glue is intentionally excluded; `Core_HasNoMediatRDependency` covers full
+   MediatR on Core).
+2. **Routing disjointness:** the decorator routes `is INotification` first. This is safe only
+   because `IIntegrationEvent` and `IDomainEventNotification` are disjoint — no integration event is
+   a notification and vice versa. If that ever changes, the routing order must be revisited.
+3. **Notification idempotency (extends ADR-MSG-003 to the outbox→MediatR path):** notification
+   handlers have no per-consumer inbox. The whole `IPublisher.Publish` call is the retry unit, so an
+   outbox retry re-runs ALL of a notification's handlers. Domain-event handlers reached via the glue
+   MUST therefore be idempotent — same contract as inbox handlers, documented in the glue README and
+   the `AddMediatRTransport` XML docs.
+
+### Consequences
+- The "MediatR.Contracts forbidden everywhere" statements in CLAUDE.md (rule #14), the dependencies
+  rule, and the testing rule carry an explicit one-line carve-out referencing this ADR, so the docs
+  are not self-contradictory.
+- `transaction-behavior-design.md` (v4) is superseded by ADR-MSG-008 §5 (no synchronous in-transaction
+  publish) and this ADR; it must not be used to re-introduce a synchronous publish or an
+  `IOutboxMessageMapper`.

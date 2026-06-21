@@ -11,6 +11,7 @@
     <ProjectReference Include="../../src/MicroKit.Messaging.Abstractions/MicroKit.Messaging.Abstractions.csproj" />
     <ProjectReference Include="../../src/MicroKit.Messaging/MicroKit.Messaging.csproj" />
     <ProjectReference Include="../../src/MicroKit.Messaging.EntityFrameworkCore/MicroKit.Messaging.EntityFrameworkCore.csproj" />
+    <ProjectReference Include="../../src/MicroKit.Messaging.MediatR/MicroKit.Messaging.MediatR.csproj" />
   </ItemGroup>
   <ItemGroup>
     <PackageReference Include="Microsoft.NET.Test.Sdk" />

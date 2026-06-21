@@ -3,16 +3,22 @@
     <Project Path="src/MicroKit.Messaging.Abstractions/MicroKit.Messaging.Abstractions.csproj" />
     <Project Path="src/MicroKit.Messaging/MicroKit.Messaging.csproj" />
     <Project Path="src/MicroKit.Messaging.EntityFrameworkCore/MicroKit.Messaging.EntityFrameworkCore.csproj" />
+    <Project Path="src/MicroKit.Messaging.MediatR/MicroKit.Messaging.MediatR.csproj" />
   </Folder>
   <Folder Name="/tests/">
     <Project Path="tests/MicroKit.Messaging.ArchitectureTests/MicroKit.Messaging.ArchitectureTests.csproj" />
     <Project Path="tests/MicroKit.Messaging.UnitTests/MicroKit.Messaging.UnitTests.csproj" />
     <Project Path="tests/MicroKit.Messaging.IntegrationTests/MicroKit.Messaging.IntegrationTests.csproj" />
+    <Project Path="tests/MicroKit.Messaging.MediatR.UnitTests/MicroKit.Messaging.MediatR.UnitTests.csproj" />
   </Folder>
   <Folder Name="/deps/">
     <!-- Required for dotnet restore in dev mode (CIReleaseBuild=false ProjectReference) -->
     <Project Path="../MicroKit.Result/src/MicroKit.Result/MicroKit.Result.csproj" />
     <Project Path="../MicroKit.Execution.Abstractions/src/MicroKit.Execution.Abstractions/MicroKit.Execution.Abstractions.csproj" />
     <Project Path="../MicroKit.Persistence/src/MicroKit.Persistence.EntityFrameworkCore/MicroKit.Persistence.EntityFrameworkCore.csproj" />
+    <!-- MicroKit.MediatR glue deps (CIReleaseBuild=false ProjectReference from MicroKit.Messaging.MediatR) -->
+    <Project Path="../MicroKit.MediatR/src/MicroKit.MediatR/MicroKit.MediatR.csproj" />
+    <Project Path="../MicroKit.MediatR/src/MicroKit.MediatR.Abstractions/MicroKit.MediatR.Abstractions.csproj" />
+    <Project Path="../MicroKit.Domain/src/MicroKit.Domain/MicroKit.Domain.csproj" />
   </Folder>
 </Solution>

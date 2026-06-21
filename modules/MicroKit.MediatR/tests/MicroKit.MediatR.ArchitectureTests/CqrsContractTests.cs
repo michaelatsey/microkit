@@ -96,7 +96,7 @@ public sealed class CqrsContractTests
             typeof(ICommandHandler<,>),
             typeof(IQueryHandler<,>),
             typeof(IStreamQueryHandler<,>),
-            typeof(IDomainEventHandler<,>),
+            typeof(IDomainEventHandler<>),
         };
 
         foreach (var iface in handlerInterfaces)

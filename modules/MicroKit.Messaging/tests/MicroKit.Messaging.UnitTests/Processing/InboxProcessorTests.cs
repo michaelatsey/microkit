@@ -96,7 +96,7 @@ public sealed class InboxProcessorTests
         var handler = new RecordingInboxHandler();
         var (registry, consumerType) = MakeRegistry(handler);
         var serializer = Substitute.For<IMessageSerializer>();
-        serializer.Deserialize(Arg.Any<string>(), Arg.Any<string>()).Returns((IIntegrationEvent?)null);
+        serializer.Deserialize(Arg.Any<string>(), Arg.Any<string>()).Returns((object?)null);
         var evt = MakeEvent();
         var message = MakeMessage(evt, consumerType, new SystemTextJsonMessageSerializer(), retryCount: 0);
 
@@ -118,7 +118,7 @@ public sealed class InboxProcessorTests
         var handler = new RecordingInboxHandler();
         var (registry, consumerType) = MakeRegistry(handler);
         var serializer = Substitute.For<IMessageSerializer>();
-        serializer.Deserialize(Arg.Any<string>(), Arg.Any<string>()).Returns((IIntegrationEvent?)null);
+        serializer.Deserialize(Arg.Any<string>(), Arg.Any<string>()).Returns((object?)null);
         var evt = MakeEvent();
         var message = MakeMessage(evt, consumerType, new SystemTextJsonMessageSerializer(), retryCount: DefaultOptions.MaxRetries - 1);
 

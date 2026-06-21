@@ -9,7 +9,7 @@
 | `NSubstitute` | Mocking | ✅ Required |
 | `NetArchTest` | Architecture tests | ✅ Required |
 | `FluentAssertions` | — | ❌ Banned (Xceed commercial licence) |
-| `MediatR.Contracts` | — | ❌ Banned (zero MediatR dependency) |
+| `MediatR.Contracts` | — | ❌ Banned everywhere EXCEPT the `MicroKit.Messaging.MediatR` glue (ADR-MSG-009 carve-out) |
 
 ---
 
@@ -68,7 +68,7 @@ nowExists.ShouldBeTrue();
 - Abstractions has zero ASP.NET Core / EF Core / broker dependency
 - Core has zero EF Core / broker dependency
 - Testing package has zero Core / EF Core dependency (Abstractions only)
-- `MediatR.Contracts` absent from ALL assemblies
+- `MediatR.Contracts` absent from all assemblies EXCEPT the `MicroKit.Messaging.MediatR` glue (ADR-MSG-009)
 - Broker provider packages do not depend on each other
 - No circular dependencies
 
@@ -153,12 +153,14 @@ public void Abstractions_ShouldHave_ZeroEfCoreDependency()
 [Fact]
 public void AllAssemblies_ShouldNot_ReferenceMediatRContracts()
 {
+    // ADR-MSG-009: the MicroKit.Messaging.MediatR glue is intentionally EXCLUDED — it is the
+    // single package permitted to reference MediatR / MediatR.Contracts.
     var assemblies = new[]
     {
         typeof(IIntegrationEvent).Assembly,       // Abstractions
         typeof(InProcessMessagePublisher).Assembly, // Core
         typeof(EfOutboxStore).Assembly,            // EntityFrameworkCore
-        typeof(FakeMessagePublisher).Assembly,     // Testing
+        typeof(FakeMessagePublisher).Assembly,     // Testing (when implemented)
     };
 
     foreach (var assembly in assemblies)
@@ -191,7 +193,9 @@ public void AllAssemblies_ShouldNot_ReferenceMediatRContracts()
 
 ## Rules
 
-1. **No `MediatR.Contracts`** in any test project `.csproj` — zero tolerance
+1. **No `MediatR.Contracts`** in any test project `.csproj` — zero tolerance. (The glue's own test
+   project, `MicroKit.Messaging.MediatR.UnitTests`, transitively references MediatR via the glue
+   under test — that is the ADR-MSG-009 carve-out, not a violation.)
 2. **Fresh test double per test** — `FakeMessagePublisher`, `InMemoryOutboxStore`, `InMemoryInboxStore` never shared
 3. **`TenantId` always set** in test fixtures — never null or empty string
 4. **SQLite isolation** — integration tests: each `Task.Run` must use its own isolated connection
