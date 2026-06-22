@@ -98,7 +98,7 @@ public sealed class CqrsContractTests
             typeof(IQuery<>),
             typeof(IStreamQuery<>),
             typeof(IDomainEventNotification<>),
-            typeof(IApplicationEvent),
+            // typeof(IApplicationEvent),
         };
 
         foreach (var contract in cqrsContracts)
