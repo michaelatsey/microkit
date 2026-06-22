@@ -4,7 +4,7 @@ namespace MicroKit.Domain.Events;
 /// Represents something significant that happened in the domain.
 /// Events are immutable facts about the past.
 /// </summary>
-public interface IDomainEvent
+public interface IDomainEvent : IEvent
 {
     /// <summary>
     /// Unique identifier for this event instance.

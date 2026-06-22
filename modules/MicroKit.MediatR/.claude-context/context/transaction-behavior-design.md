@@ -1,21 +1,139 @@
-# Transaction Behavior Design — v2
+# Transaction Behavior Design — v4
 
-> **Status:** Implementation-ready — waiting on MicroKit.Persistence.EntityFrameworkCore
-> (DomainEventsDispatcher) and MicroKit.Messaging (OutboxMessage transport).
-> Load this file when working on TransactionBehavior, DomainEventsDispatcher,
-> or IOutboxStore.
+> **⚠ SUPERSEDED (2026-06-20) by ADR-MSG-008 §5 and ADR-MSG-009**
+> (`MicroKit.Messaging/.claude/rules/microkit-messaging-architecture.md`).
+> This document is retained for history only — **do not implement from it as-is**. Two parts are
+> now obsolete and MUST NOT be re-introduced:
+> 1. **No synchronous in-transaction publish (P3).** The implemented topology has
+>    `DomainEventsDispatcher` only drain → build notification → write outbox; domain-event handlers
+>    run exactly once on the outbox path (`MediatROutboxDispatcher` → `IPublisher.Publish`). A
+>    synchronous publish alongside the outbox republish would double-execute every handler
+>    (ADR-MSG-008 §5). Any "levels 1–2 synchronous handler" / "P3 publish" text and diagrams below
+>    are obsolete.
+> 2. **No `IOutboxMessageMapper`.** ADR-MSG-008 §2 mandates a concrete `OutboxMessageFactory`
+>    (no interface until a second impl exists). Any `IOutboxMessageMapper` reference below is obsolete.
+>
+> ---
+>
+> **Status (historical):** Revised. Aligns the transaction/outbox/notification design with the
+> MicroKit.Messaging architecture: MediatR-free Messaging, three queues
+> (Outbox / IntegrationEvent / Inbox), a single generic outbox-draining engine in
+> Messaging Core driven by a swappable dispatch seam, and the MediatR coupling
+> confined to the glue package `MicroKit.Messaging.MediatR`.
+>
+> Supersedes v3. v3 wrongly typed `IOutboxWriter` on `IIntegrationEvent` and created the
+> integration event inside Phase 4. Corrected here.
 
 ---
 
-## Architecture Overview — 5 Levels
+## ⚠ Révision v3 → v4 — décisions appliquées
 
-| Level | Component | Scope | Consistency |
-|-------|-----------|-------|-------------|
-| 1 | DomainEvent | Business transaction | Synchronous, atomic |
-| 2 | DomainEventHandler | Intra-domain consistency | Same DbContext, same transaction |
-| 3 | DomainEventNotification + Outbox | Deferred reaction | Persisted atomically, processed async |
-| 4 | NotificationHandler + IntegrationMessage | Application orchestration | Async, separate transaction |
-| 5 | BrokerWorker | External distributed messaging | At-least-once delivery |
+1. **`IOutboxWriter.AddAsync(OutboxMessage)`** — prend l'entité `OutboxMessage` (Messaging.Abstractions),
+   donc **MediatR-free par construction**. Pas d'`IIntegrationEvent` ni d'`IIntegrationEventFactory`
+   dans le contrat. `AddAsync` (ValueTask). `TenantId` obligatoire. (Annule l'erreur v3.)
+2. **`OutboxMessage` = enveloppe générique** : `EventType` (type CLR) + `Payload` (JSON) + lifecycle/
+   lease/retry/corrélation. Dans le flux domaine→outbox, le **Payload est une notification sérialisée**.
+3. **Phase 4 du dispatcher = persister les notifications** (construites en `OutboxMessage`). Elle ne crée
+   PAS d'IntegrationEvent. La **décision d'émettre un IntegrationEvent appartient aux
+   `NotificationHandler`**, en aval.
+4. **Trois queues** : `Outbox` (notifications), `IntegrationEvent` (cross-module), `Inbox` (réception).
+5. **Drainer Outbox→MediatR = split** : le **moteur de drain générique reste dans Messaging Core**
+   (MediatR-free : drain + lease + back-off + retry + dead-letter), appelant une **couture de dispatch
+   `IOutboxDispatcher`**. L'**impl de dispatch « republish notification via MediatR » vit dans la glu**
+   `MicroKit.Messaging.MediatR`.
+6. **`DomainEventsDispatcher`** vit dans la glu (pas Persistence — éviterait un cycle Messaging↔Persistence).
+7. **`EfOutboxWriter`** vit dans `MicroKit.Messaging.EntityFrameworkCore` (réutilise
+   `MicroKit.Persistence.EntityFrameworkCore`). Direction `Messaging → Persistence` (autorisée).
+
+### À trancher (non figé)
+
+- **Wording des commentaires XML d'`OutboxMessage`** : ils disent « integration event » alors qu'on y
+  stocke une notification. Réconcilier : enveloppe générique (corriger le wording → « event ») **ou**
+  entité distincte par queue. Lié à la question ci-dessous.
+- **`Outbox` et `IntegrationEvent` partagent-ils l'entité `OutboxMessage`** (deux tables, même type) **ou
+  deux entités distinctes** ? Le moteur générique se registre une fois par store, dans les deux cas.
+- **Placement de `TransactionBehavior`** : `MicroKit.MediatR.Behaviors` (implique `MediatR → Persistence.
+  Abstractions`) ou la glu. Décision module à acter.
+- **Optimisations proposées, non décidées** : réveil signal-driven (`Channel` + PostgreSQL `LISTEN/NOTIFY`)
+  vs polling ; ordre/partition ; `traceparent` W3C sur l'enveloppe (tu as déjà `CorrelationId`/`CausationId`) ;
+  sérialisation JSON source-generated.
+
+---
+
+## Niveaux & trois queues
+
+| Niveau | Composant | Queue | Cohérence |
+|-------|-----------|-------|-----------|
+| 1 | `DomainEvent` | — | Synchrone, atomique |
+| 2 | `DomainEventHandler` | — | Même DbContext, même transaction |
+| 3 | Outbox (notifications) | **Outbox** | Persisté atomiquement, traité async |
+| 4 | Moteur drain + `MediatorOutboxDispatcher` → `NotificationHandler` | **Outbox** | Async, MediatR in-process |
+| 5 | `NotificationHandler` décide → `IntegrationEvent` | **IntegrationEvent** | Async, transaction séparée |
+| 6 | Moteur drain + dispatch transport (`IMessagePublisher`) → ingestion | **IntegrationEvent** | At-least-once |
+| 7 | Ingestion → `InboxMessage` → `InboxProcessor` → `IMessageHandler` | **Inbox** | Exactly-once par consumer |
+
+> Le **même moteur de drain** (Core) sert les queues Outbox et IntegrationEvent ; seul le `IOutboxDispatcher`
+> injecté change (republish MediatR vs transport).
+
+---
+
+## Module placement (canonique)
+
+```txt
+MicroKit.Domain.Abstractions
+  └─ IDomainEvent, IDomainEventsProvider
+
+MicroKit.MediatR.Abstractions
+  └─ IDomainEventDispatcher, INotificationFactory, IDomainEventNotification   (zéro Messaging)
+
+MicroKit.Persistence.Abstractions
+  └─ IUnitOfWork, ITransactionalContext                                       (MediatR-free, Messaging-free)
+
+MicroKit.Messaging.Abstractions                                              (MediatR-free)
+  └─ IOutboxWriter, IOutboxProcessorStore, IOutboxDispatcher, IInboxStore,
+     OutboxMessage, InboxMessage, IIntegrationEvent, MessageEnvelope<T>
+
+MicroKit.Messaging  (Core)                                                   (MediatR-free)
+  ├─ OutboxProcessor          ← MOTEUR générique (drain+lease+retry+deadletter → IOutboxDispatcher)
+  ├─ InProcessIntegrationDispatcher : IOutboxDispatcher  (deserialize→IIntegrationEvent→IMessagePublisher)
+  ├─ InProcessMessagePublisher, ingestion, InboxProcessor
+
+MicroKit.Messaging.EntityFrameworkCore  (réutilise Persistence.EntityFrameworkCore)  (MediatR-free)
+  └─ EfOutboxWriter, EfOutboxProcessorStore, EfInboxStore
+
+MicroKit.Messaging.MediatR  (GLU — seul point de rencontre MediatR ↔ Messaging)
+  ├─ DomainEventsDispatcher                  (implémente IDomainEventDispatcher)
+  ├─ MediatorOutboxDispatcher : IOutboxDispatcher  (deserialize→notification→IPublisher.Publish)  ← MediatR
+  └─ deps : MediatR + MediatR.Abstractions + Messaging.Abstractions + Domain.Abstractions + Persistence.Abstractions
+```
+
+**Zéro cycle.** La glu est volontairement non-autonome (composition) ; les cores restent purs.
+
+---
+
+## La couture de dispatch (cœur de la décision)
+
+```csharp
+// MicroKit.Messaging.Abstractions  — MediatR-free
+public interface IOutboxDispatcher
+{
+    /// <summary>
+    /// Dispatches a single outbox message. The engine is payload-agnostic; the
+    /// implementation deserializes (by EventType) and publishes.
+    /// </summary>
+    ValueTask DispatchAsync(OutboxMessage message, CancellationToken ct = default);
+}
+```
+
+- **Moteur (Core, MediatR-free)** : `OutboxProcessor` draine `IOutboxProcessorStore`, pose le lease,
+  appelle `IOutboxDispatcher.DispatchAsync(message)`, puis `MarkPublished` / retry-backoff / `DeadLetter`.
+  Il ne désérialise rien et ne connaît ni MediatR ni le transport.
+- **Dispatch Outbox-notifications (glu, MediatR-aware)** : `MediatorOutboxDispatcher` désérialise le payload
+  (notification) par `EventType` et appelle `IPublisher.Publish`.
+- **Dispatch IntegrationEvent (Core/broker, MediatR-free)** : désérialise en `IIntegrationEvent` et appelle
+  `IMessagePublisher.PublishAsync` (in-process v1 / broker v2) → ingestion → Inbox.
+
+Le moteur est enregistré une fois par queue, avec son `(store, dispatcher)`.
 
 ---
 
@@ -29,43 +147,33 @@ sequenceDiagram
     actor Client
     participant TB as TransactionBehavior
     participant CH as CommandHandler
-    participant OA as OrderAggregate
+    participant OA as Aggregate
     participant DD as DomainEventsDispatcher
     participant DH as DomainEventHandler
-    participant CA as CustomerAggregate
-    participant OS as OutboxStore
+    participant OW as IOutboxWriter
     participant UOW as UnitOfWork
     participant DB as Database
 
     rect rgb(52, 56, 59)
-        Note over TB,DB: TRANSACTION SCOPE
-
-        Client->>TB: Send(CreateOrderCommand)
+        Note over TB,DB: TRANSACTION SCOPE (atomique)
+        Client->>TB: Send(Command)
         TB->>CH: Handle(command)
-        CH->>OA: Create Order
-        OA-->>DD: [via IDomainEventsProvider] OrderPlacedDomainEvent accumulated
-
+        CH->>OA: muter l'agrégat
+        OA-->>DD: [via IDomainEventsProvider] DomainEvent accumulé
         TB->>DD: DispatchEventsAsync()
-
-        loop While events exist
-            Note over DD: Phase 1 — GetAndClear (atomic)
-            Note over DD: Phase 2 — Resolve notifications
-            Note over DD: Phase 3 — Publish (may raise new events)
-            DD->>DH: Publish(OrderPlacedDomainEvent)
-            DH->>CA: Update Customer loyalty
-            CA-->>DD: CustomerPointsGrantedEvent accumulated
-            Note over DD: Phase 4 — Add to Outbox (change tracker)
-            DD->>OS: Add(OrderPlacedNotification)
+        loop Drain récursif
+            Note over DD: P1 GetAndClear · P2 Resolve notifications · P3 Publish (intra-domaine)
+            DD->>DH: Publish(DomainEvent)
+            Note over DD: P4 — notification → OutboxMessage → AddAsync (change tracker)
+            DD->>OW: AddAsync(OutboxMessage)
         end
-
         TB->>UOW: CommitAsync()
-        UOW->>DB: SaveChanges — aggregates + outbox messages ATOMIC
+        UOW->>DB: SaveChanges — agrégats + OutboxMessages ATOMIQUES
     end
-
     TB-->>Client: Result
 ```
 
-### 2. DomainEventsDispatcher — 4-Phase Loop
+### 2. DomainEventsDispatcher — boucle 4 phases
 
 ```mermaid
 sequenceDiagram
@@ -74,41 +182,42 @@ sequenceDiagram
     participant DEP as IDomainEventsProvider
     participant NF as INotificationFactory
     participant PUB as IPublisher (MediatR)
-    participant OS as IOutboxStore
+    participant OW as IOutboxWriter
 
-    loop While events exist (drain recursive)
-        DD->>DEP: GetAndClearDomainEvents() ← atomic
-        DEP-->>DD: [OrderPlacedEvent, ...]
-
-        Note over DD: Phase 2 — Resolve notifications (sync, no I/O)
-        DD->>NF: Create(OrderPlacedEvent)
-        NF-->>DD: OrderPlacedNotification
-
-        Note over DD: Phase 3 — Publish (may raise new events via handlers)
-        DD->>PUB: Publish(OrderPlacedEvent)
-
-        Note over DD: Phase 4 — Add to Outbox (change tracker, no flush)
-        DD->>OS: Add(OrderPlacedNotification) ← sync, no SaveChanges
+    loop Drain récursif
+        DD->>DEP: GetAndClearDomainEvents()
+        DEP-->>DD: [DomainEvent, ...]
+        Note over DD: P2 — Resolve notifications (sync)
+        DD->>NF: Create(DomainEvent)
+        NF-->>DD: notification (peut être null)
+        Note over DD: P3 — Publish (intra-domaine; peut lever de nouveaux events)
+        DD->>PUB: Publish(DomainEvent)
+        Note over DD: P4 — notification → OutboxMessage → AddAsync (no flush)
+        DD->>OW: AddAsync(OutboxMessage(notification))
     end
 ```
 
-### 3. Outbox Processing (async, outside transaction)
+### 3. Drain (async) — moteur unique, dispatch swappable
 
 ```mermaid
 sequenceDiagram
-    participant W as OutboxWorker
-    participant DB as Database
-    participant MR as MediatR
-    participant NH as NotificationHandler
+    participant OP as OutboxProcessor (moteur, Core)
+    participant ST as IOutboxProcessorStore
+    participant DSP as IOutboxDispatcher
+    participant NH as NotificationHandler (via MediatR — queue Outbox)
+    participant ING as Ingestion → Inbox (via transport — queue IntegrationEvent)
 
     rect rgb(255, 248, 235)
-        Note over W,NH: ASYNC PROCESSING SCOPE
-
-        W->>DB: Read pending OutboxMessages
-        loop For each message
-            W->>MR: Publish(notification)
-            MR->>NH: Handle
-            W->>DB: Mark processed
+        Note over OP,ING: ASYNC — un moteur par queue, dispatcher injecté
+        OP->>ST: drain pending + lease
+        loop Pour chaque message
+            OP->>DSP: DispatchAsync(OutboxMessage)
+            alt queue Outbox : MediatorOutboxDispatcher (glu)
+                DSP->>NH: deserialize(notification) + IPublisher.Publish
+            else queue IntegrationEvent : dispatch transport (Core/broker)
+                DSP->>ING: deserialize(IIntegrationEvent) + IMessagePublisher.PublishAsync
+            end
+            OP->>ST: MarkPublished / retry-backoff / DeadLetter
         end
     end
 ```
@@ -117,118 +226,130 @@ sequenceDiagram
 
 ## Key Interfaces
 
-### IDomainEventsProvider
+### IOutboxWriter (signature actée)
 ```csharp
-// MicroKit.Domain or MicroKit.Persistence.Abstractions
-public interface IDomainEventsProvider
+namespace MicroKit.Messaging; // Messaging.Abstractions — MediatR-free
+public interface IOutboxWriter
 {
     /// <summary>
-    /// Returns all accumulated domain events and clears the internal collection atomically.
+    /// Adds an outbox message within the current domain transaction.
+    /// Not persisted until the enclosing transaction commits.
+    /// OutboxMessage.TenantId must not be null or empty.
     /// </summary>
-    IReadOnlyList<IDomainEvent> GetAndClearDomainEvents();
+    ValueTask AddAsync(OutboxMessage message, CancellationToken ct = default);
 }
 ```
 
-### IDomainEventDispatcher
+### OutboxMessage (enveloppe générique — payload = notification dans le flux domaine→outbox)
 ```csharp
+namespace MicroKit.Messaging;
+// sealed class (pas record) : EF Core exige des { get; set; } mutables.
+// TenantId obligatoire (jamais null/empty) — les processors lisent le tenant ici, pas via IHttpContextAccessor.
+// CorrelationId non-nullable (CorrelationId.New() si pas d'amont).
+public sealed class OutboxMessage
+{
+    public MessageId Id { get; set; } = null!;
+    public string TenantId { get; set; } = null!;
+    public string EventType { get; set; } = null!;   // event type ()
+    public string Payload { get; set; } = null!;      // JSON — notification sérialisée dans le flux Outbox (MessageEnvelope)
+    public OutboxMessageStatus Status { get; set; }
+    public int RetryCount { get; set; }
+    public DateTimeOffset OccurredOnUtc { get; set; }
+    public DateTimeOffset CreatedAtUtc { get; set; }
+    public DateTimeOffset? ProcessedAtUtc { get; set; }
+    public DateTimeOffset? LockedUntilUtc { get; set; }
+    public DateTimeOffset? NextRetryAtUtc { get; set; } // back-off 2^RetryCount s, cap 3600 s
+    public string? ErrorMessage { get; set; }
+    public bool DeadLettered { get; set; }              // true quand Status = Failed
+    public CorrelationId CorrelationId { get; set; } = null!;
+    public CausationId? CausationId { get; set; }
+}
+```
+
+### IDomainEventsProvider / IDomainEventDispatcher / INotificationFactory
+```csharp
+// MicroKit.Domain.Abstractions
+public interface IDomainEventsProvider
+{
+    IReadOnlyList<IDomainEvent> GetAndClearDomainEvents(); // atomic
+}
+
 // MicroKit.MediatR.Abstractions
 public interface IDomainEventDispatcher
 {
-    /// <summary>
-    /// Dispatches all accumulated domain events in 4 phases:
-    /// 1. GetAndClear (atomic), 2. Resolve notifications, 3. Publish, 4. Add to Outbox.
-    /// Recursive drain — continues until no new events are raised.
-    /// </summary>
-    Task DispatchEventsAsync(CancellationToken ct = default);
+    Task DispatchEventsAsync(CancellationToken ct = default); // 4 phases, drain récursif
 }
-```
 
-### IOutboxStore
-```csharp
-// MicroKit.Persistence.Abstractions
-public interface IOutboxStore
-{
-    /// <summary>
-    /// Adds a notification to the outbox via the EF change tracker.
-    /// No SaveChanges — persisted atomically during CommitAsync.
-    /// </summary>
-    void Add(INotification notification); // sync — change tracker only
-}
-```
-
-### INotificationFactory
-```csharp
-// MicroKit.MediatR.Abstractions or MicroKit.Persistence
+// MicroKit.MediatR.Abstractions — réaction in-process intra-domaine
 public interface INotificationFactory
 {
-    /// <summary>
-    /// Resolves the IDomainEventNotification associated with a domain event.
-    /// Returns null if no notification is registered for this event type.
-    /// </summary>
-    IDomainEventNotification<IDomainEvent>? Create(IDomainEvent domainEvent);
+    IDomainEventNotification<IDomainEvent>? Create(IDomainEvent domainEvent); // null si aucune
 }
 ```
 
 ---
 
-## DomainEventsDispatcher — Full Implementation
+## DomainEventsDispatcher — implémentation (glu)
 
 ```csharp
-// MicroKit.Persistence.EntityFrameworkCore
+// MicroKit.Messaging.MediatR
 public sealed class DomainEventsDispatcher : IDomainEventDispatcher
 {
     private readonly IDomainEventsProvider _domainEventsProvider;
-    private readonly IPublisher _publisher;           // MediatR IPublisher
-    private readonly INotificationFactory _factory;
-    private readonly IOutboxStore _outboxStore;
-    private bool _isDispatching;                      // reentrancy guard
+    private readonly IPublisher _publisher;                 // MediatR IPublisher
+    private readonly INotificationFactory _notificationFactory;
+    private readonly IOutboxWriter _outboxWriter;           // Messaging.Abstractions
+    private readonly IOutboxMessageMapper _mapper;          // notification → OutboxMessage (glu)
+    private bool _isDispatching;                            // reentrancy guard
 
     public async Task DispatchEventsAsync(CancellationToken ct = default)
     {
-        if (_isDispatching) return; // reentrancy — new events accumulate, picked up on return
-
+        if (_isDispatching) return; // new events accumulate, picked up on return
         _isDispatching = true;
         try
         {
             while (true)
             {
-                // Phase 1 — Collect atomically (GetAndClear in one operation)
+                // P1 — collect atomically
                 var domainEvents = _domainEventsProvider.GetAndClearDomainEvents();
                 if (domainEvents.Count == 0) break;
 
-                // Phase 2 — Resolve notifications (sync, no I/O)
+                // P2 — resolve in-process notifications
                 var notifications = new List<IDomainEventNotification<IDomainEvent>>(domainEvents.Count);
-                foreach (var domainEvent in domainEvents)
+                foreach (var e in domainEvents)
                 {
-                    var notification = _factory.Create(domainEvent);
-                    if (notification is not null)
-                        notifications.Add(notification);
+                    var n = _notificationFactory.Create(e);
+                    if (n is not null) notifications.Add(n);
                 }
 
-                // Phase 3 — Publish domain events (may raise new events via handlers)
-                foreach (var domainEvent in domainEvents)
-                    await _publisher.Publish(domainEvent, ct).ConfigureAwait(false);
+                // P3 — publish domain events (intra-domain handlers; may raise new events)
+                foreach (var e in domainEvents)
+                    await _publisher.Publish(e, ct).ConfigureAwait(false);
 
-                // Phase 4 — Add notifications to Outbox (change tracker, no flush)
-                foreach (var notification in notifications)
-                    _outboxStore.Add(notification);
-                // → All persisted atomically by CommitAsync in TransactionBehavior
+                // P4 — notification → OutboxMessage → outbox (change tracker, no flush)
+                foreach (var n in notifications)
+                {
+                    var message = _mapper.ToOutboxMessage(n); // EventType + JSON payload + TenantId + CorrelationId
+                    await _outboxWriter.AddAsync(message, ct).ConfigureAwait(false);
+                }
+                // → persisté atomiquement par CommitAsync dans TransactionBehavior
             }
         }
-        finally
-        {
-            _isDispatching = false;
-        }
+        finally { _isDispatching = false; }
     }
 }
 ```
 
+> `IOutboxMessageMapper` (glu) sérialise la notification et renseigne `EventType`, `Payload`, `TenantId`,
+> `CorrelationId`, `OccurredOnUtc`. C'est le seul endroit qui « connaît » la notification ; `IOutboxWriter`
+> ne voit qu'un `OutboxMessage`.
+
 ---
 
-## TransactionBehavior — Final Implementation
+## TransactionBehavior (placement à acter)
 
 ```csharp
-// MicroKit.MediatR.Behaviors — PipelineOrder 700 (after Retry)
+// PipelineOrder.Transaction = 700 (after Retry)
 public sealed class TransactionBehavior<TRequest, TResponse>(
     ITransactionalContext transactionalContext,
     IDomainEventDispatcher domainEventDispatcher,
@@ -236,43 +357,27 @@ public sealed class TransactionBehavior<TRequest, TResponse>(
     : BehaviorBase<TRequest, TResponse>
     where TRequest : IRequest<TResponse>
 {
-    public override int Order => PipelineOrder.Transaction; // 700
+    public override int Order => PipelineOrder.Transaction;
 
     public override async ValueTask<TResponse> Handle(
-        TRequest request,
-        RequestHandlerDelegate<TResponse> next,
-        CancellationToken cancellationToken)
+        TRequest request, RequestHandlerDelegate<TResponse> next, CancellationToken ct)
     {
-        if (request is not ICommand)
-            return await next().ConfigureAwait(false);
-
+        if (request is not ICommand) return await next().ConfigureAwait(false);
         var state = new TransactionState(next, domainEventDispatcher, unitOfWork);
-
         await transactionalContext.ExecuteAsync(
-            static async (st, ct) => await ExecuteCommandAsync(st, ct).ConfigureAwait(false),
-            state,
-            cancellationToken).ConfigureAwait(false);
-
+            static (st, c) => ExecuteCommandAsync(st, c), state, ct).ConfigureAwait(false);
         return state.Response!;
     }
 
-    private static async Task ExecuteCommandAsync(TransactionState state, CancellationToken ct)
+    private static async Task ExecuteCommandAsync(TransactionState s, CancellationToken ct)
     {
-        // Execute the command handler
-        state.Response = await state.Next().ConfigureAwait(false);
-
-        // Dispatch domain events — recursive drain + outbox fill
-        await state.Dispatcher.DispatchEventsAsync(ct).ConfigureAwait(false);
-
-        // Single commit — aggregates + outbox messages atomic
-        await state.UnitOfWork.CommitAsync(ct).ConfigureAwait(false);
+        s.Response = await s.Next().ConfigureAwait(false);
+        await s.Dispatcher.DispatchEventsAsync(ct).ConfigureAwait(false); // drain + outbox fill
+        await s.UnitOfWork.CommitAsync(ct).ConfigureAwait(false);          // single atomic commit
     }
 
-    // Closure-free state carrier — avoids heap allocation per pipeline invocation
     private sealed class TransactionState(
-        RequestHandlerDelegate<TResponse> next,
-        IDomainEventDispatcher dispatcher,
-        IUnitOfWork unitOfWork)
+        RequestHandlerDelegate<TResponse> next, IDomainEventDispatcher dispatcher, IUnitOfWork unitOfWork)
     {
         public RequestHandlerDelegate<TResponse> Next { get; } = next;
         public IDomainEventDispatcher Dispatcher { get; } = dispatcher;
@@ -284,58 +389,51 @@ public sealed class TransactionBehavior<TRequest, TResponse>(
 
 ---
 
-## ITransactionalContext — Correct Signature
-
-```csharp
-// MicroKit.Persistence.Abstractions
-// ExecuteAsync<TState> pattern — closure-free, EF Core ExecutionStrategy compatible
-public interface ITransactionalContext
-{
-    Task ExecuteAsync<TState>(
-        Func<TState, CancellationToken, Task> operation,
-        TState state,
-        CancellationToken ct = default);
-}
-```
-
-> **Note:** Current implementation in MicroKit.Persistence.Abstractions uses
-> Begin/Commit/Rollback methods — must be updated to this signature before
-> TransactionBehavior implementation.
-
----
-
-## Required Changes to Existing Implementations
+## Required Changes (par module)
 
 ### MicroKit.Persistence.Abstractions
-- [ ] `ITransactionalContext` — replace Begin/Commit/Rollback with `ExecuteAsync<TState>`
-- [ ] `IOutboxStore` — add `void Add(INotification notification)`
+- [ ] `ITransactionalContext` — migrer Begin/Commit/Rollback → `ExecuteAsync<TState>`
 
 ### MicroKit.MediatR.Abstractions
-- [ ] `IDomainEventDispatcher` — change signature to `DispatchEventsAsync(CancellationToken)`
-- [ ] `INotificationFactory` — new interface
+- [ ] `IDomainEventDispatcher` — `DispatchEventsAsync(CancellationToken)`
+- [ ] `INotificationFactory`
 
-### MicroKit.Persistence.EntityFrameworkCore
-- [ ] `DomainEventsDispatcher` — implement 4-phase loop with reentrancy guard
-- [ ] `EfOutboxStore` — implement `IOutboxStore` via DbSet change tracker
+### MicroKit.Messaging.Abstractions
+- [ ] `IOutboxWriter.AddAsync(OutboxMessage)` (acté)
+- [ ] `IOutboxDispatcher.DispatchAsync(OutboxMessage)` (NOUVEAU — couture moteur↔dispatch)
+- [ ] Réconcilier le wording XML d'`OutboxMessage` (event générique vs integration event)
 
-### MicroKit.MediatR.Behaviors
-- [ ] `TransactionBehavior` — implement with `ExecuteAsync<TState>` + `TransactionState`
-- [ ] `PipelineOrder.Transaction = 700` — add constant
+### MicroKit.Messaging (Core)
+- [ ] `OutboxProcessor` = moteur générique drain+lease+retry+deadletter → `IOutboxDispatcher` (MediatR-free)
+- [ ] `InProcessIntegrationDispatcher : IOutboxDispatcher` (deserialize→IIntegrationEvent→IMessagePublisher)
+
+### MicroKit.Messaging.EntityFrameworkCore (réutilise Persistence.EFCore)
+- [ ] `EfOutboxWriter`, `EfOutboxProcessorStore`, `EfInboxStore`
+
+### MicroKit.Messaging.MediatR (glu — NOUVEAU)
+- [ ] `DomainEventsDispatcher` (4 phases + reentrancy guard)
+- [ ] `IOutboxMessageMapper` (notification → OutboxMessage)
+- [ ] `MediatorOutboxDispatcher : IOutboxDispatcher` (deserialize→notification→IPublisher.Publish)
+
+### MicroKit.MediatR.Behaviors (ou glu — placement à acter)
+- [ ] `TransactionBehavior` + `PipelineOrder.Transaction = 700`
 
 ---
 
-## Scope Visualization
+## Impact sur le plan Messaging Core v1
 
-```
-🔵 BLUE   = Business transaction (synchronous, atomic — same DbContext)
-🟠 ORANGE = Async application processing (eventually consistent)
-🔴 RED    = External distributed messaging (at-least-once)
+Le `OutboxProcessor` de Core devient un **moteur générique** : il ne désérialise plus et n'appelle plus
+directement `IMessagePublisher`/`IMessageSerializer`. Il appelle `IOutboxDispatcher`. La désérialisation +
+`IMessagePublisher` descendent dans `InProcessIntegrationDispatcher : IOutboxDispatcher` (Core). C'est ce
+qui permet de réutiliser le même moteur pour la queue Outbox (dispatch MediatR, dans la glu). À répercuter
+dans le plan Core avant implémentation.
 
-Level 1: DomainEvent              🔵 raised during handler
-Level 2: DomainEventHandler       🔵 intra-domain side effects
-Level 3: DomainEventNotification  🔵 added to Outbox in same transaction
-Level 4: OutboxWorker             🟠 reads + publishes async
-Level 5: NotificationHandler      🟠 application orchestration
-Level 6: IntegrationMessage       🟠→🔴 bridge
-Level 7: BrokerWorker             🔴 external transport
-```
+---
+
+## Invariants
+
+- **Atomicité** : agrégats + `OutboxMessage` committés ensemble (un seul `SaveChanges`).
+- **Messaging MediatR-free** : aucun type MediatR dans `Messaging.*`. La glu est le seul pont.
+- **Zéro cycle** : `Messaging → Persistence` uniquement ; la glu au-dessus de tout.
+- **Un moteur, deux queues** : `OutboxProcessor` générique, dispatch injecté par queue.
+- **Broker-ready** : seul le dispatcher transport change entre in-process (v1) et broker (v2).

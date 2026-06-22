@@ -1,6 +1,7 @@
 # MicroKit — Monorepo Root Brain
 
 ## 🎯 Vision
+
 MicroKit is an ecosystem of modular, opinionated, production-ready .NET 10+ libraries.
 Each module is autonomous, independently versioned, published to NuGet, and designed to
 compose without friction in a hexagonal / DDD / CQRS / microservices architecture.
@@ -21,11 +22,12 @@ This root file provides the global vision and cross-cutting conventions.
 | **MicroKit.Result** | `modules/MicroKit.Result/` | `modules/MicroKit.Result/.claude/` | ✅ Released 1.0.0-preview.1 |
 | **MicroKit.Domain** | `modules/MicroKit.Domain/` | `modules/MicroKit.Domain/.claude/` | ✅ Released 1.0.0-preview.4 |
 | **MicroKit.Logging** | `modules/MicroKit.Logging/` | `modules/MicroKit.Logging/.claude/` | ✅ Released 1.0.0-preview.1 |
-| **MicroKit.MediatR** | `modules/MicroKit.MediatR/` | `modules/MicroKit.MediatR/.claude/` | ✅ Released 1.0.0-preview.1 |
+| **MicroKit.MediatR** | `modules/MicroKit.MediatR/` | `modules/MicroKit.MediatR/.claude/` | ✅ Released 1.0.0-preview.1 — redesign preview.2 in progress (fix/messaging/mediatr) |
 | **MicroKit.Persistence** | `modules/MicroKit.Persistence/` | `modules/MicroKit.Persistence/.claude/` | ✅ Released 1.0.0-preview.1 |
 | **MicroKit.Multitenancy** | `modules/MicroKit.Multitenancy/` | `modules/MicroKit.Multitenancy/.claude/` | ✅ Released 1.0.0-preview.1 |
-| **MicroKit.Auth** | `modules/MicroKit.Auth/` | `modules/MicroKit.Auth/.claude/` | 🚧 In progress — Abstractions ✅ Core ✅ AspNetCore ✅ Permissions ✅ Supabase ✅ Multitenancy ✅ Testing ✅ merged dev |
-| **MicroKit.Messaging** | `modules/MicroKit.Messaging/` | `modules/MicroKit.Messaging/.claude/` | 📋 Planned |
+| **MicroKit.Auth** | `modules/MicroKit.Auth/` | `modules/MicroKit.Auth/.claude/` | ✅ Released 1.0.0-preview.1 |
+| **MicroKit.Execution.Abstractions** | `modules/MicroKit.Execution.Abstractions/` | — | ✅ Merged dev — not yet released |
+| **MicroKit.Messaging** | `modules/MicroKit.Messaging/` | `modules/MicroKit.Messaging/.claude/` | 🚧 In progress — Abstractions ✅ · Core ✅ · EntityFrameworkCore ✅ · MediatR glue ✅ — all merged dev · fix/messaging/mediatr in progress |
 | **MicroKit.Caching** | `modules/MicroKit.Caching/` | `modules/MicroKit.Caching/.claude/` | 📋 Planned |
 | **MicroKit.Http** | `modules/MicroKit.Http/` | `modules/MicroKit.Http/.claude/` | 📋 Planned |
 | **MicroKit.Observability** | `modules/MicroKit.Observability/` | `modules/MicroKit.Observability/.claude/` | 📋 Planned |
@@ -68,7 +70,7 @@ MicroKit/
 ├── .github/
 │   ├── workflows/
 │   │   ├── ci-*.yml                  ← per-module CI
-│   │   └── release-*.yml             ← per-module release
+│   │   └── release-*.yml            ← per-module release
 │   ├── CODEOWNERS
 │   └── pull_request_template.md
 │
@@ -80,6 +82,8 @@ MicroKit/
 │   ├── MicroKit.Persistence/
 │   ├── MicroKit.Multitenancy/
 │   ├── MicroKit.Auth/
+│   ├── MicroKit.Execution.Abstractions/
+│   ├── MicroKit.Messaging/
 │   └── ...
 │
 ├── Directory.Build.props             ← shared props for all projects
@@ -125,17 +129,33 @@ modules/MicroKit.[Module]/
 ### Dependency graph (allowed)
 
 ```txt
-MicroKit.Domain          ← no dependency on other modules
-MicroKit.Result          ← no dependency on other modules
-MicroKit.Logging         ← ADR-006: does NOT depend on Result (permanent)
-MicroKit.Observability   ← may depend on Result, Logging
-MicroKit.Auth            ← may depend on Result, Domain
-MicroKit.Caching         ← may depend on Result
-MicroKit.Persistence     ← may depend on Result, Domain
-MicroKit.Messaging       ← may depend on Result, Domain, Persistence (outbox)
-MicroKit.Http            ← may depend on Result, Observability
-MicroKit.MediatR         ← may depend on Result, Domain, Logging.Abstractions
-MicroKit.Multitenancy    ← may depend on Result, Auth, Persistence
+MicroKit.Domain                    ← no dependency on other modules
+                                     IEvent: canonical root for all event taxonomies
+                                     IDomainEvent : IEvent (in Domain)
+MicroKit.Result                    ← no dependency on other modules
+MicroKit.Execution.Abstractions    ← no dependency on other modules (DI.Abstractions only)
+                                     ADR-EXEC-001: cross-cutting Level 0 — IExecutionScopeFactory,
+                                     IExecutionContext. NOT a god-package.
+MicroKit.Logging                   ← ADR-006: does NOT depend on Result (permanent)
+MicroKit.Observability             ← may depend on Result, Logging
+MicroKit.Auth                      ← may depend on Result, Domain
+MicroKit.Caching                   ← may depend on Result
+MicroKit.Persistence               ← may depend on Result, Domain
+MicroKit.Messaging                 ← may depend on Result, Persistence (outbox/inbox EFCore),
+                                     Execution.Abstractions (ADR-EXEC-001)
+                                     ADR-MSG-001: does NOT depend on Domain (IIntegrationEvent standalone)
+                                     ADR-EXEC-001: does NOT depend on Multitenancy (inversion via
+                                     IExecutionScopeFactory — Multitenancy implements, host composes)
+                                     ADR-MSG-009: MicroKit.Messaging.MediatR is the ONLY Messaging
+                                     package allowed to reference MediatR/MediatR.Contracts
+MicroKit.Http                      ← may depend on Result, Observability
+MicroKit.MediatR                   ← may depend on Result, Domain, Logging.Abstractions
+                                     ADR-MEDIATR-009: two disjoint pipelines —
+                                     IDomainEventHandler<TEvent> (sync, in-transaction, DI direct) and
+                                     INotificationHandler<TNotification> (async, via outbox, at-least-once)
+                                     IDomainEventHandler<TEvent> constrained to where TEvent : IDomainEvent
+MicroKit.Multitenancy              ← may depend on Result, Auth, Persistence,
+                                     Execution.Abstractions (tenant-aware IExecutionScopeFactory impl)
 ```
 
 ### Dependency rules
@@ -169,13 +189,15 @@ Each module is versioned **independently** via `version.json` in its directory.
 ### Git tag convention for releases
 
 ```txt
-result-v1.0.0-preview.1        → MicroKit.Result release
-domain-v1.0.0-preview.1        → MicroKit.Domain release
-logging-v1.0.0-preview.1       → MicroKit.Logging release
-mediatr-v1.0.0-preview.1       → MicroKit.MediatR release
-persistence-v1.0.0-preview.1   → MicroKit.Persistence release
-multitenancy-v1.0.0-preview.1  → MicroKit.Multitenancy release
-auth-v1.0.0-preview.1          → MicroKit.Auth release
+result-v1.0.0-preview.1            → MicroKit.Result release
+domain-v1.0.0-preview.1            → MicroKit.Domain release
+logging-v1.0.0-preview.1           → MicroKit.Logging release
+mediatr-v1.0.0-preview.1           → MicroKit.MediatR release
+persistence-v1.0.0-preview.1       → MicroKit.Persistence release
+multitenancy-v1.0.0-preview.1      → MicroKit.Multitenancy release
+auth-v1.0.0-preview.1              → MicroKit.Auth release
+execution-abstractions-v1.0.0-...  → MicroKit.Execution.Abstractions release
+messaging-v1.0.0-preview.1         → MicroKit.Messaging release
 ```
 
 ### Branches
@@ -207,7 +229,7 @@ NuGet: Central Package Management via Directory.Packages.props
 
 ### Non-negotiable rules
 
-- `sealed record` for errors/VOs/events | `sealed class` for handlers/behaviors
+- `sealed record` for errors/VOs/events/options | `sealed class` for handlers/behaviors/processors
 - `ValueTask<T>` async | `ConfigureAwait(false)` in libraries
 - `CancellationToken ct = default` always last
 - `Console.WriteLine` forbidden → `ILogger<T>`
@@ -221,6 +243,35 @@ NuGet: Central Package Management via Directory.Packages.props
 - **Cross-module references**: canonical two-ItemGroup CIReleaseBuild pattern mandatory
 - **ArchitectureTests mandatory** before any release (empty project = blocking)
 - **Integration tests SQLite**: each `Task.Run` must have its own isolated connection
+- **BackgroundService**: `IServiceScopeFactory` only in constructor — never scoped services directly
+- **Batch processing**: one `IAsyncServiceScope` per message — never shared across messages
+- **Publishers**: silent success FORBIDDEN — throw `InvalidOperationException` if no transport
+- **Post-code agents**: distributed-context-specialist → dependency-guardian → api-reviewer — mandatory before any merge, in separate Claude Code sessions, always include "Do not commit anything"
+- **IApplicationEvent**: REJECTED — YAGNI, no use case. Do not introduce until a real need exists.
+
+### Event taxonomy (canonical)
+
+```txt
+MicroKit.Domain.Events.IEvent          ← canonical root (Domain module)
+  IDomainEvent : IEvent                ← domain events (Domain module)
+  IIntegrationEvent : IEvent           ← integration events (Messaging module)
+
+MicroKit.MediatR.Events.IEvent         ← [Obsolete] shim → use MicroKit.Domain.Events.IEvent
+```
+
+### Domain event dispatch topology (ADR-MEDIATR-009)
+
+```txt
+Domain Event
+    │
+    ├──► P3 IDomainEventHandler<TEvent>         sync · in-transaction · DI direct
+    │        (bypasses MediatR pipeline behaviors intentionally)
+    │
+    └──► P4 DomainEventNotification<TEvent>
+                 │
+                 ▼ (outbox · at-least-once · after commit)
+          INotificationHandler<TNotification>   async · idempotent · technical/integration
+```
 
 ### Commit conventions
 
@@ -237,7 +288,7 @@ test(multitenancy): implement ArchitectureTests
 ```txt
 MicroKit.Result                                        ✅ 1.0.0-preview.1
 MicroKit.Result.AspNetCore                             ✅ 1.0.0-preview.1
-MicroKit.Domain                                        ✅ 1.0.0-preview.4
+MicroKit.Domain                                        ✅ 1.0.0-preview.4 (IEvent canonical — fix/messaging/mediatr pending) → 🚧 preview.5 
 MicroKit.Logging                                       ✅ 1.0.0-preview.1
 MicroKit.Logging.Abstractions                          ✅ 1.0.0-preview.1
 MicroKit.Logging.OpenTelemetry                         ✅ 1.0.0-preview.1
@@ -245,10 +296,10 @@ MicroKit.Logging.AspNetCore                            ✅ 1.0.0-preview.1
 MicroKit.Logging.Diagnostics                           ✅ 1.0.0-preview.1
 MicroKit.Logging.Analyzers                             ✅ 1.0.0-preview.1
 MicroKit.Logging.Generators                            ✅ 1.0.0-preview.1
-MicroKit.MediatR                                       ✅ 1.0.0-preview.1
-MicroKit.MediatR.Abstractions                          ✅ 1.0.0-preview.1
-MicroKit.MediatR.Behaviors                             ✅ 1.0.0-preview.1
-MicroKit.MediatR.Testing                               ✅ 1.0.0-preview.1
+MicroKit.MediatR                                       ✅ 1.0.0-preview.1 → 🚧 preview.2 pending (fix/messaging/mediatr)
+MicroKit.MediatR.Abstractions                          ✅ 1.0.0-preview.1 → 🚧 preview.2 pending
+MicroKit.MediatR.Behaviors                             ✅ 1.0.0-preview.1 → 🚧 preview.2 pending
+MicroKit.MediatR.Testing                               ✅ 1.0.0-preview.1 → 🚧 preview.2 pending
 MicroKit.Persistence.Abstractions                      ✅ 1.0.0-preview.1
 MicroKit.Persistence                                   ✅ 1.0.0-preview.1
 MicroKit.Persistence.EntityFrameworkCore               ✅ 1.0.0-preview.1
@@ -262,19 +313,27 @@ MicroKit.Multitenancy                                  ✅ 1.0.0-preview.1
 MicroKit.Multitenancy.AspNetCore                       ✅ 1.0.0-preview.1
 MicroKit.Multitenancy.EntityFrameworkCore              ✅ 1.0.0-preview.1
 MicroKit.Multitenancy.Analyzers                        ✅ 1.0.0-preview.1
-MicroKit.Auth.Abstractions                             🚧 In progress (merged dev)
-MicroKit.Auth                                          🚧 In progress (merged dev)
-MicroKit.Auth.AspNetCore                               🚧 In progress (merged dev)
-MicroKit.Auth.Permissions                              🚧 In progress (merged dev)
-MicroKit.Auth.Roles                                    🚧 In progress (merged dev)
-MicroKit.Auth.Jwt                                      🚧 In progress (merged dev)
-MicroKit.Auth.Supabase                                 🚧 In progress (merged dev)
-MicroKit.Auth.Multitenancy                             🚧 In progress (merged dev)
-MicroKit.Auth.Testing                                  🚧 In progress (merged dev)
-MicroKit.Messaging                                     📋 Planned
-MicroKit.Messaging.AzureServiceBus                     📋 Planned
-MicroKit.Messaging.RabbitMQ                            📋 Planned
+MicroKit.Auth.Abstractions                             ✅ 1.0.0-preview.1
+MicroKit.Auth                                          ✅ 1.0.0-preview.1
+MicroKit.Auth.AspNetCore                               ✅ 1.0.0-preview.1
+MicroKit.Auth.Permissions                              ✅ 1.0.0-preview.1
+MicroKit.Auth.Roles                                    ✅ 1.0.0-preview.1
+MicroKit.Auth.Jwt                                      ✅ 1.0.0-preview.1
+MicroKit.Auth.Supabase                                 ✅ 1.0.0-preview.1
+MicroKit.Auth.Multitenancy                             ✅ 1.0.0-preview.1
+MicroKit.Auth.Testing                                  ✅ 1.0.0-preview.1
+MicroKit.Execution.Abstractions                        ✅ Merged dev — not yet released
+MicroKit.Messaging.Abstractions                        ✅ Merged dev — not yet released
+MicroKit.Messaging                                     ✅ Merged dev — not yet released
+MicroKit.Messaging.EntityFrameworkCore                 ✅ Merged dev — not yet released
+MicroKit.Messaging.MediatR                             ✅ Merged dev — not yet released (fix/messaging/mediatr in progress)
+MicroKit.Messaging.Testing                             📋 Planned
+MicroKit.Messaging.RabbitMQ                            ⏳ v2
+MicroKit.Messaging.AzureServiceBus                     ⏳ v2
+MicroKit.Messaging.Kafka                               ⏳ v2
 ```
+
+---
 
 ## Sessions
 
@@ -289,7 +348,8 @@ PRE-CODE  : implementer /plan → architect review → implementation
 POST-CODE : distributed-context-specialist (if AsyncLocal / propagation)
             dependency-guardian (if .csproj modified)
             api-reviewer (if public API changed)
-            → in the same Claude Code session
+            → in separate Claude Code sessions
             → "Do not commit anything" mandatory in all post-code prompts
 MERGE     : only after all relevant agents approved
 /compact  : after full package implementation, before new session
+```

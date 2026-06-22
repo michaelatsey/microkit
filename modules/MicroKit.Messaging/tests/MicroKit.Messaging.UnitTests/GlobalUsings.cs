@@ -1,0 +1,10 @@
+global using Microsoft.Extensions.DependencyInjection;
+global using Microsoft.Extensions.Logging.Abstractions;
+global using MicroKit.Messaging;
+global using MicroKit.Messaging.Options;
+global using MicroKit.Messaging.Processing;
+global using MicroKit.Messaging.Registry;
+global using MicroKit.Execution.Abstractions;
+global using NSubstitute;
+global using Shouldly;
+global using Xunit;

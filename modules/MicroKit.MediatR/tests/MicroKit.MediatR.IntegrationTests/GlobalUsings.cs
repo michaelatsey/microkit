@@ -1,3 +1,4 @@
+global using MicroKit.Domain.Events;
 global using MicroKit.MediatR.DependencyInjection;
 global using MicroKit.MediatR.Events;
 global using MicroKit.MediatR.Extensions;

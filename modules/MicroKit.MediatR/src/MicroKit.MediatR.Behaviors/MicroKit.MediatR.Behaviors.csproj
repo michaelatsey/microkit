@@ -24,9 +24,11 @@
   <ItemGroup Condition="'$(CIReleaseBuild)' != 'true'">
     <ProjectReference Include="../../../MicroKit.Result/src/MicroKit.Result/MicroKit.Result.csproj" />
     <ProjectReference Include="../../../MicroKit.Logging/src/MicroKit.Logging.Abstractions/MicroKit.Logging.Abstractions.csproj" />
+    <ProjectReference Include="../../../MicroKit.Persistence/src/MicroKit.Persistence.Abstractions/MicroKit.Persistence.Abstractions.csproj" />
   </ItemGroup>
   <ItemGroup Condition="'$(CIReleaseBuild)' == 'true'">
     <PackageReference Include="MicroKit.Result" />
     <PackageReference Include="MicroKit.Logging.Abstractions" />
+    <PackageReference Include="MicroKit.Persistence.Abstractions" />
   </ItemGroup>
 </Project>

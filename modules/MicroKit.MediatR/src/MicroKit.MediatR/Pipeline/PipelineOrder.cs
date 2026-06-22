@@ -46,4 +46,17 @@ public static class PipelineOrder
     /// Wraps the handler call in a Polly exponential back-off retry pipeline.
     /// </summary>
     public const int Retry = 600;
+
+    /// <summary>
+    /// <c>TransactionBehavior</c> — commands only (<see cref="ICommand"/>/<see cref="ICommand{TResult}"/>).
+    /// Opens a database transaction, calls the handler, dispatches domain events
+    /// (<c>IDomainEventsDispatcher.DispatchEventsAsync</c>), then commits.
+    /// Queries pass through untouched.
+    /// </summary>
+    /// <remarks>
+    /// Lives in <c>MicroKit.MediatR.Behaviors</c> and requires a registered
+    /// <c>ITransactionalContext</c> and <c>IUnitOfWork</c> (provided by
+    /// <c>MicroKit.Persistence</c>).
+    /// </remarks>
+    public const int Transaction = 700;
 }

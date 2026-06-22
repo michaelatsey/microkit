@@ -1,0 +1,14 @@
+global using MediatR;
+global using MicroKit.Domain.Events;
+global using MicroKit.Execution.Abstractions;
+global using MicroKit.MediatR.Events;
+global using MicroKit.MediatR.Handlers;
+global using MicroKit.Messaging;
+global using MicroKit.Messaging.MediatR.Events;
+global using MicroKit.Messaging.MediatR.Outbox;
+global using MicroKit.Messaging.Options;
+global using MicroKit.Messaging.Outbox;
+global using Microsoft.Extensions.Logging.Abstractions;
+global using NSubstitute;
+global using Shouldly;
+global using Xunit;

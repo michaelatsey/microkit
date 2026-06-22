@@ -1,0 +1,17 @@
+{
+  "version": "1.0",
+  "publicReleaseRefSpec": [
+    "^refs/heads/main$",
+    "^refs/tags/messaging-v\\d+\\.\\d+\\.\\d+(-.+)?$"
+  ],
+  "pathFilters": [
+    "modules/MicroKit.Messaging/"
+  ],
+  "cloudBuild": {
+    "setVersionVariables": true
+  },
+  "release": {
+    "tagName": "messaging-v{version}",
+    "branchName": "release/messaging/{version}"
+  }
+}

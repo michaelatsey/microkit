@@ -13,5 +13,6 @@
   </Folder>
   <Project Path="../MicroKit.Domain/src/MicroKit.Domain/MicroKit.Domain.csproj" />
   <Project Path="../MicroKit.Logging/src/MicroKit.Logging.Abstractions/MicroKit.Logging.Abstractions.csproj" />
+  <Project Path="../MicroKit.Persistence/src/MicroKit.Persistence.Abstractions/MicroKit.Persistence.Abstractions.csproj" />
   <Project Path="../MicroKit.Result/src/MicroKit.Result/MicroKit.Result.csproj" />
 </Solution>

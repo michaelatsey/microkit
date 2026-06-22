@@ -3,16 +3,19 @@
     <ManagePackageVersionsCentrally>true</ManagePackageVersionsCentrally>
   </PropertyGroup>
   <ItemGroup Label="Framework">
-    <PackageVersion Include="Microsoft.Extensions.DependencyInjection" Version="10.0.8" />
-    <PackageVersion Include="Microsoft.Extensions.DependencyInjection.Abstractions" Version="10.0.8" />
-    <PackageVersion Include="Microsoft.Extensions.Logging.Abstractions" Version="10.0.8" />
-    <PackageVersion Include="Microsoft.Extensions.Caching.Abstractions" Version="10.0.8" />
-    <PackageVersion Include="Microsoft.Extensions.Options" Version="10.0.8" />
+    <PackageVersion Include="Microsoft.Extensions.DependencyInjection" Version="10.0.9" />
+    <PackageVersion Include="Microsoft.Extensions.DependencyInjection.Abstractions" Version="10.0.9" />
+    <PackageVersion Include="Microsoft.Extensions.Logging" Version="10.0.9" />
+    <PackageVersion Include="Microsoft.Extensions.Logging.Abstractions" Version="10.0.9" />
+    <PackageVersion Include="Microsoft.Extensions.Caching.Abstractions" Version="10.0.9" />
+    <PackageVersion Include="Microsoft.Extensions.Hosting.Abstractions" Version="10.0.9" />
+    <PackageVersion Include="Microsoft.Extensions.Options" Version="10.0.9" />
   </ItemGroup>
   <ItemGroup Label="MicroKit">
     <!-- Published versions of sibling MicroKit modules.
          Used by CIReleaseBuild=true pack step to emit correct NuGet dependencies
          instead of the git-height versions produced by cross-module ProjectReferences. -->
+    <PackageVersion Include="MicroKit.Execution.Abstractions" Version="1.0.0-preview.1" />
     <PackageVersion Include="MicroKit.Result" Version="1.0.0-preview.1" />
     <PackageVersion Include="MicroKit.Domain" Version="1.0.0-preview.4" />
     <PackageVersion Include="MicroKit.Logging.Abstractions" Version="1.0.0-preview.1" />
@@ -20,7 +23,10 @@
     <PackageVersion Include="MicroKit.Multitenancy.Abstractions" Version="1.0.0-preview.1" />
     <PackageVersion Include="MicroKit.Auth.Abstractions" Version="1.0.0-preview.1" />
     <PackageVersion Include="MicroKit.Auth.Permissions" Version="1.0.0-preview.1" />
+    <PackageVersion Include="MicroKit.MediatR" Version="1.0.0-preview.1" />
     <PackageVersion Include="MicroKit.MediatR.Abstractions" Version="1.0.0-preview.1" />
+    <PackageVersion Include="MicroKit.Messaging.Abstractions" Version="1.0.0-preview.1" />
+    <PackageVersion Include="MicroKit.Messaging" Version="1.0.0-preview.1" />
   </ItemGroup>
   <ItemGroup Label="Multitenancy">
     <PackageVersion Include="MicroKit.Multitenancy" Version="1.0.0-preview.1" />
@@ -28,10 +34,10 @@
   <ItemGroup Label="Persistence">
     <PackageVersion Include="MicroKit.Persistence" Version="1.0.0-preview.1" />
     <PackageVersion Include="MicroKit.Persistence.EntityFrameworkCore" Version="1.0.0-preview.1" />
-    <PackageVersion Include="Microsoft.EntityFrameworkCore" Version="10.0.8" />
-    <PackageVersion Include="Microsoft.EntityFrameworkCore.Relational" Version="10.0.8" />
-    <PackageVersion Include="Microsoft.EntityFrameworkCore.Sqlite" Version="10.0.8" />
-    <PackageVersion Include="Microsoft.EntityFrameworkCore.SqlServer" Version="10.0.8" />
+    <PackageVersion Include="Microsoft.EntityFrameworkCore" Version="10.0.9" />
+    <PackageVersion Include="Microsoft.EntityFrameworkCore.Relational" Version="10.0.9" />
+    <PackageVersion Include="Microsoft.EntityFrameworkCore.Sqlite" Version="10.0.9" />
+    <PackageVersion Include="Microsoft.EntityFrameworkCore.SqlServer" Version="10.0.9" />
     <PackageVersion Include="Npgsql.EntityFrameworkCore.PostgreSQL" Version="10.0.2" />
   </ItemGroup>
   <ItemGroup Label="MediatR">

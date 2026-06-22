@@ -53,12 +53,6 @@ public sealed class ContractPlacementTests
         typeof(MicroKit.Persistence.Abstractions.PersistenceException).Assembly.ShouldBe(AbstractionsAssembly);
     }
 
-    [Fact]
-    public void IOutboxStore_IsInAbstractions()
-    {
-        typeof(MicroKit.Persistence.Abstractions.IOutboxStore).Assembly.ShouldBe(AbstractionsAssembly);
-    }
-
     // --- In Core (not Abstractions) ---
 
     [Fact]

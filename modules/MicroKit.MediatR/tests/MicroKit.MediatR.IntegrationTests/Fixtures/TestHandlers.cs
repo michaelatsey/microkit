@@ -70,32 +70,32 @@ internal sealed class CancellableHandler : ICommandHandler<CancellableCommand, R
 
 // ── Domain events: single handler (ItemCreated) ───────────────────────────
 
-internal sealed record ItemCreatedEvent(Guid ItemId) : IEvent;
+internal sealed record ItemCreatedEvent(Guid ItemId) : DomainEvent;
 
 internal sealed class ItemCreatedNotification(ItemCreatedEvent domainEvent)
     : DomainEventNotification<ItemCreatedEvent>(domainEvent);
 
 internal sealed class RecordItemCreatedHandler(DomainEventLog log)
-    : IDomainEventHandler<ItemCreatedEvent, ItemCreatedNotification>
+    : IDomainEventHandler<ItemCreatedEvent>
 {
-    public Task Handle(ItemCreatedNotification notification, CancellationToken cancellationToken)
+    public Task Handle(ItemCreatedEvent domainEvent, CancellationToken cancellationToken)
     {
-        log.ItemCreatedIds.Add(notification.DomainEvent.ItemId);
+        log.ItemCreatedIds.Add(domainEvent.ItemId);
         return Task.CompletedTask;
     }
 }
 
 // ── Domain events: two handlers = fan-out (OrderPlaced) ───────────────────
 
-internal sealed record OrderPlacedEvent(Guid OrderId) : IEvent;
+internal sealed record OrderPlacedEvent(Guid OrderId) : DomainEvent;
 
 internal sealed class OrderPlacedNotification(OrderPlacedEvent domainEvent)
     : DomainEventNotification<OrderPlacedEvent>(domainEvent);
 
 internal sealed class OrderPlacedHandlerOne(DomainEventLog log)
-    : IDomainEventHandler<OrderPlacedEvent, OrderPlacedNotification>
+    : IDomainEventHandler<OrderPlacedEvent>
 {
-    public Task Handle(OrderPlacedNotification notification, CancellationToken cancellationToken)
+    public Task Handle(OrderPlacedEvent domainEvent, CancellationToken cancellationToken)
     {
         log.OrderPlacedInvocations++;
         return Task.CompletedTask;
@@ -103,9 +103,9 @@ internal sealed class OrderPlacedHandlerOne(DomainEventLog log)
 }
 
 internal sealed class OrderPlacedHandlerTwo(DomainEventLog log)
-    : IDomainEventHandler<OrderPlacedEvent, OrderPlacedNotification>
+    : IDomainEventHandler<OrderPlacedEvent>
 {
-    public Task Handle(OrderPlacedNotification notification, CancellationToken cancellationToken)
+    public Task Handle(OrderPlacedEvent domainEvent, CancellationToken cancellationToken)
     {
         log.OrderPlacedInvocations++;
         return Task.CompletedTask;
@@ -189,7 +189,7 @@ internal sealed class CacheableDoubleHandler(AttemptCounter counter)
 
 // ── Domain event with no handler (for dispatch-time error test) ───────────
 
-internal sealed record UnregisteredEvent(Guid Id) : IEvent;
+internal sealed record UnregisteredEvent(Guid Id) : DomainEvent;
 
 // ── Shared domain event log (singleton in DI) ─────────────────────────────
 
