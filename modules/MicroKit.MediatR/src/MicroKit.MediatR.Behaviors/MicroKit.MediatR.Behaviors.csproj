@@ -2,7 +2,7 @@
   <PropertyGroup>
     <AssemblyName>MicroKit.MediatR.Behaviors</AssemblyName>
     <RootNamespace>MicroKit.MediatR.Behaviors</RootNamespace>
-    <Description>Production-ready pipeline behaviors for MicroKit.MediatR — Logging (100), Authorization (200), Validation (300), Idempotency (400), Caching (500), Retry (600).</Description>
+    <Description>Production-ready pipeline behaviors for MicroKit.MediatR — Logging (100), Authorization (200), Validation (300), Idempotency (400), Caching (500), Retry (600), Transaction (700).</Description>
     <PackageTags>microkit;mediatr;cqrs;behaviors;fluentvalidation;polly;dotnet</PackageTags>
     <!-- CA1711: 'Accessor' is not a reserved analyzer suffix — suppress -->
     <NoWarn>$(NoWarn);CA1711</NoWarn>

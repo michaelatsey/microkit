@@ -67,6 +67,7 @@ MicroKit.MediatR.Abstractions      ← MediatR.Contracts, MicroKit.Domain.Abstra
 MicroKit.MediatR (core)            ← Abstractions + MediatR
         ↑
 MicroKit.MediatR.Behaviors         ← core + FluentValidation + Polly + MicroKit.Logging.Abstractions
+                                     + MicroKit.Persistence.Abstractions (ITransactionalContext for TransactionBehavior — ADR-MEDIATR-011)
 MicroKit.MediatR.Testing           ← core + NSubstitute   (sibling of Behaviors — never references it)
 ```
 
@@ -100,6 +101,7 @@ IEvent / IDomainEventNotification ← a fact that already happened; no response
 400  IdempotencyBehavior    — opt-in via IIdempotentCommand (commands only)
 500  CachingBehavior        — opt-in via ICacheableQuery (queries only)
 600  RetryBehavior          — opt-in via IRetryableRequest (Polly)
+700  TransactionBehavior    — commands only (ICommand/ICommand<TResult>); opt-in via AddTransactionBehavior(); requires ITransactionalContext
 1000 Handler                — your code
 ```
 
