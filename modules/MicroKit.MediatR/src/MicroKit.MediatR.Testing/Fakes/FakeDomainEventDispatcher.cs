@@ -1,7 +1,7 @@
 namespace MicroKit.MediatR.Testing;
 
 /// <summary>
-/// An in-memory implementation of <see cref="IDomainEventDispatcher"/> that records
+/// An in-memory implementation of <see cref="IDomainEventsDispatcher"/> that records
 /// each call to <see cref="DispatchEventsAsync"/>. Inject into pipeline behaviors under test
 /// in place of the real dispatcher.
 /// </summary>
@@ -18,7 +18,7 @@ namespace MicroKit.MediatR.Testing;
 /// dispatcher.AssertDispatchCalledOnce();
 /// </code>
 /// </example>
-public sealed class FakeDomainEventDispatcher : IDomainEventDispatcher
+public sealed class FakeDomainEventDispatcher : IDomainEventsDispatcher
 {
     private int _dispatchCallCount;
 

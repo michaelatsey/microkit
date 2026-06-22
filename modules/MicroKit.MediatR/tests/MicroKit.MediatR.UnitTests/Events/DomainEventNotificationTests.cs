@@ -1,4 +1,5 @@
 using MicroKit.MediatR;
+using MicroKit.Domain.Events;
 using Shouldly;
 using Xunit;
 
@@ -43,7 +44,7 @@ public sealed class DomainEventNotificationTests
 
     // ── Private fixtures ──────────────────────────────────────────────────
 
-    private sealed record UserRegisteredEvent(Guid UserId, string Email) : IEvent;
+    private sealed record UserRegisteredEvent(Guid UserId, string Email) : DomainEvent;
 
     private sealed class UserRegisteredNotification(UserRegisteredEvent domainEvent)
         : DomainEventNotification<UserRegisteredEvent>(domainEvent);

@@ -79,4 +79,29 @@ public sealed class EfUnitOfWork<TContext>(TContext context)
             }
         }).ConfigureAwait(false);
     }
+
+    /// <inheritdoc/>
+    public async Task<TResult> ExecuteAsync<TState, TResult>(
+        Func<TState, CancellationToken, Task<TResult>> operation,
+        TState state,
+        CancellationToken ct = default)
+    {
+        var strategy = context.Database.CreateExecutionStrategy();
+        return await strategy.ExecuteAsync(async () =>
+        {
+            await using var transaction = await context.Database
+                .BeginTransactionAsync(ct).ConfigureAwait(false);
+            try
+            {
+                var result = await operation(state, ct).ConfigureAwait(false);
+                await transaction.CommitAsync(ct).ConfigureAwait(false);
+                return result;
+            }
+            catch
+            {
+                await transaction.RollbackAsync(ct).ConfigureAwait(false);
+                throw;
+            }
+        }).ConfigureAwait(false);
+    }
 }

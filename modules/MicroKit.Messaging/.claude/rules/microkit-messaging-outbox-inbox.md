@@ -233,6 +233,13 @@ public interface IOutboxWriter
     /// Throws on database error — the exception propagates through the unit of work.
     /// </summary>
     ValueTask AddAsync(OutboxMessage message, CancellationToken ct = default);
+
+    /// <summary>
+    /// Adds multiple outbox messages in one EF Core AddRange call (ADR-MSG-011).
+    /// Used by DomainEventsDispatcher P4 for single-round-trip batch writes.
+    /// An empty list is a no-op.
+    /// </summary>
+    ValueTask AddBatchAsync(IReadOnlyList<OutboxMessage> messages, CancellationToken ct = default);
 }
 ```
 

@@ -1,13 +1,11 @@
 namespace MicroKit.MediatR.Events;
 
 /// <summary>
-/// Marks a domain fact that has already happened.
-/// Implement this on domain event records to make them dispatchable via
-/// <see cref="IDomainEventNotification{TEvent}"/> through the MediatR pipeline.
+/// Compatibility shim for the former MediatR-local event root.
 /// </summary>
-/// <example>
-/// <code>
-/// public sealed record UserRegisteredEvent(Guid UserId, string Email, DateTimeOffset RegisteredAt) : IEvent;
-/// </code>
-/// </example>
-public interface IEvent;
+/// <remarks>
+/// New code must use <see cref="MicroKit.Domain.Events.IEvent"/> directly.
+/// Domain-event dispatch contracts now require <see cref="MicroKit.Domain.Events.IDomainEvent"/>.
+/// </remarks>
+[Obsolete("Use MicroKit.Domain.Events.IEvent as the canonical MicroKit event root.")]
+public interface IEvent : MicroKit.Domain.Events.IEvent;

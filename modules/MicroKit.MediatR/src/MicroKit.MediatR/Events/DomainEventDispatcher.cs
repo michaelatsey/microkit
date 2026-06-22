@@ -3,7 +3,7 @@ using MicroKit.Domain.Events;
 namespace MicroKit.MediatR.Events;
 
 /// <summary>
-/// Default implementation of <see cref="IDomainEventDispatcher"/>.
+/// Default implementation of <see cref="IDomainEventsDispatcher"/>.
 /// Drains all domain events accumulated on tracked aggregates and dispatches them
 /// to registered <see cref="IDomainEventHandler{TEvent}"/> implementations via
 /// <see cref="IDomainEventHandlerDispatcher"/>.
@@ -20,7 +20,7 @@ namespace MicroKit.MediatR.Events;
 /// </remarks>
 internal sealed class DomainEventDispatcher(
     IDomainEventsProvider eventsProvider,
-    IDomainEventHandlerDispatcher handlerDispatcher) : IDomainEventDispatcher
+    IDomainEventHandlerDispatcher handlerDispatcher) : IDomainEventsDispatcher
 {
     /// <inheritdoc />
     public async Task DispatchEventsAsync(CancellationToken ct = default)
@@ -28,8 +28,7 @@ internal sealed class DomainEventDispatcher(
         var events = eventsProvider.DrainDomainEvents();
         foreach (var domainEvent in events)
         {
-            if (domainEvent is not IEvent mediatREvent) continue;
-            await handlerDispatcher.DispatchAsync(mediatREvent, ct).ConfigureAwait(false);
+            await handlerDispatcher.DispatchAsync(domainEvent, ct).ConfigureAwait(false);
         }
     }
 }

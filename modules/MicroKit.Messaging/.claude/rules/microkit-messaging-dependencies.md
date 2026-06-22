@@ -5,7 +5,8 @@
 ```
 MicroKit.Messaging.Abstractions
     ← MicroKit.Result
-    (ADR-MSG-001: no MicroKit.Domain.Abstractions — IIntegrationEvent is standalone)
+    ← MicroKit.Domain            (ADR-MSG-010: IIntegrationEvent : IEvent — canonical event taxonomy root
+                                  from MicroKit.Domain.Events; supersedes ADR-MSG-001 standalone stance)
 
 MicroKit.Messaging (Core)
     ← MicroKit.Messaging.Abstractions
@@ -54,14 +55,18 @@ Any cross-module dependency MUST use the two-ItemGroup CIReleaseBuild pattern:
 <!-- ⚠ Any new cross-module dependency must be added to BOTH ItemGroups -->
 <ItemGroup Condition="'$(CIReleaseBuild)' != 'true'">
   <ProjectReference Include="../../../MicroKit.Result/src/MicroKit.Result/MicroKit.Result.csproj" />
+  <ProjectReference Include="../../../MicroKit.Domain/src/MicroKit.Domain/MicroKit.Domain.csproj" />
 </ItemGroup>
 <ItemGroup Condition="'$(CIReleaseBuild)' == 'true'">
   <PackageReference Include="MicroKit.Result" />
+  <PackageReference Include="MicroKit.Domain" />
 </ItemGroup>
 ```
 
-> ADR-MSG-001: `MicroKit.Domain.Abstractions` is NOT a dependency of Abstractions.
-> `IIntegrationEvent` is a standalone transport contract — it does not extend `IDomainEvent`.
+> ADR-MSG-010: `IIntegrationEvent : IEvent` where `IEvent` is `MicroKit.Domain.Events.IEvent`
+> (canonical event taxonomy root). `IIntegrationEvent` does NOT extend `IDomainEvent` — it is a
+> standalone transport contract. The `MicroKit.Domain` dep is required only for the `IEvent` root.
+> `IIntegrationEvent` carries no domain event semantics (no `EventId`, no `OccurredAt` from IDomainEvent).
 
 See monorepo root `.claude/rules/cross-module-references.md` for the full canonical pattern.
 
@@ -71,7 +76,7 @@ See monorepo root `.claude/rules/cross-module-references.md` for the full canoni
 
 | Project | Allowed packages |
 |---------|-----------------|
-| `Abstractions` | `MicroKit.Result` only — no Domain dep per ADR-MSG-001 |
+| `Abstractions` | `MicroKit.Result` + `MicroKit.Domain` (ADR-MSG-010: `IIntegrationEvent : IEvent`) |
 | `Core` | Abstractions + `Microsoft.Extensions.{DI,Hosting,Logging}.Abstractions` |
 | `EntityFrameworkCore` | Core + `MicroKit.Persistence.EntityFrameworkCore` + `Microsoft.EntityFrameworkCore.Relational` |
 | `Testing` | Abstractions only — `xunit`, `Shouldly`, `NSubstitute` belong in the consumer's test project, NOT in this library |

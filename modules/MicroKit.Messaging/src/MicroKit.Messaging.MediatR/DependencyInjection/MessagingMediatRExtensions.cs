@@ -13,8 +13,9 @@ public static class MessagingMediatRExtensions
     /// <summary>
     /// Wires the MediatR transport bridge onto an existing MicroKit.Messaging registration:
     /// <list type="bullet">
-    ///   <item><see cref="DomainEventsDispatcher"/> as <c>IDomainEventDispatcher</c> — drains
-    ///         domain events and writes their notifications to the transactional outbox.</item>
+    ///   <item><see cref="DomainEventsDispatcher"/> as <c>IDomainEventsDispatcher</c> — drains
+    ///         domain events and writes their notifications to the transactional outbox.
+    ///         Called by <c>TransactionBehavior</c> after the command handler completes.</item>
     ///   <item><see cref="MediatROutboxDispatcher"/> as a routing decorator over the existing
     ///         <c>IOutboxDispatcher</c> — notifications publish via <see cref="IPublisher.Publish"/>,
     ///         integration events delegate to the wrapped Core dispatcher.</item>
@@ -33,15 +34,21 @@ public static class MessagingMediatRExtensions
     /// <see cref="InvalidOperationException"/>.
     /// </para>
     /// <para>
-    /// <strong>Idempotency contract:</strong> domain-event handlers run exactly once on the outbox
-    /// processing path (never synchronously at dispatch time). Because an outbox retry re-publishes
-    /// the notification and re-runs ALL of its handlers, those handlers must be idempotent
+    /// <strong>Idempotency contract:</strong> <see cref="IDomainEventHandler{TEvent}"/> handlers
+    /// run synchronously in-transaction (P2). <see cref="INotificationHandler{TNotification}"/> handlers
+    /// run later on the outbox processing path, after commit. Because an outbox retry re-publishes the
+    /// notification and re-runs ALL notification handlers, those handlers must be idempotent
     /// (ADR-MSG-003 / ADR-MSG-009).
     /// </para>
     /// </remarks>
     public static MessagingBuilder AddMediatRTransport(this MessagingBuilder builder)
     {
-        builder.Services.AddScoped<IDomainEventDispatcher, DomainEventsDispatcher>();
+        builder.Services.AddScoped<DomainEventsDispatcher>();
+        builder.Services.AddScoped<IDomainEventsDispatcher>(sp => sp.GetRequiredService<DomainEventsDispatcher>());
+#pragma warning disable CS0618 // IDomainEventDispatcher is a preview compatibility alias.
+        builder.Services.AddScoped<IDomainEventDispatcher>(sp => new DomainEventDispatcherCompatibilityAdapter(
+            sp.GetRequiredService<IDomainEventsDispatcher>()));
+#pragma warning restore CS0618
 
         // Capture the transport's IOutboxDispatcher and wrap it in the routing decorator.
         // The inner type (InProcessIntegrationDispatcher) is internal to Core and cannot be named
@@ -63,6 +70,11 @@ public static class MessagingMediatRExtensions
             },
             descriptor.Lifetime));
 
+        // Replace MediatR's default ForeachAwaitPublisher with the cascade publisher so that
+        // domain events raised by notification handlers are dispatched after every publish.
+        // Registered as transient to allow the scoped IDomainEventsDispatcher to be resolved.
+        builder.Services.Replace(ServiceDescriptor.Transient<INotificationPublisher, DomainEventsCascadeNotificationPublisher>());
+
         // Ensure IMessageSerializer is available even if AddInProcessTransport() was not called.
         // The in-process transport registers this too; TryAdd ensures no double registration.
         builder.Services.TryAddSingleton<IMessageSerializer, SystemTextJsonMessageSerializer>();
@@ -81,3 +93,11 @@ public static class MessagingMediatRExtensions
         return (IOutboxDispatcher)ActivatorUtilities.CreateInstance(sp, descriptor.ImplementationType!);
     }
 }
+
+#pragma warning disable CS0618 // IDomainEventDispatcher is a preview compatibility alias.
+file sealed class DomainEventDispatcherCompatibilityAdapter(IDomainEventsDispatcher inner) : IDomainEventDispatcher
+{
+    public Task DispatchEventsAsync(CancellationToken ct = default)
+        => inner.DispatchEventsAsync(ct);
+}
+#pragma warning restore CS0618

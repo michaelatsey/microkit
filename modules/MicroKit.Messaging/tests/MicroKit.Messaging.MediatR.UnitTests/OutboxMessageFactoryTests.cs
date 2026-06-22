@@ -129,7 +129,7 @@ public sealed class OutboxMessageFactoryTests
         public FakeDomainEvent DomainEvent { get; } = new();
     }
 
-    private sealed class FakeDomainEvent : IDomainEvent, IEvent
+    private sealed class FakeDomainEvent : IDomainEvent
     {
         public Guid EventId { get; } = Guid.NewGuid();
         public DateTimeOffset OccurredAt { get; } = DateTimeOffset.UtcNow;

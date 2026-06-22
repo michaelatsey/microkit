@@ -28,4 +28,26 @@ public interface ITransactionalContext
         Func<TState, CancellationToken, Task> operation,
         TState state,
         CancellationToken ct = default);
+
+    /// <summary>
+    /// Executes <paramref name="operation"/> inside a database transaction and returns
+    /// its result. The implementation begins a transaction, invokes the operation, commits
+    /// on success, and rolls back on failure. Transient-failure retry is handled
+    /// transparently when supported by the provider (e.g., Npgsql, SQL Server execution
+    /// strategies).
+    /// </summary>
+    /// <typeparam name="TState">
+    /// The type of caller-owned state threaded through to <paramref name="operation"/>.
+    /// Using a state carrier avoids lambda closures and heap allocations on the hot path.
+    /// Combine with a <see langword="static"/> lambda to achieve zero heap allocations.
+    /// </typeparam>
+    /// <typeparam name="TResult">The type of the value returned by <paramref name="operation"/>.</typeparam>
+    /// <param name="operation">The work to execute inside the transaction.</param>
+    /// <param name="state">State passed to <paramref name="operation"/> on each attempt.</param>
+    /// <param name="ct">Propagates notification that operations should be cancelled.</param>
+    /// <returns>The value produced by <paramref name="operation"/>.</returns>
+    Task<TResult> ExecuteAsync<TState, TResult>(
+        Func<TState, CancellationToken, Task<TResult>> operation,
+        TState state,
+        CancellationToken ct = default);
 }

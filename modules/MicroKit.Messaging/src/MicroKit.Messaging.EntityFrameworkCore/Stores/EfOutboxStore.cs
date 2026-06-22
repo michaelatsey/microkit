@@ -22,6 +22,13 @@ internal sealed class EfOutboxStore<TContext>(TContext context) : IOutboxWriter,
     }
 
     /// <inheritdoc/>
+    public ValueTask AddBatchAsync(IReadOnlyList<OutboxMessage> messages, CancellationToken ct = default)
+    {
+        context.Set<OutboxMessage>().AddRange(messages);
+        return ValueTask.CompletedTask;
+    }
+
+    /// <inheritdoc/>
     public async ValueTask<IReadOnlyList<OutboxMessage>> GetPendingAsync(
         int batchSize, CancellationToken ct = default)
     {

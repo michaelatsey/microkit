@@ -1,6 +1,7 @@
 using System.Diagnostics.CodeAnalysis;
 using System.Linq.Expressions;
 using System.Reflection;
+using MicroKit.Domain.Events;
 
 namespace MicroKit.MediatR.DependencyInjection;
 
@@ -147,7 +148,7 @@ public sealed class MediatRBuilder
 public static class ServiceCollectionExtensions
 {
     /// <summary>
-    /// Registers MicroKit.MediatR: MediatR engine, all handler adapters, <see cref="IDomainEventDispatcher"/>,
+    /// Registers MicroKit.MediatR: MediatR engine, all handler adapters, <see cref="IDomainEventsDispatcher"/>,
     /// <see cref="IDomainEventHandlerDispatcher"/>, and the domain event notification factory.
     /// Call <c>builder.FromAssemblyContaining&lt;T&gt;()</c> inside <paramref name="configure"/>
     /// to specify the assemblies to scan.
@@ -196,10 +197,10 @@ public static class ServiceCollectionExtensions
         // Phase A: scan for IDomainEventHandler<TEvent> implementations — build handler dispatch map.
         // Phase B: scan for DomainEventNotification<TEvent> subclasses — build notification factory.
         // notificationTypeMap tracks the first notification type seen per event type (ADR-MEDIATR-005 conflict detection).
-        // notificationMap holds the compiled dispatch factory per event type (used at runtime by INotificationFactory).
-        var handlerDelegates = new Dictionary<Type, List<Func<IServiceProvider, IEvent, CancellationToken, Task>>>();
+        // notificationMap holds the compiled dispatch factory per event type (used at runtime by IDomainEventNotificationFactory).
+        var handlerDelegates = new Dictionary<Type, List<Func<IServiceProvider, IDomainEvent, CancellationToken, Task>>>();
         var notificationTypeMap = new Dictionary<Type, Type>();
-        var notificationMap = new Dictionary<Type, Func<IEvent, INotification>>();
+        var notificationMap = new Dictionary<Type, Func<IDomainEvent, INotification>>();
 
         foreach (var assembly in assemblies)
         {
@@ -226,13 +227,20 @@ public static class ServiceCollectionExtensions
         services.AddSingleton(handlerMap);
         services.AddScoped<IDomainEventHandlerDispatcher, DomainEventHandlerDispatcher>();
 
-        // Default IDomainEventDispatcher (scoped — injects scoped IDomainEventHandlerDispatcher)
-        services.AddScoped<IDomainEventDispatcher, DomainEventDispatcher>();
+        // Default domain-events dispatcher (scoped — injects scoped IDomainEventHandlerDispatcher)
+        services.AddScoped<DomainEventDispatcher>();
+        services.AddScoped<IDomainEventsDispatcher>(sp => sp.GetRequiredService<DomainEventDispatcher>());
+#pragma warning disable CS0618 // IDomainEventDispatcher is a preview compatibility alias.
+        services.AddScoped<IDomainEventDispatcher>(sp => new DomainEventDispatcherCompatibilityAdapter(
+            sp.GetRequiredService<IDomainEventsDispatcher>()));
+#pragma warning restore CS0618
 
         // Phase B result: notification factory singleton (unchanged contract)
         var notificationFactory = new DomainEventNotificationFactory(notificationMap);
         services.AddSingleton<IDomainEventNotificationFactory>(notificationFactory);
+#pragma warning disable CS0618 // INotificationFactory is a preview compatibility alias.
         services.AddSingleton<INotificationFactory>(notificationFactory);
+#pragma warning restore CS0618
 
         return services;
     }
@@ -308,7 +316,7 @@ public static class ServiceCollectionExtensions
         IServiceCollection services,
         Type type,
         Type[] interfaces,
-        Dictionary<Type, List<Func<IServiceProvider, IEvent, CancellationToken, Task>>> handlerDelegates)
+        Dictionary<Type, List<Func<IServiceProvider, IDomainEvent, CancellationToken, Task>>> handlerDelegates)
     {
         foreach (var iface in interfaces
             .Where(i => i.IsGenericType && i.GetGenericTypeDefinition() == typeof(IDomainEventHandler<>)))
@@ -333,14 +341,14 @@ public static class ServiceCollectionExtensions
     }
 
     // Phase B: scan for concrete DomainEventNotification<TEvent> subclasses.
-    // Builds the IEvent → INotification factory map used by INotificationFactory / IDomainEventNotificationFactory.
-    // ADR-MEDIATR-005: each IEvent type maps to exactly one DomainEventNotification<TEvent> subclass.
+    // Builds the IDomainEvent → INotification factory map used by IDomainEventNotificationFactory.
+    // ADR-MEDIATR-005: each IDomainEvent type maps to exactly one DomainEventNotification<TEvent> subclass.
     [UnconditionalSuppressMessage("Trimming", "IL2070",
         Justification = "Notification type constructor is available — types are provided by a [RequiresUnreferencedCode] caller.")]
     private static void RegisterDomainEventNotifications(
         Type type,
         Dictionary<Type, Type> notificationTypeMap,
-        Dictionary<Type, Func<IEvent, INotification>> notificationMap)
+        Dictionary<Type, Func<IDomainEvent, INotification>> notificationMap)
     {
         // Walk the base type chain to find DomainEventNotification<TEvent>
         var cursor = type.BaseType;
@@ -376,17 +384,17 @@ public static class ServiceCollectionExtensions
         }
     }
 
-    // Builds a compiled Func<IServiceProvider, IEvent, CancellationToken, Task> for a single handler type.
+    // Builds a compiled Func<IServiceProvider, IDomainEvent, CancellationToken, Task> for a single handler type.
     // At dispatch time: resolve the concrete handler from sp, cast evt to TEvent, invoke Handle.
     [UnconditionalSuppressMessage("Trimming", "IL2060",
         Justification = "Handler interface GetMethod is called on types preserved by the [RequiresUnreferencedCode] consumer.")]
     [UnconditionalSuppressMessage("Trimming", "IL2070",
         Justification = "Handler types and their methods are preserved by the [RequiresUnreferencedCode] consumer.")]
-    private static Func<IServiceProvider, IEvent, CancellationToken, Task> BuildHandlerDelegate(
+    private static Func<IServiceProvider, IDomainEvent, CancellationToken, Task> BuildHandlerDelegate(
         Type eventType, Type concreteHandlerType)
     {
         var spParam = Expression.Parameter(typeof(IServiceProvider), "sp");
-        var evtParam = Expression.Parameter(typeof(IEvent), "evt");
+        var evtParam = Expression.Parameter(typeof(IDomainEvent), "evt");
         var ctParam = Expression.Parameter(typeof(CancellationToken), "ct");
 
         var handlerInterfaceType = typeof(IDomainEventHandler<>).MakeGenericType(eventType);
@@ -421,53 +429,46 @@ public static class ServiceCollectionExtensions
 
         var handleCall = Expression.Call(castHandler, handleMethod, castEvent, ctParam);
 
-        return Expression.Lambda<Func<IServiceProvider, IEvent, CancellationToken, Task>>(
+        return Expression.Lambda<Func<IServiceProvider, IDomainEvent, CancellationToken, Task>>(
             handleCall, spParam, evtParam, ctParam).Compile();
     }
 
     [UnconditionalSuppressMessage("Trimming", "IL2070",
         Justification = "Notification type constructor is available — types are provided by a [RequiresUnreferencedCode] caller.")]
-    private static Func<IEvent, INotification> BuildNotificationFactory(Type eventType, Type notificationType)
+    private static Func<IDomainEvent, INotification> BuildNotificationFactory(Type eventType, Type notificationType)
     {
         var ctor = notificationType.GetConstructor([eventType])
             ?? throw new InvalidOperationException(
                 $"Notification type '{notificationType.Name}' must have a public constructor accepting '{eventType.Name}'.");
 
-        var param = Expression.Parameter(typeof(IEvent), "domainEvent");
+        var param = Expression.Parameter(typeof(IDomainEvent), "domainEvent");
         var cast = Expression.Convert(param, eventType);
         var newExpr = Expression.New(ctor, cast);
         var convertResult = Expression.Convert(newExpr, typeof(INotification));
-        return Expression.Lambda<Func<IEvent, INotification>>(convertResult, param).Compile();
+        return Expression.Lambda<Func<IDomainEvent, INotification>>(convertResult, param).Compile();
     }
 }
 
-// Internal implementation of IDomainEventNotificationFactory and INotificationFactory.
+#pragma warning disable CS0618 // INotificationFactory is a preview compatibility alias.
+// Internal implementation of IDomainEventNotificationFactory and the preview compatibility alias.
 // file-scoped: cannot be instantiated or tested in isolation — only exercised through AddMicroKitMediatR.
 file sealed class DomainEventNotificationFactory(
-    Dictionary<Type, Func<IEvent, INotification>> map) : IDomainEventNotificationFactory, INotificationFactory
+    Dictionary<Type, Func<IDomainEvent, INotification>> map) : IDomainEventNotificationFactory, INotificationFactory
 {
-    // IDomainEventNotificationFactory semantics: throws on miss — callers expect a notification or an error.
-    INotification IDomainEventNotificationFactory.Create(IEvent domainEvent)
-    {
-        var eventType = domainEvent.GetType();
-        if (!map.TryGetValue(eventType, out var factory))
-            // MEDIUM #8: this error occurs at dispatch time (first call), NOT at DI startup.
-            // Missing notification coverage is not validated during AddMicroKitMediatR — only the
-            // notification type uniqueness constraint (ADR-MEDIATR-005) is enforced at startup.
-            throw new InvalidOperationException(
-                $"No domain event notification registered for event type '{eventType.Name}'. " +
-                $"This error is raised at dispatch time — missing notification coverage is not detected until " +
-                $"IDomainEventNotificationFactory.Create is first called for this event type. " +
-                $"Ensure the assembly containing a concrete DomainEventNotification<{eventType.Name}> " +
-                $"subclass is passed to MediatRBuilder.FromAssembly().");
 
-        return factory(domainEvent);
-    }
-
-    // INotificationFactory semantics: returns null on miss — callers skip events without a notification.
-    IDomainEventNotification<IEvent>? INotificationFactory.Create(IEvent domainEvent)
+    public IDomainEventNotification<IDomainEvent>? Create(IDomainEvent domainEvent)
     {
         if (!map.TryGetValue(domainEvent.GetType(), out var factory)) return null;
-        return factory(domainEvent) as IDomainEventNotification<IEvent>;
+        return factory(domainEvent) as IDomainEventNotification<IDomainEvent>;
     }
+
 }
+#pragma warning restore CS0618
+
+#pragma warning disable CS0618 // IDomainEventDispatcher is a preview compatibility alias.
+file sealed class DomainEventDispatcherCompatibilityAdapter(IDomainEventsDispatcher inner) : IDomainEventDispatcher
+{
+    public Task DispatchEventsAsync(CancellationToken ct = default)
+        => inner.DispatchEventsAsync(ct);
+}
+#pragma warning restore CS0618

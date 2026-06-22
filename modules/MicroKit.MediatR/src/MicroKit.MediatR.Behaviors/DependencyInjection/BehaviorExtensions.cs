@@ -130,4 +130,24 @@ public static class BehaviorExtensions
     [RequiresDynamicCode("Registering open-generic behaviors calls MakeGenericType at dispatch time and is not NativeAOT-compatible.")]
     public static MediatRBuilder AddRetryBehavior(this MediatRBuilder builder)
         => builder.AddOpenBehavior(typeof(RetryBehavior<,>));
+
+    /// <summary>
+    /// Activates <see cref="TransactionBehavior{TRequest,TResponse}"/> (pipeline order
+    /// <see cref="PipelineOrder.Transaction"/> = 700). Commands only — queries and events pass through.
+    /// Wraps the command handler in a database transaction: opens before the handler, dispatches
+    /// domain events after the handler, commits on success, rolls back on any exception.
+    /// </summary>
+    /// <remarks>
+    /// Requires <see cref="MicroKit.Persistence.Abstractions.ITransactionalContext"/> in DI — provided by
+    /// <c>MicroKit.Persistence.EntityFrameworkCore</c> via <c>AddEntityFrameworkCore()</c>.
+    /// Register <c>AddTransactionBehavior()</c> last (after <see cref="AddRetryBehavior"/>) so
+    /// that Retry (order 600) wraps the entire transactional unit, allowing retry of transient
+    /// DB failures without leaving a partial transaction open.
+    /// </remarks>
+    /// <param name="builder">The <see cref="MediatRBuilder"/> to configure.</param>
+    /// <returns>The builder for chaining.</returns>
+    [RequiresUnreferencedCode("Registering open-generic behaviors uses reflection and is not trim-compatible.")]
+    [RequiresDynamicCode("Registering open-generic behaviors calls MakeGenericType at dispatch time and is not NativeAOT-compatible.")]
+    public static MediatRBuilder AddTransactionBehavior(this MediatRBuilder builder)
+        => builder.AddOpenBehavior(typeof(TransactionBehavior<,>));
 }

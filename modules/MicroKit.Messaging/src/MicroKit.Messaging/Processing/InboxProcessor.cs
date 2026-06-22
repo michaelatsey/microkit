@@ -19,6 +19,16 @@ namespace MicroKit.Messaging.Processing;
 /// <c>2^retryCount</c> seconds (capped at 3 600 s), dead-letter after <c>MaxRetries</c>.
 /// See ADR-MSG-003.
 /// </para>
+/// <para>
+/// <strong>Processing order:</strong> <c>MarkProcessingAsync</c> is called before deserialization.
+/// This ensures the row always transitions through the <c>Received → Processing → …</c> state
+/// machine path, even when deserialization fails. The trade-off is that a message with a
+/// permanently unresolvable <c>EventType</c> holds a lease for the duration of deserialization
+/// before being retried or dead-lettered. This is acceptable in v1 because deserialization is
+/// CPU-bound and very fast relative to the lease duration. The registry-lookup guard (step 1)
+/// prevents the most common cause of deserialization failures (unknown consumer type) from
+/// ever reaching <c>MarkProcessingAsync</c>.
+/// </para>
 /// </remarks>
 internal sealed class InboxProcessor : IInboxProcessor
 {

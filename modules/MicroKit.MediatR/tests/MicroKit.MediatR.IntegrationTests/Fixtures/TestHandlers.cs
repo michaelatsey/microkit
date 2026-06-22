@@ -70,7 +70,7 @@ internal sealed class CancellableHandler : ICommandHandler<CancellableCommand, R
 
 // ── Domain events: single handler (ItemCreated) ───────────────────────────
 
-internal sealed record ItemCreatedEvent(Guid ItemId) : IEvent;
+internal sealed record ItemCreatedEvent(Guid ItemId) : DomainEvent;
 
 internal sealed class ItemCreatedNotification(ItemCreatedEvent domainEvent)
     : DomainEventNotification<ItemCreatedEvent>(domainEvent);
@@ -87,7 +87,7 @@ internal sealed class RecordItemCreatedHandler(DomainEventLog log)
 
 // ── Domain events: two handlers = fan-out (OrderPlaced) ───────────────────
 
-internal sealed record OrderPlacedEvent(Guid OrderId) : IEvent;
+internal sealed record OrderPlacedEvent(Guid OrderId) : DomainEvent;
 
 internal sealed class OrderPlacedNotification(OrderPlacedEvent domainEvent)
     : DomainEventNotification<OrderPlacedEvent>(domainEvent);
@@ -189,7 +189,7 @@ internal sealed class CacheableDoubleHandler(AttemptCounter counter)
 
 // ── Domain event with no handler (for dispatch-time error test) ───────────
 
-internal sealed record UnregisteredEvent(Guid Id) : IEvent;
+internal sealed record UnregisteredEvent(Guid Id) : DomainEvent;
 
 // ── Shared domain event log (singleton in DI) ─────────────────────────────
 
