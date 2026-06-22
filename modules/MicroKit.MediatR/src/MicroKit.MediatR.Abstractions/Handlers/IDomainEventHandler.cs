@@ -1,5 +1,3 @@
-using MicroKit.MediatR.Events;
-
 namespace MicroKit.MediatR.Handlers;
 
 /// <summary>
@@ -17,7 +15,7 @@ namespace MicroKit.MediatR.Handlers;
 /// <see cref="IServiceProvider"/> scope as the aggregate save.
 /// </remarks>
 public interface IDomainEventHandler<TEvent>
-    where TEvent : IEvent
+    where TEvent : IDomainEvent
 {
     /// <summary>Handles the domain event.</summary>
     /// <param name="domainEvent">The raw domain event.</param>

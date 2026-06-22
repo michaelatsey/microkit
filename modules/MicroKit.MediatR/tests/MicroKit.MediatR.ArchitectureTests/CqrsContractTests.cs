@@ -1,5 +1,6 @@
 using System.Reflection;
 using MediatR;
+using MicroKit.Domain.Events;
 using MicroKit.MediatR;
 using Shouldly;
 using Xunit;
@@ -7,7 +8,7 @@ using Xunit;
 namespace MicroKit.MediatR.ArchitectureTests;
 
 /// <summary>
-/// Verifies the CQRS contract hierarchy — ICommand, IQuery, IStreamQuery, IEvent,
+/// Verifies the CQRS contract hierarchy — ICommand, IQuery, IStreamQuery,
 /// IDomainEventNotification, and all handler interfaces are defined in Abstractions
 /// and implement the correct MediatR base interfaces.
 /// </summary>
@@ -65,6 +66,26 @@ public sealed class CqrsContractTests
                 "IDomainEventNotification<TEvent> must implement MediatR.INotification for fan-out dispatch");
     }
 
+    [Fact]
+    public void IDomainEventNotification_ConstrainsDomainEvents()
+    {
+        typeof(IDomainEventNotification<>)
+            .GetGenericArguments()[0]
+            .GetGenericParameterConstraints()
+            .ShouldContain(typeof(IDomainEvent),
+                "Domain event notifications must wrap canonical MicroKit.Domain.Events.IDomainEvent instances");
+    }
+
+    [Fact]
+    public void IDomainEventHandler_ConstrainsDomainEvents()
+    {
+        typeof(IDomainEventHandler<>)
+            .GetGenericArguments()[0]
+            .GetGenericParameterConstraints()
+            .ShouldContain(typeof(IDomainEvent),
+                "Domain event handlers must handle canonical MicroKit.Domain.Events.IDomainEvent instances");
+    }
+
     // ── Contract placement in Abstractions ─────────────────────────────────
 
     [Fact]
@@ -76,8 +97,8 @@ public sealed class CqrsContractTests
             typeof(ICommand<>),
             typeof(IQuery<>),
             typeof(IStreamQuery<>),
-            typeof(IEvent),
             typeof(IDomainEventNotification<>),
+            typeof(IApplicationEvent),
         };
 
         foreach (var contract in cqrsContracts)
@@ -85,6 +106,14 @@ public sealed class CqrsContractTests
             contract.Assembly.ShouldBe(Abstractions,
                 $"{contract.Name} must be defined in MicroKit.MediatR.Abstractions, not in Core or Behaviors");
         }
+    }
+
+    [Fact]
+    public void CanonicalIEvent_IsDefinedInDomain()
+    {
+        typeof(IDomainEvent).GetInterfaces()
+            .ShouldContain(typeof(MicroKit.Domain.Events.IEvent),
+                "MicroKit.Domain.Events.IEvent is the canonical event root");
     }
 
     [Fact]

@@ -1,11 +1,12 @@
 namespace MicroKit.Domain.Events;
 
 /// <summary>
-/// Marker interface for generic event concepts in the domain.
-/// Dans ce modèle :
-/// IEvent représente le concept générique d'événement ;
-/// IDomainEvent représente un événement métier interne au domaine ;
-/// IIntegrationEvent représente un événement destiné à être publié hors du bounded context ;
-/// IApplicationEvent représente un événement technique ou applicatif.
+/// Marker interface for every event concept in MicroKit.
 /// </summary>
+/// <remarks>
+/// This is the canonical event root. Specialized event contracts derive from it:
+/// <c>IDomainEvent</c> for facts raised by aggregates, <c>IIntegrationEvent</c>
+/// for messages crossing service boundaries, and <c>IApplicationEvent</c> for
+/// application-level facts.
+/// </remarks>
 public interface IEvent;

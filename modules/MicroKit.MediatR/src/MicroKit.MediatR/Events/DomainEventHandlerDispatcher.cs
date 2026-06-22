@@ -5,7 +5,7 @@ internal sealed class DomainEventHandlerDispatcher(
     IServiceProvider sp) : IDomainEventHandlerDispatcher
 {
     /// <inheritdoc />
-    public async Task DispatchAsync(IEvent domainEvent, CancellationToken ct = default)
+    public async Task DispatchAsync(IDomainEvent domainEvent, CancellationToken ct = default)
     {
         var eventType = domainEvent.GetType();
         if (!map.TryGet(eventType, out var delegates)) return;

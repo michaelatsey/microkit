@@ -21,5 +21,5 @@ public interface IDomainEventHandlerDispatcher
     /// </summary>
     /// <param name="domainEvent">The domain event to dispatch.</param>
     /// <param name="ct">Propagates notification that operations should be cancelled.</param>
-    Task DispatchAsync(IEvent domainEvent, CancellationToken ct = default);
+    Task DispatchAsync(IDomainEvent domainEvent, CancellationToken ct = default);
 }

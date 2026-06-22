@@ -4,7 +4,7 @@ public sealed class DomainEventsDispatcherTests
 {
     private readonly IDomainEventsProvider _eventsProvider = Substitute.For<IDomainEventsProvider>();
     private readonly IDomainEventHandlerDispatcher _handlerDispatcher = Substitute.For<IDomainEventHandlerDispatcher>();
-    private readonly INotificationFactory _factory = Substitute.For<INotificationFactory>();
+    private readonly IDomainEventNotificationFactory _factory = Substitute.For<IDomainEventNotificationFactory>();
     private readonly IMessageSerializer _serializer = Substitute.For<IMessageSerializer>();
     private readonly IOutboxWriter _outboxWriter = Substitute.For<IOutboxWriter>();
     private readonly IExecutionContext _ctx = Substitute.For<IExecutionContext>();
@@ -30,15 +30,15 @@ public sealed class DomainEventsDispatcherTests
     }
 
     [Fact]
-    public async Task DispatchEventsAsync_WhenEventIsNotIEvent_Skips()
+    public async Task DispatchEventsAsync_WhenDomainEventHasNoNotification_StillInvokesHandlerDispatcher()
     {
-        var nonMediatREvent = new NonMediatRDomainEvent();
-        _eventsProvider.DrainDomainEvents().Returns([nonMediatREvent]);
+        var domainEvent = new TestDomainEvent();
+        _eventsProvider.DrainDomainEvents().Returns([domainEvent]);
+        _factory.Create(domainEvent).Returns((IDomainEventNotification<IDomainEvent>?)null);
 
         await _sut.DispatchEventsAsync();
 
-        // P2 skips non-IEvent: neither P3 (handler dispatcher) nor P4 (outbox) should fire.
-        await _handlerDispatcher.DidNotReceive().DispatchAsync(Arg.Any<IEvent>(), Arg.Any<CancellationToken>());
+        await _handlerDispatcher.Received(1).DispatchAsync(domainEvent, Arg.Any<CancellationToken>());
         await _outboxWriter.DidNotReceive().AddAsync(Arg.Any<OutboxMessage>(), Arg.Any<CancellationToken>());
     }
 
@@ -47,11 +47,11 @@ public sealed class DomainEventsDispatcherTests
     {
         var domainEvent = new TestDomainEvent();
         _eventsProvider.DrainDomainEvents().Returns([domainEvent]);
-        _factory.Create(domainEvent).Returns((IDomainEventNotification<IEvent>?)null);
+        _factory.Create(domainEvent).Returns((IDomainEventNotification<IDomainEvent>?)null);
 
         await _sut.DispatchEventsAsync();
 
-        // P3 fires for any IEvent regardless of whether a notification exists.
+        // P2 fires for every domain event regardless of whether a notification exists.
         await _handlerDispatcher.Received(1).DispatchAsync(domainEvent, Arg.Any<CancellationToken>());
         // P4 is skipped because the notification factory returned null.
         await _outboxWriter.DidNotReceive().AddAsync(Arg.Any<OutboxMessage>(), Arg.Any<CancellationToken>());
@@ -145,7 +145,7 @@ public sealed class DomainEventsDispatcherTests
 
     // ── helpers ──────────────────────────────────────────────────────────────
 
-    private sealed class TestDomainEvent : IDomainEvent, IEvent
+    private sealed class TestDomainEvent : IDomainEvent
     {
         public Guid EventId { get; } = Guid.NewGuid();
         public DateTimeOffset OccurredAt { get; } = DateTimeOffset.UtcNow;
@@ -155,12 +155,5 @@ public sealed class DomainEventsDispatcherTests
         : IDomainEventNotification<TestDomainEvent>
     {
         public TestDomainEvent DomainEvent { get; } = domainEvent;
-    }
-
-    // IDomainEvent but NOT IEvent — should be skipped in P2
-    private sealed class NonMediatRDomainEvent : IDomainEvent
-    {
-        public Guid EventId { get; } = Guid.NewGuid();
-        public DateTimeOffset OccurredAt { get; } = DateTimeOffset.UtcNow;
     }
 }

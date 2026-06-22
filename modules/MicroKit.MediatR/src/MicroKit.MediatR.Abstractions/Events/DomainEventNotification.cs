@@ -4,7 +4,7 @@ namespace MicroKit.MediatR.Events;
 /// Abstract base class for notifications that wrap a domain event of type <typeparamref name="TEvent"/>.
 /// Derive from this class to create a concrete MediatR notification for a domain event.
 /// </summary>
-/// <typeparam name="TEvent">The domain event type, which must implement <see cref="IEvent"/>.</typeparam>
+/// <typeparam name="TEvent">The domain event type.</typeparam>
 /// <remarks>
 /// Derived classes must call <c>base(domainEvent)</c> from their constructor.
 /// </remarks>
@@ -18,7 +18,7 @@ namespace MicroKit.MediatR.Events;
 /// </example>
 public abstract class DomainEventNotification<TEvent>(TEvent domainEvent)
     : IDomainEventNotification<TEvent>
-    where TEvent : IEvent
+    where TEvent : IDomainEvent
 {
     /// <inheritdoc />
     public TEvent DomainEvent { get; } = domainEvent;

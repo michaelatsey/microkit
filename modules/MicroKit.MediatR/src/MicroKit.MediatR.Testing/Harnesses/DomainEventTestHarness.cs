@@ -4,7 +4,7 @@ namespace MicroKit.MediatR.Testing;
 /// Test harness for <see cref="IDomainEventHandler{TEvent}"/> implementations.
 /// Executes the handler in isolation — no DI container, no real dispatch pipeline.
 /// </summary>
-/// <typeparam name="TEvent">The domain event type, must implement <see cref="IEvent"/>.</typeparam>
+/// <typeparam name="TEvent">The domain event type.</typeparam>
 /// <example>
 /// <code>
 /// private readonly IEmailService _email = Substitute.For&lt;IEmailService&gt;();
@@ -25,7 +25,7 @@ namespace MicroKit.MediatR.Testing;
 /// </code>
 /// </example>
 public sealed class DomainEventTestHarness<TEvent>
-    where TEvent : IEvent
+    where TEvent : MicroKit.Domain.Events.IDomainEvent
 {
     private readonly IDomainEventHandler<TEvent> _handler;
 

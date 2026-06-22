@@ -26,4 +26,14 @@ public interface IOutboxWriter
     /// <returns>A <see cref="ValueTask"/> that completes when the message has been
     /// added to the unit of work.</returns>
     ValueTask AddAsync(OutboxMessage message, CancellationToken ct = default);
+
+    /// <summary>
+    /// Adds multiple outbox messages within the current domain transaction in a single operation.
+    /// No messages are persisted until the enclosing transaction commits.
+    /// </summary>
+    /// <param name="messages">The outbox messages to persist. An empty list is a no-op.</param>
+    /// <param name="ct">A cancellation token.</param>
+    /// <returns>A <see cref="ValueTask"/> that completes when all messages have been
+    /// added to the unit of work.</returns>
+    ValueTask AddBatchAsync(IReadOnlyList<OutboxMessage> messages, CancellationToken ct = default);
 }

@@ -7,12 +7,12 @@ namespace MicroKit.MediatR.Testing;
 /// <typeparam name="TCommand">The command type, must implement <see cref="ICommand{TResult}"/>.</typeparam>
 /// <typeparam name="TResult">The result type returned by the command handler.</typeparam>
 /// <remarks>
-/// Use the factory constructor when the handler takes an <see cref="IDomainEventDispatcher"/>
+/// Use the factory constructor when the handler takes an <see cref="IDomainEventsDispatcher"/>
 /// dependency (legacy pattern). With the current domain-event design, handlers accumulate events
 /// on aggregates rather than calling the dispatcher directly — the dispatcher is invoked by
 /// <c>TransactionBehavior</c>. For handler-only unit tests, use the direct constructor.
 /// <code>
-/// // Direct constructor — handler does not inject IDomainEventDispatcher
+/// // Direct constructor — handler does not inject IDomainEventsDispatcher
 /// var harness = new CommandHandlerTestHarness&lt;CreateOrderCommand, Result&lt;OrderId&gt;&gt;(
 ///     new CreateOrderHandler(mockRepo));
 ///
@@ -28,14 +28,14 @@ public sealed class CommandHandlerTestHarness<TCommand, TResult>
 
     /// <summary>
     /// Initialises the harness using a factory that receives a <see cref="FakeDomainEventDispatcher"/>.
-    /// Use this constructor for handlers that still accept <see cref="IDomainEventDispatcher"/>
+    /// Use this constructor for handlers that still accept <see cref="IDomainEventsDispatcher"/>
     /// as a constructor parameter.
     /// </summary>
     /// <param name="factory">
-    /// A factory that receives the harness-managed <see cref="IDomainEventDispatcher"/>
+    /// A factory that receives the harness-managed <see cref="IDomainEventsDispatcher"/>
     /// and returns the constructed handler.
     /// </param>
-    public CommandHandlerTestHarness(Func<IDomainEventDispatcher, ICommandHandler<TCommand, TResult>> factory)
+    public CommandHandlerTestHarness(Func<IDomainEventsDispatcher, ICommandHandler<TCommand, TResult>> factory)
     {
         _dispatcher = new FakeDomainEventDispatcher();
         _handler = factory(_dispatcher);
@@ -73,7 +73,7 @@ public sealed class CommandHandlerTestHarness<TCommand, TResult>
 /// </summary>
 /// <typeparam name="TCommand">The command type, must implement <see cref="ICommand"/>.</typeparam>
 /// <remarks>
-/// Use the factory constructor for handlers that accept <see cref="IDomainEventDispatcher"/>
+/// Use the factory constructor for handlers that accept <see cref="IDomainEventsDispatcher"/>
 /// as a constructor parameter. For handlers that accumulate events on aggregates, use the
 /// direct constructor instead.
 /// </remarks>
@@ -87,10 +87,10 @@ public sealed class CommandHandlerTestHarness<TCommand>
     /// Initialises the harness using a factory that receives a <see cref="FakeDomainEventDispatcher"/>.
     /// </summary>
     /// <param name="factory">
-    /// A factory that receives the harness-managed <see cref="IDomainEventDispatcher"/>
+    /// A factory that receives the harness-managed <see cref="IDomainEventsDispatcher"/>
     /// and returns the constructed handler.
     /// </param>
-    public CommandHandlerTestHarness(Func<IDomainEventDispatcher, ICommandHandler<TCommand>> factory)
+    public CommandHandlerTestHarness(Func<IDomainEventsDispatcher, ICommandHandler<TCommand>> factory)
     {
         _dispatcher = new FakeDomainEventDispatcher();
         _handler = factory(_dispatcher);

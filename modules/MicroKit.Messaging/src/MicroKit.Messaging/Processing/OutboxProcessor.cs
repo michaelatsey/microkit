@@ -50,17 +50,9 @@ internal sealed class OutboxProcessor : IOutboxProcessor
 
         foreach (var message in messages)
         {
-            var ctx = new MessageCtx
-            {
-                TenantId = message.TenantId,
-                CorrelationId = message.CorrelationId?.Value.ToString(),
-                CausationId = message.CausationId?.Value.ToString(),
-            };
-
-            await using var scope = await _executionScopeFactory
-                .CreateScopeAsync(ctx, cancellationToken)
-                .ConfigureAwait(false);
-
+            // Acquire the lease before creating the execution scope: future tenant-aware
+            // IExecutionScopeFactory implementations may perform I/O (per-tenant connection
+            // resolution) that would be wasted on every lease-contention event.
             var lockExpiry = DateTimeOffset.UtcNow.Add(_options.LockDuration);
             var acquired = await _store
                 .AcquireLeaseAsync(message.Id, lockExpiry, cancellationToken)
@@ -76,6 +68,17 @@ internal sealed class OutboxProcessor : IOutboxProcessor
                 }
                 continue;
             }
+
+            var ctx = new MessageCtx
+            {
+                TenantId = message.TenantId,
+                CorrelationId = message.CorrelationId?.Value.ToString(),
+                CausationId = message.CausationId?.Value.ToString(),
+            };
+
+            await using var scope = await _executionScopeFactory
+                .CreateScopeAsync(ctx, cancellationToken)
+                .ConfigureAwait(false);
 
             var dispatcher = scope.ServiceProvider.GetRequiredService<IOutboxDispatcher>();
 

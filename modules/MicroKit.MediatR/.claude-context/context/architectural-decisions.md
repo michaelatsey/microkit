@@ -115,52 +115,67 @@ validation, has a registered `IValidator<T>`. `LoggingBehavior` is always active
 
 ---
 
-## ADR-005: IDomainEventDispatcher Uses Registration-Time Handler Scan for Notification Mapping
+## ADR-005: Registration-Time Scan for Notification Mapping and Handler Dispatch Map
 
-**Status:** Accepted
-**Date:** 2026-05-28
+**Status:** Accepted (partially superseded by ADR-MEDIATR-009 — see below)
+**Date:** 2026-05-28 | **Revised:** 2026-06-21
 
 ### Decision
 
-`IDomainEventDispatcher.PublishAsync(IEvent)` accepts the raw domain event. The mapping from
-`IEvent` type to its concrete `DomainEventNotification<TEvent>` subclass is built **at registration
-time** (inside `AddMicroKitMediatR`) by scanning for all types implementing
-`IDomainEventHandler<TEvent, TNotification>` in the provided assemblies, extracting `TNotification`,
-and compiling a `Func<IEvent, INotification>` factory per event type. This factory dictionary is
-registered as a singleton and injected into `DomainEventDispatcher`. At dispatch time, no reflection
-occurs — the factory is looked up by `IEvent` type in O(1).
+`AddMicroKitMediatR` performs two independent registration-time scans over the provided assemblies:
+
+- **Phase A — handler scan:** discovers `IDomainEventHandler<TEvent>` (single type parameter,
+  per ADR-MEDIATR-009) implementations and compiles a
+  `Func<IServiceProvider, IDomainEvent, CancellationToken, Task>` delegate per concrete handler
+  type. Delegates are collected into a `HandlerDispatchMap` singleton. At dispatch time,
+  `IDomainEventHandlerDispatcher.DispatchAsync(IDomainEvent)` looks up the runtime event type
+  in O(1) and invokes the pre-compiled delegates — zero reflection per dispatch.
+
+- **Phase B — notification scan:** discovers `DomainEventNotification<TEvent>` subclasses and
+  compiles a `Func<IDomainEvent, INotification>` factory per event type. This map is registered
+  as an `IDomainEventNotificationFactory` singleton. At dispatch time, `Create(IDomainEvent)`
+  returns the wrapped notification or `null` when the event type has no registered notification.
+
+The two scans are **independent**: a domain event can have handlers without a notification
+(pure in-transaction business effects) and can have a notification without handlers (pure
+outbox fan-out path). Both, neither, or one-of-the-two are valid configurations.
+
+### What superseded the original ADR-005 (ADR-MEDIATR-009)
+
+The original ADR-005 described `IDomainEventHandler<TEvent, TNotification>` (two type params),
+`IDomainEventDispatcher.PublishAsync(IEvent)`, and a single scan that derived the notification
+type from the handler declaration. ADR-MEDIATR-009 replaced this with single-parameter handlers
+and separate scans. The **registration-time scan principle and the O(1) dispatch lookup** are
+unchanged and still govern the design; only the scan structure and interface shapes changed.
 
 ### Rationale
 
-1. **AOT/trimming safety:** `AppDomain.CurrentDomain.GetAssemblies()` scanned at first publish is
-   incompatible with .NET NativeAOT and the trimmer. Registration-time scanning uses the assemblies
-   explicitly provided by the consumer via `MediatRBuilder.FromAssembly(...)`, which are already
-   known to the trimmer.
-2. **Startup conflict detection:** If two handlers for the same event declare *different* notification
-   types, `AddMicroKitMediatR` throws at DI startup with a clear error naming both conflicting types
-   and guiding the consumer toward the correct pattern (ADR-005 violation detection).
-3. **O(1) dispatch lookup:** After startup, `PublishAsync` performs one dictionary lookup and invokes
-   the pre-compiled factory — zero per-dispatch reflection.
-4. **Consistency with adapter scan:** `AddMicroKitMediatR` already scans assemblies for
-   `IDomainEventHandler<TEvent, TNotification>` to register adapters. The notification mapping is
-   derived from the same scan pass — no second scan needed.
+1. **AOT/trimming safety:** `AppDomain.CurrentDomain.GetAssemblies()` scanned at first publish
+   is incompatible with .NET NativeAOT and the trimmer. Registration-time scanning uses the
+   assemblies explicitly provided by the consumer via `MediatRBuilder.FromAssembly(...)`, which
+   are already known to the trimmer.
+2. **Startup conflict detection:** If two `DomainEventNotification<TEvent>` subclasses exist for
+   the same event type, `AddMicroKitMediatR` throws at DI startup with a clear error — the
+   1-event → 1-notification constraint (Phase B) is verified eagerly.
+3. **O(1) dispatch lookup:** After startup, all dispatch paths perform one dictionary lookup and
+   invoke the pre-compiled delegate — zero per-dispatch reflection.
+4. **Captive dependency safety:** `HandlerDispatchMap` is a singleton (compiled delegates only).
+   `DomainEventHandlerDispatcher` is scoped and resolves handlers from its scope's
+   `IServiceProvider`, avoiding the singleton-wrapping-scoped-service captive dependency problem.
 
 ### Consequences
 
-- Consumers must pass all assemblies containing domain event handlers to `MediatRBuilder.FromAssembly`
-  or `FromAssemblyContaining<T>`. If a handler assembly is omitted, the notification factory entry
-  for that event type will be absent. **This is NOT detected at DI startup** — the failure surfaces
-  only when `IDomainEventDispatcher.PublishAsync` is first called for that event type (dispatch-time
-  `InvalidOperationException`). Only the notification-type uniqueness conflict (two handlers, different
-  notification types, same event) is detected at startup.
-- **1-event → 1-notification constraint:** Each `IEvent` type maps to exactly one
-  `DomainEventNotification<TEvent>` subclass. Multiple handlers for the same event must all implement
-  `IDomainEventHandler<TEvent, SameNotificationType>` — MediatR then dispatches to all registered
-  `INotificationHandler<SameNotificationType>` implementations (fan-out). Cross-bounded-context
-  fan-out patterns requiring *different* notification types per handler are not supported by this
-  model; such scenarios require either a shared notification type or a separate dispatcher.
-- `DomainEventDispatcher` injects `IDomainEventNotificationFactory` (internal singleton) — not
-  `AppDomain` or `IServiceProvider`. This is not a service locator.
+- Consumers must pass all assemblies containing domain event handlers and notification classes
+  to `MediatRBuilder.FromAssembly` or `FromAssemblyContaining<T>`. Missing assemblies are not
+  detected at DI startup; they surface only at first dispatch (handler silently absent, or
+  notification factory returns `null`).
+- **1-event → 1-notification constraint (Phase B):** each `IDomainEvent` type maps to at most
+  one `DomainEventNotification<TEvent>` subclass. Multiple `INotificationHandler<TNotification>`
+  implementations provide fan-out via MediatR for a single notification type.
+- `IDomainEventNotificationFactory` (internal singleton) is not a service locator — it is a
+  pre-compiled factory dictionary injected via DI.
+- `IDomainEventHandler<TEvent>` has **no** notification type parameter. The notification
+  mapping is purely a Phase B concern; handler authors do not declare it.
 
 ---
 
@@ -364,16 +379,24 @@ inside the persistence transaction).
    (P4 / outbox). This scan is now separate from the handler scan — handler types no longer
    declare their notification type.
 
-### The two dispatch paths post-ADR-MEDIATR-009
+### The dispatch phases post-ADR-MEDIATR-009
 
-| Path | Trigger | Interface | Use |
-|------|---------|-----------|-----|
-| **P3 — sync direct** | Transaction behavior, Messaging.MediatR glue | `IDomainEventHandlerDispatcher` | In-process, in-transaction, raw event |
-| **P4 — MediatR fan-out** | `INotificationFactory` → `IPublisher.Publish` | `INotificationHandler<TNotification>` | Decoupled, can span transports |
+`DomainEventDispatchBehavior` (order 50, outermost MediatR pipeline behavior) calls
+`IDomainEventsDispatcher.DispatchEventsAsync` after the inner pipeline and handler complete.
+That call runs four sequential phases:
 
-The two paths coexist. An event can have both a `IDomainEventHandler<TEvent>` (P3) and a
-`DomainEventNotification<TEvent>` with `INotificationHandler<TNotification>` handlers (P4).
-ADR-MEDIATR-005 still applies to P4: exactly one notification type per event type.
+| Phase | Name | Mechanism | Use |
+|-------|------|-----------|-----|
+| **P1** | Drain | `IDomainEventsProvider.DrainDomainEvents()` | Collect events accumulated on aggregates |
+| **P2** | Handler dispatch | `IDomainEventHandlerDispatcher.DispatchAsync` → `IDomainEventHandler<TEvent>` | Sync, in-transaction, raw event; business effects |
+| **P3** | Notification creation | `IDomainEventNotificationFactory.Create()` → `IDomainEventNotification<TEvent>` | Build the outbox payload wrapper (null if no mapping) |
+| **P4** | Outbox batch write | `IOutboxWriter.AddBatchAsync()` | Stage all notifications in one DB round-trip, same transaction |
+
+The two handler types are **structurally disjoint**:
+- P2: `IDomainEventHandler<TEvent>` — receives the raw domain event, runs in-transaction.
+- Post-commit: `INotificationHandler<TNotification>` — receives the notification, runs via outbox processor after commit.
+
+An event can participate in both P2 and P3/P4, one, or neither. ADR-MEDIATR-005 still applies to P3: exactly one notification type per event type.
 
 ### Breaking change
 
@@ -396,3 +419,93 @@ ADR-MEDIATR-005 still applies to P4: exactly one notification type per event typ
   unaffected — notification classes and `DomainEventNotification<TEvent>` are unchanged.
 - The `dependency-guardian` must verify that no module depends on `DomainEventHandlerAdapter`
   (deleted) and that all `IDomainEventHandler<,>` (two-param) usages are migrated.
+- `IDomainEventsDispatcher` is now the canonical interface name (plural). The singular
+  `IDomainEventDispatcher` is a preview-only compatibility alias marked `[Obsolete]`
+  and will be removed in the next major version. Both resolve to the same scoped
+  `DomainEventDispatcher` implementation in DI.
+- `DomainEventDispatchBehavior<TRequest, TResponse>` (in `MicroKit.Messaging.MediatR`) is the
+  pipeline behavior (order 50) that calls `IDomainEventsDispatcher.DispatchEventsAsync` after
+  the command handler. Registered via `AddMediatRTransport()`. See ADR-MSG-010.
+
+---
+
+## ADR-MEDIATR-010: Event Taxonomy and Dispatch Topology
+
+**Status:** Accepted  
+**Date:** 2026-06-21
+
+### Decision
+
+MicroKit adopts a **single canonical event root** (`MicroKit.Domain.Events.IEvent`) and a
+**three-tier taxonomy** of event contracts:
+
+| Contract | Location | Semantics |
+|----------|----------|-----------|
+| `MicroKit.Domain.Events.IEvent` | `MicroKit.Domain` | Root marker — all MicroKit event types |
+| `IDomainEvent : IEvent` | `MicroKit.Domain` | Aggregate fact — has `EventId` + `OccurredAt` |
+| `IIntegrationEvent : IEvent` | `MicroKit.Messaging.Abstractions` | Cross-service message — standalone, not a domain fact |
+| `IApplicationEvent : IEvent` | `MicroKit.MediatR.Abstractions` | Application-layer fact — emitted by application code, not aggregates |
+
+`MicroKit.MediatR.Events.IEvent` that previously existed as a local event root is **superseded**
+and is now a `[Obsolete]` shim that extends `MicroKit.Domain.Events.IEvent`.
+
+### Dispatch topology — full phase sequence
+
+`DomainEventDispatchBehavior` (order 50) is the MediatR pipeline behavior that triggers dispatch.
+After the command handler and all inner behaviors complete, it calls
+`IDomainEventsDispatcher.DispatchEventsAsync`, which runs:
+
+```
+Command arrives → [DomainEventDispatchBehavior wraps everything]
+  → [Logging → Auth → Validation → … → Handler]
+  → DispatchEventsAsync():
+      P1  DrainDomainEvents()          — collect events from aggregates
+      P2  IDomainEventHandler<TEvent>  — sync · in-transaction · business effects
+      P3  IDomainEventNotificationFactory.Create() — build IDomainEventNotification<TEvent>
+      P4  IOutboxWriter.AddBatchAsync() — stage all notifications · one DB round-trip
+  → IUnitOfWork.CommitAsync()          — commits domain changes + outbox rows atomically
+```
+
+| Phase | Interface | Invocation | Guarantee |
+|-------|-----------|-----------|-----------|
+| **P2** | `IDomainEventHandler<TEvent>` | Sync, in-transaction, raw event | At-most-once per commit; fails = rollback |
+| **P3** | `IDomainEventNotificationFactory` | In-transaction, builds wrapper | Null if no mapping registered |
+| **P4** | `IOutboxWriter.AddBatchAsync` | In-transaction, staged in EF change tracker | Committed atomically with domain changes |
+| Post-commit | `INotificationHandler<TNotification>` | Via outbox processor, after commit | At-least-once; handler MUST be idempotent |
+
+The two handler types are **structurally disjoint**:
+- P2 (`IDomainEventHandler<TEvent>`) receives the raw domain event — runs in-transaction via `IDomainEventHandlerDispatcher`, not via MediatR.
+- Post-commit (`INotificationHandler<TNotification>`) receives the notification wrapper — published by `IPublisher.Publish` after the outbox processor dequeues the `DomainEventNotification<TEvent>` payload.
+- An event can participate in both, one, or neither path simultaneously.
+
+### Rationale
+
+1. **Single event root eliminates ambiguity.** Before this ADR, `MicroKit.MediatR` defined its
+   own `IEvent`, creating a parallel hierarchy that conflicted with `MicroKit.Domain.Events.IEvent`.
+   A single root (`Domain.Events.IEvent`) makes the taxonomy derivable from one source of truth.
+2. **`IIntegrationEvent` is deliberately NOT a `IDomainEvent`.** Integration events cross service
+   boundaries and are transport artifacts, not domain facts. Inheriting `IDomainEvent` would impose
+   `EventId`/`OccurredAt` semantics and couple the messaging contract to the domain model (ADR-MSG-001).
+3. **Two disjoint pipelines are better than one combined pipeline.** The P-handler path gives
+   teams a simple way to run business effects in-transaction (e.g., denormalize into a read model
+   synchronously). The P-notification path provides reliable asynchronous fan-out. Merging them
+   would force all handlers to be idempotent (outbox semantics), or would eliminate the
+   in-transaction guarantee (notification semantics).
+4. **Handler authors must not know the notification type.** `IDomainEventHandler<TEvent>`
+   (single param) keeps the business handler decoupled from the MediatR/outbox plumbing.
+   The notification wrapper is an infrastructure artifact declared separately.
+
+### Consequences
+
+- All domain-event dispatch contracts (`IDomainEventHandler<TEvent>`,
+  `IDomainEventHandlerDispatcher.DispatchAsync`, `DomainEventNotification<TEvent>`,
+  `IDomainEventNotification<TEvent>`) are constrained to `where TEvent : IDomainEvent`.
+  Code targeting the shim `MicroKit.MediatR.Events.IEvent` must migrate to
+  `MicroKit.Domain.Events.IEvent`.
+- `MicroKit.MediatR.Events.IEvent` is `[Obsolete]` — it will be removed in the next major version.
+- `IDomainEventsDispatcher` (plural) is the canonical name. `IDomainEventDispatcher` (singular)
+  is a `[Obsolete]` alias and will be removed in the next major version.
+- `IDomainEventNotificationFactory` (in Abstractions) supersedes the former `INotificationFactory`,
+  which is now a `[Obsolete]` alias.
+- P-notification handlers MUST be idempotent — the outbox retry re-runs ALL notification handlers
+  for the message (ADR-MSG-003, ADR-MSG-009).

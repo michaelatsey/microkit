@@ -42,7 +42,9 @@ Public API Surface
 [ ] Naming follows microkit-messaging-naming.md conventions
 [ ] IIntegrationEvent used (not INotification, not MediatR types)
 [ ] No framework types (HttpContext, DbContext) in Abstractions
-[ ] ValueTask<T> used for all async methods
+[ ] ValueTask<T> used for all async methods (exception ADR-MSG-014: IOutboxCoordinator.ExecuteAsync,
+    IInboxCoordinator.ExecuteAsync, IOutboxProcessor.ProcessBatchAsync, IInboxProcessor.ProcessBatchAsync
+    return Task — BackgroundService chain compatibility, see ADR-MSG-014)
 [ ] CancellationToken ct = default always last parameter
 [ ] sealed on all records, services, processors, publishers
 
@@ -51,7 +53,7 @@ Outbox / Inbox Contracts
 [ ] Inbox dedup key = (MessageId + ConsumerType) — compound PK in DB config
 [ ] OutboxMessage states: Pending / Processing / Published / Failed (always + DeadLettered=true)
 [ ] IOutboxWriter and IOutboxProcessorStore in Messaging.Abstractions — not in Persistence.Abstractions
-[ ] IOutboxWriter has AddAsync only — no GetPendingAsync or state-mutation methods
+[ ] IOutboxWriter has write methods only (AddAsync + AddBatchAsync per ADR-MSG-011) — no GetPendingAsync or state-mutation methods
 [ ] OutboxMessage and InboxMessage are sealed class (not sealed record) — EF Core entities
 [ ] NextRetryAtUtc present on OutboxMessage (required for back-off filtering)
 
@@ -71,7 +73,7 @@ Result<T> / ValueTask Usage
 [ ] IOutboxWriter.AddAsync returns ValueTask (throws on DB error — propagates through UoW)
 [ ] IOutboxProcessorStore mutation methods return ValueTask<Result> (run outside domain transaction)
 [ ] IInboxStore.AddAsync returns ValueTask (throws DbUpdateException on duplicate — is the real guard)
-[ ] All async methods return ValueTask (not Task)
+[ ] All async methods return ValueTask (not Task) — exception: coordinator/processor chain (ADR-MSG-014)
 ```
 
 ---

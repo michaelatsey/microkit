@@ -14,6 +14,7 @@ global using MicroKit.MediatR.Markers;
 global using MicroKit.MediatR.Pipeline;
 global using MicroKit.MediatR.Requests;
 global using MicroKit.Logging;
+global using MicroKit.Persistence.Abstractions;
 global using MicroKit.Result;
 global using Polly;
 global using Polly.Retry;
