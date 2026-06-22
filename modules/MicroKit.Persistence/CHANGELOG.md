@@ -1,11 +1,23 @@
 # Changelog — MicroKit.Persistence
 
-## [Unreleased]
+## [1.0.0-preview.2] — 2026-06-22
+
+### Added
+
+#### MicroKit.Persistence.Abstractions
+- `ITransactionalContext` — ambient transaction execution contract (`ExecuteAsync`)
+
+### Changed
+
+#### MicroKit.Persistence.EntityFrameworkCore
+- `EfUnitOfWork` — implements `ITransactionalContext`
 
 ### Removed
 
 #### MicroKit.Persistence.Abstractions
 - `IOutboxStore` — removed. The contract was orphaned: no EF Core implementation existed, no consumer referenced it, and its `Add(INotification)` signature incorrectly pulled `MediatR.Contracts` into a package described as "Zero implementation — no infrastructure dependency." The outbox pattern will be rebuilt in `MicroKit.Messaging.Abstractions`, typed on `IIntegrationEvent`, when `MicroKit.Messaging` is implemented. The `MediatR.Contracts` `PackageReference` has been removed from the project file.
+- `MediatR.Contracts` `PackageReference` removed from the project file
+- `global using MediatR` removed
 
 ---
 
