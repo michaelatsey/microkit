@@ -23,11 +23,14 @@ jobs:
           PACKAGE_VERSION="${TAG#logging-v}"
           echo "PACKAGE_VERSION=$PACKAGE_VERSION" >> "$GITHUB_ENV"
 
+      # CIReleaseBuild=true activates release build mode.
+      # MicroKit.Logging has no cross-module MicroKit dependencies (ADR-006),
+      # so Restore, Build, and Pack use the flag for consistency with the canonical release pattern.
       - name: Restore
-        run: dotnet restore modules/MicroKit.Logging/MicroKit.Logging.slnx
+        run: dotnet restore modules/MicroKit.Logging/MicroKit.Logging.slnx -p:CIReleaseBuild=true
 
       - name: Build
-        run: dotnet build modules/MicroKit.Logging/MicroKit.Logging.slnx --no-restore -c Release
+        run: dotnet build modules/MicroKit.Logging/MicroKit.Logging.slnx --no-restore -c Release -p:CIReleaseBuild=true
 
       - name: Test
         run: dotnet test modules/MicroKit.Logging/MicroKit.Logging.slnx --no-build -c Release
@@ -36,7 +39,9 @@ jobs:
         run: |
           dotnet pack modules/MicroKit.Logging/MicroKit.Logging.slnx \
             --no-build -c Release \
+            -p:CIReleaseBuild=true \
             -p:PackageVersion=${{ env.PACKAGE_VERSION }} \
+            -p:AssemblyVersion=$(echo "${{ env.PACKAGE_VERSION }}" | grep -oE '^[0-9]+\.[0-9]+\.[0-9]+').0 \
             -o nupkgs
 
       - name: Push to NuGet.org
