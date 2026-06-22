@@ -1,17 +1,17 @@
 {
-  "version": "1.0",
-  "publicReleaseRefSpec": [
-    "^refs/heads/main$",
-    "^refs/tags/domain-v\\d+\\.\\d+\\.\\d+(-.+)?$"
-  ],
-  "pathFilters": [
-    "modules/MicroKit.Domain/"
-  ],
-  "cloudBuild": {
-    "setVersionVariables": true
-  },
-  "release": {
-    "tagName": "domain-v{version}",
-    "branchName": "release/domain/{version}"
-  }
+    "version": "1.0.0-preview.5",
+    "publicReleaseRefSpec": [
+        "^refs/heads/main$",
+        "^refs/tags/domain-v\\d+\\.\\d+\\.\\d+(-.+)?$"
+    ],
+    "pathFilters": [
+        "modules/MicroKit.Domain/"
+    ],
+    "cloudBuild": {
+        "setVersionVariables": true
+    },
+    "release": {
+        "tagName": "domain-v{version}",
+        "branchName": "release/domain/{version}"
+    }
 }
