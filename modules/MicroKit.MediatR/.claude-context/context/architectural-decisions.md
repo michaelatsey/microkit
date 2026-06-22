@@ -444,7 +444,8 @@ MicroKit adopts a **single canonical event root** (`MicroKit.Domain.Events.IEven
 | `MicroKit.Domain.Events.IEvent` | `MicroKit.Domain` | Root marker — all MicroKit event types |
 | `IDomainEvent : IEvent` | `MicroKit.Domain` | Aggregate fact — has `EventId` + `OccurredAt` |
 | `IIntegrationEvent : IEvent` | `MicroKit.Messaging.Abstractions` | Cross-service message — standalone, not a domain fact |
-| `IApplicationEvent : IEvent` | `MicroKit.MediatR.Abstractions` | Application-layer fact — emitted by application code, not aggregates |
+
+> **NOTE:** `IApplicationEvent` was considered but **rejected — YAGNI** (root `.claude/CLAUDE.md` global conventions prohibit introducing this until a concrete use case exists in the monorepo). It is not implemented and must not be added to `MicroKit.MediatR.Abstractions` without revisiting this decision.
 
 `MicroKit.MediatR.Events.IEvent` that previously existed as a local event root is **superseded**
 and is now a `[Obsolete]` shim that extends `MicroKit.Domain.Events.IEvent`.
@@ -509,3 +510,51 @@ The two handler types are **structurally disjoint**:
   which is now a `[Obsolete]` alias.
 - P-notification handlers MUST be idempotent — the outbox retry re-runs ALL notification handlers
   for the message (ADR-MSG-003, ADR-MSG-009).
+
+---
+
+## ADR-MEDIATR-011: MicroKit.MediatR.Behaviors Takes a Dependency on MicroKit.Persistence.Abstractions
+
+**Status:** Accepted  
+**Date:** 2026-06-22
+
+### Decision
+
+`MicroKit.MediatR.Behaviors` takes a production dependency on `MicroKit.Persistence.Abstractions`
+to access `ITransactionalContext`. This contract is required by
+`TransactionBehavior<TRequest, TResponse>` (pipeline order 700) to open, commit, and roll back
+database transactions around command handlers and their domain-event dispatch.
+
+### Rationale
+
+1. **`TransactionBehavior` needs a transaction abstraction.** Without one, every consumer would
+   re-declare their own unit-of-work wrapping behavior. Shipping it in `MicroKit.MediatR.Behaviors`
+   provides it once, with the correct order (700) and the correct integration point for
+   `IDomainEventsDispatcher.DispatchEventsAsync` within the transaction boundary.
+
+2. **Dependency is on the Abstractions layer only — not EF Core.** `TransactionBehavior` injects
+   `ITransactionalContext` (the interface). It has no knowledge of EF Core, Dapper, or any concrete
+   ORM. The implementation is provided by the consumer at DI registration time (e.g.,
+   `MicroKit.Persistence.EntityFrameworkCore` via `AddEntityFrameworkCore()`).
+
+3. **No circular dependency.** `MicroKit.Persistence.Abstractions` does not depend on
+   `MicroKit.MediatR`. Both packages are at Level 2 in the monorepo graph. The dependency is
+   uni-directional: `Behaviors → Persistence.Abstractions`.
+
+4. **Consistent with ADR-001.** `MicroKit.MediatR.Abstractions` already takes a deliberate
+   cross-module dependency on `MicroKit.Result` for an analogous reason: a shipped contract
+   requires a peer abstraction, and the dependency creates no cycle.
+
+5. **Opt-in registration.** `AddTransactionBehavior()` is the only DI entry point.
+   Consumers who do not call it pay zero cost — `ITransactionalContext` is not resolved.
+
+### Consequences
+
+- The root `.claude/CLAUDE.md` dependency graph for `MicroKit.MediatR` is updated to include
+  `Persistence.Abstractions` in the allowed-dependency list.
+- The module `.claude/CLAUDE.md` dependency table for `MicroKit.MediatR.Behaviors` is updated.
+- The `MicroKit.MediatR.Behaviors.csproj` CIReleaseBuild two-ItemGroup pattern already declares
+  `MicroKit.Persistence.Abstractions` in both groups (compliant with cross-module-references rule).
+- Consumers who call `AddTransactionBehavior()` without registering `ITransactionalContext` will
+  get a clear DI resolution failure at startup — not a runtime `NullReferenceException`.
+- The `dependency-guardian` allowlist for `MicroKit.MediatR.Behaviors` is updated: `MicroKit.Persistence.Abstractions` is now permitted.

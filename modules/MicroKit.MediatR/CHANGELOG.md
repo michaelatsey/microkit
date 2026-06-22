@@ -5,6 +5,81 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/) — [Semantic V
 
 ---
 
+## [1.0.0-preview.2] — 2026-06-22
+
+### Breaking Changes
+
+**MicroKit.MediatR.Abstractions**
+- `IDomainEventHandler<TEvent, TNotification>` renamed to `IDomainEventHandler<TEvent>` (single
+  type parameter). Handlers no longer declare a notification type; the in-transaction dispatch
+  path operates directly on the raw domain event. Remove the second generic parameter from all
+  `IDomainEventHandler` implementations and change `Handle(TNotification n, …)` to
+  `Handle(TEvent domainEvent, …)`.
+
+**MicroKit.MediatR.Testing**
+- `DomainEventTestHarness<TEvent, TNotification>` renamed to `DomainEventTestHarness<TEvent>`
+  (single type parameter), consistent with the updated `IDomainEventHandler<TEvent>` contract.
+  Pass the raw domain event to `HandleAsync(TEvent domainEvent, …)`.
+- `FakeDomainEventDispatcher` now implements `IDomainEventsDispatcher` (`DispatchEventsAsync`)
+  instead of the former `IDomainEventDispatcher` (`PublishAsync`). The published-events tracking
+  surface (`PublishedEvents`, `AssertEventPublished<T>`, `GetSinglePublishedEvent<T>`,
+  `AssertNoEventsPublished`) is replaced by dispatch-call tracking
+  (`DispatchCallCount`, `AssertDispatchWasCalled`, `AssertDispatchCalledOnce`,
+  `AssertDispatchNotCalled`). Update test assertions accordingly.
+
+**MicroKit.MediatR (core)**
+- `DomainEventHandlerAdapter` deleted. The adapter pattern is superseded by the new
+  `IDomainEventHandlerDispatcher` + `HandlerDispatchMap` direct-dispatch mechanism.
+- `IDomainEventsDispatcher` (plural, `DispatchEventsAsync`) is now the canonical dispatch
+  interface. `IDomainEventDispatcher` (singular, `PublishAsync`) is `[Obsolete]` and will be
+  removed in the next major version. Update injection points to `IDomainEventsDispatcher`.
+
+### Added
+
+**MicroKit.MediatR (core)**
+- `IDomainEventHandlerDispatcher` — new scoped interface for direct, in-transaction dispatch to
+  all registered `IDomainEventHandler<TEvent>` implementations. Bypasses the MediatR notification
+  pipeline intentionally; invoked by `DomainEventDispatcher` during `DispatchEventsAsync`.
+- `HandlerDispatchMap` — new singleton compiled-delegate map. Resolves `IDomainEventHandler<TEvent>`
+  implementations at DI startup into pre-compiled Expression-tree delegates; O(1) per-event-type
+  lookup with zero per-dispatch reflection.
+
+**MicroKit.MediatR.Behaviors**
+- `TransactionBehavior<TRequest, TResponse>` (pipeline order 700) — commands only
+  (`ICommand` / `ICommand<TResult>`); opt-in via `AddTransactionBehavior()`. Wraps the command
+  handler and subsequent domain event dispatch (`IDomainEventsDispatcher.DispatchEventsAsync`) in
+  a single database transaction via `ITransactionalContext` (from `MicroKit.Persistence.Abstractions`).
+  Skips event dispatch when the handler returns a business failure. Uses a static lambda and a
+  `readonly struct` state-carrier for zero heap allocation per dispatch.
+
+**MicroKit.MediatR.Abstractions**
+- `PipelineOrder.Transaction = 700` added to the canonical pipeline order registry.
+- `IDomainEventNotificationFactory` — supersedes `INotificationFactory` (now `[Obsolete]`).
+
+### Changed
+
+**MicroKit.MediatR.Abstractions**
+- `INotificationFactory` is `[Obsolete]` — inject `IDomainEventNotificationFactory` in new code.
+- `MicroKit.MediatR.Events.IEvent` is `[Obsolete]` — use `MicroKit.Domain.Events.IEvent` as the
+  canonical MicroKit event root. The shim extends `MicroKit.Domain.Events.IEvent` for backward
+  compatibility and will be removed in the next major version.
+- `IDomainEventDispatcher` (singular) is `[Obsolete]` — use `IDomainEventsDispatcher` (plural).
+
+### Dependencies
+
+**MicroKit.MediatR.Behaviors**
+- New production dependency on `MicroKit.Persistence.Abstractions` for `ITransactionalContext`
+  (required by `TransactionBehavior`). The dependency is on the Abstractions layer only — no
+  coupling to EF Core or any concrete ORM. See ADR-MEDIATR-011.
+
+### Architecture
+
+- ADRs ADR-MEDIATR-009 (single-param `IDomainEventHandler`), ADR-MEDIATR-010 (unified event
+  taxonomy, `[Obsolete]` shims), and ADR-MEDIATR-011 (`Behaviors → Persistence.Abstractions`)
+  accepted and implemented.
+
+---
+
 ## [1.0.0-preview.1] — 2026-05-29
 
 First public pre-release of MicroKit.MediatR.
@@ -66,4 +141,5 @@ First public pre-release of MicroKit.MediatR.
 
 ---
 
+[1.0.0-preview.2]: https://github.com/michaelatsey/MicroKit/releases/tag/mediatr-v1.0.0-preview.2
 [1.0.0-preview.1]: https://github.com/michaelatsey/MicroKit/releases/tag/mediatr-v1.0.0-preview.1

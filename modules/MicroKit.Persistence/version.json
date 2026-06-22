@@ -1,17 +1,17 @@
 {
-  "version": "1.0",
-  "publicReleaseRefSpec": [
-    "^refs/heads/main$",
-    "^refs/tags/persistence-v\\d+\\.\\d+\\.\\d+(-.+)?$"
-  ],
-  "pathFilters": [
-    "modules/MicroKit.Persistence/"
-  ],
-  "cloudBuild": {
-    "setVersionVariables": true
-  },
-  "release": {
-    "tagName": "persistence-v{version}",
-    "branchName": "release/persistence/{version}"
-  }
+    "version": "1.0.0-preview.2",
+    "publicReleaseRefSpec": [
+        "^refs/heads/main$",
+        "^refs/tags/persistence-v\\d+\\.\\d+\\.\\d+(-.+)?$"
+    ],
+    "pathFilters": [
+        "modules/MicroKit.Persistence/"
+    ],
+    "cloudBuild": {
+        "setVersionVariables": true
+    },
+    "release": {
+        "tagName": "persistence-v{version}",
+        "branchName": "release/persistence/{version}"
+    }
 }

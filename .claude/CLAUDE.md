@@ -20,10 +20,10 @@ This root file provides the global vision and cross-cutting conventions.
 | Module | Path | .claude/ | Status |
 |--------|------|----------|--------|
 | **MicroKit.Result** | `modules/MicroKit.Result/` | `modules/MicroKit.Result/.claude/` | ✅ Released 1.0.0-preview.1 |
-| **MicroKit.Domain** | `modules/MicroKit.Domain/` | `modules/MicroKit.Domain/.claude/` | ✅ Released 1.0.0-preview.4 |
+| **MicroKit.Domain** | `modules/MicroKit.Domain/` | `modules/MicroKit.Domain/.claude/` | ✅ Released 1.0.0-preview.5 |
 | **MicroKit.Logging** | `modules/MicroKit.Logging/` | `modules/MicroKit.Logging/.claude/` | ✅ Released 1.0.0-preview.1 |
 | **MicroKit.MediatR** | `modules/MicroKit.MediatR/` | `modules/MicroKit.MediatR/.claude/` | ✅ Released 1.0.0-preview.1 — redesign preview.2 in progress (fix/messaging/mediatr) |
-| **MicroKit.Persistence** | `modules/MicroKit.Persistence/` | `modules/MicroKit.Persistence/.claude/` | ✅ Released 1.0.0-preview.1 |
+| **MicroKit.Persistence** | `modules/MicroKit.Persistence/` | `modules/MicroKit.Persistence/.claude/` | ✅ Released 1.0.0-preview.2 |
 | **MicroKit.Multitenancy** | `modules/MicroKit.Multitenancy/` | `modules/MicroKit.Multitenancy/.claude/` | ✅ Released 1.0.0-preview.1 |
 | **MicroKit.Auth** | `modules/MicroKit.Auth/` | `modules/MicroKit.Auth/.claude/` | ✅ Released 1.0.0-preview.1 |
 | **MicroKit.Execution.Abstractions** | `modules/MicroKit.Execution.Abstractions/` | — | ✅ Merged dev — not yet released |
@@ -149,7 +149,8 @@ MicroKit.Messaging                 ← may depend on Result, Persistence (outbox
                                      ADR-MSG-009: MicroKit.Messaging.MediatR is the ONLY Messaging
                                      package allowed to reference MediatR/MediatR.Contracts
 MicroKit.Http                      ← may depend on Result, Observability
-MicroKit.MediatR                   ← may depend on Result, Domain, Logging.Abstractions
+MicroKit.MediatR                   ← may depend on Result, Domain, Logging.Abstractions,
+                                     Persistence.Abstractions (ADR-MEDIATR-011 — TransactionBehavior requires ITransactionalContext)
                                      ADR-MEDIATR-009: two disjoint pipelines —
                                      IDomainEventHandler<TEvent> (sync, in-transaction, DI direct) and
                                      INotificationHandler<TNotification> (async, via outbox, at-least-once)
@@ -288,7 +289,7 @@ test(multitenancy): implement ArchitectureTests
 ```txt
 MicroKit.Result                                        ✅ 1.0.0-preview.1
 MicroKit.Result.AspNetCore                             ✅ 1.0.0-preview.1
-MicroKit.Domain                                        ✅ 1.0.0-preview.4 (IEvent canonical — fix/messaging/mediatr pending) → 🚧 preview.5 
+MicroKit.Domain                                        ✅ 1.0.0-preview.5
 MicroKit.Logging                                       ✅ 1.0.0-preview.1
 MicroKit.Logging.Abstractions                          ✅ 1.0.0-preview.1
 MicroKit.Logging.OpenTelemetry                         ✅ 1.0.0-preview.1
@@ -300,14 +301,14 @@ MicroKit.MediatR                                       ✅ 1.0.0-preview.1 → �
 MicroKit.MediatR.Abstractions                          ✅ 1.0.0-preview.1 → 🚧 preview.2 pending
 MicroKit.MediatR.Behaviors                             ✅ 1.0.0-preview.1 → 🚧 preview.2 pending
 MicroKit.MediatR.Testing                               ✅ 1.0.0-preview.1 → 🚧 preview.2 pending
-MicroKit.Persistence.Abstractions                      ✅ 1.0.0-preview.1
-MicroKit.Persistence                                   ✅ 1.0.0-preview.1
-MicroKit.Persistence.EntityFrameworkCore               ✅ 1.0.0-preview.1
-MicroKit.Persistence.EntityFrameworkCore.PostgreSql    ✅ 1.0.0-preview.1
-MicroKit.Persistence.EntityFrameworkCore.SqlServer     ✅ 1.0.0-preview.1
-MicroKit.Persistence.Specifications                    ✅ 1.0.0-preview.1
-MicroKit.Persistence.Testing                           ✅ 1.0.0-preview.1
-MicroKit.Persistence.Analyzers                         ✅ 1.0.0-preview.1
+MicroKit.Persistence.Abstractions                      ✅ 1.0.0-preview.2
+MicroKit.Persistence                                   ✅ 1.0.0-preview.2
+MicroKit.Persistence.EntityFrameworkCore               ✅ 1.0.0-preview.2
+MicroKit.Persistence.EntityFrameworkCore.PostgreSql    ✅ 1.0.0-preview.2
+MicroKit.Persistence.EntityFrameworkCore.SqlServer     ✅ 1.0.0-preview.2
+MicroKit.Persistence.Specifications                    ✅ 1.0.0-preview.2
+MicroKit.Persistence.Testing                           ✅ 1.0.0-preview.2
+MicroKit.Persistence.Analyzers                         ✅ 1.0.0-preview.2
 MicroKit.Multitenancy.Abstractions                     ✅ 1.0.0-preview.1
 MicroKit.Multitenancy                                  ✅ 1.0.0-preview.1
 MicroKit.Multitenancy.AspNetCore                       ✅ 1.0.0-preview.1
