@@ -5,6 +5,20 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/) — [Semantic V
 
 ---
 
+## [1.0.0-preview.2] — 2026-06-22
+
+### Added
+- `ArchitectureTests` — 44 real tests covering layer dependency rules, sealed/static type conventions,
+  namespace conventions, and contract placement for both `MicroKit.Result` and `MicroKit.Result.AspNetCore`
+
+### Changed
+- `MicroKit.Result.Samples` marked `IsPackable=false` / `IsPublishable=false` — prevents the sample
+  executable from being pushed to NuGet during releases
+
+> No functional changes to the published packages.
+
+---
+
 ## [1.0.0-preview.1] — 2026-05-28
 
 First public pre-release of MicroKit.Result.
