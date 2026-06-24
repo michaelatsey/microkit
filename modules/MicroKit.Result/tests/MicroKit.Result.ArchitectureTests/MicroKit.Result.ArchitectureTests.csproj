@@ -3,7 +3,7 @@
     <IsPackable>false</IsPackable>
     <IsPublishable>false</IsPublishable>
     <GenerateDocumentationFile>false</GenerateDocumentationFile>
-    <NoWarn>$(NoWarn);CS1591;CA1707</NoWarn>
+    <NoWarn>$(NoWarn);CS1591;CA1707;IL2026;IL2070</NoWarn>
   </PropertyGroup>
   <ItemGroup>
     <PackageReference Include="Microsoft.NET.Test.Sdk" />
@@ -15,5 +15,6 @@
   </ItemGroup>
   <ItemGroup>
     <ProjectReference Include="../../src/MicroKit.Result/MicroKit.Result.csproj" />
+    <ProjectReference Include="../../src/MicroKit.Result.AspNetCore/MicroKit.Result.AspNetCore.csproj" />
   </ItemGroup>
 </Project>
