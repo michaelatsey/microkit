@@ -1,17 +1,17 @@
 {
-  "version": "1.0",
-  "publicReleaseRefSpec": [
-    "^refs/heads/main$",
-    "^refs/tags/execution-v\\d+\\.\\d+\\.\\d+(-.+)?$"
-  ],
-  "pathFilters": [
-    "modules/MicroKit.Execution.Abstractions/"
-  ],
-  "cloudBuild": {
-    "setVersionVariables": true
-  },
-  "release": {
-    "tagName": "execution-v{version}",
-    "branchName": "release/execution/{version}"
-  }
+    "version": "1.0.0-preview.1",
+    "publicReleaseRefSpec": [
+        "^refs/heads/main$",
+        "^refs/tags/execution-abstractions-v\\d+\\.\\d+\\.\\d+(-.+)?$"
+    ],
+    "pathFilters": [
+        "modules/MicroKit.Execution.Abstractions/"
+    ],
+    "cloudBuild": {
+        "setVersionVariables": true
+    },
+    "release": {
+        "tagName": "execution-abstractions-v{version}",
+        "branchName": "release/execution-abstractions/{version}"
+    }
 }

@@ -1,0 +1,48 @@
+name: Release — MicroKit.Execution.Abstractions
+
+on:
+  push:
+    tags:
+      - 'execution-abstractions-v*'
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          global-json-file: global.json
+
+      - name: Extract version from tag
+        run: |
+          TAG="${GITHUB_REF#refs/tags/}"
+          PACKAGE_VERSION="${TAG#execution-abstractions-v}"
+          echo "PACKAGE_VERSION=$PACKAGE_VERSION" >> "$GITHUB_ENV"
+
+      # CIReleaseBuild=true: no cross-module MicroKit dependencies,
+      # used for consistency with the canonical release pattern.
+      - name: Restore
+        run: dotnet restore modules/MicroKit.Execution.Abstractions/MicroKit.Execution.Abstractions.slnx -p:CIReleaseBuild=true
+
+      - name: Build
+        run: dotnet build modules/MicroKit.Execution.Abstractions/MicroKit.Execution.Abstractions.slnx --no-restore -c Release -p:CIReleaseBuild=true
+
+      - name: Pack
+        run: |
+          dotnet pack modules/MicroKit.Execution.Abstractions/MicroKit.Execution.Abstractions.slnx \
+            --no-build -c Release \
+            -p:CIReleaseBuild=true \
+            -p:PackageVersion=${{ env.PACKAGE_VERSION }} \
+            -p:AssemblyVersion=$(echo "${{ env.PACKAGE_VERSION }}" | grep -oE '^[0-9]+\.[0-9]+\.[0-9]+').0 \
+            -o nupkgs
+
+      - name: Push to NuGet.org
+        run: |
+          dotnet nuget push nupkgs/*.nupkg \
+            --api-key ${{ secrets.NUGET_API_KEY }} \
+            --source https://api.nuget.org/v3/index.json \
+            --skip-duplicate
