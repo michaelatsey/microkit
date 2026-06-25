@@ -19,7 +19,7 @@ This root file provides the global vision and cross-cutting conventions.
 
 | Module | Path | .claude/ | Status |
 |--------|------|----------|--------|
-| **MicroKit.Result** | `modules/MicroKit.Result/` | `modules/MicroKit.Result/.claude/` | ✅ Released 1.0.0-preview.1 |
+| **MicroKit.Result** | `modules/MicroKit.Result/` | `modules/MicroKit.Result/.claude/` | ✅ Released 1.0.0-preview.2 |
 | **MicroKit.Domain** | `modules/MicroKit.Domain/` | `modules/MicroKit.Domain/.claude/` | ✅ Released 1.0.0-preview.5 |
 | **MicroKit.Logging** | `modules/MicroKit.Logging/` | `modules/MicroKit.Logging/.claude/` | ✅ Released 1.0.0-preview.1 |
 | **MicroKit.MediatR** | `modules/MicroKit.MediatR/` | `modules/MicroKit.MediatR/.claude/` | ✅ Released 1.0.0-preview.1 — redesign preview.2 in progress (fix/messaging/mediatr) |
@@ -287,7 +287,7 @@ test(multitenancy): implement ArchitectureTests
 ### Published NuGet package names
 
 ```txt
-MicroKit.Result                                        ✅ 1.0.0-preview.1
+MicroKit.Result                                        ✅ 1.0.0-preview.2
 MicroKit.Result.AspNetCore                             ✅ 1.0.0-preview.1
 MicroKit.Domain                                        ✅ 1.0.0-preview.5
 MicroKit.Logging                                       ✅ 1.0.0-preview.1

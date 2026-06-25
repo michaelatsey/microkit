@@ -16,7 +16,7 @@
          Used by CIReleaseBuild=true pack step to emit correct NuGet dependencies
          instead of the git-height versions produced by cross-module ProjectReferences. -->
     <PackageVersion Include="MicroKit.Execution.Abstractions" Version="1.0.0-preview.1" />
-    <PackageVersion Include="MicroKit.Result" Version="1.0.0-preview.1" />
+    <PackageVersion Include="MicroKit.Result" Version="1.0.0-preview.2" />
     <PackageVersion Include="MicroKit.Domain" Version="1.0.0-preview.5" />
     <PackageVersion Include="MicroKit.Logging.Abstractions" Version="1.0.0-preview.1" />
     <PackageVersion Include="MicroKit.Persistence.Abstractions" Version="1.0.0-preview.2" />
