@@ -18,14 +18,17 @@
     <InternalsVisibleTo Include="MicroKit.Messaging.IntegrationTests" />
   </ItemGroup>
 
+  <!-- Same-module reference — co-versioned with Messaging Core; no CIReleaseBuild pattern needed -->
+  <ItemGroup>
+    <ProjectReference Include="../MicroKit.Messaging/MicroKit.Messaging.csproj" />
+  </ItemGroup>
+
   <!-- DEV: source ProjectReferences — CI/Release: published NuGet packages -->
   <!-- ⚠ Any new cross-module dependency must be added to BOTH ItemGroups -->
   <ItemGroup Condition="'$(CIReleaseBuild)' != 'true'">
-    <ProjectReference Include="../MicroKit.Messaging/MicroKit.Messaging.csproj" />
     <ProjectReference Include="../../../MicroKit.Persistence/src/MicroKit.Persistence.EntityFrameworkCore/MicroKit.Persistence.EntityFrameworkCore.csproj" />
   </ItemGroup>
   <ItemGroup Condition="'$(CIReleaseBuild)' == 'true'">
-    <PackageReference Include="MicroKit.Messaging" />
     <PackageReference Include="MicroKit.Persistence.EntityFrameworkCore" />
   </ItemGroup>
 

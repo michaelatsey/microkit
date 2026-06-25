@@ -1,0 +1,61 @@
+name: Release — MicroKit.Messaging
+
+on:
+  push:
+    tags:
+      - 'messaging-v*'
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          global-json-file: global.json
+
+      # Derive the package version from the triggering tag (e.g. messaging-v1.0.0-preview.1 → 1.0.0-preview.1).
+      # This makes the version explicit and independent of Nerdbank.GitVersioning tooling availability.
+      - name: Extract version from tag
+        run: |
+          TAG="${GITHUB_REF#refs/tags/}"
+          PACKAGE_VERSION="${TAG#messaging-v}"
+          echo "PACKAGE_VERSION=$PACKAGE_VERSION" >> "$GITHUB_ENV"
+
+      # CIReleaseBuild=true replaces cross-module ProjectReferences with PackageReferences
+      # (MicroKit.Result, MicroKit.Domain, MicroKit.Execution.Abstractions,
+      # MicroKit.Persistence.EntityFrameworkCore, MicroKit.MediatR) so that:
+      #   - Restore resolves the published NuGet versions from Directory.Packages.props
+      #   - Build compiles against those published packages (ABI verification)
+      #   - Pack emits the correct nuspec dependency versions
+      # Prerequisites: MicroKit.Result, MicroKit.Domain, MicroKit.Execution.Abstractions,
+      # MicroKit.Persistence.EntityFrameworkCore, and MicroKit.MediatR must be published to
+      # NuGet.org at the versions declared in Directory.Packages.props before this workflow
+      # is triggered.
+      - name: Restore
+        run: dotnet restore modules/MicroKit.Messaging/MicroKit.Messaging.slnx -p:CIReleaseBuild=true
+
+      - name: Build
+        run: dotnet build modules/MicroKit.Messaging/MicroKit.Messaging.slnx --no-restore -c Release -p:CIReleaseBuild=true
+
+      - name: Test
+        run: dotnet test modules/MicroKit.Messaging/MicroKit.Messaging.slnx --no-build -c Release
+
+      - name: Pack
+        run: |
+          dotnet pack modules/MicroKit.Messaging/MicroKit.Messaging.slnx \
+            --no-build -c Release \
+            -p:CIReleaseBuild=true \
+            -p:PackageVersion=${{ env.PACKAGE_VERSION }} \
+            -p:AssemblyVersion=$(echo "${{ env.PACKAGE_VERSION }}" | grep -oE '^[0-9]+\.[0-9]+\.[0-9]+').0 \
+            -o nupkgs
+
+      - name: Push to NuGet.org
+        run: |
+          dotnet nuget push nupkgs/*.nupkg \
+            --api-key ${{ secrets.NUGET_API_KEY }} \
+            --source https://api.nuget.org/v3/index.json \
+            --skip-duplicate
