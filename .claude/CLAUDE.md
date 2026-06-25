@@ -22,12 +22,12 @@ This root file provides the global vision and cross-cutting conventions.
 | **MicroKit.Result** | `modules/MicroKit.Result/` | `modules/MicroKit.Result/.claude/` | ✅ Released 1.0.0-preview.2 |
 | **MicroKit.Domain** | `modules/MicroKit.Domain/` | `modules/MicroKit.Domain/.claude/` | ✅ Released 1.0.0-preview.5 |
 | **MicroKit.Logging** | `modules/MicroKit.Logging/` | `modules/MicroKit.Logging/.claude/` | ✅ Released 1.0.0-preview.1 |
-| **MicroKit.MediatR** | `modules/MicroKit.MediatR/` | `modules/MicroKit.MediatR/.claude/` | ✅ Released 1.0.0-preview.1 — redesign preview.2 in progress (fix/messaging/mediatr) |
+| **MicroKit.MediatR** | `modules/MicroKit.MediatR/` | `modules/MicroKit.MediatR/.claude/` | ✅ Released 1.0.0-preview.2 |
 | **MicroKit.Persistence** | `modules/MicroKit.Persistence/` | `modules/MicroKit.Persistence/.claude/` | ✅ Released 1.0.0-preview.2 |
 | **MicroKit.Multitenancy** | `modules/MicroKit.Multitenancy/` | `modules/MicroKit.Multitenancy/.claude/` | ✅ Released 1.0.0-preview.1 |
 | **MicroKit.Auth** | `modules/MicroKit.Auth/` | `modules/MicroKit.Auth/.claude/` | ✅ Released 1.0.0-preview.1 |
 | **MicroKit.Execution.Abstractions** | `modules/MicroKit.Execution.Abstractions/` | — | ✅ Merged dev — not yet released |
-| **MicroKit.Messaging** | `modules/MicroKit.Messaging/` | `modules/MicroKit.Messaging/.claude/` | 🚧 In progress — Abstractions ✅ · Core ✅ · EntityFrameworkCore ✅ · MediatR glue ✅ — all merged dev · fix/messaging/mediatr in progress |
+| **MicroKit.Messaging** | `modules/MicroKit.Messaging/` | `modules/MicroKit.Messaging/.claude/` | 🚧 In progress — Abstractions ✅ · Core ✅ · EntityFrameworkCore ✅ · MediatR glue ✅ — all merged dev |
 | **MicroKit.Caching** | `modules/MicroKit.Caching/` | `modules/MicroKit.Caching/.claude/` | 📋 Planned |
 | **MicroKit.Http** | `modules/MicroKit.Http/` | `modules/MicroKit.Http/.claude/` | 📋 Planned |
 | **MicroKit.Observability** | `modules/MicroKit.Observability/` | `modules/MicroKit.Observability/.claude/` | 📋 Planned |
@@ -288,7 +288,7 @@ test(multitenancy): implement ArchitectureTests
 
 ```txt
 MicroKit.Result                                        ✅ 1.0.0-preview.2
-MicroKit.Result.AspNetCore                             ✅ 1.0.0-preview.1
+MicroKit.Result.AspNetCore                             ✅ 1.0.0-preview.2
 MicroKit.Domain                                        ✅ 1.0.0-preview.5
 MicroKit.Logging                                       ✅ 1.0.0-preview.1
 MicroKit.Logging.Abstractions                          ✅ 1.0.0-preview.1
@@ -297,10 +297,10 @@ MicroKit.Logging.AspNetCore                            ✅ 1.0.0-preview.1
 MicroKit.Logging.Diagnostics                           ✅ 1.0.0-preview.1
 MicroKit.Logging.Analyzers                             ✅ 1.0.0-preview.1
 MicroKit.Logging.Generators                            ✅ 1.0.0-preview.1
-MicroKit.MediatR                                       ✅ 1.0.0-preview.1 → 🚧 preview.2 pending (fix/messaging/mediatr)
-MicroKit.MediatR.Abstractions                          ✅ 1.0.0-preview.1 → 🚧 preview.2 pending
-MicroKit.MediatR.Behaviors                             ✅ 1.0.0-preview.1 → 🚧 preview.2 pending
-MicroKit.MediatR.Testing                               ✅ 1.0.0-preview.1 → 🚧 preview.2 pending
+MicroKit.MediatR                                       ✅ 1.0.0-preview.2
+MicroKit.MediatR.Abstractions                          ✅ 1.0.0-preview.2
+MicroKit.MediatR.Behaviors                             ✅ 1.0.0-preview.2
+MicroKit.MediatR.Testing                               ✅ 1.0.0-preview.2
 MicroKit.Persistence.Abstractions                      ✅ 1.0.0-preview.2
 MicroKit.Persistence                                   ✅ 1.0.0-preview.2
 MicroKit.Persistence.EntityFrameworkCore               ✅ 1.0.0-preview.2
