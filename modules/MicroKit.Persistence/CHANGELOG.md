@@ -1,5 +1,12 @@
 # Changelog — MicroKit.Persistence
 
+## [1.0.0-preview.3] — 2026-06-25
+### Fixed
+#### MicroKit.Persistence.Abstractions
+- Corrected `MicroKit.Domain` dependency constraint to `>= 1.0.0-preview.5` — previous nuspec declared `>= 1.0.0-preview.2` due to missing `CIReleaseBuild=true` on pack step, causing NuGet to resolve an incompatible Domain version transitively.
+
+---
+
 ## [1.0.0-preview.2] — 2026-06-22
 
 ### Added
