@@ -35,6 +35,6 @@
   </Folder>
   <Folder Name="/deps/">
     <Project Path="../MicroKit.Result/src/MicroKit.Result/MicroKit.Result.csproj" />
-    <Project Path="../MicroKit.Multitenancy/src/MicroKit.Multitenancy.Abstractions/MicroKit.Multitenancy.Abstractions.csproj" />
+    <Project Path="../MicroKit.Tenancy/src/MicroKit.Tenancy.Abstractions/MicroKit.Tenancy.Abstractions.csproj" />
   </Folder>
 </Solution>

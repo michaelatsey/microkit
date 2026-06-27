@@ -1,5 +1,5 @@
 using Microsoft.Extensions.DependencyInjection;
-using MicroKit.Multitenancy;
+using MicroKit.Tenancy;
 
 namespace MicroKit.Auth.Multitenancy;
 

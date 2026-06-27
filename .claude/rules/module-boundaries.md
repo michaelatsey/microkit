@@ -84,7 +84,7 @@ Niveau 2 (dépendent du niveau 1) :
 Niveau 3 (dépendent du niveau 2) :
   ├── MicroKit.Http            → Result, Observability
   ├── MicroKit.Messaging       → Result, Domain, Persistence
-  └── MicroKit.Multitenancy    → Result, Auth, Persistence
+  └── MicroKit.Tenancy    → Result, Auth, Persistence
 ```
 
 ## Détection des violations
