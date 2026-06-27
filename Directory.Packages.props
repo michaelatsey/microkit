@@ -1,6 +1,7 @@
 <Project>
   <PropertyGroup>
     <ManagePackageVersionsCentrally>true</ManagePackageVersionsCentrally>
+    <CentralPackageTransitivePinningEnabled>true</CentralPackageTransitivePinningEnabled>
   </PropertyGroup>
   <ItemGroup Label="Framework">
     <PackageVersion Include="Microsoft.Extensions.DependencyInjection" Version="10.0.9" />
@@ -18,7 +19,7 @@
     <PackageVersion Include="MicroKit.Execution.Abstractions" Version="1.0.0-preview.1" />
     <PackageVersion Include="MicroKit.Result" Version="1.0.0-preview.2" />
     <PackageVersion Include="MicroKit.Domain" Version="1.0.0-preview.5" />
-    <PackageVersion Include="MicroKit.Logging.Abstractions" Version="1.0.0-preview.1" />
+    <PackageVersion Include="MicroKit.Logging.Abstractions" Version="1.0.0-preview.2" />
     <PackageVersion Include="MicroKit.Persistence.Abstractions" Version="1.0.0-preview.2" />
     <PackageVersion Include="MicroKit.Multitenancy.Abstractions" Version="1.0.0-preview.1" />
     <PackageVersion Include="MicroKit.Auth.Abstractions" Version="1.0.0-preview.1" />
