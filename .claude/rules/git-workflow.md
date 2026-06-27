@@ -75,7 +75,7 @@ ci        → GitHub Actions
 ### Scopes valides
 ```
 result, mediatr, domain, messaging, persistence, caching,
-http, auth, observability, logging, multitenancy, monorepo
+http, auth, observability, logging, tenancy, monorepo
 ```
 
 ## Tags Git

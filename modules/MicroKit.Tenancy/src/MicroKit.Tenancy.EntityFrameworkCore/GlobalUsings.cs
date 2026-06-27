@@ -1,0 +1,5 @@
+global using MicroKit.Tenancy;
+global using MicroKit.Result;
+global using static MicroKit.Result.Result;
+global using Microsoft.EntityFrameworkCore;
+global using Microsoft.Extensions.DependencyInjection;

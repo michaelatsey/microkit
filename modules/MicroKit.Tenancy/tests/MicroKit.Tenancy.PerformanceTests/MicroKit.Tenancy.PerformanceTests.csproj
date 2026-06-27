@@ -1,0 +1,17 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <AssemblyName>MicroKit.Tenancy.PerformanceTests</AssemblyName>
+    <RootNamespace>MicroKit.Tenancy.PerformanceTests</RootNamespace>
+    <IsPackable>false</IsPackable>
+    <GenerateDocumentationFile>false</GenerateDocumentationFile>
+    <NoWarn>CS1591;CA1707</NoWarn>
+    <Optimize>true</Optimize>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\MicroKit.Tenancy.Abstractions\MicroKit.Tenancy.Abstractions.csproj" />
+    <ProjectReference Include="..\..\src\MicroKit.Tenancy\MicroKit.Tenancy.csproj" />
+  </ItemGroup>
+  <ItemGroup>
+    <PackageReference Include="BenchmarkDotNet" />
+  </ItemGroup>
+</Project>

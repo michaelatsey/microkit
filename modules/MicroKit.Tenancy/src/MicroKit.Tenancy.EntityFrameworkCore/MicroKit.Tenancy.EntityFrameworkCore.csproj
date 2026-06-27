@@ -1,0 +1,32 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <AssemblyName>MicroKit.Tenancy.EntityFrameworkCore</AssemblyName>
+    <RootNamespace>MicroKit.Tenancy.EntityFrameworkCore</RootNamespace>
+    <Description>EF Core tenant isolation for MicroKit.Tenancy — automatic query filters on ITenantEntity, SaveChanges stamp interceptor, and IgnoreTenantScope for admin queries.</Description>
+    <PackageTags>microkit;multitenancy;tenant;ef-core;dotnet</PackageTags>
+    <Authors>Ange-Michaël Atsé</Authors>
+    <PackageProjectUrl>https://github.com/michaelatsey/microkit</PackageProjectUrl>
+    <RepositoryUrl>https://github.com/michaelatsey/microkit</RepositoryUrl>
+    <PackageLicenseExpression>MIT</PackageLicenseExpression>
+    <IncludeSymbols>true</IncludeSymbols>
+    <SymbolPackageFormat>snupkg</SymbolPackageFormat>
+    <!-- EF Core generic type parameters and MakeGenericMethod generate trim warnings -->
+    <NoWarn>$(NoWarn);IL2026;IL2060;IL2091</NoWarn>
+  </PropertyGroup>
+  <!-- DEV: source ProjectReferences — CI/Release: published NuGet packages -->
+  <!-- ⚠ Any new cross-module dependency must be added to BOTH ItemGroups -->
+  <ItemGroup Condition="'$(CIReleaseBuild)' != 'true'">
+    <ProjectReference Include="..\MicroKit.Tenancy\MicroKit.Tenancy.csproj" />
+    <ProjectReference Include="../../../MicroKit.Persistence/src/MicroKit.Persistence.Abstractions/MicroKit.Persistence.Abstractions.csproj" />
+    <ProjectReference Include="../../../MicroKit.Persistence/src/MicroKit.Persistence.EntityFrameworkCore/MicroKit.Persistence.EntityFrameworkCore.csproj" />
+  </ItemGroup>
+  <ItemGroup Condition="'$(CIReleaseBuild)' == 'true'">
+    <PackageReference Include="MicroKit.Tenancy" />
+    <PackageReference Include="MicroKit.Persistence.Abstractions" />
+    <PackageReference Include="MicroKit.Persistence.EntityFrameworkCore" />
+  </ItemGroup>
+  <ItemGroup>
+    <PackageReference Include="Microsoft.EntityFrameworkCore" />
+    <PackageReference Include="Microsoft.Extensions.DependencyInjection.Abstractions" />
+  </ItemGroup>
+</Project>

@@ -1,5 +1,5 @@
 using MicroKit.Auth;
-using MicroKit.Multitenancy;
+using MicroKit.Tenancy;
 using MicroKit.Result;
 
 namespace MicroKit.Auth.Multitenancy;
@@ -7,7 +7,7 @@ namespace MicroKit.Auth.Multitenancy;
 /// <summary>
 /// Derives the current tenant from the authenticated user's identity.
 /// Implements <see cref="ITenantResolutionStrategy"/> to compose additively into
-/// the MicroKit.Multitenancy resolution pipeline via <see cref="Order"/>.
+/// the MicroKit.Tenancy resolution pipeline via <see cref="Order"/>.
 /// Returns a failure <see cref="Result{TenantId}"/> if the user is unauthenticated
 /// or carries no tenant ID claim — the pipeline proceeds to the next strategy.
 /// </summary>

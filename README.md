@@ -16,7 +16,7 @@ Ecosystem of modular, opinionated .NET 10+ libraries for production-ready applic
 | MicroKit.Auth | JWT + policies + identity | Planned |
 | MicroKit.Observability | OpenTelemetry + metrics + health | Planned |
 | MicroKit.Logging | Structured logging | In progress |
-| MicroKit.Multitenancy | Multi-tenancy support | Planned |
+| MicroKit.Tenancy | Multi-tenancy support | Planned |
 
 ## Getting Started
 

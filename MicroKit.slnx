@@ -34,19 +34,19 @@
     <Project Path="modules/MicroKit.Persistence/src/MicroKit.Persistence/MicroKit.Persistence.csproj" />
   </Folder>
   <Folder Name="/modules/MicroKit.Persistence/tests/" />
-  <Folder Name="/modules/MicroKit.Multitenancy/" />
-  <Folder Name="/modules/MicroKit.Multitenancy/src/">
-    <Project Path="modules/MicroKit.Multitenancy/src/MicroKit.Multitenancy.Abstractions/MicroKit.Multitenancy.Abstractions.csproj" />
-    <Project Path="modules/MicroKit.Multitenancy/src/MicroKit.Multitenancy/MicroKit.Multitenancy.csproj" />
-    <Project Path="modules/MicroKit.Multitenancy/src/MicroKit.Multitenancy.AspNetCore/MicroKit.Multitenancy.AspNetCore.csproj" />
-    <Project Path="modules/MicroKit.Multitenancy/src/MicroKit.Multitenancy.EntityFrameworkCore/MicroKit.Multitenancy.EntityFrameworkCore.csproj" />
-    <Project Path="modules/MicroKit.Multitenancy/src/MicroKit.Multitenancy.Analyzers/MicroKit.Multitenancy.Analyzers.csproj" />
+  <Folder Name="/modules/MicroKit.Tenancy/" />
+  <Folder Name="/modules/MicroKit.Tenancy/src/">
+    <Project Path="modules/MicroKit.Tenancy/src/MicroKit.Tenancy.Abstractions/MicroKit.Tenancy.Abstractions.csproj" />
+    <Project Path="modules/MicroKit.Tenancy/src/MicroKit.Tenancy/MicroKit.Tenancy.csproj" />
+    <Project Path="modules/MicroKit.Tenancy/src/MicroKit.Tenancy.AspNetCore/MicroKit.Tenancy.AspNetCore.csproj" />
+    <Project Path="modules/MicroKit.Tenancy/src/MicroKit.Tenancy.EntityFrameworkCore/MicroKit.Tenancy.EntityFrameworkCore.csproj" />
+    <Project Path="modules/MicroKit.Tenancy/src/MicroKit.Tenancy.Analyzers/MicroKit.Tenancy.Analyzers.csproj" />
   </Folder>
-  <Folder Name="/modules/MicroKit.Multitenancy/tests/">
-    <Project Path="modules/MicroKit.Multitenancy/tests/MicroKit.Multitenancy.UnitTests/MicroKit.Multitenancy.UnitTests.csproj" />
-    <Project Path="modules/MicroKit.Multitenancy/tests/MicroKit.Multitenancy.IntegrationTests/MicroKit.Multitenancy.IntegrationTests.csproj" />
-    <Project Path="modules/MicroKit.Multitenancy/tests/MicroKit.Multitenancy.ArchitectureTests/MicroKit.Multitenancy.ArchitectureTests.csproj" />
-    <Project Path="modules/MicroKit.Multitenancy/tests/MicroKit.Multitenancy.PerformanceTests/MicroKit.Multitenancy.PerformanceTests.csproj" />
+  <Folder Name="/modules/MicroKit.Tenancy/tests/">
+    <Project Path="modules/MicroKit.Tenancy/tests/MicroKit.Tenancy.UnitTests/MicroKit.Tenancy.UnitTests.csproj" />
+    <Project Path="modules/MicroKit.Tenancy/tests/MicroKit.Tenancy.IntegrationTests/MicroKit.Tenancy.IntegrationTests.csproj" />
+    <Project Path="modules/MicroKit.Tenancy/tests/MicroKit.Tenancy.ArchitectureTests/MicroKit.Tenancy.ArchitectureTests.csproj" />
+    <Project Path="modules/MicroKit.Tenancy/tests/MicroKit.Tenancy.PerformanceTests/MicroKit.Tenancy.PerformanceTests.csproj" />
   </Folder>
   <Folder Name="/modules/MicroKit.Auth/" />
   <Folder Name="/modules/MicroKit.Auth/src/">
