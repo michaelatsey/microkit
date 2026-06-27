@@ -1,3 +1,6 @@
+// NSubstitute ValueTask setup chains (.Returns on the method-call result) are intentional;
+// they are not a ValueTask misuse — CA2012 is suppressed for this test file.
+#pragma warning disable CA2012
 namespace MicroKit.Messaging.MediatR.UnitTests;
 
 public sealed class DomainEventsDispatcherTests
@@ -92,13 +95,15 @@ public sealed class DomainEventsDispatcherTests
         _eventsProvider.DrainDomainEvents().Returns([domainEvent]);
         _factory.Create(domainEvent).Returns(notification);
 
-        OutboxMessage? captured = null;
-        await _outboxWriter.AddAsync(Arg.Do<OutboxMessage>(m => captured = m), Arg.Any<CancellationToken>());
+        IReadOnlyList<OutboxMessage>? capturedBatch = null;
+        _outboxWriter
+            .AddBatchAsync(Arg.Do<IReadOnlyList<OutboxMessage>>(msgs => capturedBatch = msgs), Arg.Any<CancellationToken>())
+            .Returns(ValueTask.CompletedTask);
 
         await _sut.DispatchEventsAsync();
 
-        captured.ShouldNotBeNull();
-        captured!.Id.ShouldBe(MessageId.From(domainEvent.EventId));
+        capturedBatch.ShouldNotBeNull();
+        capturedBatch![0].Id.ShouldBe(MessageId.From(domainEvent.EventId));
     }
 
     [Fact]
@@ -109,12 +114,15 @@ public sealed class DomainEventsDispatcherTests
         _eventsProvider.DrainDomainEvents().Returns([domainEvent]);
         _factory.Create(domainEvent).Returns(notification);
 
-        OutboxMessage? captured = null;
-        await _outboxWriter.AddAsync(Arg.Do<OutboxMessage>(m => captured = m), Arg.Any<CancellationToken>());
+        IReadOnlyList<OutboxMessage>? capturedBatch = null;
+        _outboxWriter
+            .AddBatchAsync(Arg.Do<IReadOnlyList<OutboxMessage>>(msgs => capturedBatch = msgs), Arg.Any<CancellationToken>())
+            .Returns(ValueTask.CompletedTask);
 
         await _sut.DispatchEventsAsync();
 
-        captured!.OccurredOnUtc.ShouldBe(domainEvent.OccurredAt);
+        capturedBatch.ShouldNotBeNull();
+        capturedBatch![0].OccurredOnUtc.ShouldBe(domainEvent.OccurredAt);
     }
 
     [Fact]
@@ -133,12 +141,16 @@ public sealed class DomainEventsDispatcherTests
         _eventsProvider.DrainDomainEvents().Returns([domainEvent]);
         _factory.Create(domainEvent).Returns(notification);
 
-        OutboxMessage? captured = null;
-        await _outboxWriter.AddAsync(Arg.Do<OutboxMessage>(m => captured = m), Arg.Any<CancellationToken>());
+        IReadOnlyList<OutboxMessage>? capturedBatch = null;
+        _outboxWriter
+            .AddBatchAsync(Arg.Do<IReadOnlyList<OutboxMessage>>(msgs => capturedBatch = msgs), Arg.Any<CancellationToken>())
+            .Returns(ValueTask.CompletedTask);
 
         await _sut.DispatchEventsAsync();
 
-        captured!.TenantId.ShouldBe(tenantId);
+        capturedBatch.ShouldNotBeNull();
+        var captured = capturedBatch![0];
+        captured.TenantId.ShouldBe(tenantId);
         captured.CorrelationId.ShouldBe(CorrelationId.From(correlationGuid));
         captured.CausationId.ShouldBe(CausationId.From(causationGuid));
     }
