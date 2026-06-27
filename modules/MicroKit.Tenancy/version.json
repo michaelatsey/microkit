@@ -1,0 +1,17 @@
+{
+  "version": "1.0",
+  "publicReleaseRefSpec": [
+    "^refs/heads/main$",
+    "^refs/tags/tenancy-v\\d+\\.\\d+\\.\\d+(-.+)?$"
+  ],
+  "pathFilters": [
+    "modules/MicroKit.Tenancy/"
+  ],
+  "cloudBuild": {
+    "setVersionVariables": true
+  },
+  "release": {
+    "tagName": "tenancy-v{version}",
+    "branchName": "release/tenancy/{version}"
+  }
+}

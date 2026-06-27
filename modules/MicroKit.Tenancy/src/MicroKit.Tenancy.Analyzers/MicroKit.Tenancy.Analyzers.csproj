@@ -1,0 +1,27 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <AssemblyName>MicroKit.Tenancy.Analyzers</AssemblyName>
+    <RootNamespace>MicroKit.Tenancy.Analyzers</RootNamespace>
+    <!-- Roslyn analyzer packages must target netstandard2.0 for cross-SDK compatibility -->
+    <TargetFramework>netstandard2.0</TargetFramework>
+    <IncludeBuildOutput>false</IncludeBuildOutput>
+    <EnforceExtendedAnalyzerRules>true</EnforceExtendedAnalyzerRules>
+    <IsTrimmable>false</IsTrimmable>
+    <Description>Roslyn analyzers for MicroKit.Tenancy — enforces tenant isolation (MKT001), query filter bypass justification (MKT002), and singleton accessor prevention (MKT003).</Description>
+    <PackageTags>microkit;multitenancy;tenant;analyzers;roslyn;dotnet</PackageTags>
+    <Authors>Ange-Michaël Atsé</Authors>
+    <PackageProjectUrl>https://github.com/michaelatsey/microkit</PackageProjectUrl>
+    <RepositoryUrl>https://github.com/michaelatsey/microkit</RepositoryUrl>
+    <PackageLicenseExpression>MIT</PackageLicenseExpression>
+    <!-- RS2008: Release tracking — will add AnalyzerReleases files before first NuGet publish. -->
+    <NoWarn>RS2008;NU5128</NoWarn>
+    <IncludeSymbols>false</IncludeSymbols>
+  </PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="Microsoft.CodeAnalysis.CSharp" />
+  </ItemGroup>
+  <!-- Place the analyzer DLL in the correct NuGet package location -->
+  <ItemGroup>
+    <None Include="$(OutputPath)\$(AssemblyName).dll" Pack="true" PackagePath="analyzers/dotnet/cs" Visible="false" />
+  </ItemGroup>
+</Project>

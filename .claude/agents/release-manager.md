@@ -30,7 +30,7 @@ Always release in dependency graph order:
 2. MicroKit.Result (no dependencies)
 3. MicroKit.Logging → MicroKit.Caching → MicroKit.Auth
 4. MicroKit.Observability → MicroKit.Persistence → MicroKit.MediatR
-5. MicroKit.Http → MicroKit.Messaging → MicroKit.Multitenancy
+5. MicroKit.Http → MicroKit.Messaging → MicroKit.Tenancy
 
 ### Step 3 — Create the tag
 ```bash

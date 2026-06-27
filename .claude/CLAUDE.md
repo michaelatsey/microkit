@@ -24,7 +24,7 @@ This root file provides the global vision and cross-cutting conventions.
 | **MicroKit.Logging** | `modules/MicroKit.Logging/` | `modules/MicroKit.Logging/.claude/` | ✅ Released 1.0.0-preview.1 |
 | **MicroKit.MediatR** | `modules/MicroKit.MediatR/` | `modules/MicroKit.MediatR/.claude/` | ✅ Released 1.0.0-preview.2 |
 | **MicroKit.Persistence** | `modules/MicroKit.Persistence/` | `modules/MicroKit.Persistence/.claude/` | ✅ Released 1.0.0-preview.2 |
-| **MicroKit.Multitenancy** | `modules/MicroKit.Multitenancy/` | `modules/MicroKit.Multitenancy/.claude/` | ✅ Released 1.0.0-preview.1 |
+| **MicroKit.Tenancy** | `modules/MicroKit.Tenancy/` | `modules/MicroKit.Tenancy/.claude/` | ✅ Released 1.0.0-preview.1 |
 | **MicroKit.Auth** | `modules/MicroKit.Auth/` | `modules/MicroKit.Auth/.claude/` | ✅ Released 1.0.0-preview.1 |
 | **MicroKit.Execution.Abstractions** | `modules/MicroKit.Execution.Abstractions/` | — | ✅ Merged dev — not yet released |
 | **MicroKit.Messaging** | `modules/MicroKit.Messaging/` | `modules/MicroKit.Messaging/.claude/` | 🚧 In progress — Abstractions ✅ · Core ✅ · EntityFrameworkCore ✅ · MediatR glue ✅ — all merged dev |
@@ -80,7 +80,7 @@ MicroKit/
 │   ├── MicroKit.Logging/
 │   ├── MicroKit.MediatR/
 │   ├── MicroKit.Persistence/
-│   ├── MicroKit.Multitenancy/
+│   ├── MicroKit.Tenancy/
 │   ├── MicroKit.Auth/
 │   ├── MicroKit.Execution.Abstractions/
 │   ├── MicroKit.Messaging/
@@ -144,8 +144,8 @@ MicroKit.Persistence               ← may depend on Result, Domain
 MicroKit.Messaging                 ← may depend on Result, Persistence (outbox/inbox EFCore),
                                      Execution.Abstractions (ADR-EXEC-001)
                                      ADR-MSG-001: does NOT depend on Domain (IIntegrationEvent standalone)
-                                     ADR-EXEC-001: does NOT depend on Multitenancy (inversion via
-                                     IExecutionScopeFactory — Multitenancy implements, host composes)
+                                     ADR-EXEC-001: does NOT depend on Tenancy (inversion via
+                                     IExecutionScopeFactory — Tenancy implements, host composes)
                                      ADR-MSG-009: MicroKit.Messaging.MediatR is the ONLY Messaging
                                      package allowed to reference MediatR/MediatR.Contracts
 MicroKit.Http                      ← may depend on Result, Observability
@@ -155,7 +155,7 @@ MicroKit.MediatR                   ← may depend on Result, Domain, Logging.Abs
                                      IDomainEventHandler<TEvent> (sync, in-transaction, DI direct) and
                                      INotificationHandler<TNotification> (async, via outbox, at-least-once)
                                      IDomainEventHandler<TEvent> constrained to where TEvent : IDomainEvent
-MicroKit.Multitenancy              ← may depend on Result, Auth, Persistence,
+MicroKit.Tenancy              ← may depend on Result, Auth, Persistence,
                                      Execution.Abstractions (tenant-aware IExecutionScopeFactory impl)
 ```
 
@@ -195,7 +195,7 @@ domain-v1.0.0-preview.1            → MicroKit.Domain release
 logging-v1.0.0-preview.1           → MicroKit.Logging release
 mediatr-v1.0.0-preview.1           → MicroKit.MediatR release
 persistence-v1.0.0-preview.1       → MicroKit.Persistence release
-multitenancy-v1.0.0-preview.1      → MicroKit.Multitenancy release
+tenancy-v1.0.0-preview.1      → MicroKit.Tenancy release
 auth-v1.0.0-preview.1              → MicroKit.Auth release
 execution-abstractions-v1.0.0-...  → MicroKit.Execution.Abstractions release
 messaging-v1.0.0-preview.1         → MicroKit.Messaging release
@@ -208,7 +208,7 @@ main              ← always stable, protected
 dev               ← continuous integration
 feature/*         ← features (scope: result/fix-map, mediatr/add-streaming)
 release/*         ← release preparation (release/result-1.2)
-fix/*             ← bugfixes (fix/multitenancy/parallel-sqlite-flaky-test)
+fix/*             ← bugfixes (fix/tenancy/parallel-sqlite-flaky-test)
 ```
 
 ---
@@ -281,7 +281,7 @@ feat(result): add EnsureAsync overload
 fix(mediatr): correct pipeline order with custom behaviors
 chore(build): update Directory.Packages.props
 docs(domain): add aggregate root design guide
-test(multitenancy): implement ArchitectureTests
+test(tenancy): implement ArchitectureTests
 ```
 
 ### Published NuGet package names
@@ -309,11 +309,11 @@ MicroKit.Persistence.EntityFrameworkCore.SqlServer     ✅ 1.0.0-preview.2
 MicroKit.Persistence.Specifications                    ✅ 1.0.0-preview.2
 MicroKit.Persistence.Testing                           ✅ 1.0.0-preview.2
 MicroKit.Persistence.Analyzers                         ✅ 1.0.0-preview.2
-MicroKit.Multitenancy.Abstractions                     ✅ 1.0.0-preview.1
-MicroKit.Multitenancy                                  ✅ 1.0.0-preview.1
-MicroKit.Multitenancy.AspNetCore                       ✅ 1.0.0-preview.1
-MicroKit.Multitenancy.EntityFrameworkCore              ✅ 1.0.0-preview.1
-MicroKit.Multitenancy.Analyzers                        ✅ 1.0.0-preview.1
+MicroKit.Tenancy.Abstractions                     ✅ 1.0.0-preview.1
+MicroKit.Tenancy                                  ✅ 1.0.0-preview.1
+MicroKit.Tenancy.AspNetCore                       ✅ 1.0.0-preview.1
+MicroKit.Tenancy.EntityFrameworkCore              ✅ 1.0.0-preview.1
+MicroKit.Tenancy.Analyzers                        ✅ 1.0.0-preview.1
 MicroKit.Auth.Abstractions                             ✅ 1.0.0-preview.1
 MicroKit.Auth                                          ✅ 1.0.0-preview.1
 MicroKit.Auth.AspNetCore                               ✅ 1.0.0-preview.1

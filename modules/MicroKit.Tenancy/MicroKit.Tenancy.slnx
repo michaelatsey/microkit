@@ -1,0 +1,23 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/MicroKit.Tenancy.Abstractions/MicroKit.Tenancy.Abstractions.csproj" />
+    <Project Path="src/MicroKit.Tenancy/MicroKit.Tenancy.csproj" />
+    <Project Path="src/MicroKit.Tenancy.AspNetCore/MicroKit.Tenancy.AspNetCore.csproj" />
+    <Project Path="src/MicroKit.Tenancy.EntityFrameworkCore/MicroKit.Tenancy.EntityFrameworkCore.csproj" />
+    <Project Path="src/MicroKit.Tenancy.Analyzers/MicroKit.Tenancy.Analyzers.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/MicroKit.Tenancy.UnitTests/MicroKit.Tenancy.UnitTests.csproj" />
+    <Project Path="tests/MicroKit.Tenancy.IntegrationTests/MicroKit.Tenancy.IntegrationTests.csproj" />
+    <Project Path="tests/MicroKit.Tenancy.ArchitectureTests/MicroKit.Tenancy.ArchitectureTests.csproj" />
+    <Project Path="tests/MicroKit.Tenancy.PerformanceTests/MicroKit.Tenancy.PerformanceTests.csproj" />
+    <Project Path="tests/MicroKit.Tenancy.Analyzers.Tests/MicroKit.Tenancy.Analyzers.Tests.csproj" />
+  </Folder>
+  <Folder Name="/deps/">
+    <Project Path="../MicroKit.Result/src/MicroKit.Result/MicroKit.Result.csproj" />
+    <Project Path="../MicroKit.Domain/src/MicroKit.Domain/MicroKit.Domain.csproj" />
+    <Project Path="../MicroKit.Persistence/src/MicroKit.Persistence.Abstractions/MicroKit.Persistence.Abstractions.csproj" />
+    <Project Path="../MicroKit.Persistence/src/MicroKit.Persistence/MicroKit.Persistence.csproj" />
+    <Project Path="../MicroKit.Persistence/src/MicroKit.Persistence.EntityFrameworkCore/MicroKit.Persistence.EntityFrameworkCore.csproj" />
+  </Folder>
+</Solution>

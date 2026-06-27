@@ -1,5 +1,5 @@
 using MicroKit.Auth.Multitenancy;
-using MicroKit.Multitenancy;
+using MicroKit.Tenancy;
 
 namespace MicroKit.Auth.UnitTests.Multitenancy;
 
