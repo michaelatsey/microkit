@@ -28,8 +28,8 @@
     <PackageVersion Include="MicroKit.Persistence.EntityFrameworkCore" Version="1.0.0-preview.3" />
     <PackageVersion Include="MicroKit.Tenancy.Abstractions" Version="1.0.0-preview.1" />
     <PackageVersion Include="MicroKit.Tenancy" Version="1.0.0-preview.1" />
-    <PackageVersion Include="MicroKit.Auth.Abstractions" Version="1.0.0-preview.1" />
-    <PackageVersion Include="MicroKit.Auth.Permissions" Version="1.0.0-preview.1" />
+    <PackageVersion Include="MicroKit.Auth.Abstractions" Version="1.0.0-preview.2" />
+    <PackageVersion Include="MicroKit.Auth.Permissions" Version="1.0.0-preview.2" />
     <PackageVersion Include="MicroKit.MediatR" Version="1.0.0-preview.2" />
     <PackageVersion Include="MicroKit.MediatR.Abstractions" Version="1.0.0-preview.2" />
     <PackageVersion Include="MicroKit.Messaging.Abstractions" Version="1.0.0-preview.4" />
