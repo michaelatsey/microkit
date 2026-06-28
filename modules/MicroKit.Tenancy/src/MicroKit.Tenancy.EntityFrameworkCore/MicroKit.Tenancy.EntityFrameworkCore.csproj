@@ -13,15 +13,17 @@
     <!-- EF Core generic type parameters and MakeGenericMethod generate trim warnings -->
     <NoWarn>$(NoWarn);IL2026;IL2060;IL2091</NoWarn>
   </PropertyGroup>
+  <!-- Intra-module: sibling packages are built/released together — always ProjectReference -->
+  <ItemGroup>
+    <ProjectReference Include="..\MicroKit.Tenancy\MicroKit.Tenancy.csproj" />
+  </ItemGroup>
   <!-- DEV: source ProjectReferences — CI/Release: published NuGet packages -->
   <!-- ⚠ Any new cross-module dependency must be added to BOTH ItemGroups -->
   <ItemGroup Condition="'$(CIReleaseBuild)' != 'true'">
-    <ProjectReference Include="..\MicroKit.Tenancy\MicroKit.Tenancy.csproj" />
     <ProjectReference Include="../../../MicroKit.Persistence/src/MicroKit.Persistence.Abstractions/MicroKit.Persistence.Abstractions.csproj" />
     <ProjectReference Include="../../../MicroKit.Persistence/src/MicroKit.Persistence.EntityFrameworkCore/MicroKit.Persistence.EntityFrameworkCore.csproj" />
   </ItemGroup>
   <ItemGroup Condition="'$(CIReleaseBuild)' == 'true'">
-    <PackageReference Include="MicroKit.Tenancy" />
     <PackageReference Include="MicroKit.Persistence.Abstractions" />
     <PackageReference Include="MicroKit.Persistence.EntityFrameworkCore" />
   </ItemGroup>

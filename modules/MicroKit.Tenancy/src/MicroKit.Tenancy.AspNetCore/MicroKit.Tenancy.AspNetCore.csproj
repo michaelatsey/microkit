@@ -11,13 +11,9 @@
     <IncludeSymbols>true</IncludeSymbols>
     <SymbolPackageFormat>snupkg</SymbolPackageFormat>
   </PropertyGroup>
-  <!-- DEV: source ProjectReferences — CI/Release: published NuGet packages -->
-  <!-- ⚠ Any new cross-module dependency must be added to BOTH ItemGroups -->
-  <ItemGroup Condition="'$(CIReleaseBuild)' != 'true'">
+  <!-- Intra-module: sibling packages are built/released together — always ProjectReference -->
+  <ItemGroup>
     <ProjectReference Include="..\MicroKit.Tenancy\MicroKit.Tenancy.csproj" />
-  </ItemGroup>
-  <ItemGroup Condition="'$(CIReleaseBuild)' == 'true'">
-    <PackageReference Include="MicroKit.Tenancy" />
   </ItemGroup>
   <ItemGroup>
     <FrameworkReference Include="Microsoft.AspNetCore.App" />
