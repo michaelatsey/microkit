@@ -6,6 +6,8 @@ Versioning: [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [1.0.0-preview.1] — 2026-06-28
+
 ### Added
 - `MicroKit.Tenancy.Abstractions` — ITenantContext, ITenantContextAccessor, ITenantInfo, TenantId VO, ITenantResolver, ITenantResolutionStrategy, ITenantStore, ITenantProvisioner, ITenantEntity
 - `MicroKit.Tenancy` — AsyncLocalTenantContextAccessor, TenantResolutionPipeline, InMemoryTenantStore, DI registration
