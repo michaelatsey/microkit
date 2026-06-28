@@ -24,12 +24,13 @@ jobs:
           echo "PACKAGE_VERSION=$PACKAGE_VERSION" >> "$GITHUB_ENV"
 
       # CIReleaseBuild=true replaces cross-module ProjectReferences with PackageReferences
-      # (MicroKit.Result, MicroKit.Domain) so that:
+      # (MicroKit.Result, MicroKit.Domain, MicroKit.Tenancy.Abstractions) so that:
       #   - Restore resolves the published NuGet versions from Directory.Packages.props
       #   - Build compiles against those published packages (ABI verification)
       #   - Pack emits the correct nuspec dependency versions
-      # Prerequisites: MicroKit.Result and MicroKit.Domain must be published to NuGet.org
-      # at the versions declared in Directory.Packages.props before this workflow is triggered.
+      # Prerequisites: MicroKit.Result, MicroKit.Domain and MicroKit.Tenancy.Abstractions must be
+      # published to NuGet.org at the versions declared in Directory.Packages.props before this
+      # workflow is triggered.
       - name: Restore
         run: dotnet restore modules/MicroKit.Auth/MicroKit.Auth.slnx -p:CIReleaseBuild=true
 
