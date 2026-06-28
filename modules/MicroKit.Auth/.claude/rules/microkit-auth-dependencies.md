@@ -51,7 +51,7 @@ MicroKit.Auth.ServiceAccounts                     [Phase 2]
 
 MicroKit.Auth.Multitenancy
     ← MicroKit.Auth.Abstractions
-    ← MicroKit.Multitenancy.Abstractions
+    ← MicroKit.Tenancy.Abstractions
 
 MicroKit.Auth.MediatR                                [Phase 2]
     ← MicroKit.Auth.Abstractions

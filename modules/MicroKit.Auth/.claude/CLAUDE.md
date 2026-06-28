@@ -71,7 +71,7 @@ MicroKit.Auth/
 │   │
 │   │  ── Integration ─────────────────────────────────────────────────────
 │   ├── MicroKit.Auth.MediatR/             ← AuthorizationBehavior<TRequest,TResponse>    [Phase 2]
-│   ├── MicroKit.Auth.Multitenancy/        ← bridge Auth ↔ MicroKit.Multitenancy          [Phase 1]
+│   ├── MicroKit.Auth.Multitenancy/        ← bridge Auth ↔ MicroKit.Tenancy               [Phase 1]
 │   ├── MicroKit.Auth.Logging/             ← UserId/TenantId enrichment in log context    [Phase 2]
 │   └── MicroKit.Auth.Audit/               ← who/when/permission audit events             [Phase 2]
 │
@@ -133,7 +133,7 @@ MicroKit.Auth.OpenIdConnect
 
 MicroKit.Auth.Multitenancy
     ← MicroKit.Auth.Abstractions
-    ← MicroKit.Multitenancy.Abstractions
+    ← MicroKit.Tenancy.Abstractions
 
 MicroKit.Auth.MediatR
     ← MicroKit.Auth.Abstractions

@@ -699,7 +699,7 @@ authenticated user — is exactly one step in that pipeline.
 
 Replacing `ITenantResolver` with a single-purpose implementation would silently destroy the entire
 HTTP strategy chain (header, route, subdomain, claim, host) for any consumer also using
-`MicroKit.Multitenancy.AspNetCore`. This is a severe, silent regression.
+`MicroKit.Tenancy.AspNetCore`. This is a severe, silent regression.
 
 **Accepted registration:**
 ```csharp
@@ -715,7 +715,7 @@ All types required by `AuthTenantResolutionStrategy` (`ICurrentUserAccessor`, `I
 in `MicroKit.Auth.Abstractions`. The `microkit-auth-architecture.md` rule is explicit:
 
 > Integration packages — `Multitenancy` depends on `MicroKit.Auth.Abstractions` +
-> `MicroKit.Multitenancy.Abstractions` only.
+> `MicroKit.Tenancy.Abstractions` only.
 
 Adding Core would violate the rule with no functional benefit. The user spec line listing
 `MicroKit.Auth (Core)` as a dependency is incorrect and has been removed from the plan.
@@ -748,8 +748,8 @@ design. Deferred to Phase 2; documented in `microkit-auth-multitenancy-deferred.
 ### Constraints Applied
 
 - `microkit-auth-architecture.md` — Integration packages depend on Abstractions only ✅
-- `microkit-auth-dependencies.md` — Authoritative graph: bridge ← Auth.Abstractions + Multitenancy.Abstractions ✅
+- `microkit-auth-dependencies.md` — Authoritative graph: bridge ← Auth.Abstractions + Tenancy.Abstractions ✅
 - `multitenancy-resolution-pipeline.md` — `ITenantResolutionStrategy` = single step, no-throw, returns `Result<TenantId>`, `Order` ascending ✅
 - `multitenancy-async-context.md` — Scoped lifetime for `ICurrentUserAccessor`-dependent services; `CreateScope` for non-HTTP propagation ✅
-- `cross-module-references.md` — Same-module `ProjectReference` (Auth.Abstractions) unconditional; cross-module (Multitenancy.Abstractions) uses symmetric two-ItemGroup CIReleaseBuild pattern ✅
+- `cross-module-references.md` — Same-module `ProjectReference` (Auth.Abstractions) unconditional; cross-module (Tenancy.Abstractions) uses symmetric two-ItemGroup CIReleaseBuild pattern ✅
 - ADR-AUTH-004 — `Replace()` is the authoritative swap mechanism; additive `AddScoped` is correct here (not a swap) ✅
