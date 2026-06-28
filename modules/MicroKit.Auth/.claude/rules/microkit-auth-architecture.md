@@ -35,7 +35,7 @@
 - Each provider maps its specific claims format to `ICurrentUser` via `IClaimsMapper`
 
 ### Integration packages (MediatR, Multitenancy, Logging, Audit)
-- `Multitenancy` depends on `MicroKit.Auth.Abstractions` + `MicroKit.Multitenancy.Abstractions` only
+- `Multitenancy` depends on `MicroKit.Auth.Abstractions` + `MicroKit.Tenancy.Abstractions` only
 - `MediatR` depends on `MicroKit.Auth.Abstractions` + `MicroKit.MediatR.Abstractions` only
 - Never introduce circular dependencies
 
