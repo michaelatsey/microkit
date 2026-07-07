@@ -25,7 +25,7 @@ This root file provides the global vision and cross-cutting conventions.
 | **MicroKit.MediatR** | `modules/MicroKit.MediatR/` | `modules/MicroKit.MediatR/.claude/` | ✅ Released 1.0.0-preview.2 |
 | **MicroKit.Persistence** | `modules/MicroKit.Persistence/` | `modules/MicroKit.Persistence/.claude/` | ✅ Released 1.0.0-preview.3 |
 | **MicroKit.Tenancy** | `modules/MicroKit.Tenancy/` | `modules/MicroKit.Tenancy/.claude/` | ✅ Released 1.0.0-preview.1 |
-| **MicroKit.Auth** | `modules/MicroKit.Auth/` | `modules/MicroKit.Auth/.claude/` | ✅ Released 1.0.0-preview.2 |
+| **MicroKit.Auth** | `modules/MicroKit.Auth/` | `modules/MicroKit.Auth/.claude/` | ✅ Released 1.0.0-preview.3 |
 | **MicroKit.Execution.Abstractions** | `modules/MicroKit.Execution.Abstractions/` | — | ✅ Released 1.0.0-preview.1 |
 | **MicroKit.Messaging** | `modules/MicroKit.Messaging/` | `modules/MicroKit.Messaging/.claude/` | ✅ Released 1.0.0-preview.4 |
 | **MicroKit.Caching** | `modules/MicroKit.Caching/` | `modules/MicroKit.Caching/.claude/` | 📋 Planned |
@@ -202,6 +202,15 @@ tenancy-v1.0.0-preview.1              → MicroKit.Tenancy release
 auth-v1.0.0-preview.1                 → MicroKit.Auth release
 execution-abstractions-v1.0.0-...     → MicroKit.Execution.Abstractions release
 messaging-v1.0.0-preview.1            → MicroKit.Messaging release
+result-v1.0.0-preview.1                → MicroKit.Result release
+domain-v1.0.0-preview.1               → MicroKit.Domain release
+logging-v1.0.0-preview.1              → MicroKit.Logging release
+mediatr-v1.0.0-preview.1              → MicroKit.MediatR release
+persistence-v1.0.0-preview.1          → MicroKit.Persistence release
+tenancy-v1.0.0-preview.1              → MicroKit.Tenancy release
+auth-v1.0.0-preview.1                 → MicroKit.Auth release
+execution-abstractions-v1.0.0-...     → MicroKit.Execution.Abstractions release
+messaging-v1.0.0-preview.1            → MicroKit.Messaging release
 ```
 
 ### Branches
@@ -211,6 +220,7 @@ main              ← always stable, protected
 dev               ← continuous integration
 feature/*         ← features (scope: result/fix-map, mediatr/add-streaming)
 release/*         ← release preparation (release/result-1.2)
+fix/*             ← bugfixes (fix/multitenancy/parallel-sqlite-flaky-test)
 fix/*             ← bugfixes (fix/multitenancy/parallel-sqlite-flaky-test)
 ```
 
@@ -244,6 +254,7 @@ ItemGroup Label="Auth"        ← Microsoft.IdentityModel.*, JWT
 ```
 
 > CPM rule: after every module release, bump its version in ItemGroup MicroKit on dev via a dedicated chore/cpm-* branch before starting the next release.
+CentralPackageTransitivePinningEnabled: true (mandatory — prevents transitive version drift)
 
 ---
 
@@ -266,6 +277,9 @@ ItemGroup Label="Auth"        ← Microsoft.IdentityModel.*, JWT
 - **Intra-module references**: unconditional ProjectReference — NEVER inside CIReleaseBuild blocks
 - **CIReleaseBuild=true**: mandatory on Restore + Build + Pack steps in ALL release workflows
 - **CentralPackageTransitivePinningEnabled=true**: mandatory — prevents transitive version drift
+- **Intra-module references**: unconditional ProjectReference — NEVER inside CIReleaseBuild blocks
+- **CIReleaseBuild=true**: mandatory on Restore + Build + Pack steps in ALL release workflows
+- **CentralPackageTransitivePinningEnabled=true**: mandatory — prevents transitive version drift
 - **ArchitectureTests mandatory** before any release (empty project = blocking)
 - **Integration tests SQLite**: each `Task.Run` must have its own isolated connection
 - **BackgroundService**: `IServiceScopeFactory` only in constructor — never scoped services directly
@@ -273,6 +287,7 @@ ItemGroup Label="Auth"        ← Microsoft.IdentityModel.*, JWT
 - **Publishers**: silent success FORBIDDEN — throw `InvalidOperationException` if no transport
 - **Post-code agents**: distributed-context-specialist → dependency-guardian → api-reviewer — mandatory before any merge, in separate Claude Code sessions, always include "Do not commit anything"
 - **IApplicationEvent**: REJECTED — YAGNI, no use case. Do not introduce until a real need exists.
+- **CPM bump**: after every release, bump sibling version in Directory.Packages.props on dev — dedicated chore/cpm-* branch, PR to dev only
 - **CPM bump**: after every release, bump sibling version in Directory.Packages.props on dev — dedicated chore/cpm-* branch, PR to dev only
 
 ### Event taxonomy (canonical)
@@ -307,6 +322,7 @@ fix(mediatr): correct pipeline order with custom behaviors
 chore(build): update Directory.Packages.props
 docs(domain): add aggregate root design guide
 test(multitenancy): implement ArchitectureTests
+test(multitenancy): implement ArchitectureTests
 ```
 
 ### Published NuGet package names
@@ -315,15 +331,15 @@ test(multitenancy): implement ArchitectureTests
 MicroKit.Result                                        ✅ 1.0.0-preview.2
 MicroKit.Result.AspNetCore                             ✅ 1.0.0-preview.2
 MicroKit.Domain                                        ✅ 1.0.0-preview.5
-MicroKit.Logging                                       ✅ 1.0.0-preview.2
+MicroKit.Logging                                       ✅ 1.0.0-preview.1
 MicroKit.Logging.Abstractions                          ✅ 1.0.0-preview.2
-MicroKit.Logging.OpenTelemetry                         ✅ 1.0.0-preview.2
-MicroKit.Logging.AspNetCore                            ✅ 1.0.0-preview.2
-MicroKit.Logging.Diagnostics                           ✅ 1.0.0-preview.2
-MicroKit.Logging.Analyzers                             ✅ 1.0.0-preview.2
-MicroKit.Logging.Generators                            ✅ 1.0.0-preview.2
-MicroKit.MediatR                                       ✅ 1.0.0-preview.2
-MicroKit.MediatR.Abstractions                          ✅ 1.0.0-preview.2
+MicroKit.Logging.OpenTelemetry                         ✅ 1.0.0-preview.1
+MicroKit.Logging.AspNetCore                            ✅ 1.0.0-preview.1
+MicroKit.Logging.Diagnostics                           ✅ 1.0.0-preview.1
+MicroKit.Logging.Analyzers                             ✅ 1.0.0-preview.1
+MicroKit.Logging.Generators                            ✅ 1.0.0-preview.1
+MicroKit.MediatR                                       ✅ 1.0.0-preview.4
+MicroKit.MediatR.Abstractions                          ✅ 1.0.0-preview.4
 MicroKit.MediatR.Behaviors                             ✅ 1.0.0-preview.2
 MicroKit.MediatR.Testing                               ✅ 1.0.0-preview.2
 MicroKit.Persistence.Abstractions                      ✅ 1.0.0-preview.3
@@ -339,21 +355,21 @@ MicroKit.Tenancy                                       ✅ 1.0.0-preview.1
 MicroKit.Tenancy.AspNetCore                            ✅ 1.0.0-preview.1
 MicroKit.Tenancy.EntityFrameworkCore                   ✅ 1.0.0-preview.1
 MicroKit.Tenancy.Analyzers                             ✅ 1.0.0-preview.1
-MicroKit.Auth.Abstractions                             ✅ 1.0.0-preview.2
-MicroKit.Auth                                          ✅ 1.0.0-preview.2
-MicroKit.Auth.AspNetCore                               ✅ 1.0.0-preview.2
-MicroKit.Auth.Permissions                              ✅ 1.0.0-preview.2
-MicroKit.Auth.Roles                                    ✅ 1.0.0-preview.2
-MicroKit.Auth.Jwt                                      ✅ 1.0.0-preview.2
-MicroKit.Auth.Supabase                                 ✅ 1.0.0-preview.2
-MicroKit.Auth.Multitenancy                             ✅ 1.0.0-preview.2
-MicroKit.Auth.Testing                                  ✅ 1.0.0-preview.2
+MicroKit.Auth.Abstractions                             ✅ 1.0.0-preview.3
+MicroKit.Auth                                          ✅ 1.0.0-preview.3
+MicroKit.Auth.AspNetCore                               ✅ 1.0.0-preview.3
+MicroKit.Auth.Permissions                              ✅ 1.0.0-preview.3
+MicroKit.Auth.Roles                                    ✅ 1.0.0-preview.3
+MicroKit.Auth.Jwt                                      ✅ 1.0.0-preview.3
+MicroKit.Auth.Supabase                                 ✅ 1.0.0-preview.3
+MicroKit.Auth.Multitenancy                             ✅ 1.0.0-preview.3
+MicroKit.Auth.Testing                                  ✅ 1.0.0-preview.3
 MicroKit.Execution.Abstractions                        ✅ 1.0.0-preview.1
 MicroKit.Messaging.Abstractions                        ✅ 1.0.0-preview.4
 MicroKit.Messaging                                     ✅ 1.0.0-preview.4
 MicroKit.Messaging.EntityFrameworkCore                 ✅ 1.0.0-preview.4
 MicroKit.Messaging.MediatR                             ✅ 1.0.0-preview.4
-MicroKit.Messaging.Testing                             📋 Planned
+MicroKit.Messaging.Testing                             📋 Implemented - not release
 MicroKit.Messaging.RabbitMQ                            ⏳ v2
 MicroKit.Messaging.AzureServiceBus                     ⏳ v2
 MicroKit.Messaging.Kafka                               ⏳ v2
