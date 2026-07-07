@@ -25,7 +25,7 @@ This root file provides the global vision and cross-cutting conventions.
 | **MicroKit.MediatR** | `modules/MicroKit.MediatR/` | `modules/MicroKit.MediatR/.claude/` | ✅ Released 1.0.0-preview.2 |
 | **MicroKit.Persistence** | `modules/MicroKit.Persistence/` | `modules/MicroKit.Persistence/.claude/` | ✅ Released 1.0.0-preview.3 |
 | **MicroKit.Tenancy** | `modules/MicroKit.Tenancy/` | `modules/MicroKit.Tenancy/.claude/` | ✅ Released 1.0.0-preview.1 |
-| **MicroKit.Auth** | `modules/MicroKit.Auth/` | `modules/MicroKit.Auth/.claude/` | ✅ Released 1.0.0-preview.2 |
+| **MicroKit.Auth** | `modules/MicroKit.Auth/` | `modules/MicroKit.Auth/.claude/` | ✅ Released 1.0.0-preview.3 |
 | **MicroKit.Execution.Abstractions** | `modules/MicroKit.Execution.Abstractions/` | — | ✅ Released 1.0.0-preview.1 |
 | **MicroKit.Messaging** | `modules/MicroKit.Messaging/` | `modules/MicroKit.Messaging/.claude/` | ✅ Released 1.0.0-preview.4 |
 | **MicroKit.Caching** | `modules/MicroKit.Caching/` | `modules/MicroKit.Caching/.claude/` | 📋 Planned |
@@ -339,15 +339,15 @@ MicroKit.Tenancy                                       ✅ 1.0.0-preview.1
 MicroKit.Tenancy.AspNetCore                            ✅ 1.0.0-preview.1
 MicroKit.Tenancy.EntityFrameworkCore                   ✅ 1.0.0-preview.1
 MicroKit.Tenancy.Analyzers                             ✅ 1.0.0-preview.1
-MicroKit.Auth.Abstractions                             ✅ 1.0.0-preview.2
-MicroKit.Auth                                          ✅ 1.0.0-preview.2
-MicroKit.Auth.AspNetCore                               ✅ 1.0.0-preview.2
-MicroKit.Auth.Permissions                              ✅ 1.0.0-preview.2
-MicroKit.Auth.Roles                                    ✅ 1.0.0-preview.2
-MicroKit.Auth.Jwt                                      ✅ 1.0.0-preview.2
-MicroKit.Auth.Supabase                                 ✅ 1.0.0-preview.2
-MicroKit.Auth.Multitenancy                             ✅ 1.0.0-preview.2
-MicroKit.Auth.Testing                                  ✅ 1.0.0-preview.2
+MicroKit.Auth.Abstractions                             ✅ 1.0.0-preview.3
+MicroKit.Auth                                          ✅ 1.0.0-preview.3
+MicroKit.Auth.AspNetCore                               ✅ 1.0.0-preview.3
+MicroKit.Auth.Permissions                              ✅ 1.0.0-preview.3
+MicroKit.Auth.Roles                                    ✅ 1.0.0-preview.3
+MicroKit.Auth.Jwt                                      ✅ 1.0.0-preview.3
+MicroKit.Auth.Supabase                                 ✅ 1.0.0-preview.3
+MicroKit.Auth.Multitenancy                             ✅ 1.0.0-preview.3
+MicroKit.Auth.Testing                                  ✅ 1.0.0-preview.3
 MicroKit.Execution.Abstractions                        ✅ 1.0.0-preview.1
 MicroKit.Messaging.Abstractions                        ✅ 1.0.0-preview.4
 MicroKit.Messaging                                     ✅ 1.0.0-preview.4
