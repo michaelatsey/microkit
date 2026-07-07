@@ -44,7 +44,7 @@ public static class ServiceCollectionExtensions
         this IServiceCollection services,
         Action<SupabaseAuthOptions> configure)
     {
-        var options = new SupabaseAuthOptions { ProjectUrl = string.Empty };
+        var options = new SupabaseAuthOptions();
         configure(options);
         ValidateOptions(options);
 
