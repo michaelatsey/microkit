@@ -64,14 +64,35 @@ public static class PersistenceServiceCollectionExtensions
     /// Registers <see cref="EfUnitOfWork{TContext}"/> as a scoped service and binds it to
     /// <see cref="IUnitOfWork"/>, <see cref="ITransactionalContext"/>, and
     /// <see cref="ITransactionalUnitOfWork"/> — one instance, three interface pointers.
+    /// Additionally registers <see cref="EfDomainEventsProvider{TContext}"/> as the scoped
+    /// <see cref="IDomainEventsProvider"/> — a separate instance sharing the same
+    /// <typeparamref name="TContext"/>.
     /// </summary>
     /// <typeparam name="TContext">The application <see cref="DbContext"/> type.</typeparam>
     /// <param name="builder">The EF Core builder.</param>
     /// <returns><paramref name="builder"/> for fluent chaining.</returns>
     /// <remarks>
+    /// <para>
     /// Handlers inject the narrowest interface they need:
     /// command handlers use <see cref="IUnitOfWork"/>;
     /// <c>TransactionBehavior</c> uses <see cref="ITransactionalContext"/>.
+    /// </para>
+    /// <para>
+    /// <see cref="IDomainEventsProvider"/> resolves to the unit-of-work-scoped
+    /// <see cref="EfDomainEventsProvider{TContext}"/>, which drains domain events from every
+    /// aggregate tracked by <typeparamref name="TContext"/> — never from a single aggregate.
+    /// Domain-event dispatchers depend on this contract; without this registration they cannot
+    /// be activated.
+    /// </para>
+    /// <para>
+    /// <b>Single-context assumption.</b> <see cref="IDomainEventsProvider"/> is registered
+    /// against <typeparamref name="TContext"/>. Calling <c>AddUnitOfWork</c> for a second
+    /// context overwrites this registration — the last one wins — and domain events raised on
+    /// aggregates tracked by any other context are silently not drained. Applications with
+    /// several DbContexts must dispatch per context explicitly — for example by resolving
+    /// <see cref="EfDomainEventsProvider{TContext}"/> directly per context, or by registering
+    /// it as a keyed service.
+    /// </para>
     /// </remarks>
     public static EfCoreBuilder AddUnitOfWork<TContext>(this EfCoreBuilder builder)
         where TContext : DbContext
@@ -84,6 +105,7 @@ public static class PersistenceServiceCollectionExtensions
             sp => sp.GetRequiredService<EfUnitOfWork<TContext>>());
         builder.Services.AddScoped<ITransactionalUnitOfWork>(
             sp => sp.GetRequiredService<EfUnitOfWork<TContext>>());
+        builder.Services.AddScoped<IDomainEventsProvider, EfDomainEventsProvider<TContext>>();
         return builder;
     }
 }

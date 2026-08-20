@@ -11,6 +11,7 @@
   </Folder>
   <Folder Name="/tests/">
     <Project Path="tests/MicroKit.Persistence.UnitTests/MicroKit.Persistence.UnitTests.csproj" />
+    <Project Path="tests/MicroKit.Persistence.IntegrationTests/MicroKit.Persistence.IntegrationTests.csproj" />
     <Project Path="tests/MicroKit.Persistence.Analyzers.Tests/MicroKit.Persistence.Analyzers.Tests.csproj" />
     <Project Path="tests/MicroKit.Persistence.ArchitectureTests/MicroKit.Persistence.ArchitectureTests.csproj" />
   </Folder>

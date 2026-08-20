@@ -20,6 +20,12 @@ public sealed class SealedClassTests
     }
 
     [Fact]
+    public void EfDomainEventsProvider_IsSealed()
+    {
+        IsSealed(typeof(MicroKit.Persistence.EntityFrameworkCore.EfDomainEventsProvider<>)).ShouldBeTrue();
+    }
+
+    [Fact]
     public void InMemoryRepository_IsSealed()
     {
         IsSealed(typeof(MicroKit.Persistence.Testing.InMemoryRepository<>)).ShouldBeTrue();

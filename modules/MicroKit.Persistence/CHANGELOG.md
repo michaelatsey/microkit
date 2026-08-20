@@ -1,5 +1,19 @@
 # Changelog — MicroKit.Persistence
 
+## [Unreleased]
+
+### Added
+
+#### MicroKit.Persistence.EntityFrameworkCore
+- `EfDomainEventsProvider<TContext>` — change-tracker-backed `IDomainEventsProvider` that aggregates domain events across every entity tracked by `TContext`. Candidates are detected on `IHasDomainEvents` (the read contract); draining requires `IDomainEventsProvider`, so an entity that exposes events without implementing the drain contract is reported by `DomainEvents` but skipped by `DrainDomainEvents`. Reads the in-memory change tracker only — never queries the database.
+
+### Fixed
+
+#### MicroKit.Persistence.EntityFrameworkCore
+- Domain-event dispatchers that depend on `IDomainEventsProvider` could not be activated. No package registered an implementation, and none could correctly be supplied by a consumer: the contract is aggregate-level — `AggregateRoot<TId>` is its only implementer, draining its own events — while the drain phase requires the events of *all* tracked aggregates, so a DI-resolved provider could only ever be one arbitrary aggregate. Resolution failed with `Unable to resolve service for type 'MicroKit.Domain.Events.IDomainEventsProvider'`. `AddUnitOfWork<TContext>()` now also registers a unit-of-work-scoped provider.
+
+---
+
 ## [1.0.0-preview.3] — 2026-06-25
 ### Fixed
 #### MicroKit.Persistence.Abstractions
