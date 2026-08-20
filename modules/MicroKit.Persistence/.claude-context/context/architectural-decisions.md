@@ -336,11 +336,21 @@ member. In-repo there are exactly two; external implementers get the migration s
 
 **`DiscardChanges()` clears the whole scope's tracker, not one command's entities.** In a scope where
 command A succeeded (and therefore flushed) and command B failed, B's discard also detaches A's
-entities. A's work is already durable, so correctness holds — but any entity reference the caller
-still holds becomes detached: navigation fixup stops and lazy loading throws. Post-failure the
-pipeline is unwinding, so nothing downstream should depend on tracked state; a consumer that holds an
-entity across a discard and re-saves it later can insert a duplicate. Pathological, and recorded here
-rather than left to be discovered.
+entities. A's work is already durable, so correctness holds — but every entity reference the caller
+still holds becomes detached. The in-memory object graph is left intact (EF Core's
+`ChangeTracker.Clear()` resets the state manager rather than detaching entry by entity, so existing
+navigation references survive), but EF no longer tracks it, so re-saving such a reference later
+inserts a duplicate. Post-failure the pipeline is unwinding, so nothing downstream should depend on
+tracked state. Pathological, and recorded here rather than left to be discovered.
+
+Detachment is quieter than it sounds, which is the part worth stating explicitly: **lazy and explicit
+navigation loads on a detached entity do not throw** — verified on EF Core 10.0.9 for both the
+`ILazyLoader` form and `Entry(e).Collection(...).Load()`. They issue a fresh query and return the
+data, without re-tracking the entity. Inside a failing command that means a round-trip on a
+transaction that is about to roll back, with no signal to the caller that anything is wrong. A prior
+revision of this ADR asserted the opposite ("navigation fixup stops and lazy loading throws"); it was
+wrong on both halves, and the correction is recorded here because the claim had already been copied
+into the `IUnitOfWork.DiscardChanges` XML documentation.
 
 **Nested command dispatch stays unsupported, now for a second reason.** A command dispatched from
 inside another command's handler would, on inner failure, clear the outer command's staged work. This

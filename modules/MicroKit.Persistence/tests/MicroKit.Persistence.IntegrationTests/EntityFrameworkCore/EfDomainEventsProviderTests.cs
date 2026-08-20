@@ -152,6 +152,9 @@ public sealed class TestAggregate : IDomainEventsProvider
 
     public Guid Id { get; init; } = Guid.NewGuid();
 
+    /// <summary>A mutable scalar, so write-path tests can reach the <c>Modified</c> state.</summary>
+    public string Name { get; set; } = string.Empty;
+
     public IReadOnlyList<IDomainEvent> DomainEvents =>
         _events.Count == 0 ? Array.Empty<IDomainEvent>() : _events.AsReadOnly();
 

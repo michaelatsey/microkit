@@ -50,7 +50,12 @@ public interface IUnitOfWork
 - Synchronous: no implementation performs I/O. EF Core drops change-tracker references
   (`ChangeTracker.Clear()`); a provider with no pending change set (Dapper, raw SQL) is a no-op
 - Discards the whole context's pending set, not one command's entities. Entity references held
-  across the call become detached
+  across the call become detached: the in-memory object graph is left intact, but the provider no
+  longer tracks it, so re-saving such a reference later inserts a duplicate. **Detached does not
+  mean "throws on access"** — verified on EF Core 10.0.9, lazy and explicit navigation loads on a
+  detached entity succeed silently by issuing a fresh query, which inside a failing command means
+  a round-trip on a transaction that is about to roll back. ADR-005 asserted the opposite until it
+  was corrected; do not restate the old claim
 - Called by `TransactionBehavior`, **never** by a command handler — a handler cannot know whether
   its scope holds one command or twenty
 
