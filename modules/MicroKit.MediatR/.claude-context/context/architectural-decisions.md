@@ -709,3 +709,26 @@ stand. "It cannot throw on EF Core" is not sufficient grounds.
   measured against the 16-test suite, M3 against the 17 tests that include the replay test added for
   this purpose. If a future refactor makes any of the three pass, the suite no longer defends this
   decision.
+- **The effect is proven end-to-end, not only the call.** The three mutants above are measured against
+  unit tests that assert on an NSubstitute `IUnitOfWork` — they prove the *call*, not that a failed
+  command's row stays out of the database. `TransactionBehaviorPersistenceTests`
+  (`MicroKit.MediatR.IntegrationTests`) closes that gap: a real EF Core `DbContext` on SQLite, the real
+  `AddMicroKitPersistence`/`AddUnitOfWork<TContext>()`/`AddTransactionBehavior()` chain, and **one DI
+  scope shared by two commands** — the topology that makes the defect reachable at all. A failed
+  command stages a row; a second command in the same scope succeeds and flushes; the assertion, made
+  from a fresh `DbContext`, is that only the second command's row exists. Two integration mutants are
+  recorded alongside M1–M3:
+  **M1-INT** — remove both call sites → both defect tests fail, each reporting the failed command's
+  row present alongside the successful one (`["from-successful-command", "from-rejected-command"]` and
+  `["from-successful-command", "from-thrown-command"]`); the positive-control test still passes.
+  **M2-INT** — the half-fix, keep only the `IsFailure` discard → *only* the exception test fails
+  (`["from-thrown-command", "from-successful-command"]`), the business-failure test passes. M2-INT is
+  what makes the exception test independently load-bearing rather than a near-duplicate of the
+  business-failure one, and it is the mutant that would catch a future "simplification" back to
+  Alternative **B**. The suite deliberately carries a positive control
+  (`Handle_WhenASingleCommandSucceeds_ItsRowIsPersisted`): without it, both absence assertions would
+  pass against a harness that silently writes nothing at all.
+  The proof is composed **without** `MicroKit.Messaging` — the scenario raises no events, so the core
+  scoped `DomainEventDispatcher` runs unmodified on the `IDomainEventsProvider` that
+  `AddUnitOfWork<TContext>()` already supplies. Pulling in the outbox would add a table the scenario
+  does not need and let an unrelated module's defects contaminate the failure signal.

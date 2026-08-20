@@ -51,6 +51,27 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/) — [Semantic V
   `IUnitOfWork.DiscardChanges()` (ADR-005); no constructor change, no new dependency. See
   ADR-MEDIATR-012 for the call-site decision.
 
+### Tests
+
+**MicroKit.MediatR.Behaviors**
+- Adds `TransactionBehaviorPersistenceTests` (`MicroKit.MediatR.IntegrationTests`) — the end-to-end
+  proof for the two fixes above. The existing unit tests assert against an NSubstitute `IUnitOfWork`:
+  they prove `TransactionBehavior` *calls* `DiscardChanges()`, not that a failed command's row stays
+  out of the database. These three tests run the real chain — a real EF Core `DbContext` on SQLite
+  with an open in-memory connection, the real `AddMicroKitPersistence` → `AddEntityFrameworkCore` →
+  `AddDbContext` → `AddUnitOfWork<TContext>()` registrations, and `AddTransactionBehavior()` — with
+  **one DI scope shared by two commands**, which is the topology that makes the defect reachable
+  (`DbContext` is scoped, not per-command). A first command stages a row and then either returns
+  `Result.Failure` or throws; a second command in the same scope succeeds and flushes; a fresh
+  `DbContext` asserts only the second command's row exists. A positive control proves the harness
+  actually writes, so the two absence assertions cannot pass vacuously. Mutation-verified: removing
+  both discard call sites fails both defect tests, and the half-fix — keeping only the `IsFailure`
+  discard — fails exactly the exception test. Composed without `MicroKit.Messaging`: the scenario
+  raises no events, so the core `DomainEventDispatcher` runs unmodified. See ADR-MEDIATR-012.
+  `MicroKit.MediatR.IntegrationTests` gains `Microsoft.EntityFrameworkCore`,
+  `Microsoft.EntityFrameworkCore.Sqlite`, and a test-only `ProjectReference` to
+  `MicroKit.Persistence.EntityFrameworkCore` — no production dependency edge is added.
+
 ### Documentation
 
 **MicroKit.MediatR.Behaviors**
