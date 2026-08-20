@@ -34,6 +34,22 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/) — [Semantic V
   `SaveChangesAsync` within the open transaction. The ordering is load-bearing: flushing before the
   dispatch would drop every outbox row the dispatch had just staged. A business failure
   (`Result.IsFailure`) still dispatches nothing and now also flushes nothing.
+- `TransactionBehavior` now calls `IUnitOfWork.DiscardChanges()` on **every** non-commit exit —
+  business failure *and* thrown exception. Previously neither path cleared the change tracker.
+  `DbContext` is scoped, not per-command: the entities a failed command staged stayed in the tracker
+  as `Added`/`Modified`, and the next `SaveChangesAsync` in that scope — from any later command —
+  wrote them. A command that explicitly failed its business rule persisted its data anyway, with no
+  error, no log, and nothing distinguishing it from correct operation. The exception path had the
+  identical defect: a database transaction rollback undoes what was *written* but does not reset the
+  pending change set, so staged entities survive a rollback exactly as they survive a business
+  failure — which is why a fix scoped to `Result.IsFailure` would have been half a fix. The discard
+  runs inside the `ITransactionalContext.ExecuteAsync` operation (the retry-attempt boundary), in a
+  `catch` that rethrows bare so the original exception and its stack trace are preserved. Inert
+  under strict one-scope-per-command hosting (the common ASP.NET Core request path); reachable
+  wherever a scope outlives a single command — batch loops, scheduled jobs, Blazor Server circuits,
+  integration tests chaining commands. Requires `MicroKit.Persistence.Abstractions` with
+  `IUnitOfWork.DiscardChanges()` (ADR-005); no constructor change, no new dependency. See
+  ADR-MEDIATR-012 for the call-site decision.
 
 ### Documentation
 
@@ -47,6 +63,11 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/) — [Semantic V
   same-named calls — `IUnitOfWork.CommitAsync` is the flush (`SaveChangesAsync`);
   `IDbContextTransaction.CommitAsync` is the SQL commit, performed internally by
   `ITransactionalContext`. The behavior calls the first and never the second.
+- The `TransactionBehavior` XML doc no longer claims that on a business failure "staged changes are
+  discarded when the scope ends" — they were not, and that sentence described the defect fixed above.
+  The execution sequence now names both non-commit exits explicitly, states why the exception path
+  needs the discard *despite* the rollback, and records that nested command dispatch is unsupported
+  (an inner command's failure would discard the outer command's staged work).
 
 ---
 

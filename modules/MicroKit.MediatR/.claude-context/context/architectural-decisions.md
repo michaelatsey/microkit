@@ -558,3 +558,154 @@ database transactions around command handlers and their domain-event dispatch.
 - Consumers who call `AddTransactionBehavior()` without registering `ITransactionalContext` will
   get a clear DI resolution failure at startup — not a runtime `NullReferenceException`.
 - The `dependency-guardian` allowlist for `MicroKit.MediatR.Behaviors` is updated: `MicroKit.Persistence.Abstractions` is now permitted.
+
+---
+
+## ADR-MEDIATR-012: `TransactionBehavior` Discards Inside the `ExecuteAsync` Operation, via Catch/Rethrow
+
+**Status:** Accepted
+**Date:** 2026-08-20
+**Related:** ADR-MEDIATR-011 (Behaviors → Persistence.Abstractions), ADR-002 (BehaviorBase),
+ADR-005 in `MicroKit.Persistence` (`IUnitOfWork.DiscardChanges`), PR #78 (flush inside the transaction),
+PR #80 (the member ships)
+
+### Decision
+
+`TransactionBehavior<TRequest, TResponse>` is the caller of `IUnitOfWork.DiscardChanges()`. It calls it
+on **every non-commit exit** of a command boundary — business failure *and* thrown exception — from
+**inside** the `ITransactionalContext.ExecuteAsync` operation, structured as catch-and-rethrow with the
+discard itself guarded:
+
+```csharp
+try
+{
+    var response = await state.Next().ConfigureAwait(false);
+
+    if (ResultInspector<TResponse>.IsFailure(response))
+    {
+        state.UnitOfWork.DiscardChanges();       // business failure
+        return response;
+    }
+
+    await state.Dispatcher.DispatchEventsAsync(ct).ConfigureAwait(false);
+    await state.UnitOfWork.CommitAsync(ct).ConfigureAwait(false);
+    return response;
+}
+catch
+{
+    try { state.UnitOfWork.DiscardChanges(); }
+    catch { /* never mask the in-flight exception */ }
+    throw;                                        // bare throw — original stack preserved
+}
+```
+
+ADR-005 (Persistence) fixed the *contract* and the *requirement* — every non-commit exit discards —
+and explicitly deferred the call site: "Placement of the call is a `MicroKit.MediatR` decision, not
+this one." This ADR is that decision. No constructor change was needed: `IUnitOfWork` has been
+injected since #78.
+
+### Rationale
+
+**1. The behavior owns both exits, never the handler.** A command handler cannot know whether its
+scope holds one command or twenty; the behavior is the only place that knows a command boundary just
+ended. The behavior already owns the *commit* decision — splitting ownership of a boundary between
+behavior and handler is exactly how the #78 defect arose. A handler that calls `DiscardChanges()` is
+a defect, not a style choice (see Consequences).
+
+**2. Both exits, because a rollback does not reset the change tracker.** EF Core's transaction
+rollback undoes what was written; the entities the handler staged stay `Added`/`Modified`, exactly as
+they do after a business failure. `DbContext` is scoped, not per-command, so in any scope that
+outlives one command the next `SaveChangesAsync` writes them. A fix scoped to `Result.IsFailure`
+would be half a fix — and for the persistence layer the thrown path (`PersistenceException`,
+`DbUpdateConcurrencyException`, handler exceptions) is the *more* common failure mode.
+
+**3. Inside the operation, not around it.** The discard sits inside the `ExecuteAsync` lambda, so it
+lands on the retry-attempt boundary of a provider execution strategy: each attempt begins from a
+clean change set (ADR-005 Consequences; compatible with the deferred DN-001 retry work). Wrapping
+`ExecuteAsync` from outside would discard once per *command*, not once per *attempt*.
+
+**4. `catch`, not `finally`.** The discard must run only on a non-commit exit. A `finally` would also
+run after a successful commit and would need a "did I commit?" flag to suppress itself — mutable
+state threaded through a `readonly struct` carrier, and two code paths where there is one. Catch and
+rethrow is the shape Microsoft's own exception guidance gives for compensation that must happen only
+on failure (rollback in the `catch`, then rethrow); `finally` is for cleanup that must happen
+unconditionally. This is cleanup that must happen *conditionally*.
+
+**5. Bare `throw`, never `throw ex`.** `throw ex` resets the stack trace to the rethrow point and
+destroys the origin of the failure. The bare rethrow preserves both the instance and its stack; a
+unit test pins this (`ShouldBeSameAs` plus a stack-trace assertion), because the difference is
+invisible at a glance in review.
+
+**6. `DiscardChanges` is synchronous `void` by design, and that is what makes this safe.** No `await`
+inside a `catch` block means no risk of losing or reordering the in-flight exception, and no
+state-machine work on the failure path (ADR-005 Rationale §7).
+
+**7. The zero-allocation pattern is untouched.** `Handle` stays non-`async`, the state carrier stays a
+`private readonly struct`, the lambda stays `static`, and the try/catch lives inside the lambda —
+which only commands reach. The pass-through `return next()` for queries, events, and non-command
+requests is unchanged and still allocates nothing. A try/catch costs nothing on the non-throwing path.
+
+### Why the inner `try`/`catch` around the discard is not defensive noise
+
+This is the line a future contributor is most likely to "simplify" away. It is recorded here so that
+the ADR, not the reviewer's memory, is what stops them.
+
+It is the documented remedy for a specific failure mode: **an exception thrown by cleanup inside a
+`catch` block discards the in-flight exception and surfaces an unexpected one to the outer handler.**
+Without the guard, an `IUnitOfWork` implementation whose `DiscardChanges()` throws would replace the
+real failure — the handler exception, the concurrency conflict, the constraint violation — with an
+unrelated discard exception. The original failure is not chained, not logged, and not recoverable: it
+simply never surfaces. The diagnosis is destroyed at precisely the moment it is needed most.
+
+It is unreachable on EF Core: `ChangeTracker.Clear()` cannot fail. That is not the relevant question.
+`IUnitOfWork` is provider-agnostic **by construction** — ADR-005 §6 admits Dapper, Marten, NHibernate
+and in-memory implementers, and `TransactionBehavior` deliberately has no EF Core reference
+(ADR-MEDIATR-011), so it can never know which implementation DI has bound. Three lines guard against
+a class of failure that, when it happens, is silent by definition.
+
+**Deletion criterion, stated so it can be checked rather than argued:** this guard is removable only
+if `IUnitOfWork` stops being provider-agnostic — i.e. never, while ADR-005 §6 and ADR-MEDIATR-011
+stand. "It cannot throw on EF Core" is not sufficient grounds.
+
+### Alternatives Rejected
+
+| # | Alternative | Why it loses |
+|---|---|---|
+| **A** | `finally` with a `committed` flag | Two paths and mutable state where there is one path and none; the flag must live in or beside a `readonly struct` carrier. The flag exists solely to re-derive "did we take a non-commit exit?" — which the `catch` already knows. |
+| **B** | Discard only on `Result.IsFailure` | The half-fix ADR-005 §2 names explicitly. Leaves every thrown `PersistenceException`, `DbUpdateConcurrencyException` and handler exception with a loaded change tracker. A dedicated mutation run (M2 below) exists to keep this from creeping back. |
+| **C** | Wrap `ExecuteAsync` from the outside | Discards once per command instead of once per execution-strategy attempt; a retried attempt would start from the previous attempt's change set. |
+| **D** | `throw ex` instead of bare `throw` | Resets the stack trace to the behavior, hiding the throwing frame in the handler. |
+| **E** | Let `DiscardChanges` throw out of the `catch` | Silently swaps the in-flight exception for an unrelated one — see the section above. |
+| **F** | Log the swallowed discard exception | `TransactionBehavior` takes no `ILogger` and adding one for an unreachable-on-EF path would put a dependency on the command hot path to serve a case no shipped provider can reach. `LoggingBehavior` (order 100) already observes the real exception as it propagates. |
+
+### Consequences
+
+- **`TransactionBehavior` is now the sole owner of both exits of the unit of work.** A command handler
+  calling `DiscardChanges()` is a defect: it would abandon the staged work of every other command
+  sharing the scope. Candidate analyzer **MKP006** ("handlers never call `DiscardChanges`") is the
+  enforcement path — **not implemented here**, tracked as follow-up.
+- **`DiscardChanges()` can be called twice in one pathological case.** If `DiscardChanges()` itself
+  throws on the *business-failure* path, that exception is caught by the outer `catch`, which calls
+  the (guarded) discard a second time before rethrowing. Unreachable on EF Core, harmless where
+  reachable — the operation is idempotent — and strictly better than leaving the failure path
+  unguarded. Recorded rather than left to be discovered.
+- **A business failure still commits an empty database transaction.** Nothing threw, so
+  `ITransactionalContext` reaches its commit. That was true before this change and remains true; what
+  changes is that the change tracker no longer survives it.
+- **The `TransactionBehavior` XML documentation states both non-commit exits**, why the exception path
+  needs the discard despite the rollback, and — per ADR-005 Consequences — that nested command
+  dispatch is unsupported (an inner command's failure would discard the outer command's staged work).
+- **No public API change and no `.csproj` change.** Constructor, package graph, and
+  `Directory.Packages.props` are untouched; `version.json` is not touched by this decision.
+- **The test suite is mutation-verified.** Three mutants are recorded as the sensitivity standard for
+  future edits: **M1** — remove both call sites → 10 of 16 tests fail; **M2** — the half-fix, keep only
+  the `IsFailure` discard → 8 of 16 fail, all of them exception-path tests; **M3** — move the try/catch
+  *around* `ExecuteAsync` instead of inside it → 2 of 17 fail
+  (`Handle_WhenOperationIsReplayed_DiscardsBetweenAttempts` and
+  `Handle_WhenHandlerThrows_DiscardsBeforeTheTransactionRollsBack`). M3 is the mutant that guards the
+  placement, and it matters more than its failure count suggests: under the "around" placement a
+  retried command that ultimately *succeeds* never enters the outer catch, so no discard happens on
+  any attempt and attempt 2 runs against attempt 1's staged entities — silently. M1 and M2 were
+  measured against the 16-test suite, M3 against the 17 tests that include the replay test added for
+  this purpose. If a future refactor makes any of the three pass, the suite no longer defends this
+  decision.
