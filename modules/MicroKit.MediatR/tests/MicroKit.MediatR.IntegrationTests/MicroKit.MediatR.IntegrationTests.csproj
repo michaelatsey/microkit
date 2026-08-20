@@ -22,6 +22,10 @@
     <PackageReference Include="Microsoft.Extensions.Caching.Abstractions" />
     <PackageReference Include="Microsoft.Extensions.Options" />
     <PackageReference Include="Microsoft.AspNetCore.Authorization" />
+    <!-- TransactionBehaviorPersistenceTests: a real DbContext on SQLite is the only way to prove
+         that a failed command's staged row never reaches the database. -->
+    <PackageReference Include="Microsoft.EntityFrameworkCore" />
+    <PackageReference Include="Microsoft.EntityFrameworkCore.Sqlite" />
     <PackageReference Include="coverlet.collector" />
   </ItemGroup>
   <ItemGroup>
@@ -29,5 +33,16 @@
     <ProjectReference Include="../../src/MicroKit.MediatR/MicroKit.MediatR.csproj" />
     <ProjectReference Include="../../src/MicroKit.MediatR.Behaviors/MicroKit.MediatR.Behaviors.csproj" />
     <ProjectReference Include="../../../MicroKit.Result/src/MicroKit.Result/MicroKit.Result.csproj" />
+    <!-- Cross-module: the SQLite harness needs the real EfUnitOfWork and AddUnitOfWork<TContext>().
+         Direction matches ADR-MEDIATR-011 (MediatR -> Persistence); test-only, no production edge.
+         Test projects (IsPackable=false) use unconditional ProjectReferences — the two-ItemGroup
+         CIReleaseBuild pattern does not apply here (cross-module-references.md rule 6). -->
+    <ProjectReference Include="../../../MicroKit.Persistence/src/MicroKit.Persistence.EntityFrameworkCore/MicroKit.Persistence.EntityFrameworkCore.csproj" />
+  </ItemGroup>
+  <!-- SQLitePCLRaw.lib.e_sqlite3 2.1.11 has a known vulnerability (GHSA-2m69-gcr7-jv3q).
+       This is a transitive test-only dependency of Microsoft.EntityFrameworkCore.Sqlite;
+       it does not affect production binaries. Suppress until EFCore ships a patched version. -->
+  <ItemGroup>
+    <NuGetAuditSuppress Include="https://github.com/advisories/GHSA-2m69-gcr7-jv3q" />
   </ItemGroup>
 </Project>
