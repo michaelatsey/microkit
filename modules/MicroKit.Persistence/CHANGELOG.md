@@ -5,9 +5,19 @@
 ### Breaking Changes
 
 #### MicroKit.Persistence.Abstractions
-- `IUnitOfWork` gains `void DiscardChanges()` — abandons the pending change set without writing it. Every implementer must add the member; see ADR-005 for the migration snippet. Consumers that only inject `IUnitOfWork` are unaffected: the member is called by `TransactionBehavior`, not by handlers.
+- `IUnitOfWork` gains `void DiscardChanges()` — abandons the pending change set without writing it. Every implementer must add the member. Consumers that only inject `IUnitOfWork` are unaffected: the member is called by `TransactionBehavior`, not by handlers.
 
-  > **Release gate:** the contract is decided (ADR-005) but the member and its implementations land in a follow-up branch. Do not cut this section for release until they do.
+  ```csharp
+  public sealed class MyUnitOfWork(MyContext context) : IUnitOfWork
+  {
+      public ValueTask CommitAsync(CancellationToken ct = default) => /* unchanged */;
+
+      public void DiscardChanges() => context.ChangeTracker.Clear();   // EF Core
+      // public void DiscardChanges() { }                              // Dapper / raw SQL — no pending set
+  }
+  ```
+
+  It is called at every command boundary that does not commit — business failure *and* thrown exception, since a transaction rollback does not reset the change tracker. Rationale, alternatives, and the full consequence list are in ADR-005 (`.claude-context/context/architectural-decisions.md`).
 
 ### Added
 

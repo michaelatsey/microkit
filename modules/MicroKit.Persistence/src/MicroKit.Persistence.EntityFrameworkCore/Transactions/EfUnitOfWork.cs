@@ -45,6 +45,16 @@ public sealed class EfUnitOfWork<TContext>(TContext context)
         }
     }
 
+    /// <inheritdoc/>
+    /// <remarks>
+    /// Clears the EF Core change tracker: every <c>Added</c>, <c>Modified</c>, and <c>Deleted</c>
+    /// entry is detached and nothing is written. Purely in-memory — no I/O, no provider exception,
+    /// nothing to translate into <see cref="PersistenceException"/>. It does not touch the ambient
+    /// database transaction: the transaction's own commit or rollback still decides the fate of
+    /// anything already flushed inside it, and rows committed before it began are unaffected.
+    /// </remarks>
+    public void DiscardChanges() => context.ChangeTracker.Clear();
+
     /// <summary>
     /// Executes <paramref name="operation"/> inside a database transaction using the
     /// provider's execution strategy. Commits on success, rolls back on failure.
