@@ -2,12 +2,25 @@
 
 ## [Unreleased]
 
+### Breaking Changes
+
+#### MicroKit.Persistence.Abstractions
+- `IUnitOfWork` gains `void DiscardChanges()` — abandons the pending change set without writing it. Every implementer must add the member; see ADR-005 for the migration snippet. Consumers that only inject `IUnitOfWork` are unaffected: the member is called by `TransactionBehavior`, not by handlers.
+
+  > **Release gate:** the contract is decided (ADR-005) but the member and its implementations land in a follow-up branch. Do not cut this section for release until they do.
+
 ### Added
 
 #### MicroKit.Persistence.EntityFrameworkCore
 - `EfDomainEventsProvider<TContext>` — change-tracker-backed `IDomainEventsProvider` that aggregates domain events across every entity tracked by `TContext`. Candidates are detected on `IHasDomainEvents` (the read contract); draining requires `IDomainEventsProvider`, so an entity that exposes events without implementing the drain contract is reported by `DomainEvents` but skipped by `DrainDomainEvents`. Reads the in-memory change tracker only — never queries the database.
 
+#### MicroKit.Persistence.Testing
+- `InMemoryUnitOfWork.DiscardChanges()` and `DiscardCount`, symmetric with `CommitCount`, so tests can assert that a failed command discarded exactly once.
+
 ### Fixed
+
+#### MicroKit.Persistence.Abstractions
+- A command that failed its business rule could persist its data anyway. `TransactionBehavior` correctly skipped the flush on failure, but the entities the handler staged stayed in the scoped `DbContext`'s change tracker; the next successful command in the same scope wrote them along with its own. Identical on the exception path — EF Core's transaction rollback does not reset the change tracker. The failure was silent: no error, no log, and nothing distinguishing it from correct operation. `IUnitOfWork` had no way to express "abandon this change set", so no consumer could fix it without reaching past the abstraction into EF Core.
 
 #### MicroKit.Persistence.EntityFrameworkCore
 - Domain-event dispatchers that depend on `IDomainEventsProvider` could not be activated. No package registered an implementation, and none could correctly be supplied by a consumer: the contract is aggregate-level — `AggregateRoot<TId>` is its only implementer, draining its own events — while the drain phase requires the events of *all* tracked aggregates, so a DI-resolved provider could only ever be one arbitrary aggregate. Resolution failed with `Unable to resolve service for type 'MicroKit.Domain.Events.IDomainEventsProvider'`. `AddUnitOfWork<TContext>()` now also registers a unit-of-work-scoped provider.

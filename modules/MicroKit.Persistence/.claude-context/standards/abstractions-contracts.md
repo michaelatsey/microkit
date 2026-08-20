@@ -61,7 +61,8 @@ public interface IReadRepository<TAggregate>
 
 ```csharp
 /// <summary>
-/// Defines the commit boundary for aggregate persistence.
+/// Defines the change-set boundary for aggregate persistence: a unit of work is either
+/// committed or discarded.
 /// Inject in command handlers; call <see cref="CommitAsync"/> once per command.
 /// </summary>
 public interface IUnitOfWork
@@ -72,6 +73,16 @@ public interface IUnitOfWork
     /// <param name="ct">Propagates notification that operations should be cancelled.</param>
     /// <exception cref="PersistenceException">Thrown when the underlying provider fails to commit.</exception>
     ValueTask CommitAsync(CancellationToken ct = default);
+
+    /// <summary>
+    /// Abandons every pending change accumulated since the last commit, without writing them.
+    /// </summary>
+    /// <remarks>
+    /// Synchronous by design — no implementation performs I/O (EF Core: <c>ChangeTracker.Clear()</c>).
+    /// Called by <c>TransactionBehavior</c> at every command boundary that does not commit —
+    /// business failure and thrown exception alike. See ADR-005.
+    /// </remarks>
+    void DiscardChanges();
 }
 ```
 
@@ -79,16 +90,31 @@ public interface IUnitOfWork
 
 ```csharp
 /// <summary>
-/// Provides ambient database transaction management for cross-aggregate operations.
-/// Also consumed by <c>TransactionBehavior</c> in MicroKit.MediatR.Behaviors.
+/// Executes a database operation inside an explicit database transaction.
+/// Begin, Commit, and Rollback are managed internally by the implementation.
+/// Consumed by <c>TransactionBehavior</c> in MicroKit.MediatR.Behaviors.
 /// </summary>
-public interface ITransactionalContext : IAsyncDisposable
+public interface ITransactionalContext
 {
-    ValueTask<ITransaction> BeginTransactionAsync(CancellationToken ct = default);
-    ValueTask CommitTransactionAsync(CancellationToken ct = default);
-    ValueTask RollbackTransactionAsync(CancellationToken ct = default);
+    /// <summary>Executes <paramref name="operation"/> inside a database transaction.</summary>
+    Task ExecuteAsync<TState>(
+        Func<TState, CancellationToken, Task> operation,
+        TState state,
+        CancellationToken ct = default);
+
+    /// <summary>
+    /// Executes <paramref name="operation"/> inside a database transaction and returns its result.
+    /// </summary>
+    Task<TResult> ExecuteAsync<TState, TResult>(
+        Func<TState, CancellationToken, Task<TResult>> operation,
+        TState state,
+        CancellationToken ct = default);
 }
 ```
+
+> `TState` threads caller-owned state through without a closure; combined with a `static` lambda the
+> hot path allocates nothing. The lifecycle is not exposed because the implementation wraps the
+> operation in the provider's execution strategy, which may re-invoke it on a transient failure.
 
 ## ITransaction
 

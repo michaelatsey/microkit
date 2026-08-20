@@ -48,12 +48,17 @@ public interface IUserReadRepository : IReadRepository<User>
 
 ## Unit of Work
 
-### IUnitOfWork — single method, infrastructure boundary
+### IUnitOfWork — the change-set boundary
 ```csharp
-// ✅ CommitAsync only — never SaveChangesAsync on the public interface
+// ✅ Two exits: commit or discard — never SaveChangesAsync on the public interface
 public interface IUnitOfWork
 {
     ValueTask CommitAsync(CancellationToken ct = default);
+
+    // Abandons the pending change set without writing it (ADR-005).
+    // Synchronous — no implementation performs I/O (EF Core: ChangeTracker.Clear()).
+    // Called by TransactionBehavior on every non-commit exit, never by a handler.
+    void DiscardChanges();
 }
 
 // ✅ Injection in command handlers
@@ -65,21 +70,32 @@ public sealed class GetUsersHandler(IUserReadRepository repo, IUnitOfWork uow) {
 
 ## Transaction Context
 
-### ITransactionalContext — ambient database transaction
+### ITransactionalContext — transactional execution
 ```csharp
-// ✅ For operations requiring atomic cross-aggregate commits
-public interface ITransactionalContext : IAsyncDisposable
+// ✅ Begin/Commit/Rollback are internal to the implementation — the contract exposes execution only,
+//    because the implementation wraps the operation in the provider's execution strategy and may
+//    re-invoke it on a transient failure.
+public interface ITransactionalContext
 {
-    ValueTask<ITransaction> BeginTransactionAsync(CancellationToken ct = default);
-    ValueTask CommitTransactionAsync(CancellationToken ct = default);
-    ValueTask RollbackTransactionAsync(CancellationToken ct = default);
+    Task ExecuteAsync<TState>(
+        Func<TState, CancellationToken, Task> operation,
+        TState state,
+        CancellationToken ct = default);
+
+    Task<TResult> ExecuteAsync<TState, TResult>(
+        Func<TState, CancellationToken, Task<TResult>> operation,
+        TState state,
+        CancellationToken ct = default);
 }
 
 // ✅ ITransactionalUnitOfWork (EF Core composite) — never in Abstractions
 public interface ITransactionalUnitOfWork : IUnitOfWork, ITransactionalContext { }
 
-// ✅ TransactionBehavior in MediatR.Behaviors injects ITransactionalContext
-// The behavior wraps ICommand handlers — queries are not transactional
+// ✅ TransactionBehavior in MediatR.Behaviors injects ITransactionalContext, IUnitOfWork,
+//    and IDomainEventsDispatcher. It wraps ICommand handlers — queries are not transactional.
+//    On success: next() → DispatchEventsAsync → IUnitOfWork.CommitAsync (the flush MUST follow
+//    the dispatch, or the outbox rows it staged are never written).
+//    On business failure OR exception: IUnitOfWork.DiscardChanges().
 ```
 
 ## QueryOptions Pattern
