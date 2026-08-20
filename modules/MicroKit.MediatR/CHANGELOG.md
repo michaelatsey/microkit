@@ -5,6 +5,51 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/) — [Semantic V
 
 ---
 
+## [Unreleased]
+
+### Breaking Changes
+
+**MicroKit.MediatR.Behaviors**
+- `TransactionBehavior<TRequest, TResponse>` gains a third public constructor parameter,
+  `IUnitOfWork` (from `MicroKit.Persistence.Abstractions`). The constructor is now
+  `(ITransactionalContext, IDomainEventsDispatcher, IUnitOfWork)`. This is binary- and
+  source-breaking for code that constructs the behavior manually; it is transparent for consumers
+  registering it through `AddTransactionBehavior()`, which resolves it as an open generic from DI.
+  **Migration:** pass the third argument, or resolve the behavior from the container.
+  `AddTransactionBehavior()` now additionally requires `IUnitOfWork` to be registered — see
+  `AddUnitOfWork<TContext>()` in `MicroKit.Persistence.EntityFrameworkCore`.
+
+### Fixed
+
+**MicroKit.MediatR.Behaviors**
+- `TransactionBehavior` committed an empty transaction on every transactional command — a silent
+  no-write, not a caught error. It opened a database transaction, let the command handler stage
+  aggregates in the change tracker, dispatched domain events (which stage outbox rows in that same
+  change tracker), and then committed the database transaction **without anything ever calling
+  `SaveChangesAsync`**. `ITransactionalContext.ExecuteAsync` only performs
+  `BeginTransactionAsync` → operation → `IDbContextTransaction.CommitAsync`; the flush lives in
+  `IUnitOfWork.CommitAsync`, which nothing on that path invoked. The behavior now awaits
+  `IUnitOfWork.CommitAsync` **after** `IDomainEventsDispatcher.DispatchEventsAsync`, inside the
+  same `ExecuteAsync` operation, so aggregates and outbox rows are written by a single
+  `SaveChangesAsync` within the open transaction. The ordering is load-bearing: flushing before the
+  dispatch would drop every outbox row the dispatch had just staged. A business failure
+  (`Result.IsFailure`) still dispatches nothing and now also flushes nothing.
+
+### Documentation
+
+**MicroKit.MediatR.Behaviors**
+- Corrects the `[1.0.0-preview.2]` entry below, which described `TransactionBehavior` as wrapping
+  the handler and dispatch "in a single database transaction via `ITransactionalContext`" with no
+  mention of a flush. That description documented the defect rather than the intended behavior: a
+  transaction alone writes nothing. The behavior requires `IUnitOfWork` as well, and the flush is a
+  distinct step from the transaction commit.
+- `TransactionBehavior` and `AddTransactionBehavior()` XML docs now disambiguate the two
+  same-named calls — `IUnitOfWork.CommitAsync` is the flush (`SaveChangesAsync`);
+  `IDbContextTransaction.CommitAsync` is the SQL commit, performed internally by
+  `ITransactionalContext`. The behavior calls the first and never the second.
+
+---
+
 ## [1.0.0-preview.2] — 2026-06-22
 
 ### Breaking Changes
@@ -51,6 +96,10 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/) — [Semantic V
   a single database transaction via `ITransactionalContext` (from `MicroKit.Persistence.Abstractions`).
   Skips event dispatch when the handler returns a business failure. Uses a static lambda and a
   `readonly struct` state-carrier for zero heap allocation per dispatch.
+  > **Correction (see [Unreleased]):** this description is inaccurate as shipped. The behavior
+  > wrapped the handler and dispatch in a transaction but never flushed — no `SaveChangesAsync` was
+  > called, so every transactional command committed an empty transaction and wrote nothing. The
+  > flush requires `IUnitOfWork`, which this version did not inject. Fixed in [Unreleased].
 
 **MicroKit.MediatR.Abstractions**
 - `PipelineOrder.Transaction = 700` added to the canonical pipeline order registry.

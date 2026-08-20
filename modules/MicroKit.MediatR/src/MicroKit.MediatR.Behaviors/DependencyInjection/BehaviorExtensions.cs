@@ -135,11 +135,29 @@ public static class BehaviorExtensions
     /// Activates <see cref="TransactionBehavior{TRequest,TResponse}"/> (pipeline order
     /// <see cref="PipelineOrder.Transaction"/> = 700). Commands only — queries and events pass through.
     /// Wraps the command handler in a database transaction: opens before the handler, dispatches
-    /// domain events after the handler, commits on success, rolls back on any exception.
+    /// domain events after the handler, flushes aggregates and outbox rows in a single
+    /// <c>SaveChangesAsync</c>, commits on success, rolls back on any exception.
     /// </summary>
     /// <remarks>
-    /// Requires <see cref="MicroKit.Persistence.Abstractions.ITransactionalContext"/> in DI — provided by
-    /// <c>MicroKit.Persistence.EntityFrameworkCore</c> via <c>AddEntityFrameworkCore()</c>.
+    /// Requires <see cref="MicroKit.Persistence.Abstractions.ITransactionalContext"/> and
+    /// <see cref="MicroKit.Persistence.Abstractions.IUnitOfWork"/> in DI — both registered by
+    /// <c>AddUnitOfWork&lt;TContext&gt;()</c> in <c>MicroKit.Persistence.EntityFrameworkCore</c>,
+    /// which binds them to the same scoped <c>EfUnitOfWork&lt;TContext&gt;</c> instance.
+    /// <c>AddUnitOfWork</c> extends <c>EfCoreBuilder</c>, not <c>IServiceCollection</c>; reach it
+    /// through the chain:
+    /// <code>
+    /// services.AddMicroKitPersistence(p => p
+    ///     .AddEntityFrameworkCore()
+    ///     .AddDbContext&lt;AppDbContext&gt;(o => o.UseNpgsql(cs)) // any EF Core provider
+    ///     .AddUnitOfWork&lt;AppDbContext&gt;());
+    /// </code>
+    /// <see cref="MicroKit.Persistence.Abstractions.IUnitOfWork.CommitAsync"/> is the flush
+    /// (<c>SaveChangesAsync</c>) — distinct from the database transaction commit, which
+    /// <see cref="MicroKit.Persistence.Abstractions.ITransactionalContext"/> performs internally.
+    /// Omitting the flush would commit an empty transaction.
+    /// A missing registration surfaces as an activation exception at the first command dispatch;
+    /// build the provider with <c>ValidateOnBuild = true</c> (and <c>ValidateScopes = true</c>) to
+    /// surface it at <c>BuildServiceProvider()</c> instead.
     /// Register <c>AddTransactionBehavior()</c> last (after <see cref="AddRetryBehavior"/>) so
     /// that Retry (order 600) wraps the entire transactional unit, allowing retry of transient
     /// DB failures without leaving a partial transaction open.
