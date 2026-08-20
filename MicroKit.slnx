@@ -1,5 +1,19 @@
 <Solution>
   <Folder Name="/modules/" />
+  <Folder Name="/modules/MicroKit.Result/" />
+  <Folder Name="/modules/MicroKit.Result/src/">
+    <Project Path="modules/MicroKit.Result/src/MicroKit.Result.AspNetCore/MicroKit.Result.AspNetCore.csproj" />
+    <Project Path="modules/MicroKit.Result/src/MicroKit.Result/MicroKit.Result.csproj" />
+  </Folder>
+  <Folder Name="/modules/MicroKit.Result/samples/">
+    <Project Path="modules/MicroKit.Result/samples/MicroKit.Result.Samples/MicroKit.Result.Samples.csproj" />
+  </Folder>
+  <Folder Name="/modules/MicroKit.Result/tests/">
+    <Project Path="modules/MicroKit.Result/tests/MicroKit.Result.ArchitectureTests/MicroKit.Result.ArchitectureTests.csproj" />
+    <Project Path="modules/MicroKit.Result/tests/MicroKit.Result.IntegrationTests/MicroKit.Result.IntegrationTests.csproj" />
+    <Project Path="modules/MicroKit.Result/tests/MicroKit.Result.PerformanceTests/MicroKit.Result.PerformanceTests.csproj" />
+    <Project Path="modules/MicroKit.Result/tests/MicroKit.Result.UnitTests/MicroKit.Result.UnitTests.csproj" />
+  </Folder>
   <Folder Name="/modules/MicroKit.Domain/" />
   <Folder Name="/modules/MicroKit.Domain/src/">
     <Project Path="modules/MicroKit.Domain/src/MicroKit.Domain/MicroKit.Domain.csproj" />
@@ -30,12 +44,16 @@
     <Project Path="modules/MicroKit.Logging/src/MicroKit.Logging.AspNetCore/MicroKit.Logging.AspNetCore.csproj" />
     <Project Path="modules/MicroKit.Logging/src/MicroKit.Logging.Diagnostics/MicroKit.Logging.Diagnostics.csproj" />
     <Project Path="modules/MicroKit.Logging/src/MicroKit.Logging.OpenTelemetry/MicroKit.Logging.OpenTelemetry.csproj" />
+    <Project Path="modules/MicroKit.Logging/src/MicroKit.Logging.Analyzers/MicroKit.Logging.Analyzers.csproj" />
+    <Project Path="modules/MicroKit.Logging/src/MicroKit.Logging.Generators/MicroKit.Logging.Generators.csproj" />
   </Folder>
   <Folder Name="/modules/MicroKit.Logging/tests/">
     <Project Path="modules/MicroKit.Logging/tests/MicroKit.Logging.UnitTests/MicroKit.Logging.UnitTests.csproj" />
     <Project Path="modules/MicroKit.Logging/tests/MicroKit.Logging.IntegrationTests/MicroKit.Logging.IntegrationTests.csproj" />
     <Project Path="modules/MicroKit.Logging/tests/MicroKit.Logging.ArchitectureTests/MicroKit.Logging.ArchitectureTests.csproj" />
     <Project Path="modules/MicroKit.Logging/tests/MicroKit.Logging.PerformanceTests/MicroKit.Logging.PerformanceTests.csproj" />
+    <Project Path="modules/MicroKit.Logging/tests/MicroKit.Logging.AnalyzerTests/MicroKit.Logging.AnalyzerTests.csproj" />
+    <Project Path="modules/MicroKit.Logging/tests/MicroKit.Logging.GeneratorTests/MicroKit.Logging.GeneratorTests.csproj" />
   </Folder>
   <Folder Name="/modules/MicroKit.Persistence/" />
   <Folder Name="/modules/MicroKit.Persistence/src/">
@@ -67,6 +85,7 @@
     <Project Path="modules/MicroKit.Tenancy/tests/MicroKit.Tenancy.IntegrationTests/MicroKit.Tenancy.IntegrationTests.csproj" />
     <Project Path="modules/MicroKit.Tenancy/tests/MicroKit.Tenancy.ArchitectureTests/MicroKit.Tenancy.ArchitectureTests.csproj" />
     <Project Path="modules/MicroKit.Tenancy/tests/MicroKit.Tenancy.PerformanceTests/MicroKit.Tenancy.PerformanceTests.csproj" />
+    <Project Path="modules/MicroKit.Tenancy/tests/MicroKit.Tenancy.Analyzers.Tests/MicroKit.Tenancy.Analyzers.Tests.csproj" />
   </Folder>
   <Folder Name="/modules/MicroKit.Auth/" />
   <Folder Name="/modules/MicroKit.Auth/src/">
@@ -108,9 +127,13 @@
   <Folder Name="/modules/MicroKit.Messaging/src/">
     <Project Path="modules/MicroKit.Messaging/src/MicroKit.Messaging.Abstractions/MicroKit.Messaging.Abstractions.csproj" />
     <Project Path="modules/MicroKit.Messaging/src/MicroKit.Messaging/MicroKit.Messaging.csproj" />
+    <Project Path="modules/MicroKit.Messaging/src/MicroKit.Messaging.EntityFrameworkCore/MicroKit.Messaging.EntityFrameworkCore.csproj" />
+    <Project Path="modules/MicroKit.Messaging/src/MicroKit.Messaging.MediatR/MicroKit.Messaging.MediatR.csproj" />
   </Folder>
   <Folder Name="/modules/MicroKit.Messaging/tests/">
     <Project Path="modules/MicroKit.Messaging/tests/MicroKit.Messaging.ArchitectureTests/MicroKit.Messaging.ArchitectureTests.csproj" />
     <Project Path="modules/MicroKit.Messaging/tests/MicroKit.Messaging.UnitTests/MicroKit.Messaging.UnitTests.csproj" />
+    <Project Path="modules/MicroKit.Messaging/tests/MicroKit.Messaging.IntegrationTests/MicroKit.Messaging.IntegrationTests.csproj" />
+    <Project Path="modules/MicroKit.Messaging/tests/MicroKit.Messaging.MediatR.UnitTests/MicroKit.Messaging.MediatR.UnitTests.csproj" />
   </Folder>
 </Solution>
