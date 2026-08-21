@@ -732,3 +732,156 @@ stand. "It cannot throw on EF Core" is not sufficient grounds.
   scoped `DomainEventDispatcher` runs unmodified on the `IDomainEventsProvider` that
   `AddUnitOfWork<TContext>()` already supplies. Pulling in the outbox would add a table the scenario
   does not need and let an unrelated module's defects contaminate the failure signal.
+
+---
+
+## ADR-MEDIATR-013: `IDomainEventsDispatcher` Registration Precedence Is a Cross-Module Contract — Core `TryAdd`s, the Glue `Replace`s
+
+**Status:** Accepted
+**Date:** 2026-08-21
+**Related:** ADR-MEDIATR-010 (dispatch topology — establishes which implementation is authoritative),
+ADR-MEDIATR-009 (`IDomainEventsDispatcher` naming and the `[Obsolete]` `IDomainEventDispatcher` alias),
+ADR-MSG-009 (MediatR carve-out for the glue package), ADR-MSG-002 (outbox processing decomposition)
+
+### Decision
+
+Two implementations of `IDomainEventsDispatcher` exist by design, in two different packages. Which
+one a container resolves MUST NOT depend on the order in which the two registration methods were
+called. That is guaranteed by a **two-sided contract, and only by both sides together**:
+
+| Package | Registration method | Required API | Meaning |
+|---------|--------------------|--------------|---------|
+| `MicroKit.MediatR` | `AddMicroKitMediatR()` | **`TryAdd`** | Supplies a *default*. Abstains if the slot is already taken. |
+| `MicroKit.Messaging.MediatR` | `AddMediatRTransport()` | **`Replace`** | Supplies the *authoritative* implementation. Takes the slot unconditionally. |
+
+With `TryAdd` on one side and `Replace` on the other, both call orders converge on the glue
+implementation:
+
+```
+AddMicroKitMediatR(); AddMediatRTransport();   → core registers, glue replaces        ✓
+AddMediatRTransport(); AddMicroKitMediatR();   → glue registers, core sees it taken    ✓
+                                                 and abstains
+```
+
+**The rule applies to every dispatcher descriptor these methods register — including the
+`[Obsolete]` `IDomainEventDispatcher` alias and the concrete backing registration. There are no
+exceptions to remember.**
+
+### Context — the two implementations
+
+> Stated here in full, so this record is readable without opening another one.
+
+- **`MicroKit.MediatR.Events.DomainEventDispatcher`** (core, `internal sealed`) runs **P1 + P2**:
+  drain the domain events accumulated on tracked aggregates, then dispatch each one synchronously to
+  its registered `IDomainEventHandler<TEvent>`. It **writes nothing to any outbox** — it has no
+  knowledge of one. It is the correct and complete dispatcher for a consumer using MicroKit.MediatR
+  *without* MicroKit.Messaging, and exists so that package can stand alone.
+- **`MicroKit.Messaging.MediatR.Events.DomainEventsDispatcher`** (the glue, `internal sealed`) runs
+  the full **P1 → P2 → P3 → P4** sequence: drain, synchronous handler dispatch, notification
+  creation via `IDomainEventNotificationFactory`, then a single batched
+  `IOutboxWriter.AddBatchAsync` staging every mapped notification in the same transaction.
+  **ADR-MEDIATR-010 makes this the authoritative implementation whenever it is installed.**
+
+The two are not interchangeable: the core one is a strict prefix of the glue one. Resolving the core
+implementation in an application that installed the glue means P3 and P4 never run — every
+integration notification is silently dropped.
+
+Before this decision both sides registered with plain `AddScoped`. Microsoft DI resolves the
+**last** registration for a service type, so the winner was decided by call order alone. The
+documented order in `AddMediatRTransport`'s `<remarks>` was prescriptive and nothing enforced it —
+while, in that same method, the other two overrides were already protected properly
+(`Remove` + `Add` guarded by an `InvalidOperationException` for `IOutboxDispatcher`, `Replace` for
+`INotificationPublisher`). `IDomainEventsDispatcher` was the only one left positional.
+
+### What breaks if either half is written the other way
+
+Both failure modes are silent — no exception, no log, no startup validation error. Neither is
+detectable without reading the DI registration code or observing an empty outbox in production.
+
+- **`Add` instead of `TryAdd` on the core (MicroKit.MediatR) side** — reintroduces the order
+  dependency outright. `AddMicroKitMediatR()` called *after* `AddMediatRTransport()` overwrites the
+  glue's registration: domain events still reach their `IDomainEventHandler<TEvent>` (P2 runs
+  normally, so handler-side effects still happen and nothing looks broken), but no notification is
+  ever created or staged. The outbox stays empty. Every downstream consumer simply never receives
+  anything.
+- **`Add` instead of `Replace` on the glue (MicroKit.Messaging.MediatR) side** — leaves the
+  glue-then-core order silently outbox-free, with exactly the same symptom, because the later core
+  `Add` wins by position. A `Replace` here is also what makes the glue's registration idempotent and
+  consistent with how it already handles `INotificationPublisher`.
+
+**Neither half is sufficient alone.** `TryAdd` on the core side without `Replace` on the glue side
+still works only because the glue's `Add` happens to win by position in the core-then-glue order —
+an accident of ordering, not a guarantee. `Replace` on the glue side without `TryAdd` on the core
+side leaves the glue-then-core order broken. The contract needs both, and each side must be able to
+rely on the other honouring it.
+
+### Rationale
+
+1. **The core package must supply a default, not impose one.** MicroKit.MediatR stands alone
+   (root principle: each module is autonomous, integration is a bonus). It must therefore register
+   *something* for `IDomainEventsDispatcher`, or a consumer without Messaging has no dispatcher at
+   all. But "must supply one" does not imply "must win" — `TryAdd` expresses exactly that
+   distinction, and it is the standard .NET idiom for it.
+2. **Precedence belongs to the higher-level module.** MicroKit.Messaging.MediatR sits above
+   MicroKit.MediatR in the dependency graph and knows strictly more (it has an outbox). The lower
+   package cannot detect the higher one — the reference direction forbids it — so the only
+   mechanism available is for the lower package to yield the slot and the higher one to claim it.
+3. **Order-independence is a correctness property, not ergonomics.** Composition-root call order is
+   not something a library can police, and here getting it wrong produces no diagnostic at all.
+   A rule enforced by the registration API cannot be got wrong by a consumer.
+4. **A rule with exceptions is a rule nobody applies.** Guarding two of three dispatcher descriptors
+   and leaving the third as `Add` would force every future reader to work out whether that third
+   line is deliberate or an oversight. Today the `[Obsolete]` alias happens to be order-insensitive
+   in effect — both compatibility adapters resolve `IDomainEventsDispatcher` lazily, so whichever
+   descriptor wins delegates to the same winner — but that neutrality is a coincidence of the
+   current implementations, not a guarantee. If either adapter is ever changed to capture eagerly,
+   the positional race returns silently on a type nobody reads.
+
+### Consequences
+
+- **A consumer who registers their own `IDomainEventsDispatcher` *before* `AddMicroKitMediatR()`
+  now keeps it.** Previously the core registration overrode it. This is the intended contract and is
+  precisely the mechanism that makes the glue-then-core order safe. A consumer who wants to override
+  the core default while calling `AddMicroKitMediatR()` first must now use `Replace`, not `Add` —
+  the same API the glue uses.
+- **The concrete `DomainEventDispatcher` registration stays unconditional.** It is registered with
+  `TryAdd` for idempotency only, never skipped because the interface slot is taken. `TryAdd` there
+  cannot express supersession in any case: the type is `internal` and the module ships no
+  `InternalsVisibleTo`, so no other assembly can ever register that service type. In the
+  glue-then-core order the descriptor is simply inert — nothing resolves it.
+- **Calling `AddMicroKitMediatR()` twice no longer appends duplicate dispatcher descriptors.** All
+  three resolve exactly once. (This does *not* make the whole method idempotent: a second call that
+  scans assemblies still re-registers the `HandlerDispatchMap` and `IDomainEventNotificationFactory`
+  singletons, last-wins, discarding the first call's map. That is a separate defect, tracked
+  independently and out of scope here.)
+- **Enforced by tests, per descriptor.** `DomainEventsDispatcherRegistrationTests`
+  (`MicroKit.MediatR.IntegrationTests`) exercises the contract through a real `ServiceProvider` —
+  never by inspecting `ServiceDescriptor`s. Because MicroKit.MediatR cannot reference
+  MicroKit.Messaging, a prior registration of a stub dispatcher stands in for
+  `AddMediatRTransport()`; it is a faithful simulation of the glue-then-core order, since `TryAdd`
+  matches on service type alone. Four mutants are recorded as the sensitivity standard, measured
+  against the full module suite (163 tests):
+
+  | Mutant | Change | Result |
+  |--------|--------|--------|
+  | **M1** | `IDomainEventsDispatcher` → `Add` | 2 fail — `…KeepsExistingRegistration` (reproduces the original defect) and `…RegistersDispatcherOnce` |
+  | **M2** | all three → `Add` (the pre-decision state) | 2 fail — the same two. At test granularity M2 is indistinguishable from M1: `…RegistersDispatcherOnce` asserts all three descriptor counts and Shouldly stops at the first. The rest of the suite stays green, which is the evidence that this decision changes nothing but precedence and duplication |
+  | **M3** | `[Obsolete]` alias → `Add` | 1 fail — `…RegistersDispatcherOnce`, on the alias assertion |
+  | **M4** | concrete `DomainEventDispatcher` → `Add`, interface left as `TryAdd` | 1 fail — `…RegistersDispatcherOnce`, on `GetServices(CoreDispatcherType).Count()`: *should be 1 but was 2* |
+
+  **M4 is the load-bearing one.** It is the only mutant that isolates the concrete-type conversion:
+  M1 and M3 leave it intact, and M2 masks it behind an earlier assertion. It exists because the
+  concrete descriptor is guarded for idempotency rather than supersession, so no behavioural test
+  can reach it — without the explicit descriptor-count assertion, M4 is green and the concrete
+  `TryAdd` would be untested while appearing covered.
+
+  Three tests are **insensitive by design** and stay green under all four mutants:
+  `…ResolvesCoreDispatcher` and both `…ConcreteDispatcherStillResolves` variants. `Add` and `TryAdd`
+  are identical when nothing else is registered, so these are regression guards — they prove the
+  default is still supplied and the concrete descriptor is never skipped. If a future edit makes any
+  of M1–M4 pass, the suite no longer defends this decision.
+- **Shipped in two branches.** The core half (`TryAdd`) ships with this record. The glue half
+  (`Replace`) ships in MicroKit.Messaging and cites this ADR. Until it lands, core-then-glue
+  continues to work by position and glue-then-core is already fixed by the core half alone — so the
+  core half is a strict improvement in isolation and opens no window in which the pair is worse than
+  before.
