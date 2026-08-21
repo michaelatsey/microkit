@@ -187,6 +187,23 @@ internal sealed class CacheableDoubleHandler(AttemptCounter counter)
     }
 }
 
+// ── Domain event with a handler but NO notification (sink-composition tests) ──
+// The handlers-only configuration is supported: MicroKit.MediatR without any outbox. This event
+// exists so that case is testable distinctly from ItemCreatedEvent/OrderPlacedEvent, both of which
+// DO map to a notification and therefore require a sink (ADR-MEDIATR-015).
+
+internal sealed record HandlerOnlyEvent(Guid Id) : DomainEvent;
+
+internal sealed class RecordHandlerOnlyHandler(DomainEventLog log)
+    : IDomainEventHandler<HandlerOnlyEvent>
+{
+    public Task Handle(HandlerOnlyEvent domainEvent, CancellationToken cancellationToken)
+    {
+        log.HandlerOnlyInvocations++;
+        return Task.CompletedTask;
+    }
+}
+
 // ── Domain event with no handler (for dispatch-time error test) ───────────
 
 internal sealed record UnregisteredEvent(Guid Id) : DomainEvent;
@@ -197,4 +214,5 @@ internal sealed class DomainEventLog
 {
     public List<Guid> ItemCreatedIds { get; } = [];
     public int OrderPlacedInvocations { get; set; }
+    public int HandlerOnlyInvocations { get; set; }
 }

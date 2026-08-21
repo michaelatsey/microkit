@@ -1123,3 +1123,182 @@ shipped surface and is not worth churning in preview.
   packages are still `1.0.0-preview.*` — the contract is additive and no consumer-visible type
   changes, so this is the cheapest it will ever be. After 1.0.0 stable, `IDomainEventSink` becomes a
   permanent surface and this becomes a v2 conversation.
+
+---
+
+## ADR-MEDIATR-015: Domain-Event Composition Fails Loudly — Unreachable Notifications, `AddMediatRDomainEvents`, and Order-Independent Decoration
+
+**Status:** Accepted
+**Date:** 2026-08-21
+**Related:** ADR-MEDIATR-014 (one orchestrator, N sinks — implemented in the same lot as this record),
+ADR-MEDIATR-013 (superseded by 014), ADR-MEDIATR-012 (`TransactionBehavior` is the caller),
+ADR-MEDIATR-005 (one notification type per event type), ADR-MSG-009 (MediatR carve-out for the glue),
+ADR-MSG-013 (cascade notification publisher), ADR-EXEC-001 (consume a contract, do not depend on its
+implementer), PR #84
+
+### Decision
+
+Three changes, one theme: **every remaining way this composition could be wrong now produces a
+throw, not silence.**
+
+1. **A notification with no sink is a configuration error.** When the core orchestrator drains an
+   event that maps to a `DomainEventNotification<TEvent>` and **no `IDomainEventSink` is
+   registered**, it throws `InvalidOperationException` naming the event type, the notification type,
+   and the missing registration. Zero sinks with no notifications stays valid and free.
+2. **`AddMediatRTransport()` is renamed `AddMediatRDomainEvents()`**, outright, with no
+   `[Obsolete]` alias.
+3. **`AddInProcessTransport()` registers with `TryAdd`, and `AddMediatRDomainEvents()` is
+   idempotent.** The `IOutboxDispatcher` decoration can no longer be displaced by a later transport
+   registration, nor double-applied by a second glue call.
+
+### Context
+
+ADR-014 removed the wrong-implementation race by removing the second implementation. It did not
+address three other ways the same composition fails, all silent, none of which the sink model
+touches on its own.
+
+**Unreachable notifications.** `DomainEventNotification<TEvent>` subclasses are discovered by the
+assembly scan and mapped in `AddMicroKitMediatR`. Nothing consumes that map unless a sink is
+registered. A consumer who declares notifications, wires everything else correctly, and simply never
+installs a sink gets an application that starts, runs, dispatches handlers, and publishes nothing —
+no exception, no log, no startup error.
+
+**The transport misnomer.** `AddMediatRTransport()` transports nothing, and
+`microkit-messaging-naming.md` reserves the `Add{Provider}Transport()` shape for broker providers
+(`AddRabbitMqTransport`). After ADR-014 the method contributes a sink, decorates `IOutboxDispatcher`,
+and replaces `INotificationPublisher` — three things, none of them a transport.
+
+**Decorator displacement.** `AddInProcessTransport()` registered `IOutboxDispatcher`,
+`IMessagePublisher` and `IMessageSerializer` with a plain `Add`. Called *after* the glue it appended
+a second `IOutboxDispatcher` descriptor; Microsoft DI resolves the last one, so
+`MediatROutboxDispatcher` was bypassed and every domain-event notification stopped being published —
+while the outbox kept draining and reporting success. The serializer stacked a duplicate for the
+same reason, and the glue's `LastOrDefault` descriptor hunt meant a second glue call found its *own*
+factory descriptor and wrapped it twice.
+
+### Rationale
+
+**1. ADR-014's stated ground for rejecting Alternative E does not hold, and the correct ground is
+different.** ADR-014 rejected startup validation because "MicroKit.MediatR (Level 2) cannot detect
+MicroKit.Messaging (Level 3) — it would need a marker service in the low package naming the high
+one, i.e. the inversion the graph exists to prevent." That reasoning does not survive ADR-014 itself.
+`IDomainEventSink` lives in `MicroKit.MediatR.Abstractions`, names no package, and any package may
+register one. A low package asking "is *any* sink registered?" names nothing high and inverts
+nothing — it is the same shape as ADR-EXEC-001, where Messaging consumes `IExecutionScopeFactory`
+without depending on Tenancy.
+
+The correct ground is narrower, and it is why this is a new check rather than a wholesale
+reinstatement of Alternative E: **the sink model makes the wrong-implementation race *impossible*,
+but it does not make the zero-sink-with-notifications case *detectable*.** Alternative E asked
+"which dispatcher won?", a question that no longer exists. This asks "is anything going to receive
+what the scan mapped?", a question ADR-014 neither answers nor removes. An ADR superseded on a
+correct-but-outdated basis and one superseded because its reasoning was wrong are different things;
+this is the second kind, and recording which is which is the point of this section.
+
+**2. The check is per drained event that actually maps, not per registration.** "Notifications exist
+and no sink is registered" is the condition as first stated, and it over-fires: an application may
+legitimately declare notifications it publishes by another route, and an event with no mapping loses
+nothing. Throwing only when a *mapped event is about to be dropped* never produces a false positive,
+and lets the message name the concrete event and notification rather than a count.
+
+**3. The legitimate zero-sink path stays free, which is what forced one bit of metadata.** The
+orchestrator tests `_sinks.Length != 0` first, so the check never runs when a sink exists. With no
+sink, a precomputed `_mustGuardNotifications` (`_sinks.Length == 0 && !catalog.IsEmpty`, evaluated
+once per scope) returns immediately for a consumer with no notification mappings. Without
+registration-time metadata the only way to ask "does this event map?" would be
+`IDomainEventNotificationFactory.Create`, which **constructs** a notification — a call and an
+allocation per event, on every batch, on the path that must be free. `DomainEventNotificationCatalog`
+wraps the `notificationTypeMap` the scan already built and previously discarded; it adds no
+computation and no public surface.
+
+**4. First dispatch is the honest timing, and no package reference is worth changing it.**
+MicroKit.MediatR has no post-composition-root hook: no `IValidateOptions`, no `IStartupFilter`, no
+`IHostedService`, and core references only `MediatR` and
+`Microsoft.Extensions.DependencyInjection.Abstractions`. `Microsoft.Extensions.Options` is available
+in CPM but adding it puts a runtime dependency on a Level 2 package for a diagnostic, and
+`IValidateOptions` fires only when the options object is resolved — so it would not reliably run at
+startup either. **This therefore fires on the first dispatch of a mapped event, not at startup, and
+an application that never raises such an event never sees it.** That is the same timing as a missing
+DI registration, and it is stated here rather than left to be discovered.
+
+**5. Throw, do not log.** This is data loss, not a warning. `TransactionBehavior` (order 700) calls
+`DispatchEventsAsync` inside `ITransactionalContext.ExecuteAsync` and before `IUnitOfWork.CommitAsync`
+(ADR-MEDIATR-012), so the throw rolls the command back. A failed command is strictly better than one
+that succeeds while discarding an integration notification, and a log line on a path nobody is
+watching is how the original defect stayed invisible.
+
+**6. The rename is free now and never again.** Both packages are `1.0.0-preview.*`, there are zero
+external consumers, and the only invocation in the repository is one integration-test harness. An
+`[Obsolete]` alias would preserve a name whose entire problem is that it misdescribes the method, and
+would have to be carried to 1.0.0 and beyond. The new name follows the module's own
+`Add{Technology}{Concern}` shape (`AddEfCoreOutbox`), and every registration it makes sits on the
+domain-event → notification path.
+
+**7. `TryAdd` on a transport is the same idea as `TryAdd` on the dispatcher, applied one level
+down.** A transport supplies a default and abstains if something already holds the slot — the idiom
+`AddMicroKitMessaging` already uses for `TimeProvider` and `Random`, with the same justification. It
+converts the displacement failure from silent to impossible, in three tokens, with no new mechanism.
+The one order that still fails — the glue before any transport — already threw, and still throws,
+because there is genuinely nothing to decorate.
+
+### Consequences
+
+- **New internal type `DomainEventNotificationCatalog`** (`MicroKit.MediatR`, `internal sealed`),
+  registered as a singleton by `AddMicroKitMediatR`. **`IDomainEventNotificationFactory`'s public
+  contract is unchanged**, and no public type is added by this record.
+- **`DomainEventDispatcher` gains two constructor parameters** (`IEnumerable<IDomainEventSink>` from
+  ADR-014, and the catalog). It is `internal` with no `InternalsVisibleTo`, so this is not
+  consumer-visible.
+- **`AddMediatRTransport()` no longer exists.** Consumers call `AddMediatRDomainEvents()`. Its
+  `<summary>` states the three things it registers; its `<remarks>` lose the prescriptive
+  dispatcher call-order paragraph, which ADR-014 made false.
+- **`microkit-messaging-naming.md` gains its own row for `AddMediatRDomainEvents()`, deliberately
+  NOT under the `Add{Provider}Transport()` pattern** — this method is not a transport, and the
+  `Add{Provider}Transport()` row is narrowed to brokers so the reservation is explicit.
+- **`AddInProcessTransport()` is now idempotent and non-displacing.** A consumer who relied on
+  calling it twice to *replace* an earlier registration no longer can; nothing in the repository did,
+  and "last call wins" was never a documented contract of that method.
+- **The reflective `CreateInner` stays**, with its `IL2072`/`IL3050` suppressions. The inner type
+  (`InProcessIntegrationDispatcher`) is `internal` to Messaging Core and cannot be named from the
+  glue, so removing the reflection is a separate design question, not a side effect of this one. It
+  is recorded here so it is not mistaken for an oversight.
+- **Sensitivity standard.** The mutant that matters for ADR-014 — *delete the sink loop from the
+  orchestrator* — kills **7 tests**: 3 in `MicroKit.MediatR.IntegrationTests`
+  (`DomainEventDispatchCompositionTests`) and 4 in `MicroKit.Messaging.MediatR.IntegrationTests`
+  (both staging tests plus `NominalPathTests` and `InboxDuplicateObservationTests`, which depend on
+  outbox rows existing). For this record specifically:
+
+  ```
+  DispatchEventsAsync_WhenMappedEventRaisedAndNoSink_ThrowsNamingTheRegistration
+  DispatchEventsAsync_WhenUnmappedEventRaisedAndNoSink_DoesNotThrow    (per-event precision)
+  DispatchEventsAsync_WhenMappedEventRaisedAndSinkRegistered_DoesNotThrow
+  AddMediatRDomainEvents_CalledTwice_ContributesTheSinkOnce             (TryAddEnumerable)
+  AddMediatRDomainEvents_RegistersNoDomainEventsDispatcher              (ADR-014 invariant)
+  AddInProcessTransport_CalledAfterTheGlue_KeepsTheDecorator            (the silent displacement)
+  AddMediatRDomainEvents_WhenNoTransportRegistered_ThrowsNamingTheFix   (the loud order)
+  ```
+
+- **`TryAddEnumerable` requires an implementation type or an instance.** A factory-based descriptor
+  has no implementation type and throws *"indistinguishable from other services"* rather than
+  registering. This is documented on `IDomainEventSink` because a sink author will otherwise meet it
+  as a runtime surprise.
+- **Not fixed, and deliberately so:** cascade rows staged on the outbox-processing path are still
+  never flushed — `TransactionBehavior` is the sole `SaveChanges` owner (ADR-MSG-012) and is not on
+  that path (`L0-FINDINGS.md` Finding #3). `CascadePublish_WhenHandlerRaisesEvent_StagesOutboxRowInProcessorScope`
+  asserts **staging**, not persistence, exactly as its name says; `CascadeObservationTests` continues
+  to pin the resulting loss. This record fixes the half ADR-014 owns — that cascade dispatch reaches
+  the sinks at all — and leaves Finding #3 open.
+- **Coordinated release still required** (ADR-014): the glue will not compile against a core without
+  `IDomainEventSink`.
+
+### Alternatives Rejected
+
+| # | Alternative | Why it loses |
+|---|---|---|
+| **A** | **Registration-level check** — throw on the first non-empty dispatch whenever any notification type was discovered and no sink is registered | The condition as first stated, and the simpler code. It over-fires: an application may legitimately declare notifications it publishes by another route, and an event that maps to nothing loses nothing by having no sink. It also cannot name the offending event or notification, so the message degrades to a count. Concretely, it would throw inside ADR-014's own `DispatchEventsAsync_WhenNoSinkRegistered_DispatchesHandlersOnly`, because the MicroKit.MediatR integration-test assembly declares notification subclasses — forcing that test into a contrived scan scope to say something it should say plainly. |
+| **B** | **Container-build validation** via a new `Microsoft.Extensions.Options` reference and `IValidateOptions` | Moves the failure from first dispatch to `BuildServiceProvider`, which is genuinely better timing. It costs a runtime package reference on a Level 2 package for a diagnostic, and it does not actually deliver: `IValidateOptions` runs when the options object is first resolved, not at build, unless the host opts into eager validation. Paying a permanent dependency for a conditional improvement is the wrong trade in preview. |
+| **C** | **A single registered `bool`** instead of `DomainEventNotificationCatalog` | Smaller metadata, and it was the first instinct. But naming the notification type in the message then requires calling `IDomainEventNotificationFactory` from the orchestrator — dragging notification mapping into the type ADR-014 §6 deliberately keeps ignorant of it, and constructing a notification purely to describe an error. The catalog costs nothing extra (the map already exists and was being discarded), allocates nothing on lookup, and yields the type directly. |
+| **D** | **Builder opt-out** — `cfg.AllowNotificationsWithoutSink()` | Public surface for a configuration that has no known use. The per-event check already permits every case this would need to permit: an event with no mapping never throws. Add it if a real consumer appears with notifications they publish by another route — not before. |
+| **E** | **`[Obsolete]` shim for `AddMediatRTransport()`** | Preserves the exact name whose problem is that it misdescribes the method, and commits to carrying it past 1.0.0. Zero external consumers, one repository call site, both packages in preview: this is the cheapest the rename will ever be. |
+| **F** | **Loud guard only for the decorator** — leave `AddInProcessTransport()` on `Add` and have the glue detect displacement | Cannot be done: the glue runs *before* the displacing call, so there is nothing for it to detect. It would need a hook after composition, which is the problem B already fails to solve. `TryAdd` removes the failure instead of reporting it. |
+| **G** | **Rewrite the `IOutboxDispatcher` seam** as an ordered chain, the way ADR-014 rewrote dispatch | The principled fix, and out of scope. ADR-014 explicitly leaves this seam untouched, the brief for this lot asks for the smallest change that removes the silent failure, and a decorator chain for `IOutboxDispatcher` needs its own decision about ordering and about naming the internal inner type across the package boundary. `TryAdd` plus idempotency removes the defect today without foreclosing that. |

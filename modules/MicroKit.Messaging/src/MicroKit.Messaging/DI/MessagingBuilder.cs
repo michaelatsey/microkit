@@ -4,6 +4,7 @@ using MicroKit.Messaging.Execution;
 using MicroKit.Messaging.Publishing;
 using MicroKit.Messaging.Registry;
 using MicroKit.Messaging.Serialization;
+using Microsoft.Extensions.DependencyInjection.Extensions;
 
 namespace MicroKit.Messaging;
 
@@ -38,12 +39,22 @@ public sealed class MessagingBuilder
     /// the scoped <c>IInboxStore</c> (backed by a scoped <c>DbContext</c> in
     /// <c>MicroKit.Messaging.EntityFrameworkCore</c>), causing a captive dependency.
     /// </para>
+    /// <para>
+    /// All three are registered with <c>TryAdd</c>: a transport supplies a default and abstains if
+    /// something already holds the slot. This is what makes the composition order-independent.
+    /// Under a plain <c>Add</c>, calling this method <em>after</em> a package that decorates
+    /// <c>IOutboxDispatcher</c> appended a second descriptor, Microsoft DI resolved the last one,
+    /// and the decorator was bypassed with no exception and no log — the outbox kept draining while
+    /// nothing it routed was ever published. The serializer stacked a duplicate descriptor for the
+    /// same reason. Calling this method twice is now also a no-op rather than a double
+    /// registration (ADR-MEDIATR-015).
+    /// </para>
     /// </remarks>
     public MessagingBuilder AddInProcessTransport()
     {
-        Services.AddSingleton<IMessageSerializer, SystemTextJsonMessageSerializer>();
-        Services.AddScoped<IMessagePublisher, InProcessMessagePublisher>();
-        Services.AddScoped<IOutboxDispatcher, InProcessIntegrationDispatcher>();
+        Services.TryAddSingleton<IMessageSerializer, SystemTextJsonMessageSerializer>();
+        Services.TryAddScoped<IMessagePublisher, InProcessMessagePublisher>();
+        Services.TryAddScoped<IOutboxDispatcher, InProcessIntegrationDispatcher>();
         return this;
     }
 

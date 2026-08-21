@@ -36,7 +36,42 @@ from `2N+1` to two (three when contended) plus one settlement — flat in `N`.
   that failed together retried together. Back-off is now
   `Uniform(0, min(2^RetryCount s, MaxRetryBackoff))` — full jitter.
 
+### Changed — BREAKING (MicroKit.Messaging.MediatR)
+- **`AddMediatRTransport()` is renamed `AddMediatRDomainEvents()`, with no `[Obsolete]` alias.** The
+  old name was wrong twice: it transports nothing, and `Add{Provider}Transport()` is reserved by this
+  module's naming rules for broker providers (`AddRabbitMqTransport`). The method contributes the
+  outbox `IDomainEventSink`, decorates `IOutboxDispatcher`, and replaces `INotificationPublisher` —
+  three things, none of them a transport. Both packages are `1.0.0-preview.*` with zero external
+  consumers, so the rename ships outright rather than accumulating a permanent alias.
+  **Migration:** rename the call. Nothing else changes — same receiver, same signature, same
+  position in the chain (ADR-MEDIATR-015).
+- **The glue no longer registers an `IDomainEventsDispatcher`.** It contributes an
+  `IDomainEventSink` to the single core orchestrator in `MicroKit.MediatR` instead of registering a
+  rival dispatcher, so the two packages can no longer disagree about which implementation wins —
+  the race is gone rather than arbitrated. `DomainEventsDispatcher` becomes `OutboxDomainEventSink`
+  and sheds the drain and handler-dispatch phases it used to duplicate; both types are
+  `internal sealed`, so **no consumer-visible type changed**. **This requires MicroKit.MediatR from
+  the same release** — the glue will not compile against a core without `IDomainEventSink`
+  (ADR-MEDIATR-014).
+
+### Fixed
+- **`AddInProcessTransport()` called after the MediatR glue silently disabled notification
+  publishing.** It registered `IOutboxDispatcher`, `IMessagePublisher` and `IMessageSerializer` with
+  a plain `Add`, so a later call appended a second `IOutboxDispatcher` descriptor; Microsoft DI
+  resolves the last one, and `MediatROutboxDispatcher` was bypassed with no exception and no log.
+  The outbox kept draining and reporting success while every domain-event notification went
+  unpublished. All three registrations now use `TryAdd` — a transport supplies a default and
+  abstains if something already holds the slot. The duplicate `IMessageSerializer` descriptor that
+  stacked for the same reason is gone too.
+- **Calling the MediatR glue twice double-wrapped the outbox dispatcher.** Its `LastOrDefault`
+  descriptor hunt found its own factory registration on the second call and decorated it again,
+  routing every outbox message through two decorators. The method is now idempotent: one sink
+  (`TryAddEnumerable`), one decorator, one publisher replacement, however many times it is called
+  (ADR-MEDIATR-015).
+
 ### Added
+- `MicroKit.Messaging/README.md` — the module had none. Covers what the packages do, the complete DI
+  composition that works, one end-to-end example, and what is stable versus still moving.
 - `OutboxClaim`, `OutboxOutcome` + `OutboxOutcomeKind`, `OutboxBatchResult` + `OutboxBatchAbortReason`.
 - `OutboxPayloadException`, `OutboxTransportUnavailableException`, `OutboxConfigurationException`.
 - `IOutboxAdminStore` and `IOutboxRetentionStore` — split out of `IOutboxProcessorStore` (ISP).

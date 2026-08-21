@@ -19,54 +19,75 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/) — [Semantic V
   `AddTransactionBehavior()` now additionally requires `IUnitOfWork` to be registered — see
   `AddUnitOfWork<TContext>()` in `MicroKit.Persistence.EntityFrameworkCore`.
 
+### Added
+
+**MicroKit.MediatR.Abstractions**
+- `IDomainEventSink` — the seam a higher-level package implements to participate in domain-event
+  dispatch. `ValueTask ReceiveAsync(IReadOnlyList<IDomainEvent>, CancellationToken)`, called once
+  per drained batch, after every `IDomainEventHandler<TEvent>` has completed for every event in it.
+  Sinks run in-transaction, in registration order, fail-fast: a sink stages work in the caller's
+  unit of work and is not a place for I/O to an external system. Register with `TryAddEnumerable`
+  and an implementation type or instance — never a factory lambda, which `TryAddEnumerable` rejects
+  because it cannot deduplicate one. Additive; no consumer-visible type changed (ADR-MEDIATR-014).
+
 ### Changed
 
 **MicroKit.MediatR**
-- `AddMicroKitMediatR()` now registers `IDomainEventsDispatcher` with `TryAdd` instead of `Add`. Its
-  contract changes from *imposes a dispatcher* to *provides a default*: if a higher-level module has
-  already registered one, that registration is kept. This makes the two implementations that exist
-  by design (ADR-MEDIATR-010) order-independent. Previously both `AddMicroKitMediatR()` and
-  `AddMediatRTransport()` used plain `AddScoped`, so the winner was whichever ran last — and
-  `AddMediatRTransport()` before `AddMicroKitMediatR()` silently resolved the core dispatcher, which
-  runs domain-event handlers but writes **nothing** to the transactional outbox: no exception, no
-  log, no startup error, just an outbox that never fills. The same change applies to the concrete
-  backing registration and to the `[Obsolete]` `IDomainEventDispatcher` alias — the rule covers every
-  dispatcher descriptor the method registers, with no exceptions. A side effect: calling
-  `AddMicroKitMediatR()` twice no longer appends duplicate dispatcher descriptors.
-  **Migration:** a consumer who deliberately overrode the core dispatcher by registering their own
-  *after* `AddMicroKitMediatR()` is unaffected (a later `Add` still wins). A consumer who registered
-  their own *before* it now keeps theirs, where previously it was overridden. To override
-  unconditionally regardless of order, use `Replace` — the same API the Messaging glue uses.
+- **Domain-event dispatch composes by contribution: one dispatcher, N sinks (ADR-MEDIATR-014).**
+  There is now a single `IDomainEventsDispatcher` implementation in the ecosystem — the core
+  orchestrator. It drains, runs every `IDomainEventHandler<TEvent>` for every event, and then hands
+  the batch to an ordered, possibly empty `IEnumerable<IDomainEventSink>` resolved from DI.
+  `MicroKit.MediatR` registers the orchestrator and **zero** sinks; `MicroKit.Messaging.MediatR` now
+  contributes the outbox sink instead of registering a rival dispatcher.
 
-  **The precedence rule, in full** (ADR-MEDIATR-013 records the decision; the rule itself is stated
-  here so it is available without the repository):
+  Previously two implementations competed for one service type and the winner was decided by
+  composition-root call order — silently, with an empty outbox as the only symptom. Because
+  Microsoft DI resolves `IEnumerable<T>` to *every* registration for `T`, the composition is now
+  order-independent by construction rather than by contract: nothing arbitrates and nothing can
+  lose. **This supersedes the two-sided `TryAdd`/`Replace` precedence rule announced here
+  previously** (ADR-MEDIATR-013); the `Replace` half was never shipped and is now cancelled.
+  **Migration:** none for consumers — both dispatcher types were `internal`. A module that extended
+  domain-event dispatch by registering its own `IDomainEventsDispatcher` should now contribute an
+  `IDomainEventSink` instead.
 
-  | Package | Method | Registers with | Meaning |
-  |---------|--------|----------------|---------|
-  | `MicroKit.MediatR` | `AddMicroKitMediatR()` | `TryAdd` | Supplies a *default*; abstains if the slot is taken |
-  | `MicroKit.Messaging.MediatR` | `AddMediatRTransport()` | `Replace` | Supplies the *authoritative* implementation; takes the slot unconditionally |
+- `AddMicroKitMediatR()` registers `IDomainEventsDispatcher`, its concrete backing type and the
+  `[Obsolete]` `IDomainEventDispatcher` alias with `TryAdd` rather than `Add`. This shipped for the
+  precedence rule above and **remains correct for a different reason**: the core supplies a
+  *default*, so a consumer who registers their own dispatcher *before* this call keeps it. Reverting
+  any of the three to `Add` is a defect. A side effect: calling `AddMicroKitMediatR()` twice no
+  longer appends duplicate dispatcher descriptors.
+  **Migration:** a consumer who overrode the dispatcher by registering *after* `AddMicroKitMediatR()`
+  is unaffected (a later `Add` still wins). One who registered *before* it now keeps theirs, where
+  previously it was overridden. To override regardless of order, use `Replace`.
 
-  With `TryAdd` on one side and `Replace` on the other, both call orders converge on the glue
-  implementation: core-then-glue, the core registers and the glue replaces it; glue-then-core, the
-  glue registers and the core finds the slot taken and abstains. Neither half is sufficient alone —
-  an `Add` on either side reintroduces the silent order dependency described above. The glue half
-  ships separately in `MicroKit.Messaging`; until it does, core-then-glue continues to work by
-  position and glue-then-core is already fixed by this change alone.
+- **A domain-event notification with no sink now throws instead of vanishing (ADR-MEDIATR-015).**
+  When the scanned assemblies declare `DomainEventNotification<TEvent>` subclasses but no
+  `IDomainEventSink` is registered, every notification was silently discarded: the application
+  started, ran, dispatched handlers, and published nothing — no exception, no log, no startup error.
+  The orchestrator now throws `InvalidOperationException` naming the concrete event type, the
+  concrete notification type, and the registration that is missing.
+
+  It fires on the **first dispatch of an event that actually maps to a notification**, not at
+  startup — MicroKit.MediatR has no post-composition-root hook and gains no package reference for
+  one — so an application that never raises such an event never sees it. Declaring no notifications
+  and registering no sink stays valid and costs one bool per batch: the handlers-only configuration
+  is supported and unaffected.
+  **Migration:** register a sink — `AddMediatRDomainEvents()` from `MicroKit.Messaging.MediatR`, or
+  your own via `TryAddEnumerable` — or delete the notification types you do not route.
 
 **MicroKit.MediatR.Behaviors**
-- No API change, but `TransactionBehavior` is the package's consumer of `IDomainEventsDispatcher`
-  (constructor parameter 2), so *which* dispatcher your pipeline runs is now decided by the `TryAdd`
-  precedence rule above rather than by DI registration order. Behaviour is unchanged for the
-  documented registration order; it changes only where `AddMediatRTransport()` ran before
-  `AddMicroKitMediatR()`, which previously left the transaction dispatching domain events without
-  ever staging an outbox row. All four packages are co-versioned and ship together — see the
-  **MicroKit.MediatR** entry above for the full rule.
+- No API change. `TransactionBehavior` remains the sole in-pipeline caller of `DispatchEventsAsync`
+  (constructor parameter 2), still inside the `ITransactionalContext.ExecuteAsync` operation and
+  before `IUnitOfWork.CommitAsync`, so sinks run in-transaction and outbox rows still commit
+  atomically with the domain changes. *Which* dispatcher runs is no longer a question — there is
+  one. Pipeline order, behavior count and timing are all unchanged.
 
 **MicroKit.MediatR.Testing**
 - No API change. `FakeDomainEventDispatcher` implements `IDomainEventsDispatcher`, so registering it
-  in a container *before* `AddMicroKitMediatR()` now takes effect, where previously the real
-  dispatcher silently overwrote it. Its primary documented use — direct construction and injection
-  into a behavior under test — is unaffected.
+  in a container *before* `AddMicroKitMediatR()` takes effect, where once the real dispatcher
+  silently overwrote it. Its primary documented use — direct construction and injection into a
+  behavior under test — is unaffected. Note it replaces the whole orchestrator, sinks included; to
+  observe sink behaviour, register a fake `IDomainEventSink` and keep the real dispatcher.
 
 ### Fixed
 
@@ -103,19 +124,23 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/) — [Semantic V
 ### Tests
 
 **MicroKit.MediatR**
-- Adds `DomainEventsDispatcherRegistrationTests` (`MicroKit.MediatR.IntegrationTests`) — five tests
-  for the `TryAdd` contract above, all exercised through a real `ServiceProvider` rather than by
-  inspecting `ServiceDescriptor`s. They cover: the core dispatcher resolving when
-  `AddMicroKitMediatR()` is called alone; a prior registration surviving the call (the test that
-  reproduces the original defect, and the reason the glue-then-core order becomes safe); no
-  duplicate descriptors on a second call; and the concrete dispatcher still resolving, both with and
-  without a prior interface registration. Because MicroKit.MediatR cannot reference
-  MicroKit.Messaging, a stub registered beforehand stands in for `AddMediatRTransport()` — faithful,
-  since `TryAdd` matches on service type alone. Mutation-verified per descriptor: reverting any one
-  of the three `TryAdd` calls to `Add` fails at least one test, and each failure is attributable to
-  its own descriptor. The two "still resolves" tests are insensitive by design — `Add` and `TryAdd`
-  are identical when nothing else is registered — and serve as regression guards that the default is
-  still supplied and the concrete descriptor is never skipped.
+- `DomainEventsDispatcherRegistrationTests` becomes `DomainEventDispatchCompositionTests`
+  (`MicroKit.MediatR.IntegrationTests`), re-purposed rather than deleted. With one dispatcher, the
+  prior-registration stub no longer stands in for the Messaging glue — it stands in for a **consumer
+  override**, which is still supported, so those tests keep their meaning under a new framing. All
+  assertions still resolve through a real `ServiceProvider` rather than inspecting
+  `ServiceDescriptor`s.
+
+  It now also covers the sink seam — the batch is delivered once, after every handler has run for
+  every event (the barrier); an empty batch invokes no sink; a throwing sink propagates — and the
+  unreachable-notification guard, including its per-event precision: an event that maps to nothing
+  must not throw merely because notifications exist elsewhere in the assembly.
+
+  Recorded mutants: `IDomainEventsDispatcher` → `Add` and the concrete type → `Add` both survive the
+  reframing and still fail. The two "still resolves" tests remain insensitive by design (`Add` and
+  `TryAdd` are identical when nothing else is registered) and serve as regression guards. The new
+  load-bearing mutant is **delete the sink loop from the orchestrator**, which fails 7 tests: 3 here
+  and 4 in `MicroKit.Messaging.MediatR.IntegrationTests`.
 
 **MicroKit.MediatR.Behaviors**
 - Adds `TransactionBehaviorPersistenceTests` (`MicroKit.MediatR.IntegrationTests`) — the end-to-end

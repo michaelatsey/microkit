@@ -97,7 +97,8 @@ public class OrderPlacedNotification { ... }        // ← Notification = Mediat
 | `AddMicroKitMessaging()` | on `IServiceCollection` — main registration entry point |
 | `AddEfCoreOutbox()` | on `MessagingBuilder` — wires `EfOutboxStore` (implements both `IOutboxWriter` + `IOutboxProcessorStore`) + `EfInboxStore` |
 | `AddInProcessTransport()` | on `MessagingBuilder` — wires `InProcessMessagePublisher` |
-| `Add{Provider}Transport()` | on `MessagingBuilder` — wires a broker provider (e.g., `AddRabbitMqTransport()`) |
+| `Add{Provider}Transport()` | on `MessagingBuilder` — **broker providers ONLY** (e.g. `AddRabbitMqTransport()`). This shape is reserved: a method that does not wire a broker must not use it |
+| `AddMediatRDomainEvents()` | on `MessagingBuilder` — wires the MicroKit.MediatR glue: contributes the outbox `IDomainEventSink`, decorates `IOutboxDispatcher` with the notification router, replaces `INotificationPublisher` with the cascade publisher. **Not a transport** — it moves nothing between processes (ADR-MEDIATR-015) |
 | `AddMessageHandler<THandler, TEvent>()` | on `MessagingBuilder` — registers a handler |
 
 ---

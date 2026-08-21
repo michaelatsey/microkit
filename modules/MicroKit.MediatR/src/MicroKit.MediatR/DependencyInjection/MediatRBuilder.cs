@@ -157,28 +157,36 @@ public static class ServiceCollectionExtensions
     /// </summary>
     /// <remarks>
     /// <para>
-    /// <strong><see cref="IDomainEventsDispatcher"/> is a default, not an imposition.</strong> It is
-    /// registered with <c>TryAdd</c>: if a higher-level module has already registered one, that
-    /// registration is kept and this method does not override it. The implementation supplied here
-    /// drains domain events and dispatches them to <see cref="IDomainEventHandler{TEvent}"/> in-process
-    /// (P1 + P2) — it writes nothing to a transactional outbox. It is the correct dispatcher for
-    /// consumers using MicroKit.MediatR without MicroKit.Messaging.
+    /// <strong>One dispatcher, N sinks (ADR-MEDIATR-014).</strong> There is a single
+    /// <see cref="IDomainEventsDispatcher"/> implementation in the ecosystem, and this method
+    /// registers it. It owns the whole sequence: drain the domain events accumulated on tracked
+    /// aggregates, dispatch every one to its <see cref="IDomainEventHandler{TEvent}"/>
+    /// implementations, and then hand the batch to every registered <see cref="IDomainEventSink"/>.
     /// </para>
     /// <para>
-    /// Installing the <c>MicroKit.Messaging.MediatR</c> glue supersedes it with the four-phase
-    /// implementation that also stages mapped notifications to the outbox (P3 + P4). The glue registers
-    /// with <c>Replace</c> and this package with <c>TryAdd</c>, so either call order converges on the
-    /// glue implementation. See ADR-MEDIATR-013 (registration precedence) and ADR-MEDIATR-010
-    /// (dispatch topology).
+    /// This package registers <b>zero</b> sinks, so on its own the dispatcher runs handlers and
+    /// nothing else — the correct behaviour for a consumer using MicroKit.MediatR without
+    /// MicroKit.Messaging. Installing the <c>MicroKit.Messaging.MediatR</c> glue contributes the
+    /// outbox sink, which creates the mapped notifications and stages them in the same transaction.
+    /// A higher-level module extending dispatch <b>contributes a sink; it never registers a second
+    /// dispatcher.</b> Sinks are resolved as <c>IEnumerable&lt;IDomainEventSink&gt;</c>, so call
+    /// order between this method and any such module is irrelevant by construction — nothing
+    /// arbitrates and nothing can lose.
     /// </para>
     /// <para>
-    /// <strong>Supplying your own dispatcher.</strong> Every dispatcher registration this method makes
-    /// uses <c>TryAdd</c> — the concrete implementation and the obsolete <c>IDomainEventDispatcher</c>
-    /// alias included — so a registration already present when this method runs always wins. To
-    /// override the default, register yours with <c>Replace</c> to win regardless of call order, or
-    /// with <c>AddScoped</c> <em>after</em> this method (in Microsoft DI a later registration wins).
-    /// Registering before this method works too, and is what makes the order in which you call
-    /// <c>AddMicroKitMediatR</c> and a higher-level module's registration irrelevant.
+    /// <strong><see cref="IDomainEventsDispatcher"/> is still a default, not an imposition.</strong>
+    /// Every dispatcher registration this method makes uses <c>TryAdd</c> — the concrete
+    /// implementation and the obsolete <c>IDomainEventDispatcher</c> alias included — so a
+    /// registration already present when this method runs always wins. To override the default,
+    /// register yours with <c>Replace</c> to win regardless of call order, or with <c>AddScoped</c>
+    /// <em>after</em> this method (in Microsoft DI a later registration wins).
+    /// </para>
+    /// <para>
+    /// <strong>Notifications need a sink.</strong> If the scanned assemblies declare
+    /// <see cref="DomainEventNotification{TEvent}"/> subclasses but no <see cref="IDomainEventSink"/>
+    /// is registered, the first dispatch of an event that maps to one throws
+    /// <see cref="InvalidOperationException"/> rather than discarding it silently
+    /// (ADR-MEDIATR-015). Declaring no notifications and registering no sink stays valid.
     /// </para>
     /// </remarks>
     /// <param name="services">The service collection.</param>
@@ -255,16 +263,16 @@ public static class ServiceCollectionExtensions
         services.AddSingleton(handlerMap);
         services.AddScoped<IDomainEventHandlerDispatcher, DomainEventHandlerDispatcher>();
 
-        // Default domain-events dispatcher (scoped — injects scoped IDomainEventHandlerDispatcher).
+        // The single domain-events dispatcher (scoped — injects scoped IDomainEventHandlerDispatcher).
         //
-        // ADR-MEDIATR-013 — TryAdd, not Add: this package supplies a DEFAULT, it does not impose one.
-        // The implementation registered here runs P1 (drain) + P2 (IDomainEventHandler dispatch) only;
-        // it writes nothing to a transactional outbox. Installing MicroKit.Messaging.MediatR supersedes
-        // it (via Replace) with the four-phase implementation that also stages notifications to the
-        // outbox. TryAdd here + Replace there makes both call orders converge on the glue.
+        // ADR-MEDIATR-014 — this package registers the orchestrator and ZERO sinks. A higher-level
+        // package contributes an IDomainEventSink with TryAddEnumerable; it does not register a
+        // rival dispatcher, so there is no precedence to arbitrate any more.
         //
-        // The rule covers EVERY dispatcher descriptor below, including the [Obsolete] alias: an Add on
-        // any one of them reintroduces the positional race for that service type.
+        // TryAdd, not Add (PR #84): this package supplies a DEFAULT, it does not impose one. That is
+        // orthogonal to the sink model and still load-bearing — it is what lets a CONSUMER register
+        // their own dispatcher before this call and keep it. Reverting any of the three descriptors
+        // below to Add is a defect (ADR-MEDIATR-014 Rationale 7), the [Obsolete] alias included.
         services.TryAddScoped<DomainEventDispatcher>();
         services.TryAddScoped<IDomainEventsDispatcher>(sp => sp.GetRequiredService<DomainEventDispatcher>());
 #pragma warning disable CS0618 // IDomainEventDispatcher is a preview compatibility alias.
@@ -272,7 +280,12 @@ public static class ServiceCollectionExtensions
             sp.GetRequiredService<IDomainEventsDispatcher>()));
 #pragma warning restore CS0618
 
-        // Phase B result: notification factory singleton (unchanged contract)
+        // Phase B result: notification factory singleton (unchanged contract), plus the catalog of
+        // which event types have a notification at all. The catalog is the map the scan already
+        // built and previously discarded; it is what lets the dispatcher detect a notification with
+        // no sink to receive it without calling the factory on the hot path (ADR-MEDIATR-015).
+        services.AddSingleton(new DomainEventNotificationCatalog(notificationTypeMap));
+
         var notificationFactory = new DomainEventNotificationFactory(notificationMap);
         services.AddSingleton<IDomainEventNotificationFactory>(notificationFactory);
 #pragma warning disable CS0618 // INotificationFactory is a preview compatibility alias.

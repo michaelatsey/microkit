@@ -24,7 +24,7 @@ namespace MicroKit.Messaging.MediatR.Events;
 /// immediately with zero overhead.
 /// </para>
 /// <para>
-/// Replaces the default <c>ForeachAwaitPublisher</c> when <c>AddMediatRTransport()</c>
+/// Replaces the default <c>ForeachAwaitPublisher</c> when <c>AddMediatRDomainEvents()</c>
 /// is called. Registered as transient so the scoped <see cref="IDomainEventsDispatcher"/>
 /// is resolved correctly within each request scope.
 /// </para>

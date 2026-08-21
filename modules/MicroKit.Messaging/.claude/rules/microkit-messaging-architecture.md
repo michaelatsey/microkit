@@ -320,7 +320,7 @@ This requires the glue to reference `MediatR` (`IPublisher`) and, transitively,
    handlers have no per-consumer inbox. The whole `IPublisher.Publish` call is the retry unit, so an
    outbox retry re-runs ALL of a notification's handlers. Domain-event handlers reached via the glue
    MUST therefore be idempotent — same contract as inbox handlers, documented in the glue README and
-   the `AddMediatRTransport` XML docs.
+   the `AddMediatRDomainEvents` XML docs.
 
 ### Consequences
 - The "MediatR.Contracts forbidden everywhere" statements in CLAUDE.md (rule #14), the dependencies
