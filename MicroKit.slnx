@@ -135,5 +135,6 @@
     <Project Path="modules/MicroKit.Messaging/tests/MicroKit.Messaging.UnitTests/MicroKit.Messaging.UnitTests.csproj" />
     <Project Path="modules/MicroKit.Messaging/tests/MicroKit.Messaging.IntegrationTests/MicroKit.Messaging.IntegrationTests.csproj" />
     <Project Path="modules/MicroKit.Messaging/tests/MicroKit.Messaging.MediatR.UnitTests/MicroKit.Messaging.MediatR.UnitTests.csproj" />
+    <Project Path="modules/MicroKit.Messaging/tests/MicroKit.Messaging.MediatR.IntegrationTests/MicroKit.Messaging.MediatR.IntegrationTests.csproj" />
   </Folder>
 </Solution>

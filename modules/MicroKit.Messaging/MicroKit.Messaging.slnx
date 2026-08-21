@@ -10,6 +10,7 @@
     <Project Path="tests/MicroKit.Messaging.UnitTests/MicroKit.Messaging.UnitTests.csproj" />
     <Project Path="tests/MicroKit.Messaging.IntegrationTests/MicroKit.Messaging.IntegrationTests.csproj" />
     <Project Path="tests/MicroKit.Messaging.MediatR.UnitTests/MicroKit.Messaging.MediatR.UnitTests.csproj" />
+    <Project Path="tests/MicroKit.Messaging.MediatR.IntegrationTests/MicroKit.Messaging.MediatR.IntegrationTests.csproj" />
   </Folder>
   <Folder Name="/deps/">
     <!-- Required for dotnet restore in dev mode (CIReleaseBuild=false ProjectReference) -->
@@ -19,6 +20,8 @@
     <!-- MicroKit.MediatR glue deps (CIReleaseBuild=false ProjectReference from MicroKit.Messaging.MediatR) -->
     <Project Path="../MicroKit.MediatR/src/MicroKit.MediatR/MicroKit.MediatR.csproj" />
     <Project Path="../MicroKit.MediatR/src/MicroKit.MediatR.Abstractions/MicroKit.MediatR.Abstractions.csproj" />
+    <!-- TransactionBehavior (ADR-MSG-012 dispatch+commit owner) — required by MicroKit.Messaging.MediatR.IntegrationTests -->
+    <Project Path="../MicroKit.MediatR/src/MicroKit.MediatR.Behaviors/MicroKit.MediatR.Behaviors.csproj" />
     <Project Path="../MicroKit.Domain/src/MicroKit.Domain/MicroKit.Domain.csproj" />
   </Folder>
 </Solution>
