@@ -19,6 +19,55 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/) — [Semantic V
   `AddTransactionBehavior()` now additionally requires `IUnitOfWork` to be registered — see
   `AddUnitOfWork<TContext>()` in `MicroKit.Persistence.EntityFrameworkCore`.
 
+### Changed
+
+**MicroKit.MediatR**
+- `AddMicroKitMediatR()` now registers `IDomainEventsDispatcher` with `TryAdd` instead of `Add`. Its
+  contract changes from *imposes a dispatcher* to *provides a default*: if a higher-level module has
+  already registered one, that registration is kept. This makes the two implementations that exist
+  by design (ADR-MEDIATR-010) order-independent. Previously both `AddMicroKitMediatR()` and
+  `AddMediatRTransport()` used plain `AddScoped`, so the winner was whichever ran last — and
+  `AddMediatRTransport()` before `AddMicroKitMediatR()` silently resolved the core dispatcher, which
+  runs domain-event handlers but writes **nothing** to the transactional outbox: no exception, no
+  log, no startup error, just an outbox that never fills. The same change applies to the concrete
+  backing registration and to the `[Obsolete]` `IDomainEventDispatcher` alias — the rule covers every
+  dispatcher descriptor the method registers, with no exceptions. A side effect: calling
+  `AddMicroKitMediatR()` twice no longer appends duplicate dispatcher descriptors.
+  **Migration:** a consumer who deliberately overrode the core dispatcher by registering their own
+  *after* `AddMicroKitMediatR()` is unaffected (a later `Add` still wins). A consumer who registered
+  their own *before* it now keeps theirs, where previously it was overridden. To override
+  unconditionally regardless of order, use `Replace` — the same API the Messaging glue uses.
+
+  **The precedence rule, in full** (ADR-MEDIATR-013 records the decision; the rule itself is stated
+  here so it is available without the repository):
+
+  | Package | Method | Registers with | Meaning |
+  |---------|--------|----------------|---------|
+  | `MicroKit.MediatR` | `AddMicroKitMediatR()` | `TryAdd` | Supplies a *default*; abstains if the slot is taken |
+  | `MicroKit.Messaging.MediatR` | `AddMediatRTransport()` | `Replace` | Supplies the *authoritative* implementation; takes the slot unconditionally |
+
+  With `TryAdd` on one side and `Replace` on the other, both call orders converge on the glue
+  implementation: core-then-glue, the core registers and the glue replaces it; glue-then-core, the
+  glue registers and the core finds the slot taken and abstains. Neither half is sufficient alone —
+  an `Add` on either side reintroduces the silent order dependency described above. The glue half
+  ships separately in `MicroKit.Messaging`; until it does, core-then-glue continues to work by
+  position and glue-then-core is already fixed by this change alone.
+
+**MicroKit.MediatR.Behaviors**
+- No API change, but `TransactionBehavior` is the package's consumer of `IDomainEventsDispatcher`
+  (constructor parameter 2), so *which* dispatcher your pipeline runs is now decided by the `TryAdd`
+  precedence rule above rather than by DI registration order. Behaviour is unchanged for the
+  documented registration order; it changes only where `AddMediatRTransport()` ran before
+  `AddMicroKitMediatR()`, which previously left the transaction dispatching domain events without
+  ever staging an outbox row. All four packages are co-versioned and ship together — see the
+  **MicroKit.MediatR** entry above for the full rule.
+
+**MicroKit.MediatR.Testing**
+- No API change. `FakeDomainEventDispatcher` implements `IDomainEventsDispatcher`, so registering it
+  in a container *before* `AddMicroKitMediatR()` now takes effect, where previously the real
+  dispatcher silently overwrote it. Its primary documented use — direct construction and injection
+  into a behavior under test — is unaffected.
+
 ### Fixed
 
 **MicroKit.MediatR.Behaviors**
@@ -53,6 +102,21 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/) — [Semantic V
 
 ### Tests
 
+**MicroKit.MediatR**
+- Adds `DomainEventsDispatcherRegistrationTests` (`MicroKit.MediatR.IntegrationTests`) — five tests
+  for the `TryAdd` contract above, all exercised through a real `ServiceProvider` rather than by
+  inspecting `ServiceDescriptor`s. They cover: the core dispatcher resolving when
+  `AddMicroKitMediatR()` is called alone; a prior registration surviving the call (the test that
+  reproduces the original defect, and the reason the glue-then-core order becomes safe); no
+  duplicate descriptors on a second call; and the concrete dispatcher still resolving, both with and
+  without a prior interface registration. Because MicroKit.MediatR cannot reference
+  MicroKit.Messaging, a stub registered beforehand stands in for `AddMediatRTransport()` — faithful,
+  since `TryAdd` matches on service type alone. Mutation-verified per descriptor: reverting any one
+  of the three `TryAdd` calls to `Add` fails at least one test, and each failure is attributable to
+  its own descriptor. The two "still resolves" tests are insensitive by design — `Add` and `TryAdd`
+  are identical when nothing else is registered — and serve as regression guards that the default is
+  still supplied and the concrete descriptor is never skipped.
+
 **MicroKit.MediatR.Behaviors**
 - Adds `TransactionBehaviorPersistenceTests` (`MicroKit.MediatR.IntegrationTests`) — the end-to-end
   proof for the two fixes above. The existing unit tests assert against an NSubstitute `IUnitOfWork`:
@@ -73,6 +137,15 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/) — [Semantic V
   `MicroKit.Persistence.EntityFrameworkCore` — no production dependency edge is added.
 
 ### Documentation
+
+**MicroKit.MediatR**
+- Records **ADR-MEDIATR-013** — `IDomainEventsDispatcher` registration precedence as a cross-module
+  contract: MicroKit.MediatR `TryAdd`s, MicroKit.Messaging.MediatR `Replace`s, and neither half is
+  sufficient alone. Written to be readable from the Messaging side without MediatR context, and it
+  spells out the silent failure mode of each half written the other way.
+- The `AddMicroKitMediatR()` XML doc now states the "default, not an imposition" contract, that the
+  dispatcher it supplies is outbox-free (P1 + P2 only), and that the Messaging.MediatR glue
+  supersedes it.
 
 **MicroKit.MediatR.Behaviors**
 - Corrects the `[1.0.0-preview.2]` entry below, which described `TransactionBehavior` as wrapping

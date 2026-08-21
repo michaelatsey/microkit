@@ -2,6 +2,7 @@ using System.Diagnostics.CodeAnalysis;
 using System.Linq.Expressions;
 using System.Reflection;
 using MicroKit.Domain.Events;
+using Microsoft.Extensions.DependencyInjection.Extensions;
 
 namespace MicroKit.MediatR.DependencyInjection;
 
@@ -148,11 +149,38 @@ public sealed class MediatRBuilder
 public static class ServiceCollectionExtensions
 {
     /// <summary>
-    /// Registers MicroKit.MediatR: MediatR engine, all handler adapters, <see cref="IDomainEventsDispatcher"/>,
-    /// <see cref="IDomainEventHandlerDispatcher"/>, and the domain event notification factory.
+    /// Registers MicroKit.MediatR: MediatR engine, all handler adapters, the default
+    /// <see cref="IDomainEventsDispatcher"/>, <see cref="IDomainEventHandlerDispatcher"/>,
+    /// and the domain event notification factory.
     /// Call <c>builder.FromAssemblyContaining&lt;T&gt;()</c> inside <paramref name="configure"/>
     /// to specify the assemblies to scan.
     /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <strong><see cref="IDomainEventsDispatcher"/> is a default, not an imposition.</strong> It is
+    /// registered with <c>TryAdd</c>: if a higher-level module has already registered one, that
+    /// registration is kept and this method does not override it. The implementation supplied here
+    /// drains domain events and dispatches them to <see cref="IDomainEventHandler{TEvent}"/> in-process
+    /// (P1 + P2) — it writes nothing to a transactional outbox. It is the correct dispatcher for
+    /// consumers using MicroKit.MediatR without MicroKit.Messaging.
+    /// </para>
+    /// <para>
+    /// Installing the <c>MicroKit.Messaging.MediatR</c> glue supersedes it with the four-phase
+    /// implementation that also stages mapped notifications to the outbox (P3 + P4). The glue registers
+    /// with <c>Replace</c> and this package with <c>TryAdd</c>, so either call order converges on the
+    /// glue implementation. See ADR-MEDIATR-013 (registration precedence) and ADR-MEDIATR-010
+    /// (dispatch topology).
+    /// </para>
+    /// <para>
+    /// <strong>Supplying your own dispatcher.</strong> Every dispatcher registration this method makes
+    /// uses <c>TryAdd</c> — the concrete implementation and the obsolete <c>IDomainEventDispatcher</c>
+    /// alias included — so a registration already present when this method runs always wins. To
+    /// override the default, register yours with <c>Replace</c> to win regardless of call order, or
+    /// with <c>AddScoped</c> <em>after</em> this method (in Microsoft DI a later registration wins).
+    /// Registering before this method works too, and is what makes the order in which you call
+    /// <c>AddMicroKitMediatR</c> and a higher-level module's registration irrelevant.
+    /// </para>
+    /// </remarks>
     /// <param name="services">The service collection.</param>
     /// <param name="configure">Optional builder callback for assembly scan and behavior registration.</param>
     /// <returns>The service collection for chaining.</returns>
@@ -227,11 +255,20 @@ public static class ServiceCollectionExtensions
         services.AddSingleton(handlerMap);
         services.AddScoped<IDomainEventHandlerDispatcher, DomainEventHandlerDispatcher>();
 
-        // Default domain-events dispatcher (scoped — injects scoped IDomainEventHandlerDispatcher)
-        services.AddScoped<DomainEventDispatcher>();
-        services.AddScoped<IDomainEventsDispatcher>(sp => sp.GetRequiredService<DomainEventDispatcher>());
+        // Default domain-events dispatcher (scoped — injects scoped IDomainEventHandlerDispatcher).
+        //
+        // ADR-MEDIATR-013 — TryAdd, not Add: this package supplies a DEFAULT, it does not impose one.
+        // The implementation registered here runs P1 (drain) + P2 (IDomainEventHandler dispatch) only;
+        // it writes nothing to a transactional outbox. Installing MicroKit.Messaging.MediatR supersedes
+        // it (via Replace) with the four-phase implementation that also stages notifications to the
+        // outbox. TryAdd here + Replace there makes both call orders converge on the glue.
+        //
+        // The rule covers EVERY dispatcher descriptor below, including the [Obsolete] alias: an Add on
+        // any one of them reintroduces the positional race for that service type.
+        services.TryAddScoped<DomainEventDispatcher>();
+        services.TryAddScoped<IDomainEventsDispatcher>(sp => sp.GetRequiredService<DomainEventDispatcher>());
 #pragma warning disable CS0618 // IDomainEventDispatcher is a preview compatibility alias.
-        services.AddScoped<IDomainEventDispatcher>(sp => new DomainEventDispatcherCompatibilityAdapter(
+        services.TryAddScoped<IDomainEventDispatcher>(sp => new DomainEventDispatcherCompatibilityAdapter(
             sp.GetRequiredService<IDomainEventsDispatcher>()));
 #pragma warning restore CS0618
 
