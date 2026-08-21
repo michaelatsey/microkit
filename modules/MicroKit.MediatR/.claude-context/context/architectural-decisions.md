@@ -737,7 +737,7 @@ stand. "It cannot throw on EF Core" is not sufficient grounds.
 
 ## ADR-MEDIATR-013: `IDomainEventsDispatcher` Registration Precedence Is a Cross-Module Contract — Core `TryAdd`s, the Glue `Replace`s
 
-**Status:** Accepted
+**Status:** Superseded by ADR-MEDIATR-014
 **Date:** 2026-08-21
 **Related:** ADR-MEDIATR-010 (dispatch topology — establishes which implementation is authoritative),
 ADR-MEDIATR-009 (`IDomainEventsDispatcher` naming and the `[Obsolete]` `IDomainEventDispatcher` alias),
@@ -885,3 +885,241 @@ rely on the other honouring it.
   continues to work by position and glue-then-core is already fixed by the core half alone — so the
   core half is a strict improvement in isolation and opens no window in which the pair is worse than
   before.
+
+---
+
+## ADR-MEDIATR-014: Domain-Event Dispatch Composes by Contribution — One Orchestrator, N Sinks
+
+**Status:** Accepted
+**Date:** 2026-08-21
+**Supersedes:** ADR-MEDIATR-013 (registration precedence — the race it arbitrates ceases to exist)
+**Related:** ADR-MEDIATR-010 (dispatch topology — P1→P4 phase names), ADR-MEDIATR-009
+(`IDomainEventsDispatcher` naming and the `[Obsolete]` `IDomainEventDispatcher` alias),
+ADR-MEDIATR-012 (`TransactionBehavior` is the caller), ADR-MSG-009 (MediatR carve-out for the glue),
+ADR-MSG-011 (`IOutboxWriter.AddBatchAsync`), ADR-MSG-013 (cascade notification publisher), PR #84
+
+### Decision
+
+There is **one** `IDomainEventsDispatcher` implementation in the ecosystem: the core
+`DomainEventDispatcher`. It owns the whole sequence — drain, the `IDomainEventHandler<TEvent>` pass,
+and the barrier between them and everything downstream. What it does not own, it delegates to an
+**ordered, possibly empty collection of `IDomainEventSink`** resolved from DI.
+
+`MicroKit.MediatR` registers the orchestrator and **zero** sinks. `MicroKit.Messaging.MediatR`
+registers **one** sink — the outbox sink, which is today's P3+P4 verbatim. It no longer registers an
+`IDomainEventsDispatcher` at all.
+
+```
+before                                   after
+──────                                   ─────
+IDomainEventsDispatcher                  IDomainEventsDispatcher
+  ├─ core:  P1 P2                          └─ core: P1 P2 ──► IEnumerable<IDomainEventSink>
+  └─ glue:  P1 P2 P3 P4                                          └─ glue sink: P3 P4
+     ▲ one slot, two claimants,                              ▲ one slot, one claimant,
+       last Add* wins                                          N contributors, order-free
+```
+
+Because Microsoft DI resolves `IEnumerable<T>` to *every* registration for `T`, the composition is
+order-independent by construction, not by contract. Nothing arbitrates; nothing can lose.
+
+### Context — why the previous shape needed arbitrating at all
+
+> Stated in full so this record is readable without opening another one.
+
+`DomainEventDispatcher` (core, `internal sealed`) runs drain + synchronous handler dispatch and
+writes to no outbox — the correct and complete dispatcher for MicroKit.MediatR standing alone.
+`DomainEventsDispatcher` (glue, `internal sealed`) runs drain + handler dispatch + notification
+creation + a single batched `IOutboxWriter.AddBatchAsync`. Both registered against the same service
+type; Microsoft DI resolves the last registration; the winner was decided by composition-root call
+order. ADR-MEDIATR-013 fixed that with `TryAdd` on the core side and `Replace` on the glue side, and
+PR #84 shipped the core half.
+
+That decision is correct about precedence and is not being reversed on its merits. What this record
+challenges is the premise underneath it: **that the two implementations are alternatives at all.**
+
+Read side by side, the core is a *strict prefix* of the glue — identical collaborators, identical
+calls, identical order, differing only in a `Count == 0` early return that the glue added and the
+core did not. The glue does not replace the core; it re-implements it and appends. Alternatives get
+arbitrated. Extensions get composed. Everything ADR-MEDIATR-013 had to specify — a two-sided
+contract, an exception-free rule covering three descriptors, four recorded mutants, two coordinated
+branches — is the cost of arbitrating between two things that were never in competition.
+
+The choice of transport is not a race to be won. It is a contribution to be collected.
+
+### Rationale
+
+**1. The glue extends the core; the code says so.** The evidence is textual, not interpretive:
+the two `foreach (var domainEvent in domainEvents) await handlerDispatcher.DispatchAsync(...)` loops
+are the same loop. When one implementation is a prefix of another, the honest factoring is
+orchestrator-plus-tail, not two rivals for one slot.
+
+**2. Duplication that has already drifted, will drift again — invisibly.** The `Count == 0` guard
+exists in the glue and not the core. Harmless today. But any future change to drain or P2 semantics
+must now be made twice, in two repositories' worth of review, and **no test compares the two**. The
+divergence is undetectable by construction: each is tested against its own expectations. One
+orchestrator has one behaviour and one place to change it.
+
+**3. The current shape admits exactly two participants — forever.** This is the strongest argument
+and the one that outlives the immediate bug. A third in-transaction participant — an audit sink, an
+in-transaction read-model projector, a `MicroKit.Observability` sink, an in-memory test sink — cannot
+join without either another `Replace` war or a decorator chain in which every participant must know
+how to reconstruct the one before it. That reconstruction is not hypothetical: `AddMediatRTransport`
+already performs it for `IOutboxDispatcher`, and the shape it takes is a `LastOrDefault` descriptor
+hunt plus a three-branch `CreateInner` reflecting over `ImplementationInstance` /
+`ImplementationFactory` / `ImplementationType`
+(`MessagingMediatRExtensions.cs:56-71, 85-94`). That is what N=2 already costs. Sinks are O(N) with
+no acrobatics at any N.
+
+**4. Precedence between modules stops being a thing modules must agree on.** ADR-MEDIATR-013 §
+"Neither half is sufficient alone" is precisely the problem: two packages, released independently,
+each depending on the other having honoured a rule neither can verify. `TryAddEnumerable` needs no
+counterpart. The low package cannot detect the high one — that constraint is unchanged — but it no
+longer needs to.
+
+**5. The orchestrator keeps what is genuinely orchestration.** The documented two-foreach invariant —
+P2 completes for *every* event before any notification work begins, so a P2 handler can never observe
+a partially written outbox batch (`DomainEventsDispatcher.cs:31-35`) — is a sequencing guarantee
+across participants. It belongs to whoever sequences them, and survives the refactor unchanged
+because the orchestrator, not the sink, still owns the barrier. Had the drain been recursive, this
+would have been the argument *against* the seam; it is single-pass in both implementations, so it is
+the argument for placing the seam exactly where it is placed.
+
+**6. P3 was never a shared phase, which is why the extracted piece is a sink and not a phase.**
+Notification mapping through `IDomainEventNotificationFactory` is the outbox path's own business.
+The orchestrator has no opinion about notifications and gains none. The sink receives raw
+`IDomainEvent`s and maps them itself — no new contract crosses the seam beyond the sink interface.
+
+**7. PR #84's `TryAdd` stays correct and must not be unwound.** The core still supplies a *default*
+`IDomainEventsDispatcher`, and a consumer who registers their own before `AddMicroKitMediatR()` must
+still keep it. That is exactly what `TryAdd` expresses and it is orthogonal to how many
+implementations ship. What changes is only that MicroKit no longer ships a second claimant — so the
+`Replace` half specified by ADR-MEDIATR-013 for the glue never needs to ship. **`TryAdd` is not
+vestigial; do not revert it.**
+
+### What the current design fails at, and what this removes
+
+| # | Failure mode (current) | Removed? |
+|---|---|---|
+| 1 | Wrong implementation resolved by call order — silent, no exception, symptom is an empty outbox in production | ✅ one implementation, nothing to lose a race |
+| 2 | Drain + P2 duplicated across two modules; already drifted (`Count == 0`); no test compares them | ✅ one orchestrator |
+| 3 | Closed to a third in-transaction participant without a `Replace` war or a decorator chain | ✅ `TryAddEnumerable`, O(N) |
+| 4 | `AddMediatRTransport` must re-implement a sequence it does not own to append to it | ✅ registers its own contribution only |
+| 5 | The `[Obsolete]` `IDomainEventDispatcher` alias must be registered by both packages, so any rule must be applied twice (ADR-MEDIATR-013 § "no exceptions to remember" exists for this) | ✅ registered once, by core |
+| 6 | Correctness depends on two independently released packages each honouring an unverifiable contract | ✅ no counterpart required |
+
+**Not removed, and stated so nobody assumes otherwise:**
+
+- Sinks run **in-transaction, ordered, fail-fast** — a throwing sink aborts the command, exactly as a
+  throwing P4 does today. With N sinks the blast radius is wider, so the contract must say plainly:
+  a sink stages work in the caller's unit of work; it is not a place for I/O to an external system.
+- A sink registered twice writes twice. `TryAddEnumerable` (which deduplicates on
+  `(ServiceType, ImplementationType)`) is the guard, and `AddMediatRTransport` must use it. This is
+  the direct analogue of PR #84's `TryAdd` and inherits its reasoning.
+- **Cascade dispatch (ADR-MSG-013) must keep working, and does.** `DomainEventsCascadeNotificationPublisher`
+  resolves `IDomainEventsDispatcher` and calls it after all notification handlers, so cascade events
+  raised post-commit are staged to the outbox in the same processor scope. Under this design it
+  resolves the single orchestrator, which runs the sinks — cascade events still reach the outbox.
+  This is the one place where a careless implementation would break ADR-MSG-013 silently; the
+  integration test named below exists to pin it.
+- Neither dispatcher re-drains after P2, so a P2 handler that dirties another aggregate does not get
+  its events dispatched in the same pass. **Pre-existing, unchanged, explicitly out of scope.**
+
+### Alternatives Rejected
+
+| # | Alternative | Why it loses |
+|---|---|---|
+| **A** | **Finish the `Replace` repair** (ship the glue half of ADR-MEDIATR-013) | The cheapest option by a wide margin — one line plus a test — and it does fix failure mode 1. It fixes nothing else. Duplication (2) remains and keeps drifting; the two-participant ceiling (3) remains; `AddMediatRTransport` still re-implements a sequence it does not own (4); the alias still needs registering twice (5); correctness still rests on two packages honouring an unverifiable mutual contract (6). It buys order-independence for one service type at the price of permanently ratifying the shape that made order matter. **This is the honest baseline and it is defensible for a team that wants to stop here** — see Migration cost. |
+| **B** | Decorator chain: the glue decorates the core `IDomainEventsDispatcher` | Removes the duplication but not the ordering problem — who is outermost is still positional — and every decorator must reconstruct the descriptor beneath it. The cost is already visible in `AddMediatRTransport`'s `LastOrDefault` + three-branch `CreateInner` for `IOutboxDispatcher`. At N=3 it is worse than what it replaces. |
+| **C** | Builder opt-in `cfg.UseOutboxDispatch()` as the **selection** mechanism | Mechanically sound — `MediatRBuilder.Services` is public and `BehaviorExtensions` proves the pattern — and it genuinely converts a silent misconfiguration into a compile error when the glue package is absent. It still loses. Selection is only needed while two claimants exist; with sinks there is nothing to select. Worse, layered on top of the sink model it splits one feature's wiring across two builders — `AddMediatRTransport()` for the `IOutboxDispatcher` decorator and `INotificationPublisher`, `UseOutboxDispatch()` for the sink — making a *new* two-call requirement and relocating the silent failure from "wrong order" to "forgot the second call". One feature, one entry point. |
+| **D** | A full three-seam phase model (a drainer seam + a publisher seam + sinks) | Two of the three already exist: `IDomainEventsProvider` (`MicroKit.Domain`, Level 0) and `IDomainEventHandlerDispatcher` (scoped, core). Both are DI-swappable today. Parallel seams over them would duplicate live interfaces and give a reader two ways to replace one thing. |
+| **E** | Startup validation: throw when the glue is installed but the core dispatcher resolved | MicroKit.MediatR (Level 2) cannot detect MicroKit.Messaging (Level 3) — the reference direction forbids it. It would need a marker service in the low package naming the high one, i.e. the inversion the graph exists to prevent. |
+| **F** | Give `IDomainEventSink` an explicit `Order` property | YAGNI at N=1. Registration order is deterministic and sufficient. **Deletion criterion, so this can be checked rather than argued:** add `Order` when two sinks ship whose relative order is load-bearing — not before. |
+
+### The contract
+
+```csharp
+namespace MicroKit.MediatR.Events;   // MicroKit.MediatR.Abstractions
+
+/// <summary>
+/// Receives the batch of domain events drained for one dispatch pass, after every
+/// <see cref="IDomainEventHandler{TEvent}"/> has completed for every event in the batch.
+/// </summary>
+public interface IDomainEventSink
+{
+    /// <summary>Receives one drained batch. Never called with an empty batch.</summary>
+    ValueTask ReceiveAsync(IReadOnlyList<IDomainEvent> domainEvents, CancellationToken ct = default);
+}
+```
+
+`ValueTask` per the root convention and matching `IOutboxWriter.AddBatchAsync`, which the one real
+sink wraps. `IDomainEventsDispatcher.DispatchEventsAsync` returns `Task`; that is ADR-MEDIATR-009's
+shipped surface and is not worth churning in preview.
+
+### Consequences
+
+- **New public contract, additive:** `IDomainEventSink` in `MicroKit.MediatR.Abstractions`. It is
+  placed there rather than beside `IDomainEventsDispatcher` in core because it is a contract
+  *implemented by other packages*; `IDomainEventsDispatcher` is an orchestration seam consumed
+  in-module, and moving it during preview buys nothing. **`api-reviewer` approval is required
+  before merge** (module `.claude/CLAUDE.md`, public-API rule).
+- **`MicroKit.Messaging.MediatR`'s `DomainEventsDispatcher` becomes `OutboxDomainEventSink`.** It
+  sheds `IDomainEventsProvider` and `IDomainEventHandlerDispatcher` (now the orchestrator's) and
+  keeps `IDomainEventNotificationFactory`, `OutboxMessageFactory`, `IOutboxWriter`,
+  `IExecutionContext`. Both types are `internal sealed`, so **no consumer-visible type changes**.
+- **`AddMediatRTransport()` keeps its signature and its call site.** It drops three dispatcher
+  registrations (`IDomainEventsDispatcher`, the concrete type, the `[Obsolete]` alias) and adds one
+  `TryAddEnumerable(ServiceDescriptor.Scoped<IDomainEventSink, OutboxDomainEventSink>())`. Its
+  `<remarks>` loses the prescriptive call-order paragraph — call order genuinely no longer matters
+  for the dispatcher. Its `IOutboxDispatcher` decorator and `INotificationPublisher` replacement are
+  untouched by this decision.
+- **`AddMicroKitMediatR`'s `TryAdd` for all three dispatcher descriptors is unchanged, and its
+  `<remarks>` are rewritten.** The paragraph promising that "the glue registers with `Replace`" is
+  now false and must be replaced with the sink model. The `TryAdd` itself stays — it still protects
+  a consumer's own dispatcher registered before the call. Reverting it to `Add` remains a defect.
+- **ADR-MEDIATR-013 is superseded, not deleted.** Its precedence rule has no object once the glue
+  registers no dispatcher: `TryAdd`-versus-`Replace` arbitrates a race that no longer occurs. Its
+  core half shipped in PR #84 and remains correct for the different reason stated in Rationale §7.
+  Its glue half (`Replace`) is **cancelled and must not ship**.
+- **Pipeline impact: none.** No behavior is added, removed, or reordered. `TransactionBehavior`
+  (order 700) remains the sole in-pipeline caller of `DispatchEventsAsync`, still inside the
+  `ITransactionalContext.ExecuteAsync` operation and before `IUnitOfWork.CommitAsync`
+  (ADR-MEDIATR-012), so sinks run in-transaction and outbox rows still commit atomically with the
+  domain changes. The second, out-of-pipeline caller — `DomainEventsCascadeNotificationPublisher`,
+  post-commit in the outbox processor scope — also reaches the sinks unchanged.
+- **Test rework in `MicroKit.MediatR.IntegrationTests`.** `DomainEventsDispatcherRegistrationTests`
+  and its four recorded mutants (M1–M4) test precedence between two claimants. Post-decision the
+  interface has one implementation, so the stub that "faithfully simulates the glue-then-core order"
+  now simulates only a *consumer override* — which is still a real, supported case. **Re-purpose and
+  rename these tests; do not delete them.** M1 (`IDomainEventsDispatcher → Add`) and M4 (concrete
+  type → `Add`) stay meaningful and stay recorded; M2 and M3 lose their glue framing.
+- **New sensitivity standard, to be recorded when the work lands.** The mutant that matters is
+  *"delete the sink loop from the orchestrator"* — it must fail an integration test asserting outbox
+  rows exist after a command, and a second asserting they exist after a **cascade** publish
+  (ADR-MSG-013). A registration test asserting `GetServices<IDomainEventSink>().Count() == 1` after
+  calling `AddMediatRTransport()` **twice** pins the `TryAddEnumerable`. The intended suite:
+
+  ```
+  DispatchEventsAsync_WhenNoSinkRegistered_DispatchesHandlersOnly
+  DispatchEventsAsync_WhenSinkRegistered_ReceivesBatchAfterAllHandlersRan
+  DispatchEventsAsync_WhenBatchIsEmpty_DoesNotInvokeAnySink
+  DispatchEventsAsync_WhenSinkThrows_PropagatesAndRollsBack
+  AddMediatRTransport_CalledTwice_ContributesTheSinkOnce
+  AddMicroKitMediatR_WhenDispatcherAlreadyRegistered_KeepsIt        (PR #84 TryAdd, re-purposed)
+  Command_WhenMappedEventRaised_StagesOutboxRowInSameTransaction     (Messaging.MediatR)
+  CascadePublish_WhenHandlerRaisesEvent_StagesOutboxRowInProcessorScope  (ADR-MSG-013)
+  ```
+
+  Shouldly assertions, NSubstitute doubles; a real EF Core `DbContext` on SQLite for the two staging
+  tests — the unit tests prove the *call*, only the integration tests prove the *row*.
+- **No dependency-graph change.** No new edge in either direction. `MicroKit.MediatR` (Level 2)
+  still knows nothing of `MicroKit.Messaging` (Level 3). `dependency-guardian` review is required
+  only because two `.csproj` files may gain nothing at all — verify, do not assume.
+- **Migration cost, stated plainly.** Two modules, one new public contract, one type moved and
+  re-shaped, three registration sites edited, one XML-doc block rewritten, one ADR superseded, one
+  test class re-purposed, CHANGELOG entries in both modules, and a **coordinated release** of
+  MicroKit.MediatR and MicroKit.Messaging (the glue will not compile against a core without
+  `IDomainEventSink`). Days, not hours. Alternative **A** is one line and an hour. The case for
+  paying the difference is failure modes 2–6, all of which A leaves standing, and the fact that both
+  packages are still `1.0.0-preview.*` — the contract is additive and no consumer-visible type
+  changes, so this is the cheapest it will ever be. After 1.0.0 stable, `IDomainEventSink` becomes a
+  permanent surface and this becomes a v2 conversation.
