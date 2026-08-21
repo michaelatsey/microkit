@@ -1,0 +1,68 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <AssemblyName>MicroKit.Messaging.MediatR.IntegrationTests</AssemblyName>
+    <RootNamespace>MicroKit.Messaging.MediatR.IntegrationTests</RootNamespace>
+    <IsPackable>false</IsPackable>
+    <IsPublishable>false</IsPublishable>
+    <GenerateDocumentationFile>false</GenerateDocumentationFile>
+    <!-- CA1707: test method underscore convention
+         CA2012: NSubstitute ValueTask setup pattern
+         IL2026/IL2067/IL2070: DI reflection (AddMicroKitMediatR, AddTransactionBehavior) in a
+         non-trimmed test host — both are [RequiresUnreferencedCode] + [RequiresDynamicCode] -->
+    <NoWarn>$(NoWarn);CS1591;CA1707;CA2012;IL2026;IL2067;IL2070</NoWarn>
+  </PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="Microsoft.NET.Test.Sdk" />
+    <PackageReference Include="xunit" />
+    <PackageReference Include="xunit.runner.visualstudio" />
+    <PackageReference Include="Shouldly" />
+    <PackageReference Include="NSubstitute" />
+    <PackageReference Include="Microsoft.Extensions.DependencyInjection" />
+    <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" />
+    <!-- AddLogging() lives here, not in .Abstractions. OutboxProcessor, InProcessMessagePublisher
+         and MediatROutboxDispatcher all take an ILogger<T>; without it the drain cannot activate. -->
+    <PackageReference Include="Microsoft.Extensions.Logging" />
+    <!-- The whole point of this suite: a real DbContext on SQLite is the only way to observe the
+         domain-event -> outbox -> notification path end to end. -->
+    <PackageReference Include="Microsoft.EntityFrameworkCore" />
+    <PackageReference Include="Microsoft.EntityFrameworkCore.Sqlite" />
+    <PackageReference Include="coverlet.collector" />
+  </ItemGroup>
+  <ItemGroup>
+    <!-- Intra-module (MicroKit.Messaging): unconditional by definition, co-versioned. -->
+    <ProjectReference Include="../../src/MicroKit.Messaging.Abstractions/MicroKit.Messaging.Abstractions.csproj" />
+    <ProjectReference Include="../../src/MicroKit.Messaging/MicroKit.Messaging.csproj" />
+    <ProjectReference Include="../../src/MicroKit.Messaging.EntityFrameworkCore/MicroKit.Messaging.EntityFrameworkCore.csproj" />
+    <ProjectReference Include="../../src/MicroKit.Messaging.MediatR/MicroKit.Messaging.MediatR.csproj" />
+    <!-- Cross-module. Test projects (IsPackable=false) use unconditional ProjectReferences — the
+         two-ItemGroup CIReleaseBuild pattern does not apply here (cross-module-references.md rule 6).
+         Each edge below is authorized by a specific ADR:
+
+         MicroKit.MediatR / MicroKit.MediatR.Behaviors
+           ADR-MSG-009 — MicroKit.Messaging.MediatR is the ONLY Messaging package permitted to
+           reference MediatR / MediatR.Contracts; this suite exercises that glue.
+           ADR-MSG-012 — TransactionBehavior (order 700) is the dispatch+commit owner, so the
+           Behaviors package is what makes the outbox row reach the database at all.
+
+         MicroKit.Persistence.EntityFrameworkCore
+           ADR-MEDIATR-011 — TransactionBehavior requires ITransactionalContext. Supplies the real
+           EfUnitOfWork and EfDomainEventsProvider. Test-only, no production edge.
+
+         MicroKit.Domain
+           ADR-MSG-010 — IIntegrationEvent : IEvent, the canonical event taxonomy root.
+
+         MicroKit.Result
+           ADR-001 — commands return Result<T>; MicroKit.MediatR depends on Result deliberately. -->
+    <ProjectReference Include="../../../MicroKit.MediatR/src/MicroKit.MediatR/MicroKit.MediatR.csproj" />
+    <ProjectReference Include="../../../MicroKit.MediatR/src/MicroKit.MediatR.Behaviors/MicroKit.MediatR.Behaviors.csproj" />
+    <ProjectReference Include="../../../MicroKit.Persistence/src/MicroKit.Persistence.EntityFrameworkCore/MicroKit.Persistence.EntityFrameworkCore.csproj" />
+    <ProjectReference Include="../../../MicroKit.Domain/src/MicroKit.Domain/MicroKit.Domain.csproj" />
+    <ProjectReference Include="../../../MicroKit.Result/src/MicroKit.Result/MicroKit.Result.csproj" />
+  </ItemGroup>
+  <!-- SQLitePCLRaw.lib.e_sqlite3 2.1.11 has a known vulnerability (GHSA-2m69-gcr7-jv3q).
+       This is a transitive test-only dependency of Microsoft.EntityFrameworkCore.Sqlite;
+       it does not affect production binaries. Suppress until EFCore ships a patched version. -->
+  <ItemGroup>
+    <NuGetAuditSuppress Include="https://github.com/advisories/GHSA-2m69-gcr7-jv3q" />
+  </ItemGroup>
+</Project>
