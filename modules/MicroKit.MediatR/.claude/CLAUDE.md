@@ -30,6 +30,7 @@ Always load the relevant file before working on a specific concern:
 | Adding a behavior | `.claude/workflows/adding-behavior.md` + `/new-behavior` | `behavior-designer` → `performance-reviewer` |
 | Adding a provider/integration | `.claude/workflows/adding-provider.md` + `/new-provider` | `implementer` → `dependency-guardian` |
 | Adding a domain event | `/new-domain-event` + `.claude/rules/cqrs-patterns.md` | `architect` |
+| Domain-event dispatch composition | `.claude-context/context/architectural-decisions.md` — ADR-MEDIATR-014, -010, -009 | `architect` |
 | Performance concern | `.claude/rules/performance.md` + `.claude/skills/pipeline-internals/SKILL.md` | `performance-reviewer` |
 | Public API change | `.claude/rules/dependencies.md` (Abstractions) + `.claude/rules/naming.md` | `api-reviewer` — required before merge |
 | Dependency / `.csproj` change | `.claude/rules/dependencies.md` + `.claude-context/context/dependency-graph.md` | `dependency-guardian` — auto on `.csproj` edit |
@@ -134,23 +135,49 @@ public sealed class GetUserHandler(IUserReadRepository repo)
 ## 🧱 DomainEvent Pattern
 
 ```csharp
-public sealed record UserRegisteredEvent(Guid UserId, string Email, DateTimeOffset RegisteredAt) : IEvent;
+// The fact. Inherit MicroKit.Domain.Events.DomainEvent — it supplies EventId + OccurredAt,
+// which IDomainEventHandler<TEvent>'s `where TEvent : IDomainEvent` constraint requires.
+public sealed record UserRegisteredEvent(Guid UserId, string Email) : DomainEvent;
 
+// P2 — synchronous, in-transaction. Receives the RAW event; single type parameter.
+public sealed class SendWelcomeEmailHandler(IEmailService email)
+    : IDomainEventHandler<UserRegisteredEvent>
+{
+    public async Task Handle(UserRegisteredEvent domainEvent, CancellationToken cancellationToken)
+        => await email.SendWelcomeAsync(domainEvent.Email, cancellationToken).ConfigureAwait(false);
+}
+
+// P3/P4 — OPTIONAL and independent of the handler above. Declare a notification only if the
+// event must also fan out asynchronously via the outbox after commit.
 public sealed class UserRegisteredNotification : DomainEventNotification<UserRegisteredEvent>
 {
     public UserRegisteredNotification(UserRegisteredEvent domainEvent) : base(domainEvent) { }
 }
 
-public sealed class SendWelcomeEmailHandler(IEmailService email)
-    : IDomainEventHandler<UserRegisteredEvent, UserRegisteredNotification>
+// Post-commit, at-least-once — MUST be idempotent. Receives the NOTIFICATION, not the raw event.
+public sealed class ProjectUserToReadModelHandler(IReadModel readModel)
+    : INotificationHandler<UserRegisteredNotification>
 {
-    public async Task Handle(UserRegisteredNotification n, CancellationToken ct)
-        => await email.SendWelcomeAsync(n.DomainEvent.Email, ct).ConfigureAwait(false);
+    public Task Handle(UserRegisteredNotification n, CancellationToken cancellationToken)
+        => readModel.UpsertAsync(n.DomainEvent.UserId, n.DomainEvent.Email, cancellationToken);
 }
 ```
 
+> The two handler types are **structurally disjoint** (ADR-MEDIATR-009 / -010). An event may have
+> handlers, a notification, both, or neither. `IDomainEventHandler<TEvent>` takes **one** type
+> parameter and never sees the notification wrapper — handler authors do not declare it.
+
 Publish events from the command handler **after** persistence, via `IDomainEventDispatcher` —
 never from a behavior, never before the write.
+
+**Dispatch composition — ADR-MEDIATR-014 (accepted, NOT yet implemented).** There is one
+`IDomainEventsDispatcher` implementation: the core orchestrator. It drains, runs every
+`IDomainEventHandler<TEvent>` for every event, then hands the batch to an ordered, possibly empty
+`IEnumerable<IDomainEventSink>`. MicroKit.MediatR registers **zero** sinks; installing
+MicroKit.Messaging.MediatR contributes the outbox sink (notification creation + batched outbox
+write). A higher-level module extending dispatch **contributes a sink — it never registers a second
+dispatcher.** Supersedes the ADR-MEDIATR-013 precedence contract; the core-side `TryAdd` from PR #84
+stays, because it still protects a consumer's own dispatcher registration.
 
 ---
 
@@ -166,6 +193,7 @@ never from a behavior, never before the write.
 8. **Canonical log property names only** — `LogPropertyNames.*` (esp. `CommandName`)
 9. **Shouldly + NSubstitute** for tests — **FluentAssertions is banned**
 10. **No inline `Version=`** on `PackageReference` — CPM via `Directory.Packages.props`
+11. **One `IDomainEventsDispatcher`, N `IDomainEventSink`** — a module extending domain-event dispatch contributes a sink, never a rival dispatcher (ADR-MEDIATR-014)
 
 ---
 

@@ -155,6 +155,11 @@ MicroKit.MediatR                   ← may depend on Result, Domain, Logging.Abs
                                      IDomainEventHandler<TEvent> (sync, in-transaction, DI direct) and
                                      INotificationHandler<TNotification> (async, via outbox, at-least-once)
                                      IDomainEventHandler<TEvent> constrained to where TEvent : IDomainEvent
+                                     ADR-MEDIATR-014 (accepted — NOT yet implemented): dispatch
+                                     composes by contribution — ONE IDomainEventsDispatcher (core)
+                                     + N IDomainEventSink. Messaging.MediatR contributes a sink;
+                                     it does not register a rival dispatcher. Supersedes
+                                     ADR-MEDIATR-013 (registration precedence).
 MicroKit.Tenancy                   ← may depend on Result, Auth, Persistence,
                                      Execution.Abstractions (tenant-aware IExecutionScopeFactory impl)
 ```
@@ -303,16 +308,28 @@ MicroKit.MediatR.Events.IEvent         ← [Obsolete] shim → use MicroKit.Doma
 ### Domain event dispatch topology (ADR-MEDIATR-009)
 
 ```txt
-Domain Event
+Domain Event  (accumulated on the tracked aggregate)
     │
-    ├──► P3 IDomainEventHandler<TEvent>         sync · in-transaction · DI direct
+    ▼ P1  IDomainEventsProvider.DrainDomainEvents()   collect · one pass · not recursive
+    │
+    ├──► P2 IDomainEventHandler<TEvent>         sync · in-transaction · DI direct · raw event
     │        (bypasses MediatR pipeline behaviors intentionally)
     │
-    └──► P4 DomainEventNotification<TEvent>
+    └──► P3 DomainEventNotification<TEvent>     built via IDomainEventNotificationFactory
+                 │                                (null when the event has no mapping)
+                 ▼ P4 IOutboxWriter.AddBatchAsync   staged in the SAME transaction
                  │
-                 ▼ (outbox · at-least-once · after commit)
+                 ▼ (outbox processor · at-least-once · after commit)
           INotificationHandler<TNotification>   async · idempotent · technical/integration
 ```
+
+**Composition — ADR-MEDIATR-014 (accepted, NOT yet implemented).** One `IDomainEventsDispatcher`
+implementation orchestrates the whole sequence (drain → handler pass → the barrier between them and
+everything downstream). Further in-transaction participants contribute through an ordered, possibly
+empty `IEnumerable<IDomainEventSink>` resolved from DI: MicroKit.MediatR registers zero sinks,
+MicroKit.Messaging.MediatR contributes the outbox sink. Order-independent by construction — this
+supersedes the `TryAdd`/`Replace` precedence contract of ADR-MEDIATR-013. **PR #84's core-side
+`TryAdd` stays correct and must not be reverted** — it still protects a consumer's own dispatcher.
 
 ### Commit conventions
 
