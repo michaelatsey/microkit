@@ -82,8 +82,8 @@ public interface IInboxStore
     /// Resets an inbox message to <see cref="InboxMessageStatus.Received"/> after a
     /// transient handler failure. Increments <c>RetryCount</c>, clears
     /// <c>LockedUntilUtc</c>, and sets <c>NextRetryAtUtc = UtcNow + 2^retryCount</c>
-    /// seconds (capped at 3600 s). Symmetric with
-    /// <see cref="IOutboxProcessorStore.MarkFailedAsync"/>.
+    /// seconds (capped at 3600 s). Symmetric with the outbox
+    /// <c>Retry</c> outcome, which the outbox processor now buffers and settles in batch.
     /// </summary>
     /// <param name="messageId">The identifier of the original message.</param>
     /// <param name="consumerType">The assembly-qualified CLR type name of the consuming handler.</param>
@@ -102,7 +102,7 @@ public interface IInboxStore
     /// Permanently dead-letters an inbox message when <c>MaxRetries</c> has been
     /// exceeded. Sets <c>Status = Failed</c>, <c>DeadLettered = true</c>, and
     /// <c>ProcessedAtUtc = UtcNow</c>. Terminal — no further retry will be attempted.
-    /// Symmetric with <see cref="IOutboxProcessorStore.DeadLetterAsync"/>.
+    /// Symmetric with the outbox <c>DeadLetter</c> outcome.
     /// </summary>
     /// <param name="messageId">The identifier of the original message.</param>
     /// <param name="consumerType">The assembly-qualified CLR type name of the consuming handler.</param>

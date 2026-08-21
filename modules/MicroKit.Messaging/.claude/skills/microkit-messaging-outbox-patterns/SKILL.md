@@ -211,17 +211,29 @@ via the `LockedUntilUtc < now` filter. Crashed processors release automatically 
 ## Retry Back-Off Formula
 
 ```csharp
-// ✅ Exponential back-off with 1-hour cap
-public static TimeSpan CalculateDelay(int retryCount)
-    => TimeSpan.FromSeconds(Math.Min(3600, Math.Pow(2, retryCount)));
+// ✅ Exponential ceiling, then FULL JITTER over the whole interval.
+//    NextRetryAtUtc = now + Uniform(0, min(2^retryCount seconds, MaxRetryBackoff))
+//    Computed by OutboxProcessor (not the store), with TimeProvider and Random both injected.
+public TimeSpan ComputeBackoffCeiling(int retryCount)
+{
+    var exponent = Math.Clamp(retryCount, 0, 20);
+    var backoff = TimeSpan.FromSeconds(1L << exponent);
+    return backoff > _options.MaxRetryBackoff ? _options.MaxRetryBackoff : backoff;
+}
 
-// Examples:
+public TimeSpan ApplyJitter(TimeSpan ceiling) =>
+    TimeSpan.FromTicks((long)(ceiling.Ticks * _random.NextDouble()));
+
+// Ceiling examples (default MaxRetryBackoff = 1 hour):
 // retryCount=0 → 1s
 // retryCount=1 → 2s
 // retryCount=2 → 4s
 // retryCount=5 → 32s
 // retryCount=10 → 1024s (~17 min)
-// retryCount=11+ → 3600s (1 hour cap)
+// retryCount=12+ → 3600s (cap)
+//
+// The ACTUAL delay is a uniform draw in [0, ceiling]. Without jitter, several processor
+// instances retry the messages that failed together at the same instant, forever.
 ```
 
 ---

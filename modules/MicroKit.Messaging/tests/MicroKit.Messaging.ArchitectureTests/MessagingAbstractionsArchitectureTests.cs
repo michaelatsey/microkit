@@ -141,6 +141,42 @@ public sealed class MessagingAbstractionsArchitectureTests
     }
 
     // ---------------------------------------------------------------------------
+    // Topology seam (ADR-MSG-002)
+    // ---------------------------------------------------------------------------
+
+    [Fact]
+    public void Core_DependsOnSharedDbOutboxCoordinator_OnlyThroughIOutboxCoordinator()
+    {
+        // ADR-MSG-002 defers a per-tenant topology to MicroKit.Messaging.Multitenancy, which will
+        // supply its own IOutboxCoordinator without touching Core. That is only possible while
+        // nothing inside Core reaches for the shared-DB implementation by name. The composition
+        // root necessarily does — that is what a composition root is — and the type may of course
+        // refer to itself.
+        //
+        // Name-based rather than typeof(): SharedDbOutboxCoordinator is internal and this project
+        // has no InternalsVisibleTo, which is itself part of the point.
+        const string Coordinator = "MicroKit.Messaging.Processing.SharedDbOutboxCoordinator";
+
+        var permitted = new[]
+        {
+            Coordinator,
+            "MicroKit.Messaging.ServiceCollectionExtensions",
+        };
+
+        var offenders = Types.InAssembly(CoreAssembly)
+            .That()
+            .HaveDependencyOn(Coordinator)
+            .GetTypes()
+            .Where(t => !permitted.Contains(t.FullName, StringComparer.Ordinal))
+            .Select(t => t.FullName)
+            .ToList();
+
+        offenders.ShouldBeEmpty(
+            "only the composition root may name SharedDbOutboxCoordinator; everything else must " +
+            "depend on IOutboxCoordinator, or the per-tenant topology cannot be added additively");
+    }
+
+    // ---------------------------------------------------------------------------
     // MediatR glue layer checks (ADR-MSG-009: glue MAY reference MediatR / MediatR.Contracts;
     // it must still stay free of EF Core, ASP.NET Core, and broker dependencies)
     // ---------------------------------------------------------------------------

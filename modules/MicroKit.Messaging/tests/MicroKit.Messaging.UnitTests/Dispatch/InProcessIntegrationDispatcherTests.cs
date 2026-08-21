@@ -24,12 +24,12 @@ public sealed class InProcessIntegrationDispatcherTests
     }
 
     [Fact]
-    public async Task DispatchAsync_WhenDeserializeReturnsNull_ThrowsInvalidOperation()
+    public async Task DispatchAsync_WhenDeserializeReturnsNull_ThrowsOutboxPayloadException()
     {
         var message = MakeOutboxMessage("SomeType", "{}");
         _serializer.Deserialize(Arg.Any<string>(), Arg.Any<string>()).Returns((object?)null);
 
-        var ex = await Should.ThrowAsync<InvalidOperationException>(
+        var ex = await Should.ThrowAsync<OutboxPayloadException>(
             async () => await _sut.DispatchAsync(message));
 
         ex.Message.ShouldContain("SomeType");

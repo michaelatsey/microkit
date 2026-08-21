@@ -28,15 +28,31 @@ internal sealed class InProcessIntegrationDispatcher : IOutboxDispatcher
     }
 
     /// <inheritdoc />
+    /// <exception cref="OutboxPayloadException">
+    /// The payload can never be dispatched without the persisted row itself changing: the
+    /// <see cref="OutboxMessage.EventType"/> resolves to no CLR type, the
+    /// <see cref="OutboxMessage.Payload"/> is not valid JSON, or the resolved type is not an
+    /// <see cref="IIntegrationEvent"/>. All three are proven permanent, so the processor
+    /// dead-letters on first sight instead of spending the whole retry budget re-reaching the
+    /// same verdict.
+    /// </exception>
     public async ValueTask DispatchAsync(OutboxMessage message, CancellationToken ct = default)
     {
+        // IMessageSerializer.Deserialize never throws: it returns null when the EventType does
+        // not resolve or the JSON is malformed. The `as` then also yields null when the type
+        // resolved but is not a transport contract. Those are the only three cases here, and
+        // every one of them is permanent — nothing infrastructural (a nack, a timeout, a
+        // refused connection, an HTTP 503, a database timeout) can reach this branch, which is
+        // exactly the exclusion rule OutboxPayloadException documents.
         var evt = _serializer.Deserialize(message.Payload, message.EventType) as IIntegrationEvent;
         if (evt is null)
-            throw new InvalidOperationException(
+            throw new OutboxPayloadException(
                 $"Cannot deserialize EventType '{message.EventType}' from outbox message {message.Id} " +
                 "as an IIntegrationEvent. Ensure the event type is resolvable in the current assembly " +
                 "context and implements IIntegrationEvent.");
 
+        // Anything the publisher throws stays untyped, and therefore transient. A duplicate
+        // inbox row surfaces here as a DbUpdateException and must keep being retried.
         await _publisher.PublishAsync(evt, ct).ConfigureAwait(false);
     }
 }

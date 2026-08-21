@@ -65,6 +65,12 @@
     <PackageVersion Include="BenchmarkDotNet" Version="0.15.8" />
     <PackageVersion Include="NetArchTest.Rules" Version="1.3.2" />
     <PackageVersion Include="coverlet.collector" Version="10.0.1" />
+    <!-- FakeTimeProvider. MIT. Pinned to the 10.0 band so it stays aligned with the rest of the
+         Microsoft.Extensions.* family above (10.0.9); 10.9.0 is a later minor band, not taken. -->
+    <PackageVersion Include="Microsoft.Extensions.TimeProvider.Testing" Version="10.0.0" />
+    <!-- Real PostgreSQL for the outbox concurrency tests. MIT. Requires Docker; the tests that
+         use it are skipped, not failed, when no Docker endpoint is reachable. -->
+    <PackageVersion Include="Testcontainers.PostgreSql" Version="4.14.0" />
   </ItemGroup>
   <ItemGroup Label="Analyzers">
     <PackageVersion Include="Microsoft.CodeAnalysis.NetAnalyzers" Version="10.0.300" />

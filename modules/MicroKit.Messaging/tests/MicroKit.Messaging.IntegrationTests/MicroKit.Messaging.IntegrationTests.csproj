@@ -20,6 +20,13 @@
   </ItemGroup>
   <ItemGroup>
     <PackageReference Include="Microsoft.EntityFrameworkCore.Sqlite" />
+    <!-- Second provider for the SAME store. EfOutboxStore is provider-agnostic by design,
+         so the PostgreSQL suite is the same contract under a real database, not a second
+         implementation. Testcontainers-backed tests are skipped when Docker is absent. -->
+    <PackageReference Include="Npgsql.EntityFrameworkCore.PostgreSQL" />
+    <PackageReference Include="Testcontainers.PostgreSql" />
+    <!-- FakeTimeProvider: pins claim/lease instants so nothing depends on a wall clock. -->
+    <PackageReference Include="Microsoft.Extensions.TimeProvider.Testing" />
     <PackageReference Include="Microsoft.NET.Test.Sdk" />
     <PackageReference Include="xunit" />
     <PackageReference Include="xunit.runner.visualstudio">

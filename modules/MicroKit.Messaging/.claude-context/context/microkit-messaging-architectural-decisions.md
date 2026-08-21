@@ -314,3 +314,90 @@ All other public async methods in Abstractions and Core return `ValueTask` as re
   carve-out referencing this ADR.
 - XML docs on each interface already document the reason (BackgroundService chain compatibility).
 - Future coordinator/processor-pattern interfaces in this chain should default to `Task`.
+
+---
+
+## ADR-MSG-015: ValueTask&lt;OutboxBatchResult&gt; on the Outbox Coordinator and Processor
+
+**Status:** Accepted
+**Date:** 2026-08-21
+**Supersedes (in part):** ADR-MSG-014 — the return-type mandate only, and only its two outbox lines.
+
+### Context
+
+ADR-MSG-014 mandated `Task` for the four coordinator/processor seam interfaces. Two things have
+changed since.
+
+First, `ProcessBatchAsync` now produces a value. The outbox rewrite makes a batch report what it
+achieved — claimed, published, retried, dead-lettered, released, and why it stopped early. The
+hosting worker needs that to set its own cadence: poll again immediately when a batch comes back
+full, back off geometrically while the queue is idle, back off hard while the transport is down. A
+`Task` discards it, which leaves the worker on a fixed timer — one of the seven defects this lot
+fixes. A result that the type system throws away is not a result.
+
+Second, and this matters for how the next reader should weigh ADR-MSG-014: **its rationale #1 was
+factually wrong.** It argued that returning `ValueTask` here "would require `.AsTask()` adapters at
+each call site, adding allocation overhead with zero benefit". Awaiting a `ValueTask` from a
+`Task`-returning context requires no adapter and allocates nothing; `BackgroundService.ExecuteAsync`
+awaits a `ValueTask` exactly as happily as a `Task`. This ADR therefore supersedes on a *mistaken
+premise*, not on a correct-but-outdated one. An ADR overtaken by events and an ADR whose reasoning
+did not hold are different things, and the distinction is worth recording.
+
+Rationale #3 (allocation is irrelevant at polling cadence) remains true, and is not the ground for
+this change. The ground is that the operation now has a return value.
+
+### Decision
+
+`IOutboxCoordinator.ExecuteAsync` and `IOutboxProcessor.ProcessBatchAsync` return
+`ValueTask<OutboxBatchResult>`.
+
+`ValueTask` rather than `Task<OutboxBatchResult>` because `ValueTask` is the MicroKit convention for
+async library code (root CLAUDE.md, module rule #9). ADR-MSG-014 was an explicit carve-out from that
+convention; with its stated justification removed, the convention applies again.
+
+### Scope of supersession
+
+Superseded — these two lines of ADR-MSG-014's "Scope of exception":
+
+- `IOutboxCoordinator.ExecuteAsync(CancellationToken)` → now `ValueTask<OutboxBatchResult>`
+- `IOutboxProcessor.ProcessBatchAsync(int, CancellationToken)` → now `ValueTask<OutboxBatchResult>`
+
+Still in force — the inbox half, unchanged:
+
+- `IInboxCoordinator.ExecuteAsync(CancellationToken)` → `Task`
+- `IInboxProcessor.ProcessBatchAsync(int, CancellationToken)` → `Task`
+
+Untouched — everything else in ADR-MSG-014 and in ADR-MSG-002: the Worker / Coordinator / Processor
+decomposition, the roles of each, `internal sealed` implementations, and the public seam interfaces
+that let a deferred per-tenant coordinator compose the engine rather than reimplement it. Only the
+return-type mandate is affected.
+
+### Consequences
+
+- **The symmetry ADR-MSG-014 protected is deliberately broken, and the break is temporary.** The
+  inbox pair stays on `Task` for exactly one reason: the inbox rewrite is a separate lot, and
+  changing its signature here would be a breaking change unaccompanied by the batching work that
+  justifies it. **The inbox lot is expected to restore symmetry by moving the inbox seam to the same
+  shape** — a result type plus `ValueTask`. Until it does, the two halves differ. An asymmetry that
+  is recorded and dated is debt; a silent one is drift, and this file exists to keep it the former.
+- Consumers implementing `IOutboxCoordinator` or `IOutboxProcessor` must update their signatures.
+  This is a breaking change on `MicroKit.Messaging.Abstractions`, sequenced with the outbox rewrite
+  release rather than separately.
+- `OutboxWorker` derives its polling interval from the returned result instead of a fixed timer.
+- The api-reviewer checklist and module CLAUDE.md rule #9 carve-out must name this ADR for the outbox
+  seam and keep naming ADR-MSG-014 for the inbox seam.
+
+### Alternatives considered
+
+**Keep `Task` and expose the batch result through a separate channel** — an event on the coordinator,
+a callback passed into `ExecuteAsync`, or mutable state read by the worker after the call.
+**Rejected.** It hides in a side channel a value that is the direct return of the operation. Every
+variant is worse than the signature change it avoids: an event inverts control for a value that is
+already synchronously available to the caller; a callback puts the worker's cadence policy inside the
+processor's call stack; mutable state on a scoped coordinator is a data race waiting for the first
+consumer who resolves it twice. None of them removes the breaking change either — they just move it
+somewhere less visible.
+
+**Return `Task<OutboxBatchResult>`** — preserves ADR-MSG-014's symmetry argument at the cost of the
+`ValueTask` convention. Rejected because the symmetry is broken by the inbox lag regardless, and
+between two conventions in tension the one with a live justification wins.

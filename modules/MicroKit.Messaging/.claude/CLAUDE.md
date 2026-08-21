@@ -149,9 +149,10 @@ IMessageHandler<T>                 // HandleAsync(T evt, CancellationToken ct) �
 ```csharp
 IOutboxWriter                      // AddAsync + AddBatchAsync — write-only, used by domain handlers
                                    //   in transaction; no processor operations (ADR-MSG-011)
-IOutboxProcessorStore              // GetPendingAsync, AcquireLeaseAsync, MarkPublishedAsync,
-                                   //   MarkFailedAsync, DeadLetterAsync, DeleteProcessedAsync,
-                                   //   GetDeadLetteredAsync, RequeueAsync — background processor only
+IOutboxProcessorStore              // ClaimBatchAsync (atomic batch claim + ownership token),
+                                   //   ApplyOutcomesAsync (one settlement per batch) — processor only
+IOutboxAdminStore                  // GetDeadLetteredAsync, RequeueAsync — operator tooling only
+IOutboxRetentionStore              // DeleteProcessedAsync — the retention worker only
 IInboxStore                        // ExistsAsync, AddAsync, GetPendingAsync, MarkProcessingAsync,
                                    //   MarkProcessedAsync, MarkFailedAsync
 ```
@@ -177,9 +178,10 @@ MessageEnvelope<T>                 // sealed record — wraps T with metadata (M
 7. **Background processors never use `IHttpContextAccessor`** — `TenantId` read from `OutboxMessage`/`InboxMessage` only
 8. **`sealed class`** for EF Core entities (`OutboxMessage`, `InboxMessage`) | **`sealed record`** for VOs (`MessageId`, `CorrelationId`, `CausationId`, options) | **`sealed class`** for processors/handlers/publishers
 9. **`ValueTask<T>`** for all async methods | **`ConfigureAwait(false)`** throughout lib code
-   **Exception (ADR-MSG-014):** `IOutboxCoordinator.ExecuteAsync`, `IInboxCoordinator.ExecuteAsync`,
-   `IOutboxProcessor.ProcessBatchAsync`, `IInboxProcessor.ProcessBatchAsync` return `Task` —
-   BackgroundService chain compatibility; no allocation benefit from ValueTask in polling loops.
+   **Exception (ADR-MSG-014, narrowed by ADR-MSG-015):** `IInboxCoordinator.ExecuteAsync` and
+   `IInboxProcessor.ProcessBatchAsync` return `Task` — BackgroundService chain compatibility.
+   The two OUTBOX seams no longer take the exception: `IOutboxCoordinator.ExecuteAsync` and
+   `IOutboxProcessor.ProcessBatchAsync` return `ValueTask<OutboxBatchResult>` (ADR-MSG-015).
 10. **`CancellationToken ct = default`** always last parameter
 11. **`Console.WriteLine` forbidden** → `ILogger<T>`
 12. **No inline `Version=`** on `PackageReference` — CPM via root `Directory.Packages.props`
@@ -187,7 +189,10 @@ MessageEnvelope<T>                 // sealed record — wraps T with metadata (M
 14. **`MediatR.Contracts` forbidden everywhere** — in all packages, production and test, **except the `MicroKit.Messaging.MediatR` glue** (ADR-MSG-009 carve-out: the glue bridges domain-event notifications onto the outbox via `IPublisher.Publish`)
 15. **`FluentAssertions` forbidden** — use Shouldly (MIT)
 16. **Scope-per-message mandatory** in `OutboxProcessor` and `InboxProcessor` — never share one scope across a batch
-17. **`AcquireLeaseAsync` must be atomic** — single `UPDATE WHERE` via `ExecuteUpdateAsync`; SELECT+mutate+SaveChanges is forbidden
+17. **The claim must be atomic** — `ClaimBatchAsync` stamps candidates with a single `UPDATE WHERE`
+    via `ExecuteUpdateAsync`, replaying the eligibility predicate inside the UPDATE; SELECT+mutate+SaveChanges
+    is forbidden. Every terminal write additionally filters on `ClaimToken`, so a processor whose lease
+    expired mid-dispatch matches zero rows instead of overwriting the processor that took its messages over.
 
 ---
 
@@ -281,7 +286,8 @@ All v1 packages share one version per release.
 - **ADR-MSG-011:** `IOutboxWriter.AddBatchAsync` ratified — batch write optimization for `DomainEventsDispatcher` P4 (single EF Core `AddRange` call). `AddAsync` kept for single-message paths.
 - **ADR-MSG-012:** `DomainEventDispatchBehavior` SUPERSEDED — deleted in favour of `TransactionBehavior` (order 700) as the dispatch+commit owner.
 - **ADR-MSG-013:** `DomainEventsCascadeNotificationPublisher` replaces `ForeachAwaitPublisher` — dispatches cascade domain events once after all notification handlers complete.
-- **ADR-MSG-014:** `IOutboxCoordinator`, `IInboxCoordinator`, `IOutboxProcessor`, `IInboxProcessor` return `Task` (not `ValueTask`) — BackgroundService chain symmetry; no allocation benefit in polling loops.
+- **ADR-MSG-014:** `IOutboxCoordinator`, `IInboxCoordinator`, `IOutboxProcessor`, `IInboxProcessor` return `Task` (not `ValueTask`) — BackgroundService chain symmetry; no allocation benefit in polling loops. **Superseded in part by ADR-MSG-015** — the two OUTBOX seams now return `ValueTask<OutboxBatchResult>`; the two inbox seams still return `Task`.
+- **ADR-MSG-015:** `IOutboxCoordinator.ExecuteAsync` and `IOutboxProcessor.ProcessBatchAsync` return `ValueTask<OutboxBatchResult>` — the batch now produces a result the worker needs to adapt its cadence, and ADR-MSG-014's `.AsTask()` rationale was factually wrong. The inbox asymmetry is recorded, dated, and expected to be closed by the inbox lot.
 
 ---
 

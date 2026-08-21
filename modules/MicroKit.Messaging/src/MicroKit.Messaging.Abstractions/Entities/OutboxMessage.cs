@@ -67,10 +67,31 @@ public sealed class OutboxMessage
     public DateTimeOffset? LockedUntilUtc { get; set; }
 
     /// <summary>
+    /// Gets or sets the ownership token of the processor that currently holds the lease.
+    /// <see langword="null"/> when no lease is held.
+    /// </summary>
+    /// <remarks>
+    /// Written by <c>IOutboxProcessorStore.ClaimBatchAsync</c> and cleared by every terminal
+    /// write. It is what makes a lease verifiable on release, not only on acquisition: every
+    /// settlement filters on it, so a processor whose lease expired mid-dispatch matches zero
+    /// rows instead of silently overwriting the processor that legitimately took its messages
+    /// over. Without it a late writer clobbers a legitimate one — a lost update that only
+    /// manifests under lease expiry, which is to say under load or after a stall.
+    /// </remarks>
+    public Guid? ClaimToken { get; set; }
+
+    /// <summary>
     /// Gets or sets the earliest UTC time at which this message is eligible for
     /// re-dispatch after a transient failure. <see langword="null"/> for the initial attempt.
-    /// Back-off formula: <c>2^RetryCount</c> seconds, capped at 3600 s.
     /// </summary>
+    /// <remarks>
+    /// Back-off formula, computed by the processor rather than the store:
+    /// <c>NextRetryAtUtc = now + Uniform(0, min(2^RetryCount seconds, MaxRetryBackoff))</c>.
+    /// The exponential term is capped by <c>OutboxProcessorOptions.MaxRetryBackoff</c>
+    /// (default 1 hour), and full jitter is then applied over the whole interval. The jitter is
+    /// not decoration: without it, messages that fail together — which is what a broker outage
+    /// produces — retry together across every processor instance.
+    /// </remarks>
     public DateTimeOffset? NextRetryAtUtc { get; set; }
 
     /// <summary>
