@@ -30,6 +30,14 @@ public static class MessagingBuilderExtensions
             sp => sp.GetRequiredService<EfOutboxStore<TContext>>());
         builder.Services.AddScoped<IOutboxProcessorStore>(
             sp => sp.GetRequiredService<EfOutboxStore<TContext>>());
+
+        // Admin and retention are separate contracts (ISP) served by the same instance: a DLQ
+        // console has no business seeing ClaimBatchAsync, and the processor has no business
+        // seeing RequeueAsync.
+        builder.Services.AddScoped<IOutboxAdminStore>(
+            sp => sp.GetRequiredService<EfOutboxStore<TContext>>());
+        builder.Services.AddScoped<IOutboxRetentionStore>(
+            sp => sp.GetRequiredService<EfOutboxStore<TContext>>());
         builder.Services.AddScoped<IInboxStore, EfInboxStore<TContext>>();
         return builder;
     }

@@ -1,27 +1,23 @@
 namespace MicroKit.Messaging;
 
 /// <summary>
-/// Coordinates one processing cycle of the transactional outbox for a given topology
-/// (e.g. Shared-DB, Per-Tenant). Each implementation decides <em>which</em> messages
-/// to process and creates the appropriate scopes before delegating to
-/// <see cref="IOutboxProcessor"/>.
+/// Topology strategy for one processing pass. Decides which database(s) a pass covers;
+/// the <see cref="IOutboxProcessor"/> decides what happens to each message.
 /// </summary>
 /// <remarks>
-/// <para>
-/// The v1 Shared-DB implementation (<c>SharedDbOutboxCoordinator</c>) issues a single
-/// cross-tenant <c>GetPendingAsync</c> call and delegates to <c>IOutboxProcessor</c>.
-/// A future per-tenant coordinator (in <c>MicroKit.Messaging.Multitenancy</c>) will
-/// iterate over an <c>ITenantSource</c> and create one scope per tenant, reusing the
-/// same <see cref="IOutboxProcessor"/> engine.
-/// </para>
-/// <para>
-/// Returns <see cref="Task"/> (not <c>ValueTask</c>) for symmetry with
-/// <see cref="IInboxCoordinator"/> and BackgroundService chain compatibility.
-/// </para>
+/// <b>Breaking change (ADR-MSG-015).</b> Previously returned <see cref="Task"/>, which discarded
+/// everything the pass learned and forced the hosting worker to poll on a fixed timer. Returning
+/// the aggregate result is what lets the worker adapt its cadence. This supersedes the
+/// return-type mandate of ADR-MSG-014 for the outbox seam only; the inbox pair still returns
+/// <see cref="Task"/> until the inbox lot restores the symmetry.
 /// </remarks>
 public interface IOutboxCoordinator
 {
-    /// <summary>Executes one outbox processing cycle.</summary>
+    /// <summary>Runs one processing pass across the topology this coordinator owns.</summary>
     /// <param name="cancellationToken">A cancellation token.</param>
-    Task ExecuteAsync(CancellationToken cancellationToken = default);
+    /// <returns>
+    /// The aggregate outcome of the pass. For a multi-database topology, the sum across
+    /// every database covered.
+    /// </returns>
+    ValueTask<OutboxBatchResult> ExecuteAsync(CancellationToken cancellationToken = default);
 }

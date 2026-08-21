@@ -6,8 +6,8 @@ namespace MicroKit.Messaging;
 /// <remarks>
 /// <see cref="IOutboxWriter"/> is intentionally minimal — it exposes only
 /// <see cref="AddAsync"/>. Domain handlers must never have access to
-/// <see cref="IOutboxProcessorStore"/> methods such as <c>GetPendingAsync</c> or
-/// <c>DeadLetterAsync</c>, which are reserved for the background processor.
+/// <see cref="IOutboxProcessorStore"/> methods such as <c>ClaimBatchAsync</c> or
+/// <c>ApplyOutcomesAsync</c>, which are reserved for the background processor.
 /// <para>
 /// The EF Core implementation (<c>EfOutboxStore</c>) resolves from the same
 /// <c>DbContext</c> as the domain aggregate, ensuring the outbox write and the

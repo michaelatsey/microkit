@@ -31,6 +31,10 @@ public static class ServiceCollectionExtensions
     /// e.g. <c>AddEfCoreOutbox()</c> from <c>MicroKit.Messaging.EntityFrameworkCore</c>.
     /// </description></item>
     /// <item><description>
+    /// <c>IOutboxRetentionStore</c> — required by the retention worker; supplied by the same
+    /// store implementation.
+    /// </description></item>
+    /// <item><description>
     /// <c>IInboxStore</c> — same requirement as above.
     /// </description></item>
     /// <item><description>
@@ -61,6 +65,13 @@ public static class ServiceCollectionExtensions
         services.AddSingleton<IExecutionScopeFactory, PassThroughExecutionScopeFactory>();
         services.AddSingleton<OutboxMessageFactory>();
 
+        // Clock and jitter source, both TryAdd so a host that already supplies its own wins.
+        // Injected rather than read statically so the outbox retry curve is unit-testable
+        // without a wall clock and without a range assertion: TimeProvider fixes "now",
+        // Random fixes the jitter draw. Random.Shared is thread-safe (.NET 6+).
+        services.TryAddSingleton(TimeProvider.System);
+        services.TryAddSingleton(Random.Shared);
+
         // Default pass-through IExecutionContext (ADR-EXEC-001 / ADR-MSG-008 §7): one stable
         // CorrelationId per DI scope, TenantId/CausationId null. A tenant-aware host (e.g.
         // MicroKit.Multitenancy) overrides this via a non-Try AddScoped<IExecutionContext>().
@@ -72,6 +83,10 @@ public static class ServiceCollectionExtensions
         services.AddScoped<IOutboxProcessor, OutboxProcessor>();
         services.AddScoped<IOutboxCoordinator, SharedDbOutboxCoordinator>();
         services.AddHostedService<OutboxWorker>();
+
+        // Retention. Without it DeleteProcessedAsync has no caller, RetentionDays is read by
+        // nothing, and the outbox grows without bound in production.
+        services.AddHostedService<OutboxRetentionWorker>();
 
         services.AddScoped<IInboxProcessor, InboxProcessor>();
         services.AddScoped<IInboxCoordinator, SharedDbInboxCoordinator>();

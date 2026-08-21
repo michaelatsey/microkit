@@ -34,7 +34,7 @@ public enum OutboxMessageStatus
     /// <summary>
     /// Maximum retries exceeded. Terminal — <c>DeadLettered = true</c> is always set
     /// simultaneously on the <see cref="OutboxMessage"/>. Use
-    /// <see cref="IOutboxProcessorStore.RequeueAsync"/> for operator-driven reprocessing.
+    /// <see cref="IOutboxAdminStore.RequeueAsync"/> for operator-driven reprocessing.
     /// </summary>
     Failed,
 }

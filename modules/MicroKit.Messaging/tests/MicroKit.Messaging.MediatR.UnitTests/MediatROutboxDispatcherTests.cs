@@ -62,14 +62,22 @@ public sealed class MediatROutboxDispatcherTests
     }
 
     [Fact]
-    public async Task DispatchAsync_WhenDeserializeReturnsNull_DelegatesToInner()
+    public async Task DispatchAsync_WhenDeserializeReturnsNull_ThrowsOutboxPayloadException()
     {
+        // A null deserialize means the EventType resolved to no CLR type, or the JSON was
+        // malformed. This decorator routes BY CLR TYPE, so such a payload has no route here and
+        // never will. It used to fall through to the inner dispatcher, whose bare
+        // InvalidOperationException the processor classified as transient — burning the whole
+        // retry budget on a message that could never succeed.
         var message = MakeOutboxMessage();
         _serializer.Deserialize(message.Payload, message.EventType).Returns((object?)null);
 
-        await Build().DispatchAsync(message);
+        var ex = await Should.ThrowAsync<OutboxPayloadException>(
+            async () => await Build().DispatchAsync(message));
 
-        await _inner.Received(1).DispatchAsync(message, Arg.Any<CancellationToken>());
+        ex.Message.ShouldContain("SomeType");
+
+        await _inner.DidNotReceive().DispatchAsync(Arg.Any<OutboxMessage>(), Arg.Any<CancellationToken>());
         await _publisher.DidNotReceive().Publish(Arg.Any<INotification>(), Arg.Any<CancellationToken>());
     }
 

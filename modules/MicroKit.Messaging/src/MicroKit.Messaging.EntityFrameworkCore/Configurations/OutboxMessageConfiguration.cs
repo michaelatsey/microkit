@@ -51,9 +51,29 @@ public sealed class OutboxMessageConfiguration : IEntityTypeConfiguration<Outbox
                 v => v == null ? null : v.Value,
                 v => v == null ? null : new CausationId(v.Value)));
 
+        // Plain Guid? — no value converter, no invariant. Written by ClaimBatchAsync and
+        // cleared by every terminal write.
+        builder.Property(m => m.ClaimToken);
+
         // No HasQueryFilter — infrastructure table, read cross-tenant by processors (ADR-MSG-002).
 
-        // Polling index: GetPendingAsync filter on (Status, NextRetryAtUtc, LockedUntilUtc).
+        // Claim index: ClaimBatchAsync candidate filter + OrderBy(OccurredOnUtc). Column order
+        // follows the predicate — DeadLettered and Status are equality-ish, NextRetryAtUtc is a
+        // range, OccurredOnUtc supplies the sort.
+        //
+        // Deliberately NOT a filtered index. A partial index (`WHERE dead_lettered = false`)
+        // would keep it small as published rows accumulate, but HasFilter takes provider-specific
+        // SQL and this is the provider-neutral EF Core package. Consumers who own their DDL can
+        // add the filtered variant — see the README.
+        builder.HasIndex(m => new { m.DeadLettered, m.Status, m.NextRetryAtUtc, m.OccurredOnUtc })
+            .HasDatabaseName("IX_OutboxMessages_Dispatchable");
+
+        // Read-back index: the contended branch of ClaimBatchAsync selects by token alone.
+        builder.HasIndex(m => m.ClaimToken)
+            .HasDatabaseName("IX_OutboxMessages_ClaimToken");
+
+        // Legacy polling index, retained: still covers the (Status, NextRetryAtUtc) prefix used
+        // by ad-hoc operator queries.
         builder.HasIndex(m => new { m.Status, m.NextRetryAtUtc, m.LockedUntilUtc })
             .HasDatabaseName("IX_OutboxMessages_Status_NextRetryAt_LockedUntil");
 

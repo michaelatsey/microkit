@@ -38,9 +38,31 @@ internal sealed class MediatROutboxDispatcher(
     : IOutboxDispatcher
 {
     /// <inheritdoc />
+    /// <exception cref="OutboxPayloadException">
+    /// The payload could not be materialized at all: the <see cref="OutboxMessage.EventType"/>
+    /// resolves to no CLR type, or the <see cref="OutboxMessage.Payload"/> is not valid JSON.
+    /// Both are permanent, so the processor dead-letters on first sight rather than spending the
+    /// whole retry budget re-deserializing a payload that cannot change.
+    /// </exception>
     public async ValueTask DispatchAsync(OutboxMessage message, CancellationToken ct = default)
     {
         var payload = serializer.Deserialize(message.Payload, message.EventType);
+
+        // Null means the EventType did not resolve or the JSON was malformed — IMessageSerializer
+        // returns null rather than throwing for both. This routing decorator dispatches BY CLR
+        // TYPE, so a payload with no CLR type has no route here and never will.
+        //
+        // Previously this fell through to the inner dispatcher, which threw a bare
+        // InvalidOperationException the processor classified as transient — burning the full
+        // retry budget on a message that could never succeed. Throwing here also avoids
+        // deserializing the same payload twice on the poison path.
+        if (payload is null)
+        {
+            throw new OutboxPayloadException(
+                $"Cannot deserialize EventType '{message.EventType}' from outbox message {message.Id}. " +
+                "The event type must be resolvable in the current assembly context and the payload " +
+                "must be valid JSON for it.");
+        }
 
         if (payload is INotification notification)
         {
@@ -53,8 +75,8 @@ internal sealed class MediatROutboxDispatcher(
             return;
         }
 
-        // Integration-event path (or unresolvable payload): delegate to the Core dispatcher,
-        // which deserializes/publishes and owns the canonical deserialization-failure error.
+        // Integration-event path: delegate to the Core dispatcher, which re-deserializes and
+        // publishes. The payload is known to be materializable by this point.
         await inner.DispatchAsync(message, ct).ConfigureAwait(false);
     }
 }
