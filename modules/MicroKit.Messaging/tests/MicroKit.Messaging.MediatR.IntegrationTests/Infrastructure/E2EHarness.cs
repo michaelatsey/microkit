@@ -104,17 +104,19 @@ internal static class E2EHarness
             .FromAssemblyContaining<CreateWidgetCommand>()
             .AddTransactionBehavior());
 
-        // Registration ORDER is load-bearing twice over:
-        //   - AddMediatRTransport() throws InvalidOperationException if no IOutboxDispatcher is
-        //     registered yet, so AddInProcessTransport() must come first;
-        //   - AddMediatRTransport() registers IDomainEventsDispatcher with a plain AddScoped that
-        //     must win over the core's TryAdd from AddMicroKitMediatR above.
+        // Registration order is load-bearing in exactly ONE place now: AddMediatRDomainEvents()
+        // decorates the transport's IOutboxDispatcher, so a transport must be registered first —
+        // and calling it first throws InvalidOperationException rather than failing silently.
+        // Nothing else here is order-sensitive: the glue contributes an IDomainEventsSink to the
+        // single core dispatcher rather than registering a rival one (ADR-MEDIATR-014), and
+        // AddInProcessTransport() now uses TryAdd so a later transport cannot displace the
+        // decorator (ADR-MEDIATR-015).
         // AddHostedService<OutboxWorker> is registered by AddMicroKitMessaging and starts nothing
         // without an IHost. It is left alone; every drain goes through DrainOnceAsync.
         var messaging = services.AddMicroKitMessaging()
             .AddEfCoreOutbox<E2EDbContext>()
             .AddInProcessTransport()
-            .AddMediatRTransport();
+            .AddMediatRDomainEvents();
 
         configureMessaging?.Invoke(messaging);
 

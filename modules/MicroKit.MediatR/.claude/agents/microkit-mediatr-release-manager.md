@@ -1,5 +1,5 @@
 ---
-name: release-manager
+name: microkit-mediatr-release-manager
 description: Use this agent exclusively via the /release command. Handles the full release lifecycle for the 4 MicroKit.MediatR packages — validating build state, checking changelog completeness, computing version from Nerdbank.GitVersioning, creating git tags, and preparing NuGet publish artifacts. Never invoke manually for non-release tasks.
 tools: Read, Bash, Glob, Grep
 model: sonnet

@@ -30,7 +30,7 @@ Always load the relevant file before working on a specific concern:
 | Adding a behavior | `.claude/workflows/adding-behavior.md` + `/new-behavior` | `behavior-designer` → `performance-reviewer` |
 | Adding a provider/integration | `.claude/workflows/adding-provider.md` + `/new-provider` | `implementer` → `dependency-guardian` |
 | Adding a domain event | `/new-domain-event` + `.claude/rules/cqrs-patterns.md` | `architect` |
-| Domain-event dispatch composition | `.claude-context/context/architectural-decisions.md` — ADR-MEDIATR-014, -010, -009 | `architect` |
+| Domain-event dispatch composition | `.claude-context/context/architectural-decisions.md` — ADR-MEDIATR-015, -014, -010, -009 | `architect` |
 | Performance concern | `.claude/rules/performance.md` + `.claude/skills/pipeline-internals/SKILL.md` | `performance-reviewer` |
 | Public API change | `.claude/rules/dependencies.md` (Abstractions) + `.claude/rules/naming.md` | `api-reviewer` — required before merge |
 | Dependency / `.csproj` change | `.claude/rules/dependencies.md` + `.claude-context/context/dependency-graph.md` | `dependency-guardian` — auto on `.csproj` edit |
@@ -170,14 +170,23 @@ public sealed class ProjectUserToReadModelHandler(IReadModel readModel)
 Publish events from the command handler **after** persistence, via `IDomainEventDispatcher` —
 never from a behavior, never before the write.
 
-**Dispatch composition — ADR-MEDIATR-014 (accepted, NOT yet implemented).** There is one
-`IDomainEventsDispatcher` implementation: the core orchestrator. It drains, runs every
-`IDomainEventHandler<TEvent>` for every event, then hands the batch to an ordered, possibly empty
-`IEnumerable<IDomainEventSink>`. MicroKit.MediatR registers **zero** sinks; installing
-MicroKit.Messaging.MediatR contributes the outbox sink (notification creation + batched outbox
+**Dispatch composition — ADR-MEDIATR-014 (implemented).** There is one `IDomainEventsDispatcher`
+implementation: the core orchestrator. It drains, runs every `IDomainEventHandler<TEvent>` for every
+event, then hands the batch to an ordered, possibly empty `IEnumerable<IDomainEventsSink>`.
+MicroKit.MediatR registers **zero** sinks; installing MicroKit.Messaging.MediatR and calling
+`AddMediatRDomainEvents()` contributes the outbox sink (notification creation + batched outbox
 write). A higher-level module extending dispatch **contributes a sink — it never registers a second
-dispatcher.** Supersedes the ADR-MEDIATR-013 precedence contract; the core-side `TryAdd` from PR #84
-stays, because it still protects a consumer's own dispatcher registration.
+dispatcher.** Register with `TryAddEnumerable` and an implementation type or instance; a factory
+lambda is rejected because it cannot be deduplicated. Supersedes the ADR-MEDIATR-013 precedence
+contract; the core-side `TryAdd` from PR #84 stays, because it still protects a consumer's own
+dispatcher registration.
+
+**Loud failure — ADR-MEDIATR-015 (implemented).** If the scan discovers
+`DomainEventNotification<TEvent>` subclasses and **no** `IDomainEventsSink` is registered, the
+orchestrator throws on the first dispatch of an event that maps to one, naming the event type, the
+notification type and the missing registration. Previously every such notification was discarded in
+silence. The handlers-only configuration — no notifications, no sink — stays valid and costs one
+bool per batch.
 
 ---
 
@@ -193,7 +202,8 @@ stays, because it still protects a consumer's own dispatcher registration.
 8. **Canonical log property names only** — `LogPropertyNames.*` (esp. `CommandName`)
 9. **Shouldly + NSubstitute** for tests — **FluentAssertions is banned**
 10. **No inline `Version=`** on `PackageReference` — CPM via `Directory.Packages.props`
-11. **One `IDomainEventsDispatcher`, N `IDomainEventSink`** — a module extending domain-event dispatch contributes a sink, never a rival dispatcher (ADR-MEDIATR-014)
+11. **One `IDomainEventsDispatcher`, N `IDomainEventsSink`** — a module extending domain-event dispatch contributes a sink, never a rival dispatcher (ADR-MEDIATR-014)
+12. **A notification with no sink is a configuration error** — it throws at first dispatch of a mapped event, never silently discards (ADR-MEDIATR-015)
 
 ---
 

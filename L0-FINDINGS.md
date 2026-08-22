@@ -416,3 +416,93 @@ Two specific notes for whoever closes that debt:
 - `ClaimToken` is deliberately mapped with **no value converter** — a plain `Guid?`. It is
   infrastructure, never a domain identifier, and giving it a strong type would buy nothing and cost a
   converter on the hottest write path in the module.
+
+---
+
+# L2 Findings — domain-event sinks (ADR-MEDIATR-014 / -015)
+
+Surfaced while implementing the sink model. Same standing as the findings above.
+
+---
+
+## Finding #12 — three negative assertions were unfalsifiable, and the defect class is invisible to the suite
+
+**Severity: medium.** No production defect, but three tests reported coverage they did not provide,
+and nothing in the repository can detect the next occurrence.
+
+### The three assertions
+
+`modules/MicroKit.Messaging/tests/MicroKit.Messaging.MediatR.UnitTests/DomainEventsDispatcherTests.cs`
+— lines 32, 45 and 60, one in each of:
+
+```
+DispatchEventsAsync_WhenNoDomainEvents_WritesNoOutbox
+DispatchEventsAsync_WhenDomainEventHasNoNotification_StillInvokesHandlerDispatcher
+DispatchEventsAsync_WhenNotificationFactoryReturnsNull_SkipsOutbox
+```
+
+each asserting:
+
+```csharp
+await _outboxWriter.DidNotReceive().AddAsync(Arg.Any<OutboxMessage>(), Arg.Any<CancellationToken>());
+```
+
+The subject under test, `DomainEventsDispatcher`, writes to the outbox with **`AddBatchAsync`**, per
+ADR-MSG-011. It never calls `AddAsync` on any path.
+
+### Why that is not a typo
+
+`DidNotReceive()` on a method the subject never invokes is green **no matter what the subject
+does**. These three assertions could not fail. Each test's stated intent — "no outbox write
+happened" — was checked against a method that is not the write path, so a real write would have
+passed unnoticed. Rewriting the dispatcher to write on the empty-batch path, or to write twice, or
+to write the wrong payload, would not have moved any of them.
+
+That is the general shape, and it is the part worth remembering:
+
+> A negative assertion is only as good as the method it names. `DidNotReceive().X()` where the
+> subject uses `Y()` is indistinguishable, in every test run, from a correct assertion — and no
+> mutation of the subject can expose it, because the assertion does not depend on the subject at
+> all.
+
+Positive assertions do not have this failure mode: `Received(1).AddAsync(...)` on a subject that
+calls `AddBatchAsync` fails immediately and loudly. Only the negative form is silently inert, which
+is why it needs reviewing by name rather than by eye.
+
+### How long
+
+For the entire life of the file as shipped. The dispatcher has used `AddBatchAsync` since
+ADR-MSG-011 introduced the batch write, and these tests were written against it — so they were never
+able to fail, including in `1.0.0-preview.4`. The same file's *positive* tests capture from
+`AddBatchAsync` correctly, which is what makes the inconsistency visible on a careful read and
+invisible on a casual one.
+
+### Status
+
+**Fixed in this lot**, as part of re-purposing the file. `DomainEventsDispatcherTests.cs` became
+`OutboxDomainEventSinkTests.cs` when the glue's dispatcher became `OutboxDomainEventSink`
+(ADR-MEDIATR-014), and every negative assertion now names `AddBatchAsync`. A new test,
+`ReceiveAsync_WhenSomeEventsMap_WritesOnlyTheMappedOnesInOneBatch`, additionally pins the batch
+contents positively, so the "wrote nothing" claim is no longer the only guard.
+
+### Audit of the rest — not fixed, because nothing else is defective
+
+Every `DidNotReceive()` / `DidNotReceiveWithAnyArgs()` in the four MicroKit.Messaging test projects
+was checked against whether its subject invokes that method at all:
+
+| File | Assertions | Verdict |
+|---|---|---|
+| `MicroKit.Messaging.MediatR.UnitTests/MediatROutboxDispatcherTests.cs` | 4 (`_inner.DispatchAsync`, `_publisher.Publish`) | **Sound** — the decorator calls both; each is the real branch being excluded |
+| `MicroKit.Messaging.UnitTests/Publishing/InProcessMessagePublisherTests.cs` | 1 (`_inboxStore.AddAsync`) | **Sound** — `InProcessMessagePublisher.cs:83` calls exactly that |
+| `MicroKit.Messaging.UnitTests/Processing/InboxProcessorTests.cs` | 8 (`MarkFailedAsync`, `DeadLetterAsync`, `MarkProcessedAsync`, `MarkProcessingAsync`) | **Sound** — all four are invoked by `InboxProcessor` |
+| `MicroKit.Messaging.UnitTests/Processing/InboxProcessorTests.cs` | 4 (`ExistsAsync`, `AddAsync`) | **Sound, and deliberately so** — `InboxProcessor` never calls these *by design* (ADR-MSG-002: "pure drain … no `ExistsAsync`/`AddAsync` inside the loop"), and `ProcessBatch_DoesNotCallExistsAsync` is named for it. Unlike Finding #12 these are not "the wrong method for the intent"; the intent *is* that these specific methods stay uncalled, and the assertion fails the moment someone adds one |
+| `MicroKit.Messaging.UnitTests/Processing/OutboxProcessorTests.cs` | 1 (`ApplyOutcomesAsync`) | **Sound** — the settlement call, invoked on every non-empty batch |
+| `MicroKit.Messaging.UnitTests/Processing/OutboxRetentionWorkerTests.cs` | 1 (`DeleteProcessedAsync`) | **Sound** — the worker's only store call |
+
+The discriminator that separates the last row of `InboxProcessorTests` from Finding #12 is worth
+stating, because they look identical: a negative assertion naming an uncalled method is **correct**
+when "this method must not be called" is the property under test, and **vacuous** when it is standing
+in for "this *effect* did not happen" and the effect travels through a different method.
+
+**Nothing here is being changed.** The count of genuine defects is three, all in the one file this
+lot was already rewriting.

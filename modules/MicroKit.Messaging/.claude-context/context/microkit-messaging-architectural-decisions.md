@@ -13,6 +13,7 @@ Format: `## ADR-MSG-{NNN}: {Title}` · Status: `Accepted` | `Proposed` | `Supers
 
 **Status:** Accepted  
 **Date:** 2026-06-22  
+**Amended by:** ADR-MSG-016 — the four phases stand; their *ownership* moved. `DomainEventsDispatcher` no longer exists and never superseded the core dispatcher. Read the Consequences section below through ADR-MSG-016.
 
 ### Decision
 
@@ -150,6 +151,7 @@ These three registrations are **independent**:
 
 **Status:** Accepted  
 **Date:** 2026-06-22  
+**Amended by:** ADR-MSG-016 — decision unchanged; the caller named `DomainEventsDispatcher` below is now `OutboxDomainEventSink`.
 
 ### Decision
 
@@ -213,6 +215,7 @@ See ADR-MSG-013 for the accepted cascade dispatch design.
 
 **Status:** Accepted  
 **Date:** 2026-06-22  
+**Amended by:** ADR-MSG-016 — the publisher and its registration stand, under the new name `AddMediatRDomainEvents()`. The Consequences claim that installing the glue yields working cascade dispatch is **known false**: cascade rows are staged and never flushed. See ADR-MSG-016 §Known-false consequence.
 
 ### Context
 
@@ -401,3 +404,150 @@ somewhere less visible.
 **Return `Task<OutboxBatchResult>`** — preserves ADR-MSG-014's symmetry argument at the cost of the
 `ValueTask` convention. Rejected because the symmetry is broken by the inbox lag regardless, and
 between two conventions in tension the one with a live justification wins.
+
+---
+
+## ADR-MSG-016: The Glue Contributes a Sink — Messaging Half of ADR-MEDIATR-014/-015
+
+**Status:** Accepted
+**Date:** 2026-08-22
+**Amends:** ADR-MSG-010 (phase ownership), ADR-MSG-011 (caller name), ADR-MSG-013 (registration name, and one consequence that was never true).
+**Requires:** MicroKit.MediatR from the same release — the glue does not compile against a core without `IDomainEventsSink`.
+
+### Context
+
+ADR-MSG-010 gave `MicroKit.Messaging.MediatR` a type called `DomainEventsDispatcher` that
+implemented `IDomainEventsDispatcher` and ran all four phases: drain (P1), synchronous
+`IDomainEventHandler<TEvent>` dispatch (P2), notification mapping (P3), outbox batch write (P4).
+`MicroKit.MediatR` core shipped its own `DomainEventDispatcher` running P1 and P2. Both claimed the
+same DI slot, and ADR-MSG-010's Consequences declared the glue's copy "authoritative" — it
+"supersedes the basic `DomainEventDispatcher` in MicroKit.MediatR core".
+
+That arrangement had two participants racing for one slot, arbitrated by registration order, with
+P1 and P2 implemented twice and free to drift. ADR-MEDIATR-013 tried to fix it with a
+`TryAdd`/`Replace` precedence contract — correctness resting on two packages honouring a mutual
+convention that nothing verified. ADR-MEDIATR-014 replaced the arbitration with composition, and
+ADR-MEDIATR-015 fixed the two naming and registration defects that survived it. This ADR records
+what those decisions mean on the Messaging side, so this file stops contradicting the code it
+governs.
+
+### Decision
+
+1. **The glue registers no `IDomainEventsDispatcher`.** There is exactly one implementation of that
+   interface and it lives in `MicroKit.MediatR` core. The Consequences of ADR-MSG-010 are inverted:
+   the core dispatcher is authoritative and the glue does not supersede it.
+
+2. **`DomainEventsDispatcher` becomes `OutboxDomainEventSink`, an `IDomainEventsSink`.** It sheds P1
+   and P2 — which it duplicated from core — and keeps P3 and P4. The core orchestrator drains, runs
+   the whole P2 pass for the batch, and only then hands the batch to each sink. The barrier between
+   P2 and the sinks is load-bearing: a P2 handler can never observe a partially written outbox
+   batch.
+
+3. **Contributed with `TryAddEnumerable`, never `Add`.** `TryAddEnumerable` dedups on
+   `(ServiceType, ImplementationType)`, so calling the registration twice contributes one sink.
+   Under a plain `Add` the second copy would receive every batch and write every outbox row twice.
+   Because Microsoft DI resolves `IEnumerable<T>` to every registration for `T`, the composition is
+   order-independent by construction: it no longer matters whether `AddMicroKitMediatR()` ran before
+   or after the glue.
+
+4. **`AddMediatRTransport()` is renamed `AddMediatRDomainEvents()`, outright, with no `[Obsolete]`
+   alias.** The old name was wrong twice: the method transports nothing, and
+   `Add{Provider}Transport()` is reserved by this module's naming rules for broker providers. Both
+   packages are `1.0.0-preview.*` with zero external consumers and one in-repo call site — this is
+   the cheapest the rename will ever be.
+
+5. **`AddInProcessTransport()` registers all three of its services with `TryAdd`.** A transport
+   supplies a default and abstains when something already holds the slot.
+
+6. **`AddMediatRDomainEvents()` makes four registrations, not three** — the sink, the
+   `IOutboxDispatcher` decoration, the `INotificationPublisher` replacement, and a `TryAdd`ed
+   `IMessageSerializer` default. The fourth is not redundant: the decorator takes a serializer as a
+   constructor dependency, and the method's precondition proves only that an `IOutboxDispatcher`
+   exists, not that whoever registered it registered a serializer too.
+
+### Rationale
+
+1. **A race removed beats a race arbitrated.** ADR-MEDIATR-013's precedence contract made the
+   *documented* order correct; it did not make a wrong order fail loudly. With sinks there is
+   nothing to select, so there is no order to get wrong.
+
+2. **Contribution scales; replacement does not.** The `Replace` shape has a ceiling of two
+   participants — a second package wanting in-transaction participation would have to know about
+   the first and re-implement its sequence to append to it. An `IEnumerable<IDomainEventsSink>` has
+   no ceiling and requires no participant to know about any other.
+
+3. **One implementation of P1/P2 cannot drift from itself.** The duplicated drain and handler pass
+   were two copies of one algorithm in two repositories' worth of review surface.
+
+4. **`TryAdd` on the transport closes a silent failure, not a theoretical one.** Under the previous
+   plain `Add`, calling `AddInProcessTransport()` *after* the glue appended a second
+   `IOutboxDispatcher` descriptor; Microsoft DI resolves the last registration, so the decorator was
+   bypassed with no exception and no log. The outbox kept draining and nothing it routed was ever
+   published. This is the failure mode the composition rules exist to prevent, and it had shipped.
+
+5. **The rename is a naming-rule consequence, not a preference.** `microkit-messaging-naming.md`
+   reserves `Add{Provider}Transport()` for brokers. A method that contributes a sink, decorates a
+   dispatcher, replaces a publisher and supplies a serializer default is not a transport by any
+   reading.
+
+### Consequences
+
+- **No consumer-visible type changed.** `DomainEventsDispatcher` and `OutboxDomainEventSink` are
+  both `internal sealed`. The package's public surface remains one type
+  (`MessagingMediatRExtensions`) and one method.
+- **The rename is a breaking change on a preview package** and is recorded as such in the CHANGELOG.
+  Migration is renaming the call: same receiver, same signature, same position in the chain.
+- **`AddInProcessTransport()` now abstains instead of imposing, in both directions.** A consumer who
+  registered their own `IMessagePublisher` first now keeps it, where previously it was silently
+  displaced — a runtime change, not DI bookkeeping. A consumer calling it *after* a broker transport
+  no longer overrides that broker. Neither direction is likely today (all broker providers are
+  `IsPackable=false`), but both are behavioural.
+- **The one remaining ordering requirement is that a transport precede
+  `AddMediatRDomainEvents()`**, because the decoration needs something to wrap. Getting it wrong
+  throws at startup naming the fix, rather than failing silently.
+- **`MicroKit.MediatR` and `MicroKit.Messaging.MediatR` must ship from the same release.** The two
+  halves of ADR-MEDIATR-014 are not independently versionable.
+- **ADR-MSG-011 is unaffected in substance**: `AddBatchAsync` is still the exclusive write path, now
+  called by `OutboxDomainEventSink` rather than by `DomainEventsDispatcher`.
+
+### Known-false consequence inherited from ADR-MSG-013
+
+ADR-MSG-013 states that consumers who install the glue "automatically get cascade dispatch on the
+notification path". **That is not true and this ADR does not make it true.** The cascade dispatch
+itself works — `DomainEventsCascadeNotificationPublisher` calls the core dispatcher after all
+handlers, the drain happens, and the sink produces the outbox row, which
+`DomainEventSinkStagingTests.CascadePublish_WhenHandlerRaisesEvent_StagesOutboxRowInProcessorScope`
+pins against the change tracker. But nothing on the outbox processing path calls `SaveChanges`:
+`TransactionBehavior` is the sole flush owner and is not in that path, so the staged row dies with
+the processor scope. The cascade domain event is lost with no row, no exception, and nothing logged
+at Warning or above — recorded by `CascadeObservationTests`, which asserts the loss rather than a
+desired outcome, and disclosed to consumers in the module README.
+
+This is pre-existing, out of scope for the sink refactor, and tracked separately. It is named here
+because ADR-MSG-013's Consequences section will otherwise keep asserting a guarantee the test suite
+disproves. **Do not resolve it by deleting the observation test.** Before 1.0.0 stable one of three
+things must happen: the outbox path acquires a flush owner, the cascade publisher fails loudly, or
+cascade dispatch leaves the stable surface.
+
+### Alternatives considered
+
+**Finish the ADR-MEDIATR-013 `Replace` repair** — one line plus a test, and it does fix the
+order-dependence for that one service type. Rejected: it buys order-independence at the price of
+permanently ratifying the shape that made order matter, leaves P1/P2 duplicated and drifting, keeps
+the two-participant ceiling, and leaves correctness resting on a mutual contract nothing verifies.
+
+**Decorator chain — the glue decorates the core `IDomainEventsDispatcher`.** Rejected: it removes
+the duplication but not the ordering problem, since which decorator ends up outermost is still
+positional, and every decorator must reconstruct the descriptor beneath it. The cost of that
+reconstruction is already visible in this package's `IOutboxDispatcher` decoration
+(`LastOrDefault` + `Remove` + a three-branch `CreateInner`). At three participants it is worse than
+what it replaces.
+
+**Keep `AddMediatRTransport()` and add an `[Obsolete]` alias.** Rejected: it preserves the exact
+name whose defect is that it misdescribes the method, and commits to carrying it past 1.0.0. Zero
+external consumers and one in-repo call site make outright rename strictly cheaper now than it will
+ever be again.
+
+**Leave `AddInProcessTransport()` on plain `Add` and document the required call order.** Rejected:
+it trades a DI-ordering bug for a documentation-ordering bug, and the failure mode it leaves in
+place is silent.

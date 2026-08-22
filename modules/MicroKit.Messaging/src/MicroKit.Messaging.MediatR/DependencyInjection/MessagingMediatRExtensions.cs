@@ -6,62 +6,113 @@ using Microsoft.Extensions.DependencyInjection.Extensions;
 namespace MicroKit.Messaging.MediatR.DependencyInjection;
 
 /// <summary>
-/// DI extensions that wire MediatR as the messaging transport for <c>MicroKit.Messaging</c>.
+/// DI extensions that bridge MicroKit.MediatR domain events onto the MicroKit.Messaging outbox.
 /// </summary>
 public static class MessagingMediatRExtensions
 {
     /// <summary>
-    /// Wires the MediatR transport bridge onto an existing MicroKit.Messaging registration:
+    /// Wires the MicroKit.MediatR glue onto an existing MicroKit.Messaging registration. It makes
+    /// four registrations:
     /// <list type="bullet">
-    ///   <item><see cref="DomainEventsDispatcher"/> as <c>IDomainEventsDispatcher</c> — drains
-    ///         domain events and writes their notifications to the transactional outbox.
-    ///         Called by <c>TransactionBehavior</c> after the command handler completes.</item>
-    ///   <item><see cref="MediatROutboxDispatcher"/> as a routing decorator over the existing
-    ///         <c>IOutboxDispatcher</c> — notifications publish via <see cref="IPublisher.Publish"/>,
-    ///         integration events delegate to the wrapped Core dispatcher.</item>
+    ///   <item><strong>Contributes the domain-event sink.</strong>
+    ///         <c>OutboxDomainEventSink</c> is added as an <c>IDomainEventsSink</c>: it maps
+    ///         each drained domain event to its notification and stages them in the transactional
+    ///         outbox, in the same transaction as the aggregate.</item>
+    ///   <item><strong>Decorates the outbox dispatcher.</strong>
+    ///         <c>MediatROutboxDispatcher</c> wraps the transport's <c>IOutboxDispatcher</c>
+    ///         and routes by payload: notifications publish via <see cref="IPublisher.Publish"/>,
+    ///         integration events delegate to the wrapped dispatcher.</item>
+    ///   <item><strong>Replaces the notification publisher.</strong>
+    ///         <c>DomainEventsCascadeNotificationPublisher</c> takes over from MediatR's
+    ///         <c>ForeachAwaitPublisher</c> so domain events raised by notification handlers are
+    ///         dispatched once after all handlers complete (ADR-MSG-013).</item>
+    ///   <item><strong>Supplies a serializer default.</strong>
+    ///         <c>IMessageSerializer</c> is <c>TryAdd</c>ed. The decorator above takes one as a
+    ///         constructor dependency, and the precondition below only proves that an
+    ///         <c>IOutboxDispatcher</c> exists — not that whoever registered it also registered a
+    ///         serializer. <see cref="MessagingBuilder.AddInProcessTransport"/> does; a broker
+    ///         transport need not. Without this line that combination would register cleanly and
+    ///         then fail to resolve at first dispatch.</item>
     /// </list>
     /// </summary>
     /// <param name="builder">The <see cref="MessagingBuilder"/> returned by
     /// <c>AddMicroKitMessaging()</c>.</param>
     /// <returns>The same <see cref="MessagingBuilder"/> for chaining.</returns>
+    /// <exception cref="InvalidOperationException">
+    /// No <c>IOutboxDispatcher</c> is registered yet, so there is nothing to decorate. Call
+    /// <see cref="MessagingBuilder.AddInProcessTransport"/> (or a broker transport) first.
+    /// </exception>
     /// <remarks>
     /// <para>
-    /// <strong>Call order (required):</strong> call <c>AddMicroKitMediatR()</c> first (so the
-    /// notification pipeline and <c>IPublisher</c> are registered), then
-    /// <c>AddMicroKitMessaging(...).AddInProcessTransport()</c> (which registers the base
-    /// <c>IOutboxDispatcher</c>), and finally <c>AddMediatRTransport()</c>. Calling this method
-    /// before a transport has registered an <c>IOutboxDispatcher</c> throws
-    /// <see cref="InvalidOperationException"/>.
+    /// <strong>Call order.</strong> A transport must be registered before this method, because the
+    /// outbox-dispatcher decorator needs something to wrap; calling it first throws rather than
+    /// failing silently. Everything else is order-independent: the sink is contributed with
+    /// <c>TryAddEnumerable</c> and is resolved alongside any other, so it does not matter whether
+    /// <c>AddMicroKitMediatR()</c> ran before or after; and registering a transport <em>after</em>
+    /// this method no longer displaces the decorator. This method is idempotent — calling it twice
+    /// contributes one sink and applies one decorator.
     /// </para>
     /// <para>
     /// <strong>Idempotency contract:</strong> <see cref="IDomainEventHandler{TEvent}"/> handlers
-    /// run synchronously in-transaction (P2). <see cref="INotificationHandler{TNotification}"/> handlers
-    /// run later on the outbox processing path, after commit. Because an outbox retry re-publishes the
-    /// notification and re-runs ALL notification handlers, those handlers must be idempotent
+    /// run synchronously in-transaction. <see cref="INotificationHandler{TNotification}"/> handlers
+    /// run later on the outbox processing path, after commit. Because an outbox retry re-publishes
+    /// the notification and re-runs ALL notification handlers, those handlers must be idempotent
     /// (ADR-MSG-003 / ADR-MSG-009).
     /// </para>
     /// </remarks>
-    public static MessagingBuilder AddMediatRTransport(this MessagingBuilder builder)
+    public static MessagingBuilder AddMediatRDomainEvents(this MessagingBuilder builder)
     {
-        builder.Services.AddScoped<DomainEventsDispatcher>();
-        builder.Services.AddScoped<IDomainEventsDispatcher>(sp => sp.GetRequiredService<DomainEventsDispatcher>());
-#pragma warning disable CS0618 // IDomainEventDispatcher is a preview compatibility alias.
-        builder.Services.AddScoped<IDomainEventDispatcher>(sp => new DomainEventDispatcherCompatibilityAdapter(
-            sp.GetRequiredService<IDomainEventsDispatcher>()));
-#pragma warning restore CS0618
+        ArgumentNullException.ThrowIfNull(builder);
+
+        // Contribute the outbox sink to the core orchestrator (ADR-MEDIATR-014). This package
+        // registers NO IDomainEventsDispatcher: there is one implementation, in MicroKit.MediatR,
+        // and higher-level packages extend it by contributing sinks.
+        //
+        // TryAddEnumerable, not Add: it deduplicates on (ServiceType, ImplementationType), so a
+        // second call to this method does not contribute a second sink that would write twice.
+        builder.Services.TryAddEnumerable(
+            ServiceDescriptor.Scoped<IDomainEventsSink, OutboxDomainEventSink>());
+
+        DecorateOutboxDispatcherOnce(builder.Services);
+
+        // Replace MediatR's default ForeachAwaitPublisher with the cascade publisher so that
+        // domain events raised by notification handlers are dispatched after every publish.
+        // Registered as transient to allow the scoped IDomainEventsDispatcher to be resolved.
+        // Replace is idempotent, so a second call is harmless.
+        builder.Services.Replace(
+            ServiceDescriptor.Transient<INotificationPublisher, DomainEventsCascadeNotificationPublisher>());
+
+        // MediatROutboxDispatcher takes IMessageSerializer as a constructor dependency. The
+        // precondition in DecorateOutboxDispatcherOnce proves only that SOMETHING registered
+        // IOutboxDispatcher — not that it also registered a serializer. AddInProcessTransport()
+        // registers both; a broker transport is not obliged to. Without this line that combination
+        // registers cleanly and then throws on first resolve, which is the wrong place to find out.
+        builder.Services.TryAddSingleton<IMessageSerializer, SystemTextJsonMessageSerializer>();
+
+        return builder;
+    }
+
+    private static void DecorateOutboxDispatcherOnce(IServiceCollection services)
+    {
+        // The decorator is registered as a factory, so it carries no ImplementationType and cannot
+        // be recognised by inspecting the IOutboxDispatcher descriptor. A marker descriptor records
+        // that the decoration has been applied; without it a second call would find its OWN factory
+        // descriptor, remove it, and wrap it again — double-routing every outbox message.
+        if (services.Any(d => d.ServiceType == typeof(OutboxDispatcherDecorationMarker)))
+            return;
 
         // Capture the transport's IOutboxDispatcher and wrap it in the routing decorator.
         // The inner type (InProcessIntegrationDispatcher) is internal to Core and cannot be named
         // here, so it is rebuilt from the captured descriptor.
         var descriptor =
-            builder.Services.LastOrDefault(d => d.ServiceType == typeof(IOutboxDispatcher))
+            services.LastOrDefault(d => d.ServiceType == typeof(IOutboxDispatcher))
             ?? throw new InvalidOperationException(
                 "No IOutboxDispatcher is registered. Call AddInProcessTransport() (or a broker " +
-                "transport) before AddMediatRTransport().");
+                "transport) before AddMediatRDomainEvents().");
 
-        builder.Services.Remove(descriptor);
+        services.Remove(descriptor);
 
-        builder.Services.Add(new ServiceDescriptor(
+        services.Add(new ServiceDescriptor(
             typeof(IOutboxDispatcher),
             sp =>
             {
@@ -70,16 +121,7 @@ public static class MessagingMediatRExtensions
             },
             descriptor.Lifetime));
 
-        // Replace MediatR's default ForeachAwaitPublisher with the cascade publisher so that
-        // domain events raised by notification handlers are dispatched after every publish.
-        // Registered as transient to allow the scoped IDomainEventsDispatcher to be resolved.
-        builder.Services.Replace(ServiceDescriptor.Transient<INotificationPublisher, DomainEventsCascadeNotificationPublisher>());
-
-        // Ensure IMessageSerializer is available even if AddInProcessTransport() was not called.
-        // The in-process transport registers this too; TryAdd ensures no double registration.
-        builder.Services.TryAddSingleton<IMessageSerializer, SystemTextJsonMessageSerializer>();
-
-        return builder;
+        services.Add(ServiceDescriptor.Singleton(new OutboxDispatcherDecorationMarker()));
     }
 
     private static IOutboxDispatcher CreateInner(IServiceProvider sp, ServiceDescriptor descriptor)
@@ -94,10 +136,8 @@ public static class MessagingMediatRExtensions
     }
 }
 
-#pragma warning disable CS0618 // IDomainEventDispatcher is a preview compatibility alias.
-file sealed class DomainEventDispatcherCompatibilityAdapter(IDomainEventsDispatcher inner) : IDomainEventDispatcher
-{
-    public Task DispatchEventsAsync(CancellationToken ct = default)
-        => inner.DispatchEventsAsync(ct);
-}
-#pragma warning restore CS0618
+/// <summary>
+/// Registration-only marker recording that the <c>IOutboxDispatcher</c> decoration has been
+/// applied. Never resolved — only its presence in the service collection is read.
+/// </summary>
+internal sealed class OutboxDispatcherDecorationMarker;

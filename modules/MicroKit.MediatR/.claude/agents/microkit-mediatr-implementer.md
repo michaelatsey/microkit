@@ -1,5 +1,5 @@
 ---
-name: implementer
+name: microkit-mediatr-implementer
 description: Use this agent BEFORE implementing any new feature, contract, handler, behavior, marker, or component in MicroKit.MediatR. Produces a detailed implementation plan — file structure, class design, public API surface, dependency impact, test strategy — and waits for explicit approval before any code is written. Automatically invoked when asked to implement, create, add, or build something new. Do NOT use for architecture arbitration, dependency checks, or performance analysis — use the dedicated agents for those.
 tools: Read, Glob, Grep
 model: opus
