@@ -161,7 +161,7 @@ public static class ServiceCollectionExtensions
     /// <see cref="IDomainEventsDispatcher"/> implementation in the ecosystem, and this method
     /// registers it. It owns the whole sequence: drain the domain events accumulated on tracked
     /// aggregates, dispatch every one to its <see cref="IDomainEventHandler{TEvent}"/>
-    /// implementations, and then hand the batch to every registered <see cref="IDomainEventSink"/>.
+    /// implementations, and then hand the batch to every registered <see cref="IDomainEventsSink"/>.
     /// </para>
     /// <para>
     /// This package registers <b>zero</b> sinks, so on its own the dispatcher runs handlers and
@@ -169,7 +169,7 @@ public static class ServiceCollectionExtensions
     /// MicroKit.Messaging. Installing the <c>MicroKit.Messaging.MediatR</c> glue contributes the
     /// outbox sink, which creates the mapped notifications and stages them in the same transaction.
     /// A higher-level module extending dispatch <b>contributes a sink; it never registers a second
-    /// dispatcher.</b> Sinks are resolved as <c>IEnumerable&lt;IDomainEventSink&gt;</c>, so call
+    /// dispatcher.</b> Sinks are resolved as <c>IEnumerable&lt;IDomainEventsSink&gt;</c>, so call
     /// order between this method and any such module is irrelevant by construction — nothing
     /// arbitrates and nothing can lose.
     /// </para>
@@ -183,7 +183,7 @@ public static class ServiceCollectionExtensions
     /// </para>
     /// <para>
     /// <strong>Notifications need a sink.</strong> If the scanned assemblies declare
-    /// <see cref="DomainEventNotification{TEvent}"/> subclasses but no <see cref="IDomainEventSink"/>
+    /// <see cref="DomainEventNotification{TEvent}"/> subclasses but no <see cref="IDomainEventsSink"/>
     /// is registered, the first dispatch of an event that maps to one throws
     /// <see cref="InvalidOperationException"/> rather than discarding it silently
     /// (ADR-MEDIATR-015). Declaring no notifications and registering no sink stays valid.
@@ -266,7 +266,7 @@ public static class ServiceCollectionExtensions
         // The single domain-events dispatcher (scoped — injects scoped IDomainEventHandlerDispatcher).
         //
         // ADR-MEDIATR-014 — this package registers the orchestrator and ZERO sinks. A higher-level
-        // package contributes an IDomainEventSink with TryAddEnumerable; it does not register a
+        // package contributes an IDomainEventsSink with TryAddEnumerable; it does not register a
         // rival dispatcher, so there is no precedence to arbitrate any more.
         //
         // TryAdd, not Add (PR #84): this package supplies a DEFAULT, it does not impose one. That is

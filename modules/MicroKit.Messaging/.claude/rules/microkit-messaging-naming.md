@@ -17,10 +17,12 @@
 | `IIntegrationEvent` | typed contract — all integration events implement this; defines TenantId, CorrelationId, CausationId, OccurredOnUtc |
 | `IMessagePublisher` | publishes outbound messages to broker or in-process |
 | `IMessageHandler<T>` | handles a specific integration event type |
-| `IOutboxWriter` | write-only outbox access for domain handlers (AddAsync only) |
-| `IOutboxProcessorStore` | read/write outbox access for background processor (GetPendingAsync, AcquireLeaseAsync, MarkPublishedAsync, ...) |
+| `IOutboxWriter` | write-only outbox access for domain handlers — `AddAsync` (single) + `AddBatchAsync` (ADR-MSG-011, the path `OutboxDomainEventSink` uses) |
+| `IOutboxProcessorStore` | claim + settlement for the background processor — `ClaimBatchAsync`, `ApplyOutcomesAsync`. The per-message lease API (`GetPendingAsync`, `AcquireLeaseAsync`, `MarkPublishedAsync`, `MarkFailedAsync`, `DeadLetterAsync`) was removed by the outbox claim rewrite |
+| `IOutboxAdminStore` | dead-letter inspection and requeue for operator tooling only — `GetDeadLetteredAsync`, `RequeueAsync` |
+| `IOutboxRetentionStore` | retention for the cleanup worker only — `DeleteProcessedAsync` |
 | `IInboxStore` | read/write access to the inbox table (dedup + processing state) |
-| `MessageDispatcher` | `internal sealed class` in Core — routes to `IMessageHandler<T>`; NOT a public Abstractions contract |
+| `IOutboxDispatcher` | the dispatch seam in Core — deserializes an `OutboxMessage` and routes it. **Replaced the former `MessageDispatcher`**, which no longer exists and must not be re-introduced (pinned by `Core_DoesNotContainTypeNamedMessageDispatcher`) |
 
 ---
 
@@ -68,7 +70,8 @@
 | `{Provider}{Noun}` | `RabbitMqMessagePublisher`, `AzureServiceBusPublisher` |
 | `Ef{Noun}` | `EfOutboxStore`, `EfInboxStore` — EF Core implementations |
 | `{Noun}Processor` | `OutboxProcessor`, `InboxProcessor` — background workers |
-| `{Noun}Dispatcher` | `MessageDispatcher` — internal routing |
+| `{Noun}Dispatcher` | `InProcessIntegrationDispatcher`, `MediatROutboxDispatcher` — `IOutboxDispatcher` implementations, `internal sealed`. NOT `MessageDispatcher`: that type was eliminated in favour of the `IOutboxDispatcher` seam and its re-introduction is blocked by an architecture test |
+| `{Noun}Sink` | `OutboxDomainEventSink` — an `IDomainEventsSink` (MicroKit.MediatR.Abstractions) contributed to the core domain-event orchestrator. `internal sealed`, registered with `TryAddEnumerable` so the collection dedups on implementation type. A sink **contributes** to a sequence it does not own; a `{Noun}Dispatcher` **owns** one. Never register a sink as a rival dispatcher (ADR-MSG-016) |
 | `Fake{Noun}` | `FakeMessagePublisher` (Testing package only) |
 | `InMemory{Noun}` | `InMemoryOutboxStore`, `InMemoryInboxStore` (Testing package only) |
 
@@ -98,7 +101,7 @@ public class OrderPlacedNotification { ... }        // ← Notification = Mediat
 | `AddEfCoreOutbox()` | on `MessagingBuilder` — wires `EfOutboxStore` (implements both `IOutboxWriter` + `IOutboxProcessorStore`) + `EfInboxStore` |
 | `AddInProcessTransport()` | on `MessagingBuilder` — wires `InProcessMessagePublisher` |
 | `Add{Provider}Transport()` | on `MessagingBuilder` — **broker providers ONLY** (e.g. `AddRabbitMqTransport()`). This shape is reserved: a method that does not wire a broker must not use it |
-| `AddMediatRDomainEvents()` | on `MessagingBuilder` — wires the MicroKit.MediatR glue: contributes the outbox `IDomainEventSink`, decorates `IOutboxDispatcher` with the notification router, replaces `INotificationPublisher` with the cascade publisher. **Not a transport** — it moves nothing between processes (ADR-MEDIATR-015) |
+| `AddMediatRDomainEvents()` | on `MessagingBuilder` — wires the MicroKit.MediatR glue, four registrations: contributes the outbox `IDomainEventsSink` (`TryAddEnumerable`), decorates `IOutboxDispatcher` with the notification router, replaces `INotificationPublisher` with the cascade publisher, and `TryAdd`s an `IMessageSerializer` default the decorator requires. **Not a transport** — it moves nothing between processes (ADR-MEDIATR-015, ADR-MSG-016) |
 | `AddMessageHandler<THandler, TEvent>()` | on `MessagingBuilder` — registers a handler |
 
 ---

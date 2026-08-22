@@ -10,7 +10,7 @@ namespace MicroKit.MediatR.IntegrationTests.Registration;
 /// <summary>
 /// The composition contract of domain-event dispatch (ADR-MEDIATR-014): ONE
 /// <see cref="IDomainEventsDispatcher"/> — the core orchestrator — plus an ordered, possibly empty
-/// <c>IEnumerable&lt;IDomainEventSink&gt;</c>. The orchestrator owns drain, the
+/// <c>IEnumerable&lt;IDomainEventsSink&gt;</c>. The orchestrator owns drain, the
 /// <see cref="IDomainEventHandler{TEvent}"/> pass, and the barrier between them and the sinks.
 /// </summary>
 /// <remarks>
@@ -33,6 +33,10 @@ namespace MicroKit.MediatR.IntegrationTests.Registration;
 ///   <item><term>NEW</term><description>delete the sink loop from the orchestrator: fails
 ///         <c>…SinkReceivesBatchAfterAllHandlersRan</c> here, and the two outbox staging tests in
 ///         MicroKit.Messaging.</description></item>
+///   <item><term>NEW</term><description><c>break</c> after the first sink, reverse iteration of
+///         <c>_sinks</c>, or handing each sink its own copy of the batch: all three fail
+///         <c>…TwoSinksRegistered_InvokesEachInOrderWithTheSameBatch</c>, and none of them is
+///         reachable by a single-sink test.</description></item>
 /// </list>
 /// M2 and M3 lose their glue framing and are no longer recorded as distinct.
 /// </para>
@@ -146,7 +150,7 @@ public sealed class DomainEventDispatchCompositionTests
         using var provider = services.BuildServiceProvider();
         using var scope = provider.CreateScope();
 
-        scope.ServiceProvider.GetServices<IDomainEventSink>().ShouldBeEmpty();
+        scope.ServiceProvider.GetServices<IDomainEventsSink>().ShouldBeEmpty();
     }
 
     // ── the sink seam ──────────────────────────────────────────────────────────────────────
@@ -199,7 +203,7 @@ public sealed class DomainEventDispatchCompositionTests
         // Nothing raised — the drain returns empty.
         await Dispatcher(scope).DispatchEventsAsync();
 
-        sink.Batches.ShouldBeEmpty("IDomainEventSink is never called with an empty batch");
+        sink.Batches.ShouldBeEmpty("IDomainEventsSink is never called with an empty batch");
     }
 
     [Fact]
@@ -216,6 +220,33 @@ public sealed class DomainEventDispatchCompositionTests
             async () => await Dispatcher(scope).DispatchEventsAsync());
 
         ex.Message.ShouldBe(ThrowingSink.Message);
+    }
+
+    [Fact]
+    public async Task DispatchEventsAsync_WhenTwoSinksRegistered_InvokesEachInOrderWithTheSameBatch()
+    {
+        // Three documented guarantees that no single-sink test can pin, because with one sink every
+        // mutant below still produces exactly one correct call:
+        //   • "every registered sink"      — `break` after the first survives
+        //   • "in registration order"      — iterating _sinks in reverse survives
+        //   • "the same instance is passed" — a per-sink defensive copy survives
+        var log = new DomainEventLog();
+        var calls = new SinkCallLog();
+        using var provider = BuildWithFixtures(
+            log, Contribute(new FirstSink(calls), new SecondSink(calls)));
+        using var scope = provider.CreateScope();
+        Raise(scope, new HandlerOnlyEvent(Guid.NewGuid()), new HandlerOnlyEvent(Guid.NewGuid()));
+
+        await Dispatcher(scope).DispatchEventsAsync();
+
+        calls.Calls.Count.ShouldBe(2, "every registered sink receives the batch — none is skipped");
+        calls.Calls[0].Sink.ShouldBe(nameof(FirstSink), "sinks run in registration order");
+        calls.Calls[1].Sink.ShouldBe(nameof(SecondSink), "sinks run in registration order");
+        calls.Calls[1].Batch.ShouldBeSameAs(
+            calls.Calls[0].Batch,
+            "the same list instance reaches every sink — a per-sink copy would break the "
+            + "documented rule that mutating it changes what later sinks see");
+        calls.Calls[0].Batch.Count.ShouldBe(2);
     }
 
     // ── ADR-MEDIATR-015: a notification with no sink is a configuration error, not silence ──
@@ -237,7 +268,7 @@ public sealed class DomainEventDispatchCompositionTests
         // It must name what is missing and what to call — not read like a DI resolution failure.
         ex.Message.ShouldContain(nameof(ItemCreatedEvent));
         ex.Message.ShouldContain(nameof(ItemCreatedNotification));
-        ex.Message.ShouldContain(nameof(IDomainEventSink));
+        ex.Message.ShouldContain(nameof(IDomainEventsSink));
         ex.Message.ShouldContain("AddMediatRDomainEvents()");
     }
 
@@ -302,12 +333,21 @@ public sealed class DomainEventDispatchCompositionTests
         return services.BuildServiceProvider();
     }
 
-    // Registered as an INSTANCE, not a factory: TryAddEnumerable deduplicates on the implementation
-    // type, and a factory-based descriptor has none — it throws "indistinguishable from other
-    // services". Real sinks register by implementation type; a test double registers by instance so
-    // the test can still hold a reference to it.
-    private static Action<IServiceCollection> Contribute(IDomainEventSink sink)
-        => services => services.TryAddEnumerable(ServiceDescriptor.Singleton(sink));
+    // Registered as an INSTANCE so the test can hold a reference to the same object it asserts on.
+    // TryAddEnumerable needs a descriptor whose implementation type it can recover, to deduplicate
+    // on (ServiceType, ImplementationType): by type, by instance, or via the two-type-argument
+    // factory overload all qualify. Only the one-type-argument
+    // ServiceDescriptor.Scoped<IDomainEventsSink>(sp => ...) is rejected — a bare lambda carries no
+    // implementation type, so it throws "indistinguishable from other services".
+    // Variadic so a PAIR can be contributed. TryAddEnumerable deduplicates on
+    // (ServiceType, ImplementationType), so two sinks of the same class collapse into one
+    // registration — a two-sink test needs two distinct implementation types, not two instances.
+    private static Action<IServiceCollection> Contribute(params IDomainEventsSink[] sinks)
+        => services =>
+        {
+            foreach (var sink in sinks)
+                services.TryAddEnumerable(ServiceDescriptor.Singleton(sink));
+        };
 
     private static void Raise(IServiceScope scope, params IDomainEvent[] domainEvents)
     {
@@ -339,7 +379,7 @@ public sealed class DomainEventDispatchCompositionTests
         }
     }
 
-    private sealed class RecordingSink(DomainEventLog log) : IDomainEventSink
+    private sealed class RecordingSink(DomainEventLog log) : IDomainEventsSink
     {
         // List, not IReadOnlyList: CA1859 — a test double's own collection type is concrete.
         public List<IReadOnlyList<IDomainEvent>> Batches { get; } = [];
@@ -355,7 +395,32 @@ public sealed class DomainEventDispatchCompositionTests
         }
     }
 
-    private sealed class ThrowingSink : IDomainEventSink
+    /// <summary>Records which sink was called, in call order, with the batch it received.</summary>
+    private sealed class SinkCallLog
+    {
+        public List<(string Sink, IReadOnlyList<IDomainEvent> Batch)> Calls { get; } = [];
+    }
+
+    // Two distinct types, deliberately: see the comment on Contribute.
+    private sealed class FirstSink(SinkCallLog log) : IDomainEventsSink
+    {
+        public ValueTask ReceiveAsync(IReadOnlyList<IDomainEvent> domainEvents, CancellationToken ct = default)
+        {
+            log.Calls.Add((nameof(FirstSink), domainEvents));
+            return ValueTask.CompletedTask;
+        }
+    }
+
+    private sealed class SecondSink(SinkCallLog log) : IDomainEventsSink
+    {
+        public ValueTask ReceiveAsync(IReadOnlyList<IDomainEvent> domainEvents, CancellationToken ct = default)
+        {
+            log.Calls.Add((nameof(SecondSink), domainEvents));
+            return ValueTask.CompletedTask;
+        }
+    }
+
+    private sealed class ThrowingSink : IDomainEventsSink
     {
         internal const string Message = "sink refused the batch";
 

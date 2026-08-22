@@ -1,5 +1,5 @@
 ---
-name: dependency-guardian
+name: microkit-mediatr-dependency-guardian
 description: Automatically invoked on ANY change to .csproj files, Directory.Packages.props, or project references within MicroKit.MediatR. Validates that no new dependency violates the module's 4-layer dependency rules — no circular references, no concrete dependencies from Abstractions, no FluentValidation/Polly leaking out of the Behaviors project, no inline package versions. Also invoked when a new PackageReference is added to verify it belongs in Directory.Packages.props.
 tools: Read, Glob, Grep, Bash
 model: haiku

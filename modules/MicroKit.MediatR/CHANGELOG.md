@@ -22,13 +22,18 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/) — [Semantic V
 ### Added
 
 **MicroKit.MediatR.Abstractions**
-- `IDomainEventSink` — the seam a higher-level package implements to participate in domain-event
+- `IDomainEventsSink` — the seam a higher-level package implements to participate in domain-event
   dispatch. `ValueTask ReceiveAsync(IReadOnlyList<IDomainEvent>, CancellationToken)`, called once
   per drained batch, after every `IDomainEventHandler<TEvent>` has completed for every event in it.
   Sinks run in-transaction, in registration order, fail-fast: a sink stages work in the caller's
   unit of work and is not a place for I/O to an external system. Register with `TryAddEnumerable`
-  and an implementation type or instance — never a factory lambda, which `TryAddEnumerable` rejects
-  because it cannot deduplicate one. Additive; no consumer-visible type changed (ADR-MEDIATR-014).
+  using a descriptor that carries an implementation type — by type, by instance, or via the
+  two-type-argument factory overload `ServiceDescriptor.Scoped<IDomainEventsSink, MySink>(sp => ...)`
+  when the sink takes constructor arguments DI cannot supply. The one-type-argument
+  `ServiceDescriptor.Scoped<IDomainEventsSink>(sp => ...)` is rejected with `ArgumentException`,
+  because `TryAddEnumerable` deduplicates on `(ServiceType, ImplementationType)` and cannot infer
+  the implementation type from a lambda alone. Additive; no consumer-visible type changed
+  (ADR-MEDIATR-014).
 
 ### Changed
 
@@ -36,7 +41,7 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/) — [Semantic V
 - **Domain-event dispatch composes by contribution: one dispatcher, N sinks (ADR-MEDIATR-014).**
   There is now a single `IDomainEventsDispatcher` implementation in the ecosystem — the core
   orchestrator. It drains, runs every `IDomainEventHandler<TEvent>` for every event, and then hands
-  the batch to an ordered, possibly empty `IEnumerable<IDomainEventSink>` resolved from DI.
+  the batch to an ordered, possibly empty `IEnumerable<IDomainEventsSink>` resolved from DI.
   `MicroKit.MediatR` registers the orchestrator and **zero** sinks; `MicroKit.Messaging.MediatR` now
   contributes the outbox sink instead of registering a rival dispatcher.
 
@@ -48,7 +53,7 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/) — [Semantic V
   previously** (ADR-MEDIATR-013); the `Replace` half was never shipped and is now cancelled.
   **Migration:** none for consumers — both dispatcher types were `internal`. A module that extended
   domain-event dispatch by registering its own `IDomainEventsDispatcher` should now contribute an
-  `IDomainEventSink` instead.
+  `IDomainEventsSink` instead.
 
 - `AddMicroKitMediatR()` registers `IDomainEventsDispatcher`, its concrete backing type and the
   `[Obsolete]` `IDomainEventDispatcher` alias with `TryAdd` rather than `Add`. This shipped for the
@@ -62,16 +67,22 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/) — [Semantic V
 
 - **A domain-event notification with no sink now throws instead of vanishing (ADR-MEDIATR-015).**
   When the scanned assemblies declare `DomainEventNotification<TEvent>` subclasses but no
-  `IDomainEventSink` is registered, every notification was silently discarded: the application
+  `IDomainEventsSink` is registered, every notification was silently discarded: the application
   started, ran, dispatched handlers, and published nothing — no exception, no log, no startup error.
   The orchestrator now throws `InvalidOperationException` naming the concrete event type, the
   concrete notification type, and the registration that is missing.
 
   It fires on the **first dispatch of an event that actually maps to a notification**, not at
   startup — MicroKit.MediatR has no post-composition-root hook and gains no package reference for
-  one — so an application that never raises such an event never sees it. Declaring no notifications
-  and registering no sink stays valid and costs one bool per batch: the handlers-only configuration
-  is supported and unaffected.
+  one — so an application that never raises such an event never sees it. It is checked *before* the
+  `IDomainEventHandler<TEvent>` pass, so a dispatch that is going to abort aborts before any handler
+  side effect (an email, an SMS) that a rollback could not undo.
+
+  Both no-sink configurations stay supported, at different cost. Declaring no notifications and
+  registering no sink — the handlers-only configuration — costs one bool per batch: no factory call,
+  no allocation, no per-event work. Declaring notifications but routing them by something other than
+  a sink costs one `GetType()` and one dictionary lookup per event, per batch; allocation-free, but
+  not free.
   **Migration:** register a sink — `AddMediatRDomainEvents()` from `MicroKit.Messaging.MediatR`, or
   your own via `TryAddEnumerable` — or delete the notification types you do not route.
 
@@ -87,7 +98,7 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/) — [Semantic V
   in a container *before* `AddMicroKitMediatR()` takes effect, where once the real dispatcher
   silently overwrote it. Its primary documented use — direct construction and injection into a
   behavior under test — is unaffected. Note it replaces the whole orchestrator, sinks included; to
-  observe sink behaviour, register a fake `IDomainEventSink` and keep the real dispatcher.
+  observe sink behaviour, register a fake `IDomainEventsSink` and keep the real dispatcher.
 
 ### Fixed
 

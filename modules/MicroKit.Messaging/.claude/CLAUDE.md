@@ -288,7 +288,7 @@ All v1 packages share one version per release.
 - **ADR-MSG-013:** `DomainEventsCascadeNotificationPublisher` replaces `ForeachAwaitPublisher` — dispatches cascade domain events once after all notification handlers complete.
 - **ADR-MSG-014:** `IOutboxCoordinator`, `IInboxCoordinator`, `IOutboxProcessor`, `IInboxProcessor` return `Task` (not `ValueTask`) — BackgroundService chain symmetry; no allocation benefit in polling loops. **Superseded in part by ADR-MSG-015** — the two OUTBOX seams now return `ValueTask<OutboxBatchResult>`; the two inbox seams still return `Task`.
 - **ADR-MEDIATR-014 / -015 (MicroKit.MediatR, implemented — this module is the other half):** the
-  glue contributes an `IDomainEventSink` to the single core dispatcher instead of registering a
+  glue contributes an `IDomainEventsSink` to the single core dispatcher instead of registering a
   rival one, so registration order between the two packages no longer decides correctness.
   `AddMediatRTransport()` is renamed **`AddMediatRDomainEvents()`** (it is not a transport — the
   `Add{Provider}Transport()` shape stays reserved for brokers), the method is idempotent, and

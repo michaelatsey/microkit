@@ -1,3 +1,5 @@
+using System.Diagnostics.CodeAnalysis;
+
 namespace MicroKit.MediatR.Events;
 
 /// <summary>
@@ -27,6 +29,8 @@ internal sealed class DomainEventNotificationCatalog(IReadOnlyDictionary<Type, T
     /// Gets the concrete <see cref="DomainEventNotification{TEvent}"/> subclass registered for
     /// <paramref name="eventType"/>, if any.
     /// </summary>
-    internal bool TryGetNotificationType(Type eventType, out Type notificationType)
-        => map.TryGetValue(eventType, out notificationType!);
+    internal bool TryGetNotificationType(
+        Type eventType,
+        [MaybeNullWhen(false)] out Type notificationType)
+        => map.TryGetValue(eventType, out notificationType);
 }

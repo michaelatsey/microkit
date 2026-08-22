@@ -2,10 +2,13 @@
   <PropertyGroup>
     <AssemblyName>MicroKit.Messaging.MediatR</AssemblyName>
     <RootNamespace>MicroKit.Messaging.MediatR</RootNamespace>
-    <Description>MediatR glue for MicroKit.Messaging — DomainEventsDispatcher (IDomainEventDispatcher)
-    drains domain events into the transactional outbox as MediatR notifications; MediatROutboxDispatcher
-    is a routing IOutboxDispatcher decorator that publishes notifications via IPublisher.Publish and
-    delegates integration events to the wrapped Core dispatcher.</Description>
+    <Description>MediatR glue for MicroKit.Messaging — puts MicroKit.MediatR domain events on the
+    transactional outbox. Contributes an IDomainEventsSink that maps drained domain events to their
+    notifications and stages them in the same transaction as the aggregate; decorates IOutboxDispatcher
+    so those notifications publish via IPublisher.Publish while integration events delegate to the
+    wrapped Core dispatcher; replaces MediatR's notification publisher so domain events raised by
+    notification handlers are dispatched too; and supplies an IMessageSerializer default for transports
+    that register a dispatcher without one.</Description>
     <PackageTags>microkit;messaging;mediatr;outbox;domain-events;dotnet</PackageTags>
     <Authors>Ange-Michaël Atsé</Authors>
     <PackageLicenseExpression>MIT</PackageLicenseExpression>

@@ -1,5 +1,5 @@
 ---
-name: performance-reviewer
+name: microkit-mediatr-performance-reviewer
 description: Use this agent when reviewing code on the dispatch hot path — pipeline behavior execution, BehaviorBase, the dispatcher, marker type checks, or any code executed per request. Automatically invoked when changes touch MicroKit.MediatR.Behaviors, the dispatch/send extensions, or benchmark results. Do NOT use for one-off utilities or test code.
 tools: Read, Glob, Grep, Bash
 model: sonnet

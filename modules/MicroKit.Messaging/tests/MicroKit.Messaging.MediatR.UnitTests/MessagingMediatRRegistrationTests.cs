@@ -6,7 +6,7 @@ namespace MicroKit.Messaging.MediatR.UnitTests;
 
 /// <summary>
 /// The composition contract of <c>AddMediatRDomainEvents()</c>: it contributes exactly one
-/// <see cref="IDomainEventSink"/>, registers no rival <c>IDomainEventsDispatcher</c>, and survives
+/// <see cref="IDomainEventsSink"/>, registers no rival <c>IDomainEventsDispatcher</c>, and survives
 /// being called twice or having a transport registered after it (ADR-MEDIATR-014 / -015).
 /// </summary>
 /// <remarks>
@@ -47,7 +47,7 @@ public sealed class MessagingMediatRRegistrationTests
 
         // TryAddEnumerable deduplicates on (ServiceType, ImplementationType). Under a plain Add the
         // sink would receive every batch twice and write every outbox row twice.
-        scope.ServiceProvider.GetServices<IDomainEventSink>().Count().ShouldBe(1);
+        scope.ServiceProvider.GetServices<IDomainEventsSink>().Count().ShouldBe(1);
     }
 
     [Fact]

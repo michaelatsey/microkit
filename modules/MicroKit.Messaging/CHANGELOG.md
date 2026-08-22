@@ -40,18 +40,18 @@ from `2N+1` to two (three when contended) plus one settlement — flat in `N`.
 - **`AddMediatRTransport()` is renamed `AddMediatRDomainEvents()`, with no `[Obsolete]` alias.** The
   old name was wrong twice: it transports nothing, and `Add{Provider}Transport()` is reserved by this
   module's naming rules for broker providers (`AddRabbitMqTransport`). The method contributes the
-  outbox `IDomainEventSink`, decorates `IOutboxDispatcher`, and replaces `INotificationPublisher` —
+  outbox `IDomainEventsSink`, decorates `IOutboxDispatcher`, and replaces `INotificationPublisher` —
   three things, none of them a transport. Both packages are `1.0.0-preview.*` with zero external
   consumers, so the rename ships outright rather than accumulating a permanent alias.
   **Migration:** rename the call. Nothing else changes — same receiver, same signature, same
   position in the chain (ADR-MEDIATR-015).
 - **The glue no longer registers an `IDomainEventsDispatcher`.** It contributes an
-  `IDomainEventSink` to the single core orchestrator in `MicroKit.MediatR` instead of registering a
+  `IDomainEventsSink` to the single core orchestrator in `MicroKit.MediatR` instead of registering a
   rival dispatcher, so the two packages can no longer disagree about which implementation wins —
   the race is gone rather than arbitrated. `DomainEventsDispatcher` becomes `OutboxDomainEventSink`
   and sheds the drain and handler-dispatch phases it used to duplicate; both types are
   `internal sealed`, so **no consumer-visible type changed**. **This requires MicroKit.MediatR from
-  the same release** — the glue will not compile against a core without `IDomainEventSink`
+  the same release** — the glue will not compile against a core without `IDomainEventsSink`
   (ADR-MEDIATR-014).
 
 ### Fixed

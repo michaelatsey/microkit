@@ -1,5 +1,5 @@
 ---
-name: api-reviewer
+name: microkit-mediatr-api-reviewer
 description: Use this agent when changing the public API surface of MicroKit.MediatR.Abstractions or MicroKit.MediatR core — adding/removing contracts (ICommand, IQuery, IEvent, IStreamQuery), markers (IIdempotentCommand, ICacheableQuery, IRetryableRequest, IAuthorizedRequest), handler interfaces, or any change that affects consumers outside this module. Automatically invoked on PRs that modify src/MicroKit.MediatR.Abstractions/ or add public members to src/MicroKit.MediatR/.
 tools: Read, Glob, Grep, Bash
 model: opus

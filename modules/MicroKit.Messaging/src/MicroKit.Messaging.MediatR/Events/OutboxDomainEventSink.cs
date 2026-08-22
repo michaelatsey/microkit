@@ -3,7 +3,7 @@ using MicroKit.Messaging.Outbox;
 namespace MicroKit.Messaging.MediatR.Events;
 
 /// <summary>
-/// The <see cref="IDomainEventSink"/> contributed by <c>MicroKit.Messaging.MediatR</c>. Maps each
+/// The <see cref="IDomainEventsSink"/> contributed by <c>MicroKit.Messaging.MediatR</c>. Maps each
 /// domain event in the batch to its <see cref="IDomainEventNotification{TEventType}"/> and stages
 /// every mapped notification in the transactional outbox with a single batched write.
 /// </summary>
@@ -41,7 +41,7 @@ internal sealed class OutboxDomainEventSink(
     OutboxMessageFactory outboxFactory,
     IOutboxWriter outboxWriter,
     IExecutionContext executionContext)
-    : IDomainEventSink
+    : IDomainEventsSink
 {
     /// <inheritdoc />
     public async ValueTask ReceiveAsync(

@@ -2,7 +2,7 @@ namespace MicroKit.Messaging.MediatR.IntegrationTests;
 
 /// <summary>
 /// Pins the sink seam end to end (ADR-MEDIATR-014): the outbox rows that used to be written by the
-/// glue's own <c>IDomainEventsDispatcher</c> are now written by an <c>IDomainEventSink</c> that the
+/// glue's own <c>IDomainEventsDispatcher</c> are now written by an <c>IDomainEventsSink</c> that the
 /// core orchestrator invokes. Both callers of <c>DispatchEventsAsync</c> must reach it.
 /// </summary>
 /// <remarks>

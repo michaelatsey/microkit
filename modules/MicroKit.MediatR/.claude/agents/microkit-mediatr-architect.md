@@ -1,5 +1,5 @@
 ---
-name: architect
+name: microkit-mediatr-apiarchitect
 description: Use this agent when making architecture decisions for MicroKit.MediatR — designing commands, queries, handlers, pipeline behaviors, domain event notifications, or the MediatR integration layer. Automatically invoked on tasks that touch CQRS contracts, new public interfaces, the pipeline order, or cross-module dependencies. Do NOT use for implementation details within a single handler.
 tools: Read, Glob, Grep
 model: opus

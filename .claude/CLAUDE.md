@@ -157,7 +157,7 @@ MicroKit.MediatR                   ← may depend on Result, Domain, Logging.Abs
                                      IDomainEventHandler<TEvent> constrained to where TEvent : IDomainEvent
                                      ADR-MEDIATR-014 (implemented): dispatch composes by
                                      contribution — ONE IDomainEventsDispatcher (core)
-                                     + N IDomainEventSink. Messaging.MediatR contributes a sink;
+                                     + N IDomainEventsSink. Messaging.MediatR contributes a sink;
                                      it does not register a rival dispatcher. Supersedes
                                      ADR-MEDIATR-013 (registration precedence).
                                      ADR-MEDIATR-015 (implemented): a notification with no sink
@@ -330,14 +330,14 @@ Domain Event  (accumulated on the tracked aggregate)
 **Composition — ADR-MEDIATR-014 (implemented).** One `IDomainEventsDispatcher` implementation
 orchestrates the whole sequence (drain → handler pass → the barrier between them and everything
 downstream). Further in-transaction participants contribute through an ordered, possibly empty
-`IEnumerable<IDomainEventSink>` resolved from DI: MicroKit.MediatR registers zero sinks,
+`IEnumerable<IDomainEventsSink>` resolved from DI: MicroKit.MediatR registers zero sinks,
 MicroKit.Messaging.MediatR contributes the outbox sink via `AddMediatRDomainEvents()`.
 Order-independent by construction — this supersedes the `TryAdd`/`Replace` precedence contract of
 ADR-MEDIATR-013. **PR #84's core-side `TryAdd` stays correct and must not be reverted** — it still
 protects a consumer's own dispatcher.
 
 **Loud failure — ADR-MEDIATR-015 (implemented).** A `DomainEventNotification<TEvent>` discovered by
-the scan with **no** `IDomainEventSink` registered throws on the first dispatch of a mapped event,
+the scan with **no** `IDomainEventsSink` registered throws on the first dispatch of a mapped event,
 naming the event, the notification and the missing registration — it is no longer discarded in
 silence. Zero sinks with no notifications stays valid and free. Register a sink with
 `TryAddEnumerable` and an implementation type or instance; a factory lambda is rejected.

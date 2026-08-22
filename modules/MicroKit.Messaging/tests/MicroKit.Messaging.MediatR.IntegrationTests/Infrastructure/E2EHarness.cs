@@ -107,7 +107,7 @@ internal static class E2EHarness
         // Registration order is load-bearing in exactly ONE place now: AddMediatRDomainEvents()
         // decorates the transport's IOutboxDispatcher, so a transport must be registered first —
         // and calling it first throws InvalidOperationException rather than failing silently.
-        // Nothing else here is order-sensitive: the glue contributes an IDomainEventSink to the
+        // Nothing else here is order-sensitive: the glue contributes an IDomainEventsSink to the
         // single core dispatcher rather than registering a rival one (ADR-MEDIATR-014), and
         // AddInProcessTransport() now uses TryAdd so a later transport cannot displace the
         // decorator (ADR-MEDIATR-015).

@@ -172,7 +172,7 @@ never from a behavior, never before the write.
 
 **Dispatch composition — ADR-MEDIATR-014 (implemented).** There is one `IDomainEventsDispatcher`
 implementation: the core orchestrator. It drains, runs every `IDomainEventHandler<TEvent>` for every
-event, then hands the batch to an ordered, possibly empty `IEnumerable<IDomainEventSink>`.
+event, then hands the batch to an ordered, possibly empty `IEnumerable<IDomainEventsSink>`.
 MicroKit.MediatR registers **zero** sinks; installing MicroKit.Messaging.MediatR and calling
 `AddMediatRDomainEvents()` contributes the outbox sink (notification creation + batched outbox
 write). A higher-level module extending dispatch **contributes a sink — it never registers a second
@@ -182,7 +182,7 @@ contract; the core-side `TryAdd` from PR #84 stays, because it still protects a 
 dispatcher registration.
 
 **Loud failure — ADR-MEDIATR-015 (implemented).** If the scan discovers
-`DomainEventNotification<TEvent>` subclasses and **no** `IDomainEventSink` is registered, the
+`DomainEventNotification<TEvent>` subclasses and **no** `IDomainEventsSink` is registered, the
 orchestrator throws on the first dispatch of an event that maps to one, naming the event type, the
 notification type and the missing registration. Previously every such notification was discarded in
 silence. The handlers-only configuration — no notifications, no sink — stays valid and costs one
@@ -202,7 +202,7 @@ bool per batch.
 8. **Canonical log property names only** — `LogPropertyNames.*` (esp. `CommandName`)
 9. **Shouldly + NSubstitute** for tests — **FluentAssertions is banned**
 10. **No inline `Version=`** on `PackageReference` — CPM via `Directory.Packages.props`
-11. **One `IDomainEventsDispatcher`, N `IDomainEventSink`** — a module extending domain-event dispatch contributes a sink, never a rival dispatcher (ADR-MEDIATR-014)
+11. **One `IDomainEventsDispatcher`, N `IDomainEventsSink`** — a module extending domain-event dispatch contributes a sink, never a rival dispatcher (ADR-MEDIATR-014)
 12. **A notification with no sink is a configuration error** — it throws at first dispatch of a mapped event, never silently discards (ADR-MEDIATR-015)
 
 ---

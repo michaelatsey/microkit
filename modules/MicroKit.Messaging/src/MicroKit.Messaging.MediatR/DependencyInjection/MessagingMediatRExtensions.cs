@@ -11,21 +11,28 @@ namespace MicroKit.Messaging.MediatR.DependencyInjection;
 public static class MessagingMediatRExtensions
 {
     /// <summary>
-    /// Wires the MicroKit.MediatR glue onto an existing MicroKit.Messaging registration. It does
-    /// three things:
+    /// Wires the MicroKit.MediatR glue onto an existing MicroKit.Messaging registration. It makes
+    /// four registrations:
     /// <list type="bullet">
     ///   <item><strong>Contributes the domain-event sink.</strong>
-    ///         <see cref="OutboxDomainEventSink"/> is added as an <c>IDomainEventSink</c>: it maps
+    ///         <c>OutboxDomainEventSink</c> is added as an <c>IDomainEventsSink</c>: it maps
     ///         each drained domain event to its notification and stages them in the transactional
     ///         outbox, in the same transaction as the aggregate.</item>
     ///   <item><strong>Decorates the outbox dispatcher.</strong>
-    ///         <see cref="MediatROutboxDispatcher"/> wraps the transport's <c>IOutboxDispatcher</c>
+    ///         <c>MediatROutboxDispatcher</c> wraps the transport's <c>IOutboxDispatcher</c>
     ///         and routes by payload: notifications publish via <see cref="IPublisher.Publish"/>,
     ///         integration events delegate to the wrapped dispatcher.</item>
     ///   <item><strong>Replaces the notification publisher.</strong>
-    ///         <see cref="DomainEventsCascadeNotificationPublisher"/> takes over from MediatR's
+    ///         <c>DomainEventsCascadeNotificationPublisher</c> takes over from MediatR's
     ///         <c>ForeachAwaitPublisher</c> so domain events raised by notification handlers are
     ///         dispatched once after all handlers complete (ADR-MSG-013).</item>
+    ///   <item><strong>Supplies a serializer default.</strong>
+    ///         <c>IMessageSerializer</c> is <c>TryAdd</c>ed. The decorator above takes one as a
+    ///         constructor dependency, and the precondition below only proves that an
+    ///         <c>IOutboxDispatcher</c> exists — not that whoever registered it also registered a
+    ///         serializer. <see cref="MessagingBuilder.AddInProcessTransport"/> does; a broker
+    ///         transport need not. Without this line that combination would register cleanly and
+    ///         then fail to resolve at first dispatch.</item>
     /// </list>
     /// </summary>
     /// <param name="builder">The <see cref="MessagingBuilder"/> returned by
@@ -64,7 +71,7 @@ public static class MessagingMediatRExtensions
         // TryAddEnumerable, not Add: it deduplicates on (ServiceType, ImplementationType), so a
         // second call to this method does not contribute a second sink that would write twice.
         builder.Services.TryAddEnumerable(
-            ServiceDescriptor.Scoped<IDomainEventSink, OutboxDomainEventSink>());
+            ServiceDescriptor.Scoped<IDomainEventsSink, OutboxDomainEventSink>());
 
         DecorateOutboxDispatcherOnce(builder.Services);
 
@@ -75,8 +82,11 @@ public static class MessagingMediatRExtensions
         builder.Services.Replace(
             ServiceDescriptor.Transient<INotificationPublisher, DomainEventsCascadeNotificationPublisher>());
 
-        // Ensure IMessageSerializer is available even if AddInProcessTransport() was not called —
-        // a broker transport may register IOutboxDispatcher without one.
+        // MediatROutboxDispatcher takes IMessageSerializer as a constructor dependency. The
+        // precondition in DecorateOutboxDispatcherOnce proves only that SOMETHING registered
+        // IOutboxDispatcher — not that it also registered a serializer. AddInProcessTransport()
+        // registers both; a broker transport is not obliged to. Without this line that combination
+        // registers cleanly and then throws on first resolve, which is the wrong place to find out.
         builder.Services.TryAddSingleton<IMessageSerializer, SystemTextJsonMessageSerializer>();
 
         return builder;
