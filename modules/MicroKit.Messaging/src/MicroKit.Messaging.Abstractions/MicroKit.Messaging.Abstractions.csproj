@@ -2,7 +2,7 @@
   <PropertyGroup>
     <AssemblyName>MicroKit.Messaging.Abstractions</AssemblyName>
     <RootNamespace>MicroKit.Messaging</RootNamespace>
-    <Description>Pure contracts for MicroKit.Messaging — IIntegrationEvent, IMessagePublisher, IMessageHandler, IOutboxWriter, IOutboxProcessorStore, IInboxStore, OutboxMessage, InboxMessage, MessageEnvelope. Zero framework dependency.</Description>
+    <Description>Pure contracts for MicroKit.Messaging — IIntegrationEvent, IMessagePublisher, IMessageHandler, IOutboxWriter, IOutboxProcessorStore, IInboxWriter, IInboxProcessorStore, IInboxSettlementStore, OutboxMessage, InboxMessage, MessageEnvelope. Zero framework dependency.</Description>
     <PackageTags>microkit;messaging;outbox;inbox;integration-events;abstractions;dotnet</PackageTags>
     <Authors>Ange-Michaël Atsé</Authors>
     <PackageProjectUrl>https://github.com/michaelatsey/microkit</PackageProjectUrl>

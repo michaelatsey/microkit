@@ -3,16 +3,26 @@ using Microsoft.Extensions.Logging;
 namespace MicroKit.Messaging.MediatR.IntegrationTests;
 
 /// <summary>
-/// Observation test for outbox redelivery of an integration event that already produced inbox rows.
+/// Outbox redelivery of an integration event whose inbox rows already exist.
 /// </summary>
 /// <remarks>
-/// This test exists to RECORD behaviour, not to enforce a desired outcome. It asserts what is
-/// actually observed. No production code is adjusted to make it pass.
+/// <para>
+/// <b>This test was inverted, not written from scratch, and that matters.</b> It began as an
+/// observation test recording the defect: the duplicate inbox insert threw, the exception reached
+/// <c>OutboxProcessor</c>, was classified a transient dispatch failure, and retried into the same
+/// duplicate until the message dead-lettered — a message that had been delivered correctly on the
+/// first attempt.
+/// </para>
+/// <para>
+/// It is the test that caught that defect, so inverted it is the test that stops the regression.
+/// Every other assertion in the file is unchanged, including the two that hold either way: the
+/// exception never escapes the drain, and the compound key still yields exactly two inbox rows.
+/// </para>
 /// </remarks>
-public sealed class InboxDuplicateObservationTests(ITestOutputHelper output)
+public sealed class InboxRedeliveryTests(ITestOutputHelper output)
 {
     [Fact]
-    public async Task Redelivery_AfterInboxRowsWritten_SecondDispatchBehaviour()
+    public async Task Redelivery_AfterInboxRowsWritten_IsDeduplicatedAndTheOutboxRowIsPublished()
     {
         await using var connection = await E2EHarness.OpenConnectionAsync();
         await E2EHarness.CreateSchemaAsync(connection);
@@ -64,27 +74,45 @@ public sealed class InboxDuplicateObservationTests(ITestOutputHelper output)
         var outboxAfterDrain2 = await E2EHarness.ReadOutboxAsync(connection);
 
         // ---------------------------------------------------------------------------------------
-        // OBSERVED BEHAVIOUR — recorded, not prescribed.
+        // THE CONTRACT.
         //
-        // The duplicate (MessageId, ConsumerType) insert violates the inbox compound PK.
-        // OutboxProcessor wraps dispatch in try/catch, so the exception never escapes the drain:
-        // it is converted into a retry decision on the OUTBOX row and reported only via a log line.
-        // The inbox is unchanged; the outbox row goes back to Pending with RetryCount incremented.
+        // The duplicate (MessageId, ConsumerType) insert still violates the inbox unique index —
+        // that index is the dedup gate and nothing about it changed. What changed is who answers
+        // for it: EfInboxStore absorbs the violation and reports InboxWriteResult.AlreadyPresent,
+        // and InProcessMessagePublisher treats that as a successful skip rather than a failure.
+        //
+        // So the publisher returns normally, the outbox marks the message Published, and no retry
+        // is charged. A redelivery is not an error: under at-least-once delivery it needs no
+        // failure at all — one expired lease after a crash is enough to produce it.
         // ---------------------------------------------------------------------------------------
         secondDrain.ShouldBeNull("OutboxProcessor catches dispatch failures — nothing escapes the drain");
 
         inboxAfterDrain2.Count.ShouldBe(2, "the compound PK prevents duplicate inbox rows");
 
         var redelivered = outboxAfterDrain2.Single();
-        redelivered.Status.ShouldBe(OutboxMessageStatus.Pending);
-        redelivered.RetryCount.ShouldBe(1);
+        redelivered.Status.ShouldBe(
+            OutboxMessageStatus.Published, "a deduplicated redelivery is a successful dispatch");
+        redelivered.RetryCount.ShouldBe(0, "no retry may be charged for the nominal path");
         redelivered.DeadLettered.ShouldBeFalse();
-        redelivered.ErrorMessage.ShouldNotBeNullOrEmpty();
+        redelivered.ErrorMessage.ShouldBeNullOrEmpty();
 
-        // The log line is the ONLY place the failure is visible: the row state alone cannot
-        // distinguish "the store absorbed the duplicate" from "the exception escaped and was caught".
-        drain2Warnings.ShouldNotBeEmpty("the retry decision must be reported somewhere");
-        drain2Warnings.ShouldContain(e => e.ExceptionTypeName == "DbUpdateException");
+        // A redelivery is normal operation, so MicroKit reports it at Debug and counts it as
+        // microkit.inbox.messages.deduplicated — never as a warning. Warning-level would drown
+        // the log after any incident and train whoever reads it to lower the level, losing the
+        // genuine warnings with it. Nothing in the module may report a failure here.
+        drain2Warnings
+            .Where(e => e.CategoryName.StartsWith("MicroKit.", StringComparison.Ordinal))
+            .ShouldBeEmpty("deduplication is not a failure and must not warn");
+
+        // EF Core does log the rejected INSERT at Error, from its own categories, before the
+        // store absorbs it. That is outside this library's control — the setting that would
+        // silence it lives on the CONSUMER's DbContext — so it is asserted rather than wished
+        // away: a redelivery is quiet in MicroKit's logs and noisy in EF's.
+        drain2Warnings.ShouldAllBe(
+            e => e.CategoryName.StartsWith("Microsoft.EntityFrameworkCore.", StringComparison.Ordinal));
+        drain2Warnings.ShouldContain(
+            e => e.ExceptionTypeName == "DbUpdateException",
+            "the unique index is still the dedup gate; what changed is who answers for it");
 
         // Neither message handler ever runs here, on either drain. DrainOnceAsync drives the OUTBOX
         // coordinator only; IMessageHandler<T> is invoked by the INBOX processor, which this test
@@ -92,7 +120,7 @@ public sealed class InboxDuplicateObservationTests(ITestOutputHelper output)
         recorder.For<FirstWidgetSyncedHandler>().ShouldBeEmpty();
         recorder.For<SecondWidgetSyncedHandler>().ShouldBeEmpty();
 
-        output.WriteLine("OBSERVED — redelivery of an already-published integration event");
+        output.WriteLine("Redelivery of an already-consumed integration event");
         output.WriteLine($"  exception escaping drain 2 : {secondDrain?.GetType().Name ?? "(none)"}");
         output.WriteLine($"  inbox rows after drain 1   : {inboxAfterDrain1.Count}");
         output.WriteLine($"  inbox rows after drain 2   : {inboxAfterDrain2.Count}");

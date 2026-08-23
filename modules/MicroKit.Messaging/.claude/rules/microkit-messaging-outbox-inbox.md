@@ -1,6 +1,6 @@
 # microkit-messaging-outbox-inbox
 
-## Always active for any task touching OutboxProcessor, InboxProcessor, IOutboxWriter, IOutboxProcessorStore, IInboxStore, OutboxMessage, or InboxMessage.
+## Always active for any task touching OutboxProcessor, InboxProcessor, IOutboxWriter, IOutboxProcessorStore, IInboxWriter, IInboxProcessorStore, IInboxSettlementStore, OutboxMessage, or InboxMessage.
 
 ---
 
@@ -224,9 +224,10 @@ TimeSpan delay = TimeSpan.FromSeconds(retryCount * 30);
 ```csharp
 public sealed class InboxMessage
 {
-    public MessageId MessageId { get; set; } = null!;        // dedup key — part 1
+    public Guid RowId { get; set; } = Guid.NewGuid();         // PRIMARY KEY — surrogate, writer-assigned
+    public MessageId MessageId { get; set; } = null!;         // dedup key — part 1 (unique INDEX, not the PK)
     public string ConsumerType { get; set; } = null!;         // fully qualified handler type name — dedup key part 2
-    public string TenantId { get; set; } = null!;             // REQUIRED — never null
+    public string? TenantId { get; set; }                     // optional — null in single-tenant (ADR-MSG-008 §5)
     public string EventType { get; set; } = null!;
     public string Payload { get; set; } = null!;
     public InboxMessageStatus Status { get; set; }
@@ -234,6 +235,9 @@ public sealed class InboxMessage
     public DateTimeOffset ReceivedAtUtc { get; set; }
     public DateTimeOffset? ProcessedAtUtc { get; set; }
     public DateTimeOffset? LockedUntilUtc { get; set; }       // lease expiry for concurrent processors
+    public Guid? ClaimToken { get; set; }                     // ownership proof — EF CONCURRENCY TOKEN
+    public DateTimeOffset? NextRetryAtUtc { get; set; }       // earliest eligible retry time
+    public bool DeadLettered { get; set; }                    // true = terminal
     public string? ErrorMessage { get; set; }
     public CorrelationId? CorrelationId { get; set; }          // nullable — inbound messages from external systems may lack correlation context
     public CausationId? CausationId { get; set; }             // nullable — root events have no cause
@@ -250,52 +254,70 @@ public sealed class InboxMessage
 ## Inbox Dedup Pattern (Idempotency Gate)
 
 ```csharp
-// ✅ Compound unique key = (MessageId + ConsumerType)
-// One envelope can be consumed by multiple handlers independently — each gets its own row.
+// ✅ Compound dedup key = (MessageId + ConsumerType), enforced by a UNIQUE INDEX.
+// One envelope can be consumed by multiple handlers independently — each gets its own row,
+// and those rows advance independently: one handler may succeed while another retries.
+//
+// ✅ The unique index is the SOLE AUTHORITY. ExistsAsync is a fast-path read, never the guard:
+// under concurrent load two ingesters can both see false and then race on AddAsync.
+//
+// ✅ The store recognises the duplicate by POST-HOC VERIFICATION — it asks the database whether
+// the row is there NOW, rather than decoding a provider error code. That answers the question
+// the decision depends on ("is the message recorded?") instead of the syntactic one a detector
+// answers ("was that error a unique violation?"), and it keeps working on providers that do not
+// exist yet. It is a check AFTER the failed insert, never a guard before it, so there is no
+// time-of-check-to-time-of-use window.
 
-// ✅ AUTHORITATIVE GUARD: compound PK unique constraint (not ExistsAsync)
-// ExistsAsync is a fast-path read optimization. Under concurrent load, two processors
-// can both pass ExistsAsync (both see false), then race on AddAsync.
-// The compound PK constraint is the real gate — only one AddAsync succeeds.
-
-// ✅ Handler invocation flow
-async ValueTask ProcessAsync<T>(
-    MessageEnvelope<T> envelope,
-    IMessageHandler<T> handler,
-    CancellationToken ct) where T : IIntegrationEvent
+catch (DbUpdateException)
 {
-    // consumerType comes from the handler's type — NOT from any inbox row
-    var consumerType = typeof(handler).FullName!;
+    entry.State = EntityState.Detached;   // or the next SaveChanges retries the same insert
+    if (savepoint is not null)
+        await ambient.RollbackToSavepointAsync(savepoint, ct);   // PostgreSQL aborts the whole txn
 
-    // 1. Fast-path read (optimization, not the sole guard)
-    if (await _inboxStore.ExistsAsync(envelope.MessageId, consumerType, ct).ConfigureAwait(false))
-        return;
+    if (await ExistsAsync(message.MessageId, message.ConsumerType, ct))
+        return InboxWriteResult.AlreadyPresent;
 
-    // 2. Attempt to record receipt — compound PK is the real concurrency guard
-    try
-    {
-        await _inboxStore.AddAsync(InboxMessage.FromEnvelope(envelope, consumerType), ct).ConfigureAwait(false);
-    }
-    catch (DbUpdateException)
-    {
-        return; // unique constraint violation — another processor won, skip
-    }
-
-    // 3. Acquire lease — lockUntil derived from InboxProcessorOptions.LeaseDuration
-    var lockUntil = DateTimeOffset.UtcNow.Add(_options.LeaseDuration);
-    await _inboxStore.MarkProcessingAsync(envelope.MessageId, consumerType, lockUntil, ct).ConfigureAwait(false);
-
-    // 4. Invoke handler
-    await handler.HandleAsync(envelope.Event, ct).ConfigureAwait(false);
-
-    // 5. Mark Processed
-    await _inboxStore.MarkProcessedAsync(envelope.MessageId, consumerType, ct).ConfigureAwait(false);
+    throw;   // not the dedup gate — a real fault, and absorbing it would be silent data loss
 }
-
-// ❌ Check after processing — idempotency failure
-await handler.HandleAsync(payload, ct);
-if (await _inboxStore.ExistsAsync(...)) { ... } // too late — duplicate already processed
 ```
+
+> ⚠ **The savepoint is required on every provider, not just PostgreSQL,** and its name is capped
+> at **24 characters**: SQL Server rejects savepoint identifiers over 32, so a `Guid:N` with any
+> prefix overflows. PostgreSQL tolerates 63, so a Testcontainers-only suite would never catch it.
+> Where a provider truncates rather than rejects, two savepoints can share a name and a rollback
+> unwinds to the wrong one silently. SQL Server also rejects savepoints inside a distributed
+> transaction.
+
+### The publisher side — one line carries the fix
+
+```csharp
+var result = await inboxWriter.AddAsync(message, ct);
+metrics.Record(result, message.ConsumerType);
+
+if (result is InboxWriteResult.AlreadyPresent)
+{
+    InboxIngestionLogs.Deduplicated(logger, message.MessageId.Value, message.ConsumerType);
+    continue;   // next consumer — NOT a dispatch failure, and NOT an early return
+}
+```
+
+The `continue` is the repair. The publisher returns normally, so the outbox marks the message
+`Published` instead of retrying it to death — **and** consumers after a duplicated one still get
+their row. When the duplicate escaped as an exception it ended the whole publish, so a partial
+redelivery became permanent loss for consumers 3..N.
+
+```csharp
+// ❌ FORBIDDEN — reporting the nominal path as a failure
+await _inboxStore.AddAsync(message, ct);   // throws on redelivery; nothing catches it;
+                                           // OutboxProcessor calls it transient and dead-letters
+                                           // a message that was delivered correctly
+```
+
+> **A redelivery is not an error.** Reported through the return value, logged at `Debug`, counted
+> as `microkit.inbox.messages.deduplicated`. The **rate** is the signal: a steady low level is
+> healthy, a sustained climb means a lease set too short, a stalling consumer, or a broker
+> replaying. Note EF Core independently logs the rejected `INSERT` at `Error` — that setting lives
+> on the consumer's `DbContext`, so a library cannot silence it.
 
 ---
 
@@ -408,51 +430,140 @@ write. Four kinds, and the difference between the last two is load-bearing:
 > transient. A library that guesses permanence wrongly loses messages.
 
 
-## IInboxStore Contract
+## Inbox Store Contracts (Abstractions — split by consumer, ISP)
+
+One class may implement all five; five interfaces so a publisher never sees `ClaimBatchAsync` and
+the drain processor never sees `AddAsync`.
 
 ```csharp
-public interface IInboxStore
+/// <summary>Ingestion. Publishers and broker adapters only.</summary>
+public interface IInboxWriter
 {
-    /// <summary>
-    /// Fast-path dedup check. Read optimization — not the sole concurrency guard.
-    /// The compound PK (MessageId, ConsumerType) is the authoritative guard.
-    /// </summary>
-    ValueTask<bool> ExistsAsync(
-        MessageId messageId, string consumerType, CancellationToken ct = default);
+    ValueTask<bool> ExistsAsync(MessageId messageId, string consumerType, CancellationToken ct = default);
 
     /// <summary>
-    /// Records receipt of an inbound message.
-    /// Throws DbUpdateException on duplicate (unique constraint on compound PK).
+    /// Redelivery is reported through the RETURN VALUE, never through an exception. Under
+    /// at-least-once delivery a redelivery needs no failure at all — one expired lease after a
+    /// crash is enough — so an exception made the nominal path an error. An exception from this
+    /// method means a REAL failure and the caller must treat it as one.
     /// </summary>
-    ValueTask AddAsync(InboxMessage message, CancellationToken ct = default);
+    ValueTask<InboxWriteResult> AddAsync(InboxMessage message, CancellationToken ct = default);
+}
+
+/// <summary>Claim and deferred settlement. Batch-scoped; the drain processor only.</summary>
+public interface IInboxProcessorStore
+{
+    ValueTask<InboxClaim> ClaimBatchAsync(
+        int batchSize, TimeSpan leaseDuration, CancellationToken ct = default);
 
     /// <summary>
-    /// Returns pending inbox messages.
-    /// Processes ALL tenants — TenantId is read from each InboxMessage row, not passed as a filter.
+    /// EVERY write filters on claimToken. Returns the affected-row count: a value below
+    /// outcomes.Count means those rows no longer carry this batch's token, which the caller logs
+    /// rather than assuming success. The token is a SHORT INDEPENDENT timeout, deliberately NOT
+    /// the caller's shutdown token — cancelling this write strands every lease in the batch.
     /// </summary>
-    ValueTask<IReadOnlyList<InboxMessage>> GetPendingAsync(
-        int batchSize, CancellationToken ct = default);
+    ValueTask<int> ApplyOutcomesAsync(
+        Guid claimToken, IReadOnlyList<InboxOutcome> outcomes, CancellationToken ct = default);
+}
+
+/// <summary>
+/// Marks a row processed INSIDE THE HANDLER'S OWN UNIT OF WORK. Resolved from the per-message
+/// execution scope, so the mark is staged on the same DbContext the handler wrote through.
+/// </summary>
+public interface IInboxSettlementStore
+{
+    /// <summary>Stages only. NEVER calls SaveChangesAsync — the handler's UoW owns the boundary.</summary>
+    ValueTask<bool> StageProcessedAsync(
+        InboxMessageKey key, Guid claimToken, CancellationToken ct = default);
+
+    /// <summary>True when the handler committed nothing, so the mark needs a deferred write.</summary>
+    bool IsMarkUncommitted(InboxMessageKey key);
 
     /// <summary>
-    /// Acquires a processing lease. Returns plain ValueTask — throws on failure
-    /// (e.g. database error). This is a non-optional precondition: a failure here
-    /// means the inbox row is in an inconsistent state and must not be silently swallowed.
+    /// Whether an exception from the handler's commit is this processor's lease being lost.
+    /// Structural — which entity failed — never a guess at the message. It lives on the store
+    /// because only the implementation knows its provider's exception types, which is what keeps
+    /// MicroKit.Messaging free of any EF Core reference.
     /// </summary>
-    ValueTask MarkProcessingAsync(
-        MessageId messageId, string consumerType, DateTimeOffset lockUntil,
-        CancellationToken ct = default);
+    bool IsLeaseLost(Exception exception);
+}
 
-    /// <summary>Marks message as successfully processed.</summary>
-    ValueTask<Result> MarkProcessedAsync(
-        MessageId messageId, string consumerType, CancellationToken ct = default);
+/// <summary>Dead-letter inspection and requeueing. Operator tooling only.</summary>
+public interface IInboxAdminStore
+{
+    ValueTask<IReadOnlyList<InboxMessage>> GetDeadLetteredAsync(
+        int batchSize, string? tenantId = null, CancellationToken ct = default);
 
-    /// <summary>Marks message as failed and increments retry count.</summary>
-    ValueTask<Result> MarkFailedAsync(
-        MessageId messageId, string consumerType, string errorMessage, CancellationToken ct = default);
+    /// <summary>Returns true only if a row was actually requeued — never unconditional success.</summary>
+    ValueTask<bool> RequeueAsync(InboxMessageKey key, CancellationToken ct = default);
+}
+
+/// <summary>Retention. The inbox cleanup worker only.</summary>
+public interface IInboxRetentionStore
+{
+    ValueTask<int> DeleteProcessedAsync(
+        DateTimeOffset olderThan, string? tenantId = null, CancellationToken ct = default);
 }
 ```
 
----
+### Why the inbox is NOT a mirror of the outbox
+
+An outbox may widen its crash window from one message to one batch: that widens only
+*duplication*, and the inbox deduplicates downstream. For the inbox there is no downstream — the
+inbox **is** the deduplication. A crash between a handler returning and its row being marked
+reruns the handler, with its business side effects. Batching that settlement would turn one
+possible replay into N.
+
+| | Scope | Rationale |
+|---|---|---|
+| Claim | batch-scoped | Cross-tenant reservation, ADR-MSG-002 preserved |
+| Settle success | per-message scope | Joins the handler's transaction — the replay window closes |
+| Settle failures and releases | batch-scoped | A failed handler rolled back; there is nothing to join |
+
+`StageProcessedAsync` therefore uses the tracked change pipeline rather than `ExecuteUpdateAsync`,
+**precisely because it must not execute immediately**.
+
+> **Guarantee, stated plainly rather than hidden:** with a handler that writes through the scope's
+> `DbContext`, inbox processing is **transactionally atomic** — mark and side effects commit
+> together or not at all. It is NOT exactly-once in general: a handler that calls an external
+> endpoint and then rolls back calls it again on replay. A handler that commits no unit of work at
+> all is **detected and reported**, not degraded silently.
+
+### The claim token does two jobs
+
+1. **Fencing** — every write filters on it, so a processor whose lease expired matches zero rows
+   instead of overwriting its successor.
+2. **Settled marker** — a committed handler transaction leaves it null, so every deferred write for
+   that row (including a `Released` issued during shutdown) filters to zero rows and becomes a
+   no-op. Nothing has to check for that case; it is structurally impossible.
+
+> ⚠ Job 1 works only because **`ClaimToken` is mapped as an EF concurrency token**
+> (`InboxMessageConfiguration`). Without it the `UPDATE` that `SaveChanges` emits carries the
+> primary key alone, ownership is checked at read time only, and the lost update returns. Removing
+> that line breaks no test that does not exercise concurrency — treat it as part of the contract,
+> and note it is pinned by `PostgreSql/InboxLeaseExpiryTests`.
+
+### Inbox failure classification
+
+| Kind | Raised for | Effect on this row | Effect on the batch |
+|---|---|---|---|
+| **Permanent** (`InboxPayloadException`) | unknown consumer, unreadable payload | dead-letter **immediately** | continues |
+| **Transient** (anything unrecognised) | — | retry, full-jitter back-off | continues |
+| **Dependency** (`InboxDependencyUnavailableException`) | downstream service unreachable | **released**, no retry spent | abandoned |
+| **Configuration** (`InboxConfigurationException`) | handler or settlement store not registered | released, no retry spent | abandoned, **worker stops** |
+| **Lease lost** | expired mid-handler | untouched, owned elsewhere | continues |
+
+> ⚠ **Never throw `InboxPayloadException` for** a timeout, a refused connection, an HTTP 503, a
+> database timeout or a deadlock. Only proven permanence dead-letters; everything unrecognised
+> stays transient. A library that guesses permanence wrongly loses messages.
+
+### Inbox retention — not housekeeping
+
+`InboxRetentionWorker` deletes `Processed` rows older than `RetentionDays` across every tenant
+(`tenantId: null`). **`RetentionDays` defaults to 30, not the outbox's 7, and harmonising the two
+would be a defect.** On the outbox, deleting early loses history; on the inbox it loses the
+deduplication guarantee, because the table only deduplicates messages it still holds. The window
+must exceed the maximum plausible redelivery delay of every upstream transport.
 
 ## Batch Processing Conventions
 

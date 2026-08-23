@@ -52,7 +52,8 @@ MicroKit.Messaging/
 ├── src/
 │   ├── MicroKit.Messaging.Abstractions/        ← IIntegrationEvent, IMessagePublisher,
 │   │                                              IMessageHandler<T>, IOutboxWriter,
-│   │                                              IOutboxProcessorStore, IInboxStore,
+│   │                                              IOutboxProcessorStore, IInboxWriter,
+│   │                                              IInboxProcessorStore, IInboxSettlementStore,
 │   │                                              OutboxMessage (sealed class), InboxMessage (sealed class),
 │   │                                              MessageEnvelope<T> (sealed record)
 │   ├── MicroKit.Messaging/                     ← OutboxProcessor, InboxProcessor,
@@ -153,8 +154,16 @@ IOutboxProcessorStore              // ClaimBatchAsync (atomic batch claim + owne
                                    //   ApplyOutcomesAsync (one settlement per batch) — processor only
 IOutboxAdminStore                  // GetDeadLetteredAsync, RequeueAsync — operator tooling only
 IOutboxRetentionStore              // DeleteProcessedAsync — the retention worker only
-IInboxStore                        // ExistsAsync, AddAsync, GetPendingAsync, MarkProcessingAsync,
-                                   //   MarkProcessedAsync, MarkFailedAsync
+IInboxWriter                       // ExistsAsync + AddAsync — ingestion only. AddAsync returns
+                                   //   InboxWriteResult (Added / AlreadyPresent); a redelivery is
+                                   //   reported, never thrown (ADR-MSG-017)
+IInboxProcessorStore               // ClaimBatchAsync (atomic batch claim + ownership token),
+                                   //   ApplyOutcomesAsync — the drain processor only
+IInboxSettlementStore              // StageProcessedAsync + IsMarkUncommitted + IsLeaseLost —
+                                   //   resolved from the PER-MESSAGE scope so the processed mark
+                                   //   commits in the handler's own transaction
+IInboxAdminStore                   // GetDeadLetteredAsync, RequeueAsync — operator tooling only
+IInboxRetentionStore               // DeleteProcessedAsync — the inbox retention worker only
 ```
 
 ### Outbox / Inbox messages
@@ -173,26 +182,43 @@ MessageEnvelope<T>                 // sealed record — wraps T with metadata (M
 2. **`IOutboxWriter` and `IOutboxProcessorStore` live in `Messaging.Abstractions`** — never in `Persistence.Abstractions`
 3. **Tenant-aware mandatory** — `TenantId` on `OutboxMessage` and `InboxMessage` — never null
 4. **Outbox states** — `Pending → Processing → Published` or `Failed+DeadLettered=true`; **`Failed` always means terminal** (DeadLettered=true)
-5. **Inbox dedup key** = `(MessageId + ConsumerType)` — compound PK unique constraint is the real guard
+5. **Inbox dedup key** = `(MessageId + ConsumerType)` — a **unique index** is the real guard, and
+   the sole authority. The primary key is the `RowId` surrogate (ADR-MSG-017): a compound-key
+   claim filters an `UPDATE` with two `Contains` and selects the CROSS PRODUCT of both lists,
+   which claims rows nobody chose and breaks the `batchSize` bound. A redelivery is reported
+   through `InboxWriteResult.AlreadyPresent`, never thrown
 6. **No silent success when publisher is null** — throw `InvalidOperationException`, not fake success
 7. **Background processors never use `IHttpContextAccessor`** — `TenantId` read from `OutboxMessage`/`InboxMessage` only
 8. **`sealed class`** for EF Core entities (`OutboxMessage`, `InboxMessage`) | **`sealed record`** for VOs (`MessageId`, `CorrelationId`, `CausationId`, options) | **`sealed class`** for processors/handlers/publishers
 9. **`ValueTask<T>`** for all async methods | **`ConfigureAwait(false)`** throughout lib code
-   **Exception (ADR-MSG-014, narrowed by ADR-MSG-015):** `IInboxCoordinator.ExecuteAsync` and
-   `IInboxProcessor.ProcessBatchAsync` return `Task` — BackgroundService chain compatibility.
-   The two OUTBOX seams no longer take the exception: `IOutboxCoordinator.ExecuteAsync` and
-   `IOutboxProcessor.ProcessBatchAsync` return `ValueTask<OutboxBatchResult>` (ADR-MSG-015).
+   **The ADR-MSG-014 exception is gone (ADR-MSG-015, then ADR-MSG-017).** All four seams now
+   return a batch result: `IOutboxCoordinator.ExecuteAsync` / `IOutboxProcessor.ProcessBatchAsync`
+   return `ValueTask<OutboxBatchResult>`, and `IInboxCoordinator.ExecuteAsync` /
+   `IInboxProcessor.ProcessBatchAsync` return `ValueTask<InboxBatchResult>`. `BackgroundService`
+   overrides still return `Task`, which is the framework's signature, not ours.
 10. **`CancellationToken ct = default`** always last parameter
 11. **`Console.WriteLine` forbidden** → `ILogger<T>`
 12. **No inline `Version=`** on `PackageReference` — CPM via root `Directory.Packages.props`
 13. **XML docs on all public members** in `src/` projects
 14. **`MediatR.Contracts` forbidden everywhere** — in all packages, production and test, **except the `MicroKit.Messaging.MediatR` glue** (ADR-MSG-009 carve-out: the glue bridges domain-event notifications onto the outbox via `IPublisher.Publish`)
 15. **`FluentAssertions` forbidden** — use Shouldly (MIT)
-16. **Scope-per-message mandatory** in `OutboxProcessor` and `InboxProcessor` — never share one scope across a batch
+16. **Scope-per-message mandatory** in `OutboxProcessor` and `InboxProcessor` — never share one
+    scope across a batch. On the inbox this is load-bearing twice over: the per-message scope
+    is also what makes `IInboxSettlementStore` resolve against the same `DbContext` the
+    handler writes through, so the processed mark commits in the handler's own transaction
 17. **The claim must be atomic** — `ClaimBatchAsync` stamps candidates with a single `UPDATE WHERE`
     via `ExecuteUpdateAsync`, replaying the eligibility predicate inside the UPDATE; SELECT+mutate+SaveChanges
     is forbidden. Every terminal write additionally filters on `ClaimToken`, so a processor whose lease
     expired mid-dispatch matches zero rows instead of overwriting the processor that took its messages over.
+
+18. **The inbox claim is the same shape, with one addition that is not optional.** `ClaimBatchAsync`
+    stamps candidates selected by their **single-column `RowId`**, replaying the eligibility
+    predicate inside the `UPDATE`; every deferred write filters on `ClaimToken`. On top of that,
+    `ClaimToken` is mapped as an **EF concurrency token**, which is what makes the staged
+    `StageProcessedAsync` mark safe: without it the `UPDATE` that `SaveChanges` emits carries the
+    primary key alone, ownership is checked at read time only, and the lost update the token exists
+    to prevent comes straight back. Removing that mapping breaks no test that does not exercise
+    concurrency (ADR-MSG-017).
 
 ---
 
@@ -286,7 +312,7 @@ All v1 packages share one version per release.
 - **ADR-MSG-011:** `IOutboxWriter.AddBatchAsync` ratified — batch write optimization for `DomainEventsDispatcher` P4 (single EF Core `AddRange` call). `AddAsync` kept for single-message paths.
 - **ADR-MSG-012:** `DomainEventDispatchBehavior` SUPERSEDED — deleted in favour of `TransactionBehavior` (order 700) as the dispatch+commit owner.
 - **ADR-MSG-013:** `DomainEventsCascadeNotificationPublisher` replaces `ForeachAwaitPublisher` — dispatches cascade domain events once after all notification handlers complete.
-- **ADR-MSG-014:** `IOutboxCoordinator`, `IInboxCoordinator`, `IOutboxProcessor`, `IInboxProcessor` return `Task` (not `ValueTask`) — BackgroundService chain symmetry; no allocation benefit in polling loops. **Superseded in part by ADR-MSG-015** — the two OUTBOX seams now return `ValueTask<OutboxBatchResult>`; the two inbox seams still return `Task`.
+- **ADR-MSG-014:** `IOutboxCoordinator`, `IInboxCoordinator`, `IOutboxProcessor`, `IInboxProcessor` return `Task` (not `ValueTask`) — BackgroundService chain symmetry; no allocation benefit in polling loops. **Fully superseded as a return-type mandate** — by ADR-MSG-015 for the two OUTBOX seams and by ADR-MSG-017 for the two INBOX seams. All four now return `ValueTask<T>` with a batch result.
 - **ADR-MEDIATR-014 / -015 (MicroKit.MediatR, implemented — this module is the other half):** the
   glue contributes an `IDomainEventsSink` to the single core dispatcher instead of registering a
   rival one, so registration order between the two packages no longer decides correctness.
@@ -294,7 +320,8 @@ All v1 packages share one version per release.
   `Add{Provider}Transport()` shape stays reserved for brokers), the method is idempotent, and
   `AddInProcessTransport()` now uses `TryAdd` so a later transport registration cannot silently
   displace the `IOutboxDispatcher` decorator. Requires MicroKit.MediatR from the same release.
-- **ADR-MSG-015:** `IOutboxCoordinator.ExecuteAsync` and `IOutboxProcessor.ProcessBatchAsync` return `ValueTask<OutboxBatchResult>` — the batch now produces a result the worker needs to adapt its cadence, and ADR-MSG-014's `.AsTask()` rationale was factually wrong. The inbox asymmetry is recorded, dated, and expected to be closed by the inbox lot.
+- **ADR-MSG-015:** `IOutboxCoordinator.ExecuteAsync` and `IOutboxProcessor.ProcessBatchAsync` return `ValueTask<OutboxBatchResult>` — the batch now produces a result the worker needs to adapt its cadence, and ADR-MSG-014's `.AsTask()` rationale was factually wrong. The inbox asymmetry it recorded was closed by ADR-MSG-017.
+- **ADR-MSG-017:** the inbox rewrite. Atomic `ClaimBatchAsync` + token-fenced `ApplyOutcomesAsync` replace the per-message lease; the primary key moves to a `RowId` surrogate with the compound key surviving as the unique dedup index (a compound-key claim selected a CROSS PRODUCT and could exceed `batchSize` several times over); **success settles inside the handler's own transaction** via `IInboxSettlementStore`, which is why the inbox is NOT a mirror of the outbox; `ClaimToken` is an EF concurrency token, without which the ownership mechanism is decorative; `IInboxWriter.AddAsync` returns `InboxWriteResult` instead of throwing on a redelivery — the defect that dead-lettered correctly delivered messages. Closes the inbox half of ADR-MSG-014.
 
 ---
 

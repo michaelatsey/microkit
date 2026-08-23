@@ -10,7 +10,7 @@ namespace MicroKit.Messaging.Dispatch;
 /// <remarks>
 /// This class is registered as <strong>scoped</strong> (not singleton) because it
 /// depends on <see cref="IMessagePublisher"/> (<c>InProcessMessagePublisher</c>), which
-/// is itself scoped due to its <see cref="IInboxStore"/> dependency. Both are resolved
+/// is itself scoped due to its <see cref="IInboxWriter"/> dependency. Both are resolved
 /// from the per-message execution scope created by <c>OutboxProcessor</c>.
 /// </remarks>
 internal sealed class InProcessIntegrationDispatcher : IOutboxDispatcher
@@ -51,8 +51,17 @@ internal sealed class InProcessIntegrationDispatcher : IOutboxDispatcher
                 "as an IIntegrationEvent. Ensure the event type is resolvable in the current assembly " +
                 "context and implements IIntegrationEvent.");
 
-        // Anything the publisher throws stays untyped, and therefore transient. A duplicate
-        // inbox row surfaces here as a DbUpdateException and must keep being retried.
+        // Anything the publisher throws stays untyped, and therefore transient.
+        //
+        // A redelivery no longer reaches here at all: IInboxWriter.AddAsync reports an
+        // already-recorded row through its return value and the publisher treats it as a
+        // successful skip. It used to surface as a DbUpdateException, be classified transient,
+        // and retry into the same duplicate until the message dead-lettered — a message that had
+        // been delivered correctly on the first attempt.
+        //
+        // Still open (issue #89): when an inbox ingestion fails for real, this dispatcher has no
+        // way to tell permanent from transient and defaults to transient. Removing the most
+        // frequent cause is not the same as fixing the classification.
         await _publisher.PublishAsync(evt, ct).ConfigureAwait(false);
     }
 }

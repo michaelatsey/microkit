@@ -137,18 +137,37 @@ picks the row up on its next poll and publishes it; `ProjectOrderHandler` runs t
 ## State
 
 **Stable.** The outbox: atomic batch claim with an ownership token, buffered outcomes settled in one
-write, full-jitter retry, dead-lettering, and the retention worker. The EF Core stores. The
-in-process transport. The MicroKit.MediatR glue and the domain-event → notification → outbox path.
+write, full-jitter retry, dead-lettering, and the retention worker. **The inbox: the same atomic
+claim, the dedup gate actually implemented, and success settled inside the handler's own
+transaction.** The EF Core stores. The in-process transport. The MicroKit.MediatR glue and the
+domain-event → notification → outbox path.
+
+### What the inbox guarantees
+
+**Transactionally atomic processing for database-backed handlers.** The processed mark and any
+database side effects your handler writes through the execution scope's `DbContext` commit together
+or not at all — the mark is staged into your unit of work, not written after it.
+
+It is **not** exactly-once in general. A handler that calls an external endpoint and then rolls back
+calls it again on replay: database effects happen effectively once, external effects at least once.
+A handler that commits no unit of work at all is **detected and reported**, not degraded silently.
+
+`LeaseDuration` is the setting that matters: it must comfortably exceed your worst-case handler
+duration. `InboxBatchResult.LeasesLost` is the signal that it does not — without that counter, a
+lease set too short is invisible, and the system stays correct while quietly doing less work than it
+appears to.
+
+**Inbox retention is not housekeeping.** `RetentionDays` defaults to 30, deliberately unlike the
+outbox's 7: the table only deduplicates messages it still holds, so the window must exceed the
+maximum plausible redelivery delay of every upstream transport. Deleting too eagerly reopens the
+door to reprocessing.
 
 **Still moving.**
-- **The inbox is being rewritten next.** It still uses the per-message lease and the deterministic
-  back-off the outbox has left behind, its options callback is a no-op (`InboxProcessorOptions` has
-  `init`-only accessors), and the dedup gate documented on `IInboxStore` is not implemented — a
-  redelivered message currently fails its duplicate insert and burns retries. Treat the inbox as
-  preview.
 - **Broker providers** (RabbitMQ, Azure Service Bus, Kafka) are scaffolded but unimplemented — v2.
-- **Schema ownership.** There is no published SQL for the outbox/inbox tables; the only definition is
-  the EF Core entity configuration. If you own your own DDL, you are reverse-engineering it.
+- **Schema ownership.** There is still no published canonical SQL for the outbox and inbox tables;
+  the only full definition is the EF Core entity configuration, so a consumer who owns their own DDL
+  is reverse-engineering it. The CHANGELOG publishes the *migration* for the inbox claim rewrite
+  (including the primary-key move, which is not optional) — that is a step, not the fix.
 - Domain events raised by a notification handler are staged but never flushed, so cascade events are
   currently lost. Tracked; do not rely on cascade dispatch.
 

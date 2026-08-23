@@ -23,7 +23,7 @@ public sealed class MessagingMediatRRegistrationTests
         // the store the in-process publisher needs, and the logger the decorator needs.
         services.AddSingleton(Substitute.For<IDomainEventNotificationFactory>());
         services.AddScoped(_ => Substitute.For<IOutboxWriter>());
-        services.AddScoped(_ => Substitute.For<IInboxStore>());
+        services.AddScoped(_ => Substitute.For<IInboxWriter>());
         services.AddSingleton(Substitute.For<IPublisher>());
         // Open generic, not one closed ILogger<T> per activated type: AddMicroKitMessaging and the
         // transports between them require six of these and nothing registers logging

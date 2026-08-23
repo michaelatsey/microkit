@@ -8,12 +8,14 @@ Invoke manually via: `dotnet test modules/MicroKit.Messaging/tests/MicroKit.Mess
 ### 1. IOutboxWriter / IOutboxProcessorStore not in Persistence
 
 ```bash
-grep -rn "IOutboxWriter\|IOutboxProcessorStore\|IInboxStore" \
+grep -rn "IOutboxWriter\|IOutboxProcessorStore\|IInboxWriter\|IInboxProcessorStore\|IInboxSettlementStore" \
   modules/MicroKit.Persistence/ --include="*.cs" --include="*.csproj"
 ```
 
-Fail if any match found. `IOutboxWriter`, `IOutboxProcessorStore`, and `IInboxStore` must live in
+Fail if any match found. The outbox and inbox store contracts must live in
 `MicroKit.Messaging.Abstractions` — never in `MicroKit.Persistence.Abstractions`.
+`IInboxStore` was split by ADR-MSG-017 and no longer exists; the grep names its successors so
+the check keeps guarding something rather than passing forever on a type nobody can write.
 
 ### 2. IIntegrationEvent used (not INotification)
 

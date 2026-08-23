@@ -22,7 +22,8 @@ public sealed class DockerRequiredFactAttribute : FactAttribute
         if (!DockerEndpoint.IsAvailable)
         {
             Skip = "Docker is not available — skipping the PostgreSQL suite. " +
-                   "Start Docker to run the outbox concurrency tests against a real database.";
+                   "Start Docker to run the outbox and inbox concurrency tests against a real " +
+                   "database.";
         }
     }
 }

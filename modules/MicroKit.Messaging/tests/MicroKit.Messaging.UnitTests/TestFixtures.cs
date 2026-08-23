@@ -104,3 +104,103 @@ internal static class OutboxFixtures
     internal static OutboxClaim Claim(params OutboxMessage[] messages)
         => new(Guid.NewGuid(), messages);
 }
+
+/// <summary>Builders for inbox rows and claims, so tests state only what they care about.</summary>
+internal static class InboxFixtures
+{
+    internal const string DefaultEventType = "MicroKit.Test.TestEvent, MicroKit.Test";
+
+    internal static InboxMessage Message(
+        MessageId? messageId = null,
+        string consumerType = "MicroKit.Test.TestHandler, MicroKit.Test",
+        int retryCount = 0,
+        string eventType = DefaultEventType,
+        string payload = "{}",
+        string? tenantId = "tenant-a")
+        => new()
+        {
+            RowId = Guid.NewGuid(),
+            MessageId = messageId ?? MessageId.New(),
+            ConsumerType = consumerType,
+            TenantId = tenantId,
+            EventType = eventType,
+            Payload = payload,
+            Status = InboxMessageStatus.Processing,
+            RetryCount = retryCount,
+            ReceivedAtUtc = DateTimeOffset.UnixEpoch,
+        };
+
+    internal static InboxClaim Claim(params InboxMessage[] messages)
+        => new(Guid.NewGuid(), messages);
+
+    internal static InboxMessageKey KeyOf(InboxMessage message)
+        => new(message.MessageId, message.ConsumerType);
+}
+
+/// <summary>
+/// An <see cref="IInboxSettlementStore"/> whose staging outcome and commit behaviour are
+/// scripted, so the processor's branches can be driven without a database.
+/// </summary>
+/// <remarks>
+/// The real store stages a tracked change that the handler's unit of work commits. There is no
+/// unit of work here, so the two questions the processor asks — "do I still own this row?" and
+/// "did anything commit the mark?" — are answered directly.
+/// </remarks>
+internal sealed class ScriptedInboxSettlementStore : IInboxSettlementStore
+{
+    /// <summary>Gets or sets what <see cref="StageProcessedAsync"/> returns.</summary>
+    public bool Owned { get; set; } = true;
+
+    /// <summary>Gets or sets what <see cref="IsMarkUncommitted"/> returns.</summary>
+    public bool MarkUncommitted { get; set; }
+
+    /// <summary>Gets or sets the predicate deciding whether an exception is a lost lease.</summary>
+    public Func<Exception, bool> LeaseLost { get; set; } = _ => false;
+
+    /// <summary>Gets the keys staged, in order.</summary>
+    public List<InboxMessageKey> Staged { get; } = [];
+
+    public ValueTask<bool> StageProcessedAsync(
+        InboxMessageKey key, Guid claimToken, CancellationToken ct = default)
+    {
+        Staged.Add(key);
+        return ValueTask.FromResult(Owned);
+    }
+
+    public bool IsMarkUncommitted(InboxMessageKey key) => MarkUncommitted;
+
+    public bool IsLeaseLost(Exception exception) => LeaseLost(exception);
+}
+
+/// <summary>A handler that records invocations and can be scripted to throw.</summary>
+internal sealed class RecordingInboxHandler : IMessageHandler<InboxTestEvent>
+{
+    private int _invocationCount;
+
+    public int InvocationCount => _invocationCount;
+
+    /// <summary>Gets or sets the exception thrown on every invocation, if any.</summary>
+    public Exception? ThrowOnHandle { get; set; }
+
+    public ValueTask HandleAsync(InboxTestEvent evt, CancellationToken ct = default)
+    {
+        Interlocked.Increment(ref _invocationCount);
+
+        if (ThrowOnHandle is not null)
+        {
+            throw ThrowOnHandle;
+        }
+
+        return ValueTask.CompletedTask;
+    }
+}
+
+/// <summary>The integration event the inbox unit tests round-trip.</summary>
+internal sealed record InboxTestEvent(MessageId MessageId, string TenantId) : IIntegrationEvent
+{
+    public CorrelationId? CorrelationId => null;
+
+    public CausationId? CausationId => null;
+
+    public DateTimeOffset OccurredOnUtc { get; } = DateTimeOffset.UnixEpoch;
+}

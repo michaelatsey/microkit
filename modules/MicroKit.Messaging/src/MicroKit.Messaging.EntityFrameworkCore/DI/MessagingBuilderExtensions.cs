@@ -38,7 +38,26 @@ public static class MessagingBuilderExtensions
             sp => sp.GetRequiredService<EfOutboxStore<TContext>>());
         builder.Services.AddScoped<IOutboxRetentionStore>(
             sp => sp.GetRequiredService<EfOutboxStore<TContext>>());
-        builder.Services.AddScoped<IInboxStore, EfInboxStore<TContext>>();
+        // The inbox store follows the same shape as the outbox: the concrete type is registered
+        // once as scoped, and each interface resolves to that single instance, so one scope holds
+        // one store over one DbContext.
+        //
+        // That is also what makes settlement transactional, with no second registration needed.
+        // IInboxSettlementStore is resolved from the PER-MESSAGE execution scope, which is a
+        // fresh scope; the instance it yields therefore shares its TContext with the handler
+        // resolved from that same scope, and the staged mark commits in the handler's own
+        // transaction. Registering the store as anything other than scoped breaks that silently.
+        builder.Services.AddScoped<EfInboxStore<TContext>>();
+        builder.Services.AddScoped<IInboxWriter>(
+            sp => sp.GetRequiredService<EfInboxStore<TContext>>());
+        builder.Services.AddScoped<IInboxProcessorStore>(
+            sp => sp.GetRequiredService<EfInboxStore<TContext>>());
+        builder.Services.AddScoped<IInboxSettlementStore>(
+            sp => sp.GetRequiredService<EfInboxStore<TContext>>());
+        builder.Services.AddScoped<IInboxAdminStore>(
+            sp => sp.GetRequiredService<EfInboxStore<TContext>>());
+        builder.Services.AddScoped<IInboxRetentionStore>(
+            sp => sp.GetRequiredService<EfInboxStore<TContext>>());
         return builder;
     }
 }

@@ -21,7 +21,11 @@
 | `IOutboxProcessorStore` | claim + settlement for the background processor — `ClaimBatchAsync`, `ApplyOutcomesAsync`. The per-message lease API (`GetPendingAsync`, `AcquireLeaseAsync`, `MarkPublishedAsync`, `MarkFailedAsync`, `DeadLetterAsync`) was removed by the outbox claim rewrite |
 | `IOutboxAdminStore` | dead-letter inspection and requeue for operator tooling only — `GetDeadLetteredAsync`, `RequeueAsync` |
 | `IOutboxRetentionStore` | retention for the cleanup worker only — `DeleteProcessedAsync` |
-| `IInboxStore` | read/write access to the inbox table (dedup + processing state) |
+| `IInboxWriter` | inbox ingestion — `ExistsAsync`, `AddAsync`. `AddAsync` returns `InboxWriteResult`: a redelivery is reported through the return value, never thrown (ADR-MSG-017) |
+| `IInboxProcessorStore` | claim + deferred settlement for the drain processor — `ClaimBatchAsync`, `ApplyOutcomesAsync`. The per-message lease API (`GetPendingAsync`, `MarkProcessingAsync`, `MarkProcessedAsync`, `MarkFailedAsync`, `DeadLetterAsync`) was removed by the inbox claim rewrite |
+| `IInboxSettlementStore` | `StageProcessedAsync`, `IsMarkUncommitted`, `IsLeaseLost` — resolved from the **per-message** execution scope so the processed mark commits in the handler's own transaction. Stages only; never calls `SaveChangesAsync` |
+| `IInboxAdminStore` | dead-letter inspection and requeue for operator tooling only — `GetDeadLetteredAsync`, `RequeueAsync` |
+| `IInboxRetentionStore` | retention for the inbox cleanup worker only — `DeleteProcessedAsync` |
 | `IOutboxDispatcher` | the dispatch seam in Core — deserializes an `OutboxMessage` and routes it. **Replaced the former `MessageDispatcher`**, which no longer exists and must not be re-introduced (pinned by `Core_DoesNotContainTypeNamedMessageDispatcher`) |
 
 ---
@@ -51,10 +55,10 @@
 | `OutboxMessageStatus.Processing` | lease acquired, in-flight (`LockedUntilUtc > now`) |
 | `OutboxMessageStatus.Published` | confirmed delivery — terminal |
 | `OutboxMessageStatus.Failed` | **always terminal** — max retries exceeded, `DeadLettered=true`; never used for transient failures |
-| `InboxMessageStatus.Received` | received, not yet processed |
-| `InboxMessageStatus.Processing` | handler executing (lease held) |
+| `InboxMessageStatus.Received` | received, not yet processed. Reached from three places with three meanings — retried, released, or requeued — and only one costs a retry |
+| `InboxMessageStatus.Processing` | claimed; lease held until `LockedUntilUtc`, `ClaimToken` names the owner |
 | `InboxMessageStatus.Processed` | handler completed successfully — terminal |
-| `InboxMessageStatus.Failed` | handler failed, retry pending |
+| `InboxMessageStatus.Failed` | **always terminal** — permanently unprocessable or past `MaxRetries`, `DeadLettered=true` set simultaneously |
 
 > **`OutboxMessageStatus.Failed` = permanent, terminal.** Failed attempts reset to `Pending`
 > (not to `Failed`). The `Failed` status is only set by `DeadLetterAsync` when
@@ -69,7 +73,8 @@
 | `InProcess{Noun}` | `InProcessMessagePublisher` — in-process default |
 | `{Provider}{Noun}` | `RabbitMqMessagePublisher`, `AzureServiceBusPublisher` |
 | `Ef{Noun}` | `EfOutboxStore`, `EfInboxStore` — EF Core implementations |
-| `{Noun}Processor` | `OutboxProcessor`, `InboxProcessor` — background workers |
+| `{Noun}Processor` | `OutboxProcessor`, `InboxProcessor` — topology-agnostic batch engines |
+| `{Noun}Worker` | `OutboxWorker`, `InboxWorker`, `OutboxRetentionWorker`, `InboxRetentionWorker` — `BackgroundService` hosts. `internal sealed`; only `IServiceScopeFactory` is injected |
 | `{Noun}Dispatcher` | `InProcessIntegrationDispatcher`, `MediatROutboxDispatcher` — `IOutboxDispatcher` implementations, `internal sealed`. NOT `MessageDispatcher`: that type was eliminated in favour of the `IOutboxDispatcher` seam and its re-introduction is blocked by an architecture test |
 | `{Noun}Sink` | `OutboxDomainEventSink` — an `IDomainEventsSink` (MicroKit.MediatR.Abstractions) contributed to the core domain-event orchestrator. `internal sealed`, registered with `TryAddEnumerable` so the collection dedups on implementation type. A sink **contributes** to a sequence it does not own; a `{Noun}Dispatcher` **owns** one. Never register a sink as a rival dispatcher (ADR-MSG-016) |
 | `Fake{Noun}` | `FakeMessagePublisher` (Testing package only) |
@@ -98,7 +103,7 @@ public class OrderPlacedNotification { ... }        // ← Notification = Mediat
 | Pattern | Example |
 |---------|---------|
 | `AddMicroKitMessaging()` | on `IServiceCollection` — main registration entry point |
-| `AddEfCoreOutbox()` | on `MessagingBuilder` — wires `EfOutboxStore` (implements both `IOutboxWriter` + `IOutboxProcessorStore`) + `EfInboxStore` |
+| `AddEfCoreOutbox()` | on `MessagingBuilder` — wires `EfOutboxStore` and `EfInboxStore`. Each is registered **once as scoped by concrete type**, with every interface resolving to that instance through a factory lambda, so one scope holds one store over one `DbContext`. That is also what makes `IInboxSettlementStore` transactional: resolved from the per-message execution scope it necessarily shares its `TContext` with the handler resolved from the same scope. Registering either store as anything other than scoped breaks the guarantee silently. The name is now a misnomer — it wires the inbox too |
 | `AddInProcessTransport()` | on `MessagingBuilder` — wires `InProcessMessagePublisher` |
 | `Add{Provider}Transport()` | on `MessagingBuilder` — **broker providers ONLY** (e.g. `AddRabbitMqTransport()`). This shape is reserved: a method that does not wire a broker must not use it |
 | `AddMediatRDomainEvents()` | on `MessagingBuilder` — wires the MicroKit.MediatR glue, four registrations: contributes the outbox `IDomainEventsSink` (`TryAddEnumerable`), decorates `IOutboxDispatcher` with the notification router, replaces `INotificationPublisher` with the cascade publisher, and `TryAdd`s an `IMessageSerializer` default the decorator requires. **Not a transport** — it moves nothing between processes (ADR-MEDIATR-015, ADR-MSG-016) |

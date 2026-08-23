@@ -15,7 +15,8 @@
 
 ## MicroKit.Messaging.Testing Usage
 
-Always use the provided test doubles — never instantiate EF stores directly in unit tests.
+Always use the provided test doubles in UNIT tests — never instantiate EF stores there. Inbox
+store behaviour is asserted in the integration suite against a real provider instead.
 
 ```csharp
 // ✅ FakeMessagePublisher — records published messages for assertions
@@ -34,14 +35,12 @@ var pending = await outboxStore.GetPendingAsync(batchSize: 10, ct);
 pending.Count.ShouldBe(1);
 pending[0].TenantId.ShouldBe("tenant-abc"); // TenantId is on the row, not a filter parameter
 
-// ✅ InMemoryInboxStore — in-memory inbox for dedup tests
-var inboxStore = new InMemoryInboxStore();
-var alreadyProcessed = await inboxStore.ExistsAsync(messageId, consumerType, ct);
-alreadyProcessed.ShouldBeFalse();
+// ✅ Inbox ingestion returns a result — a redelivery is reported, never thrown (ADR-MSG-017)
+var result = await inboxWriter.AddAsync(inboxMessage, ct);
+result.ShouldBe(InboxWriteResult.Added);
 
-await inboxStore.AddAsync(inboxMessage, ct);
-var nowExists = await inboxStore.ExistsAsync(messageId, consumerType, ct);
-nowExists.ShouldBeTrue();
+var redelivered = await inboxWriter.AddAsync(Clone(inboxMessage), ct);
+redelivered.ShouldBe(InboxWriteResult.AlreadyPresent);   // the nominal path, not an error
 ```
 
 ---
@@ -51,11 +50,12 @@ nowExists.ShouldBeTrue();
 ### Unit Tests (`MicroKit.Messaging.UnitTests`)
 - `IMessagePublisher` dispatch logic (happy path, null publisher, cancellation)
 - `OutboxProcessor` state transitions (Pending → Processing → Published/Failed)
-- `InboxProcessor` dedup gate (ExistsAsync gate prevents double-processing)
+- `InboxProcessor` claim, settlement and failure classification (drives `FakeTimeProvider`)
 - `OutboxMessage` retry back-off formula verification
-- `InboxMessage` compound dedup key isolation
+- `InboxMessage` compound dedup key isolation (unique index; the PK is the `RowId` surrogate)
 - `MessageEnvelope<T>` CorrelationId/CausationId chain propagation
-- `IOutboxStore` / `IInboxStore` contracts via `InMemoryOutboxStore` / `InMemoryInboxStore`
+- Inbox claim/settlement contracts via `EfInboxStore` on SQLite (the claim carries no
+  provider-specific SQL, so the production path is what runs)
 
 ### Integration Tests (`MicroKit.Messaging.IntegrationTests`)
 - Full outbox → dispatch → inbox cycle with EF Core (SQLite in-memory)
@@ -96,13 +96,40 @@ AcquireLeaseAsync_WhenSameMessage_ReturnsFalseForSecondAcquirer  (unit — optim
 ProcessBatch_WhenTwoProcessorsConcurrent_EachMessageProcessedOnce  (lease isolation — requires real DB)
 ```
 
-### InboxProcessor / Dedup Gate
+### InboxProcessor (claim / settlement — ADR-MSG-017)
 ```
-ProcessMessage_WhenAlreadyProcessed_SkipsHandler
-ProcessMessage_WhenNotProcessed_InvokesHandler
-ProcessMessage_WhenHandlerThrows_MarksFailedAndRetains
-ProcessMessage_WhenSameMessageDifferentConsumer_ProcessesBoth  (compound key)
+ProcessBatch_WhenNothingClaimable_ReturnsEmptyAndSettlesNothing
+ProcessBatch_WhenHandlerCommitsTheStagedMark_WritesNoOutcome   (success settles itself)
+ProcessBatch_StagesTheMarkBeforeInvokingTheHandler
+ProcessBatch_WhenLeaseLostBeforeHandler_CountsItAndLeavesTheRowAlone
+ProcessBatch_WhenLeaseLostDuringHandler_CountsItAndConsumesNoRetry
+ProcessBatch_WhenADomainConflictIsNotALostLease_KeepsItsRetry
+ProcessBatch_WhenConsumerNotRegistered_DeadLettersOnFirstSight
+ProcessBatch_WhenPayloadDoesNotDeserialize_DeadLettersOnFirstSight
+ProcessBatch_WhenHandlerThrows_BelowMaxRetries_SchedulesARetry
+ProcessBatch_WhenHandlerThrows_AtMaxRetries_DeadLetters
+ProcessBatch_WhenHandlerCommitsNothing_WritesADeferredProcessedOutcome
+ProcessBatch_WhenHandlerCommitsThenThrows_CountsItProcessedAndDoesNotRetry
+ProcessBatch_WhenDependencyUnavailable_ReleasesTheRemainderWithoutRetries
+ProcessBatch_WhenSettlementStoreMissing_SettlesReleasedThenRethrows
+ProcessBatch_WhenCancelled_ReleasesEveryUnattemptedRow
+ComputeBackoffCeiling_FollowsTheExponentialCurve                (exact values, FixedRandom)
 ```
+
+### Inbox ingestion (the dedup gate)
+```
+First_delivery_inserts_the_row
+Redelivery_is_reported_as_already_present_and_does_not_throw
+Context_remains_usable_after_a_deduplicated_write
+A_duplicate_for_one_consumer_does_not_block_the_others
+A_non_duplicate_persistence_failure_still_throws                (NOT NULL, every provider)
+The_unique_index_is_what_rejects_the_duplicate
+```
+
+> `A_non_duplicate_persistence_failure_still_throws` uses a **NOT NULL** violation deliberately.
+> A max-length overflow is the obvious alternative and is wrong: SQLite does not enforce length
+> constraints, so the insert would succeed and the one test standing between the dedup fix and
+> silent data loss would not run on the provider the fast suite uses.
 
 ### IOutboxWriter + IOutboxProcessorStore (InMemoryOutboxStore)
 ```
@@ -118,13 +145,33 @@ MarkFailedAsync_ResetsStatusToPending_IncrementsRetryCount_SetsNextRetryAt
 DeadLetterAsync_SetStatusFailed_SetsDeadLetteredTrue
 ```
 
-### IInboxStore (InMemoryInboxStore)
+### Inbox stores (EfInboxStore, SQLite)
 ```
-ExistsAsync_WhenNotPresent_ReturnsFalse
-ExistsAsync_WhenPresent_ReturnsTrue
-AddAsync_WithSameMessageIdDifferentConsumer_StoresBothRows
-MarkProcessedAsync_UpdatesStatus
+ClaimBatchAsync_StampsStatusLeaseAndToken
+ClaimBatchAsync_RecoversAnExpiredLease
+ClaimBatchAsync_DoesNotStealALiveLease
+ClaimBatchAsync_NeverExceedsBatchSize                    (the cross-product bound)
+ClaimBatchAsync_TwoProcessorsNeverWinTheSameRow
+ApplyOutcomesAsync_WithTheOwningToken_WritesEveryDisposition
+ApplyOutcomesAsync_WithAStaleToken_WritesNothing         (the lost update)
+ApplyOutcomesAsync_DoesNotTouchASiblingConsumersRow
+StageProcessedAsync_StagesWithoutCommitting
+StageProcessedAsync_WithAStaleToken_ReturnsFalse
+GetDeadLetteredAsync_WithNullTenant_MatchesRowsThatHaveNoTenant
+DeleteProcessedAsync_WithNullTenant_DeletesRowsThatHaveNoTenant
 ```
+
+### Inbox — PostgreSQL only (`[DockerRequiredFact]`, `PostgreSqlSuite`)
+
+Two tests decide whether the design is correct, and neither can be replaced by reading code:
+```
+InboxLeaseExpiryTests.WhenTheLeaseExpiresMidHandler_TheLoserRollsBackEntirelyAndTheWinnerStands
+InboxClaimConcurrencyTests.ClaimBatchAsync_TwoProcessorsOverAFannedOutQueue_AreDisjointAndBounded
+```
+> The first fails if `ClaimToken` is not mapped as an EF concurrency token — verified by mutation,
+> not assumed. The second seeds rows sharing a `MessageId` across `ConsumerType` values and asserts
+> **neither claim exceeds `batchSize`**; that assertion is the one the cross-product bug failed,
+> and nothing else in the suite would have caught it.
 
 ### FakeMessagePublisher
 ```
@@ -196,7 +243,10 @@ public void AllAssemblies_ShouldNot_ReferenceMediatRContracts()
 1. **No `MediatR.Contracts`** in any test project `.csproj` — zero tolerance. (The glue's own test
    project, `MicroKit.Messaging.MediatR.UnitTests`, transitively references MediatR via the glue
    under test — that is the ADR-MSG-009 carve-out, not a violation.)
-2. **Fresh test double per test** — `FakeMessagePublisher`, `InMemoryOutboxStore`, `InMemoryInboxStore` never shared
+2. **Fresh test double per test** — `FakeMessagePublisher` and `InMemoryOutboxStore` never shared.
+   Inbox tests use a fresh isolated SQLite connection per test rather than an in-memory double:
+   the claim and the dedup gate are both database behaviour, and a hand-written double would
+   assert the behaviour it was written to have
 3. **`TenantId` always set** in test fixtures — never null or empty string
 4. **SQLite isolation** — integration tests: each `Task.Run` must use its own isolated connection
 5. **No `Thread.Sleep` in tests** — use `Task.Delay` with `CancellationToken` if timing matters
