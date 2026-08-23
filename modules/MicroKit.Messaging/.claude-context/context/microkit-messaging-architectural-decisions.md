@@ -551,3 +551,258 @@ ever be again.
 **Leave `AddInProcessTransport()` on plain `Add` and document the required call order.** Rejected:
 it trades a DI-ordering bug for a documentation-ordering bug, and the failure mode it leaves in
 place is silent.
+
+---
+
+## ADR-MSG-017: Inbox Claim, Settlement Inside the Handler Transaction, and Ingestion That Returns
+
+**Status:** Accepted
+**Date:** 2026-08-23
+**Supersedes (in part):** ADR-MSG-014 — its two remaining inbox return-type lines, which ADR-MSG-015 explicitly left to "the inbox lot".
+**Amends:** ADR-MSG-003 (the inbox delivery guarantee is narrowed, not replaced), ADR-MSG-006 (the inbox store splits the way the outbox store already did).
+
+### Context
+
+The inbox is the system's deduplication mechanism, and it did not deduplicate safely.
+
+`MarkProcessingAsync` carried no eligibility predicate and returned `void`: an unconditional
+write, not a lease. Two processors could both "acquire" the same row, both invoke the handler,
+and neither could tell. The three terminal writes filtered on the compound key alone, so a
+processor whose lease had expired overwrote the one that legitimately re-claimed the row, and all
+three returned `Result.Success()` regardless of affected rows. Handler resolution sat outside the
+`try`, so one unregistered handler killed the whole batch and stranded every lease until expiry.
+Two structurally permanent failures — an unregistered `ConsumerType`, a payload that will not
+deserialize — each burned the full retry budget on a verdict fixed at the first attempt. A
+downstream outage failed all N rows, wrote N failure rows, consumed N retry budgets, and repeated
+next tick.
+
+Worst, because it corrupted a path that was otherwise working: `AddAsync` reported its **nominal**
+outcome — "already present" — by throwing. Under at-least-once delivery a redelivery needs no
+failure at all; one expired lease after a crash produces it. Nothing caught the exception, so it
+reached `OutboxProcessor`, was classified a transient dispatch failure, and retried into the same
+duplicate until the message dead-lettered. A message delivered correctly on the first attempt was
+destroyed by the mechanism meant to protect it. The end-to-end harness recorded this as observed
+behaviour before the fix existed.
+
+### Decision
+
+1. **The claim replaces the per-message lease.** `ClaimBatchAsync` reserves up to `batchSize` rows
+   in one `UPDATE` that replays the eligibility predicate inside itself, stamping a lease and an
+   ownership token. `ApplyOutcomesAsync` settles the batch, and **every write filters on the
+   token**, so a processor whose lease expired matches zero rows instead of overwriting its
+   successor. Round trips per batch drop from `2N+1` to three, plus two only when something failed.
+
+2. **The primary key moves to a `RowId` surrogate; the compound key survives as a unique index.**
+   Not decoration. Filtering an `UPDATE` with two `Contains` over a compound key selects the cross
+   product of both lists rather than the candidate pairs: 20 candidates spanning 5 consumers could
+   claim up to 100 rows, so "at most `batchSize`" was not merely imprecise but violated. The
+   surrogate collapses the claim to one exact, bounded list — `WHERE "RowId" = ANY (@ids)`, one
+   bound array parameter, plan-cacheable at any batch size. The dedup gate is unchanged: the
+   unique index on `(MessageId, ConsumerType)` is still the sole authority.
+
+3. **Success settles inside the handler's own transaction; failures are batched.** This is the
+   decision the rest exists to serve, and it is why the inbox is **not** a mirror of the outbox.
+   An outbox may widen its crash window from one message to one batch, because that widens only
+   duplication and the inbox absorbs it downstream. For the inbox there is no downstream — the
+   inbox *is* the absorber. A crash between a handler returning and its row being marked reruns
+   the handler with its business side effects, so batching that settlement would turn one possible
+   replay into N. `IInboxSettlementStore.StageProcessedAsync` therefore uses the tracked change
+   pipeline rather than `ExecuteUpdateAsync`, precisely because it must **not** execute
+   immediately. A failed handler rolled back and has nothing to join, so failures batch freely.
+
+   **The staged read states `AsTracking()` explicitly, and that is load-bearing.** It is the one
+   query in `EfInboxStore` that requires tracking; the other four all say `AsNoTracking()`. A
+   consumer whose `DbContext` sets `UseQueryTrackingBehavior(QueryTrackingBehavior.NoTracking)` —
+   an ordinary setting on a read-heavy application, and this store runs on *their* context — would
+   otherwise get an untracked row whose mutations reach nothing. The guarantee must not depend on
+   a setting the library cannot control: the same reasoning that rejected `EntityFramework.Exceptions`
+   for the dedup gate.
+
+4. **`ClaimToken` is mapped as an EF concurrency token.** Filtering the read on the token proves
+   ownership at read time only; the `UPDATE` that `SaveChanges` emits later would carry the
+   primary key alone, and a lease that expired in between would be silently overwritten — exactly
+   the race the token exists to prevent. With the mapping, the token lands in the `WHERE` clause,
+   a lost lease surfaces as `DbUpdateConcurrencyException`, and the handler's whole transaction
+   rolls back — business side effects and mark together. Removing the mapping breaks no test that
+   does not exercise concurrency, which is why it is configured centrally and pinned by a
+   PostgreSQL test rather than left to consumers.
+
+5. **The token doubles as the "already settled" marker.** A committed handler transaction leaves
+   it null, so every deferred write for that row — including a `Released` issued while the host is
+   shutting down — filters to zero rows and becomes a no-op. Nothing has to check for that case;
+   it is structurally impossible. This is an invariant, not a happy accident.
+
+6. **Ingestion returns `InboxWriteResult` instead of throwing.** The signature change is not a
+   cost of the fix; it *is* the fix. A method whose expected result can only be expressed as an
+   exception has the wrong signature. `InProcessMessagePublisher` treats `AlreadyPresent` as a
+   successful skip and **continues to the next consumer** — that `continue` is the whole repair:
+   the publisher returns normally, so the outbox marks the message `Published` instead of retrying
+   it to death, and consumers after a duplicated one still get their row.
+
+7. **The duplicate is recognised by post-hoc verification, in the store.** After a failed insert
+   the row is queried: if it is there now, the gate held. That asks the question the decision
+   actually depends on — "is the message recorded?" — rather than the syntactic one a detector
+   answers, "was that error a unique violation?". It is a check *after* the insert, never a guard
+   before it, so the unique index remains the sole authority and there is no
+   time-of-check-to-time-of-use window. It lives in the store because the store owns the index;
+   catching it in Core would force a provider-neutral package to decode `SqlState`, and every
+   future ingestion path would repeat the catch.
+
+8. **Failures are classified, and only proven permanence dead-letters.** An unregistered consumer
+   and an unreadable payload raise `InboxPayloadException` and dead-letter on **first sight**.
+   `InboxDependencyUnavailableException` abandons the batch and releases the remainder as
+   `Released`, consuming no retry budget. `InboxConfigurationException` settles the batch — every
+   row released — and only then rethrows, so the worker stops without stranding a lease.
+   Everything unrecognised stays transient: a library that guesses permanence wrongly loses
+   messages.
+
+9. **Back-off gains full jitter, matching the outbox.** `Uniform(0, min(2^RetryCount s,
+   MaxRetryBackoff))`, computed by the processor rather than the store, with `TimeProvider` and
+   `Random` injected so the curve is asserted against exact values without a database.
+
+10. **`IsLeaseLost` lives on the settlement store.** A lost lease and an ordinary domain
+    concurrency conflict surface from the same `SaveChanges` as the same exception type. The
+    discrimination is structural — which entity failed — and is a persistence-technology question,
+    so it belongs to the implementation that knows the provider's exception types. Putting it
+    there is also what keeps `MicroKit.Messaging` free of any EF Core reference, which its
+    architecture tests enforce.
+
+### Scope of supersession
+
+Superseded — the two remaining lines of ADR-MSG-014's "Scope of exception":
+
+- `IInboxCoordinator.ExecuteAsync(CancellationToken)` → now `ValueTask<InboxBatchResult>`
+- `IInboxProcessor.ProcessBatchAsync(int, CancellationToken)` → now `ValueTask<InboxBatchResult>`
+
+ADR-MSG-014 now has no operative return-type mandate left: ADR-MSG-015 took the outbox pair, this
+takes the inbox pair, and the asymmetry ADR-MSG-015 recorded as dated debt is closed. Its body is
+left untouched, following the ADR-MSG-014 ← ADR-MSG-015 precedent rather than ADR-MSG-012's
+body-edit form; the pointer lives in the decisions index in `.claude/CLAUDE.md`.
+
+Untouched — everything else in ADR-MSG-014 and in ADR-MSG-002. The Worker / Coordinator / Processor
+decomposition, the shared-database default topology and the deferred per-tenant coordinator are
+unchanged, and `SharedDbInboxCoordinator` now has the architecture test guarding that seam that its
+outbox twin already had.
+
+### Consequences
+
+- **Delivery is transactionally atomic for database-backed handlers, and that phrasing is
+  deliberate.** The processed marker and any database side effects written through the scope's
+  `DbContext` commit together or not at all. It is **not** exactly-once in general: a handler that
+  calls an external endpoint and then rolls back calls it again on replay, so database effects
+  happen effectively once and external effects at least once. Stating this in consumer-facing docs
+  rather than hiding it is part of the decision.
+- **A handler that commits no unit of work is detected, not degraded silently.** The staged mark
+  would otherwise never persist, and the row would replay on every pass and eventually dead-letter
+  although every invocation succeeded. `IsMarkUncommitted` catches it after the handler returns,
+  the processor falls back to a deferred `Processed` outcome, and it warns that the transactional
+  guarantee did not apply for that row.
+- **A handler that commits and then throws is a post-commit fault: counted processed, not
+  retried.** The work is durable. Retrying would be wrong in principle and a no-op in practice —
+  the committed transaction cleared the token, so the retry write would match zero rows and emit a
+  misleading "lease expired" warning about a nominal path. This mirrors the rule the command
+  pipeline already applies.
+- **The scope-identity hazard is signalled, and this ADR should say which parts.** If the
+  settlement store and the handler resolve different `TContext` instances, the mark never rides
+  the handler's transaction. Three cases, and they are not equally visible:
+  - **`TContext` not registered `Scoped`** (e.g. `ServiceLifetime.Transient`), or a handler that
+    writes through a second `DbContext`: the staged entry stays `Modified` on the store's context,
+    `IsMarkUncommitted` returns true, and the processor emits `HandlerDidNotCommit` (event 2009,
+    Warning) plus a deferred `Processed` outcome. **Loud, and correct.**
+  - **The context defaults to `NoTracking`**: was **silent** — no entry existed, so
+    `IsMarkUncommitted` reported the mark committed, the batch reported `Processed`, and the row
+    replayed forever without incrementing `RetryCount`. Closed by the explicit `AsTracking()` in
+    Decision 3, and pinned by
+    `InboxSettlementGuaranteeTests.StageProcessedAsync_PersistsTheMark_WhenTheContextDefaultsToNoTracking`.
+  - **The staged mark discarded** (`ChangeTracker.Clear()` in a batch-processing handler): was
+    **silent** for the same reason. `IsMarkUncommitted` now treats an absent or detached entry as
+    *uncommitted* — absent means unknown, and unknown must fail toward a redundant deferred write
+    rather than toward a lost mark. Pinned by
+    `IsMarkUncommitted_ReportsUncommitted_WhenTheStagedMarkWasDiscarded`.
+
+  Both silent cases were found in review and confirmed by observation before being fixed. Stating
+  which hazards are handled matters: an ADR that only warns invites someone to re-fix a covered
+  case while an uncovered one goes unmentioned.
+- **The scope-identity guarantee is asserted against a composed container, not a comment.**
+  `InboxSettlementGuaranteeTests` resolves `IInboxSettlementStore` and the handler's `TContext`
+  from a real `IExecutionScope` and proves the handler's own `SaveChanges` persists the staged
+  mark. Every other inbox test builds the store directly with an explicit context, which proves
+  store behaviour and nothing about DI. The guarantee is a composition property, so it needed a
+  composition-level test — and that test is what would have caught the `NoTracking` defect.
+- **`InboxBatchResult.LeasesLost` is the operational signal for `LeaseDuration`,** the inbox's
+  most consequential setting. It must exceed the worst-case handler duration, and without the
+  counter a too-short lease is invisible: the system stays correct and quietly does less work than
+  it appears to.
+- **Two structural schema changes, not one.** The claim token *and* the primary key. A consumer who
+  applies only `claim_token` gets a schema the code cannot query. The migration is published in the
+  CHANGELOG with the unique index recreated **before** the old primary key is dropped, so the dedup
+  gate is never absent, and with the instruction to drain the queue first — rows sitting in
+  `Processing` when the key changes are the one case with no clean answer.
+- **`AddAsync` returning a value does NOT force callers to read it, and this ADR previously claimed
+  it did.** `await writer.AddAsync(message, ct);` compiles unchanged against
+  `ValueTask<InboxWriteResult>` — discarding the value of an awaited expression used as a statement
+  is legal C# and raises no diagnostic, even under `TreatWarningsAsErrors`. Verified by
+  compilation, not assumed. Only a caller that assigned the returned `ValueTask`, or converted it
+  with `.AsTask()`, breaks.
+  The signal is therefore preserved by **`InboxMetrics`**, not by the type system:
+  `microkit.inbox.messages.deduplicated` is recorded on the ingestion path regardless of what the
+  caller does with the result. The return value makes the outcome *expressible* and stops the
+  exception-as-nominal-path defect; it does not make reading it mandatory. A stronger guarantee
+  would need `[MustUseReturnValue]`-style analysis, which is not in scope here — and a release note
+  promising a protection that does not exist is worse than one that names the real mechanism.
+- **`BatchSize` 20 → 100 and `MaxRetries` 10 → 5 are behavioural changes,** not merely new
+  defaults. Both bind unchanged from existing configuration but halve the retry budget.
+- **A redelivery is quiet in MicroKit's logs and noisy in EF's.** The module logs it at `Debug` and
+  counts it; EF Core independently logs the rejected `INSERT` at `Error` before the store absorbs
+  it. The setting that would silence that lives on the consumer's `DbContext`, so a library cannot
+  set it. The harness asserts both halves rather than wishing the second away.
+- **Retention is deliberately asymmetric with the outbox's and must stay so.** 30 days against the
+  outbox's 7. On the outbox, deleting early loses history; on the inbox it loses the deduplication
+  guarantee, because the table only deduplicates messages it still holds. The window must exceed
+  the maximum plausible redelivery delay of every upstream transport.
+
+### Alternatives considered
+
+**`IMeterFactory` for `InboxMetrics`, as the design specified.** Rejected. It obliges every host —
+including every bare `ServiceCollection` test host, and the end-to-end harness — to call
+`services.AddMetrics()` or fail at resolution, and it pulls `Microsoft.Extensions.Diagnostics` into
+Central Package Management on both sides. The only thing it buys is per-container meter isolation,
+which nothing in this repository exercises. `InboxMetrics` owns its `Meter` instead; subscribing is
+unaffected, since OpenTelemetry picks it up with `AddMeter(InboxMetrics.MeterName)` either way.
+**If per-container isolation is ever needed, switching back is a one-line change in `InboxMetrics`
+plus `AddMetrics()` in the consumer's composition root** — this was weighed, not overlooked.
+
+**Deterministic `2^n` back-off, as the design specified.** Rejected. Its stated rationale was
+symmetry with the outbox, and that had stopped being true: ADR-MSG-015's lot replaced the outbox's
+deterministic curve with full jitter precisely because several processor instances make the rows
+that fail together — which is what an outage produces — retry together, and keep doing so on every
+subsequent attempt. The design's own justification therefore argued for jitter.
+
+**A per-provider `SqlState` detector for the duplicate.** Rejected: it fails on a
+`DEFERRABLE INITIALLY DEFERRED` unique constraint, where the inner exception is not a provider
+exception at all, and it becomes dead code the day a PostgreSQL adapter uses
+`ON CONFLICT DO NOTHING`. It also would not have helped under an ambient transaction: it classifies
+the exception correctly and then returns into a transaction that is already dead.
+
+**The `EntityFramework.Exceptions` package.** Rejected: it activates through
+`UseExceptionProcessor` on the **consumer's** `DbContext`, which a library cannot configure, so a
+consumer who forgets it silently reproduces the defect. It remains a good fit for an application
+that owns its own `DbContext`; the constraint here is specific to being a library.
+
+**`FOR UPDATE SKIP LOCKED` for the claim.** Rejected, as for the outbox: a PostgreSQL locking
+clause in the provider-neutral EF Core package leaks a provider dependency and leaves the
+production claim path untestable under SQLite. The token achieves the guarantee portably, and the
+`READ COMMITTED` re-evaluation it relies on is demonstrated by the PostgreSQL suite rather than
+assumed.
+
+**OR-ed predicate pairs instead of a surrogate key.** Rejected: correct, but it builds a
+variable-length expression tree that defeats plan caching — a poor trade on the hottest write path
+in a library.
+
+**Classifying `CreateScopeAsync` failures as configuration errors.** Not taken. The gap is real,
+but per-tenant connection resolution can legitimately throw `InvalidOperationException`
+transiently, and misclassifying it would stop the worker on a network blip. Without a typed
+exception from `IExecutionScopeFactory` the two are indistinguishable, and guessing is worse than
+not guessing. The right repair is startup validation — assert at registration that
+`IInboxSettlementStore` and every registered handler type resolve — which is tracked, not silently
+dropped.

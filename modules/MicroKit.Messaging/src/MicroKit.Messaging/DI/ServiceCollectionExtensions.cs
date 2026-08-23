@@ -35,7 +35,11 @@ public static class ServiceCollectionExtensions
     /// store implementation.
     /// </description></item>
     /// <item><description>
-    /// <c>IInboxStore</c> — same requirement as above.
+    /// <c>IInboxWriter</c>, <c>IInboxProcessorStore</c>, <c>IInboxSettlementStore</c> and
+    /// <c>IInboxRetentionStore</c> — same requirement as above. <c>IInboxSettlementStore</c>
+    /// must resolve from the per-message execution scope against the same <c>DbContext</c> the
+    /// handler writes through, which is what lets the processed mark commit in the handler's own
+    /// transaction.
     /// </description></item>
     /// <item><description>
     /// <c>IMessageSerializer</c>, <c>IMessagePublisher</c>, <c>IOutboxDispatcher</c> — call
@@ -91,6 +95,15 @@ public static class ServiceCollectionExtensions
         services.AddScoped<IInboxProcessor, InboxProcessor>();
         services.AddScoped<IInboxCoordinator, SharedDbInboxCoordinator>();
         services.AddHostedService<InboxWorker>();
+
+        // Inbox retention. The window is deliberately longer than the outbox's and must stay
+        // that way: the inbox only deduplicates messages it still holds, so deleting early
+        // reopens reprocessing rather than merely losing history.
+        services.AddHostedService<InboxRetentionWorker>();
+
+        // Ingestion counters. Owns its Meter rather than taking IMeterFactory, so no host is
+        // obliged to call AddMetrics(); subscribe with AddMeter(InboxMetrics.MeterName).
+        services.TryAddSingleton<InboxMetrics>();
 
         return new MessagingBuilder(services, registry);
     }

@@ -132,6 +132,14 @@ dead-letter queue full of false failures.
 
 The dedup gate is the one thing that makes redelivery idempotent, and it is missing.
 
+**Status:** closed by the inbox claim rewrite (`feature/messaging/inbox-claim-rewrite`) as its
+*headline purpose*, not as a side effect. `IInboxWriter.AddAsync` now returns
+`InboxWriteResult.AlreadyPresent` instead of throwing, and `InProcessMessagePublisher` treats that
+as a successful skip and continues to the next consumer — so the outbox marks the message
+`Published`. The integration test that recorded this behaviour was **inverted, not deleted**: it is
+now `InboxRedeliveryTests.Redelivery_AfterInboxRowsWritten_IsDeduplicatedAndTheOutboxRowIsPublished`,
+and it is what stops the regression. See ADR-MSG-017.
+
 ---
 
 ## Finding #3 — cascade domain events are staged to the outbox but never flushed, and are silently lost
@@ -506,3 +514,368 @@ in for "this *effect* did not happen" and the effect travels through a different
 
 **Nothing here is being changed.** The count of genuine defects is three, all in the one file this
 lot was already rewriting.
+
+---
+
+# Findings — inbox claim rewrite (`feature/messaging/inbox-claim-rewrite`)
+
+Named for the branch rather than an ordinal: this lot is "L2" in the roadmap while `L2` above is
+already spent on the domain-event sinks, and a heading that means two different things is worse
+than no heading. Finding numbering continues unbroken.
+
+Same standing as everything above: **nothing here was fixed**, and each is recorded precisely
+because acting on it was out of scope for this lot.
+
+---
+
+## Finding #13 — retention deletes are unchunked in *both* workers, and the fix must land on both at once
+
+**Severity: medium in production, zero in test.** This supersedes Finding #10's framing, which was
+written when only the outbox had a retention worker and therefore described half the problem.
+
+`OutboxRetentionWorker` and now `InboxRetentionWorker` each issue one `ExecuteDeleteAsync` per pass
+with no chunking:
+
+```csharp
+await store.DeleteProcessedAsync(cutoff, tenantId: null, stoppingToken);
+```
+
+The **first** pass after an upgrade reaches a table that has never been cleaned, because
+`DeleteProcessedAsync` had no caller before its worker existed — true of the outbox at L1 and true
+of the inbox now. On a busy deployment that is a single `DELETE` over potentially millions of rows:
+one long transaction, a table-level lock escalation risk on SQL Server, and replication lag on
+PostgreSQL.
+
+**Scoped out by decision, not by oversight.** The real fix is a `RetentionBatchSize` option plus a
+chunked delete loop, and it has to land on **both** workers in the same change — `OutboxProcessorOptions`
+and `InboxProcessorOptions`, `OutboxRetentionWorker` and `InboxRetentionWorker` — or the asymmetry
+becomes the new defect. This lot could not do that without editing outbox files, and its
+"zero outbox files touched" guarantee was worth more than closing a known, bounded, operator-visible
+issue one side at a time.
+
+The inbox is the milder of the two in one respect and the sharper in another. Milder: its 30-day
+window plus the `Status == Processed` filter means the first pass reaches far less than the outbox's
+never-cleaned table. Sharper: on the outbox an over-eager delete loses history, while on the inbox
+it loses the deduplication guarantee outright — the table only deduplicates messages it still holds.
+
+**Operators upgrading a long-running deployment** should run one bounded manual cleanup before
+enabling either worker, or set `RetentionDays` high initially and walk it down.
+
+---
+
+## Finding #14 — `ReceivedAtUtc` is still stamped from the wall clock
+
+**Severity: low.**
+
+`InProcessMessagePublisher` sets `ReceivedAtUtc = DateTimeOffset.UtcNow` while everything around it
+moved to an injected `TimeProvider`: `InboxProcessor`, `InboxRetentionWorker` and
+`EfInboxStore<TContext>` all take one, and `AddMicroKitMessaging` already registers
+`TimeProvider.System` via `TryAddSingleton`, so the dependency is free.
+
+It matters more than a stray `UtcNow` usually would, because `ReceivedAtUtc` is the claim's ordering
+key — `ClaimBatchAsync` selects candidates `OrderBy(m => m.ReceivedAtUtc)`. Today no test asserts
+ingestion ordering, and the integration tests set the column directly, so nothing is untestable
+right now; the point is that it *would* be if such a test were wanted.
+
+**Not fixed, deliberately.** One fix, one problem: the design is silent on it, it is not one of the
+ten defects this lot set out to close, and changing a constructor signature on the ingestion path to
+tidy a clock reference is exactly the premature widening this repository's scope discipline exists
+to prevent.
+
+---
+
+## Finding #15 — `IOutboxCoordinator`'s XML doc now describes an inbox that no longer exists
+
+**Severity: low** (documentation, not runtime), **and it is a direct consequence of this lot.**
+
+`modules/MicroKit.Messaging/src/MicroKit.Messaging.Abstractions/IOutboxCoordinator.cs` says:
+
+> This supersedes the return-type mandate of ADR-MSG-014 for the outbox seam only; the inbox pair
+> still returns `Task` until the inbox lot restores the symmetry.
+
+The inbox lot has restored the symmetry. That sentence is now false: both inbox seams return
+`ValueTask<InboxBatchResult>`.
+
+**Not fixed, because the file is an outbox file** and this lot's scope guard was absolute — the
+user reaffirmed "zero outbox files touched" as a guarantee mid-implementation. Correcting one XML
+sentence would have been harmless in isolation and is exactly how an absolute guard erodes. The
+decisions index in `.claude/CLAUDE.md` carries the accurate pointer (ADR-MSG-014 fully superseded as
+a return-type mandate), so a reader following the ADR trail is not misled; only a reader of that one
+file is. One line, in whichever lot next touches the outbox.
+
+---
+
+## Finding #16 — EF Core logs every deduplicated insert at `Error`, and a library cannot silence it
+
+**Severity: low, but it will generate support questions.**
+
+The module reports a redelivery at `Debug` and counts it as
+`microkit.inbox.messages.deduplicated`, deliberately: under at-least-once delivery a redelivery is
+normal operation, and one incident produces a burst of them. Warning-level would drown the log and
+train whoever reads it to lower the level, losing the real warnings too.
+
+EF Core does not cooperate. The rejected `INSERT` is logged by
+`Microsoft.EntityFrameworkCore.Database.Command` and `Microsoft.EntityFrameworkCore.Update` at
+`Error`, with a full stack trace, *before* the store absorbs it. So a healthy deployment producing a
+steady trickle of redeliveries also produces a steady trickle of EF error logs about a condition
+that was handled correctly.
+
+The setting that would suppress it —
+`optionsBuilder.ConfigureWarnings(w => w.Log((RelationalEventId.CommandError, LogLevel.Debug)))` or
+similar — lives on the **consumer's** `DbContext`, which a library cannot configure. The same
+constraint that ruled out the `EntityFramework.Exceptions` package (ADR-MSG-017, alternatives) rules
+out fixing this from inside the module.
+
+**Recorded rather than wished away, and asserted rather than hidden:**
+`InboxRedeliveryTests` pins both halves — no warning from any `MicroKit.*` logger, and the
+warnings that *are* present all come from `Microsoft.EntityFrameworkCore.*`. If a future change
+makes the module itself noisy on the nominal path, that test fails.
+
+A consumer who finds the noise unacceptable can downgrade `RelationalEventId.CommandError` on the
+messaging `DbContext`. That belongs in consumer-facing documentation, which this lot did not add.
+
+---
+
+## Finding #17 — `AddEfCoreOutbox()` wires the inbox, and now wires six more registrations of it
+
+**Severity: low** (naming, not behaviour), **but the gap widened in this lot.**
+
+`MessagingBuilderExtensions.AddEfCoreOutbox<TContext>()` has always registered the inbox store as
+well as the outbox one. After this lot it registers `EfInboxStore<TContext>` plus five interface
+forwards — six of its eleven registrations are inbox — under a name that says outbox.
+
+The consequence is not cosmetic. Both inbox workers log
+*"Register `IInboxProcessorStore` (e.g. call `AddEfCoreOutbox()`)"* and
+*"Register it (e.g. call `AddEfCoreOutbox()`)"* on a missing registration, which reads as a typo to
+anyone who has not seen this file, and the obvious guess — `AddEfCoreInbox()` — does not exist.
+
+**Not fixed:** renaming it to `AddEfCoreMessaging()` with an `[Obsolete]` alias is a public API
+change on `MessagingBuilder`, which is api-reviewer territory and belongs in its own change rather
+than riding along with a rewrite. Both packages are `1.0.0-preview.*` with zero external consumers,
+so the rename could ship outright the way `AddMediatRTransport` → `AddMediatRDomainEvents` did.
+
+---
+
+## Finding #18 — EF Core's automatic savepoint makes the ingestion savepoint conditionally redundant
+
+**Severity: informational.** Verified against EF Core 10.0.9, not assumed.
+
+`EfInboxStore.AddAsync` creates an explicit savepoint before the insert when an ambient transaction
+is present, so that a duplicate can be unwound without poisoning the caller's transaction —
+necessary on PostgreSQL, where a constraint violation aborts the whole transaction and every later
+statement fails, *including the verification query in the catch block itself*.
+
+`DatabaseFacade.AutoSavepointsEnabled` defaults to `true`, and EF already creates and rolls back to
+an automatic savepoint around `SaveChanges` inside a manually-started transaction. In the default
+configuration the explicit savepoint is therefore belt and braces.
+
+It was **kept**, on purpose: `AutoSavepointsEnabled` is a consumer setting, and a correctness
+guarantee that holds only while a consumer leaves a flag alone is not a guarantee. The cost is one
+extra round trip per ingestion under an ambient transaction, which is not the common path. The
+interaction is documented on the method.
+
+Worth knowing for whoever revisits this: nesting is harmless — rolling back to the outer savepoint
+invalidates the inner one, which is ordinary SQL semantics.
+
+---
+
+## Finding #19 — the `MicroKit.Messaging.Testing` package is now further from existing
+
+**Severity: low.**
+
+`.claude/CLAUDE.md` and the naming and testing rules still describe a planned
+`MicroKit.Messaging.Testing` package containing `InMemoryOutboxStore`, `InMemoryInboxStore` and
+`FakeMessagePublisher`. The project does not exist, and the architecture tests carry a standing
+`NOTE` to add it to `AllAssemblies_HaveNoMediatRContractsDependency` when it does.
+
+This lot did not narrow that gap and slightly widened it: an `InMemoryInboxStore` would now have to
+implement five interfaces rather than one, and — more awkwardly — `IInboxSettlementStore` is
+defined by behaviour an in-memory double cannot honestly reproduce. `StageProcessedAsync` must stage
+into *the handler's unit of work*; there is no unit of work in memory to stage into. The inbox tests
+in this lot use a real isolated SQLite connection for exactly that reason.
+
+**Not fixed.** Whoever builds that package should decide deliberately whether the inbox belongs in
+it at all, rather than assuming symmetry with the outbox: a double that cannot reproduce the one
+guarantee the contract exists to provide would assert the behaviour it was written to have.
+
+---
+
+## Finding #20 — `_rowIdsByKey` re-derives in hidden state what the claim already carries, and a per-tenant coordinator strands every lease through a `continue`
+
+**Severity: low today, high the day a second topology exists.** Surfaced by the
+distributed-context review of this lot.
+
+`EfInboxStore` is the only store in the module holding mutable state —
+`EfOutboxStore` holds none:
+
+```csharp
+private readonly Dictionary<InboxMessageKey, Guid> _rowIdsByKey = [];   // EfInboxStore.cs:51
+```
+
+`ClaimBatchAsync` populates it; `ApplyOutcomesAsync` reads it. That converts a value-passing
+relationship into a **temporal** one, and the information is not new: `InboxClaim.Messages` already
+carries every row, and `InboxMessage.RowId` is on each of them. The processor holds
+`message.RowId` in hand while it builds the outcome.
+
+**The trigger condition, stated plainly so the per-tenant lot cannot miss it.** ADR-MSG-002 defers
+`PerTenantInboxCoordinator` to `MicroKit.Messaging.Multitenancy`, and that coordinator's natural
+shape is a loop over tenants reusing the public `IInboxProcessor`. If two claims occur on one
+scoped store instance before the first is settled —
+
+```
+claim(tenantA) → claim(tenantB) → settle(tenantA)
+```
+
+— then `ClaimBatchAsync` cleared the dictionary at the start of the second claim, `settle(tenantA)`
+resolves **zero** keys, and every outcome hits this:
+
+```csharp
+if (!_rowIdsByKey.TryGetValue(outcome.Key, out var rowId))
+{
+    continue;                                        // EfInboxStore.cs:311-313
+}
+```
+
+Zero rows written. Every lease in batch A strands for the full `LeaseDuration`. Nothing throws.
+
+Two lesser variants: `Dictionary` is not thread-safe, so parallel claims on one instance corrupt
+it (the `DbContext` would probably throw first, but the ordering is not guaranteed); and
+`IInboxProcessorStore` *is* registered in the per-message execution scope too
+(`MessagingBuilderExtensions.cs:53`), where its dictionary is empty — no caller does that today,
+which is exactly what makes it a trap rather than a bug.
+
+**Is it loud enough?** Partially, and misleadingly. `written < outcomes.Count` fires
+`PartialSettlement` (event 2010, Warning), so it is not literally silent — but the message asserts
+a cause that would be false: *"their lease either expired and was re-claimed, or their handler
+already committed."* In the unresolved-key case the rows still carry the token; the store simply
+could not map them. The one signal an operator has would send them to look at `LeaseDuration`.
+
+**Not fixed here.** The fix is to carry `RowId` on `InboxOutcome` (or on `InboxMessageKey`) so
+`ApplyOutcomesAsync` becomes pure and the field disappears — a public-contract change on
+`MicroKit.Messaging.Abstractions`, which is api-reviewer territory and does not belong bolted onto
+a review pass. Whoever writes the per-tenant coordinator must do this **first**, or document on
+`IInboxProcessorStore` that `ApplyOutcomesAsync` must be called on the instance that produced the
+claim with no intervening claim. That contract currently exists only in the implementation's head.
+
+Two minor riders: `_rowIdsByKey.Clear()` sits at `EfInboxStore.cs:259`, reached only when
+`claimedCount > 0`, so both empty-claim early returns leave the previous batch's mapping in place;
+and `PartialSettlement` should distinguish "I could not map this outcome" from "the token moved
+on".
+
+### Amended after the api-reviewer pass — it is now a documented contradiction, not only a coupling
+
+The API review found the same state asserted against on **permanent public surface**, in two
+places that a third-party implementer reads and cannot get behind:
+
+- `IInboxProcessorStore.ApplyOutcomesAsync` documents **one** cause for a short affected-row count
+  — "the unwritten rows no longer carry this batch's token". The EF implementation has **two**: the
+  documented one, and an outcome whose key is absent from `_rowIdsByKey`, which is `continue`d and
+  never counted. An operator following the doc investigates `LeaseDuration` and finds nothing.
+- `InboxClaim`'s remarks say the token "is carried explicitly rather than held as store state, so
+  the store stays stateless". `EfInboxStore` **is** stateful across the two calls. The contract
+  asserts the opposite of the reference implementation.
+
+That raises the stakes on the fix. It is no longer only "a future topology would break": the
+shipped contract currently tells an implementer something untrue about the only implementation
+that exists, and both statements are on types that freeze at `1.0.0`. Whoever writes the
+per-tenant coordinator should carry `RowId` on `InboxOutcome` and delete the field — which makes
+both doc statements true rather than requiring them to be softened.
+
+---
+
+## Finding #21 — `ContextAwareServiceProvider` cannot influence constructor injection, so cascade outbox rows lose their tenant and correlation chain
+
+**Severity: medium in production, and the shipped XML doc claims a guarantee that has never
+held.** Pre-existing, identical on the outbox — **this lot introduces no regression**. It is
+recorded here because the review that found it was commissioned for this lot, and because the
+false doc is the part that makes it a finding rather than a note.
+
+`PassThroughExecutionScope` wraps the scope's provider:
+
+```csharp
+public object? GetService(Type serviceType)
+    => serviceType == typeof(IExecutionContext) ? context : inner.GetService(serviceType);
+```
+
+That intercepts a **direct** `GetService(typeof(IExecutionContext))` call made through the wrapper.
+Nothing else. Every other resolution delegates to `inner`, and the inner `ServiceProvider` builds
+the whole object graph from its own descriptors — a wrapper cannot reach into constructor
+injection. So any service taking `IExecutionContext` as a constructor parameter receives the
+scope's registered default instead:
+
+```csharp
+services.TryAddScoped<IExecutionContext>(
+    _ => new Execution.ExecutionContext { CorrelationId = Guid.NewGuid().ToString() });
+// TenantId = null, CausationId = null, CorrelationId = a fresh random Guid
+```
+
+No caller anywhere in the repo resolves `IExecutionContext` directly from a scope provider, so the
+wrapper is effectively dead code. The sole production consumer, `OutboxDomainEventSink`, takes it
+by constructor and hands it to `OutboxMessageFactory.Create`.
+
+**Consequence, live on this branch.** An inbox handler that raises a domain event — MediatR
+command → `TransactionBehavior` → dispatcher → `OutboxDomainEventSink` → `OutboxMessageFactory` —
+writes a cascade outbox row with `TenantId = null` and a **brand-new random `CorrelationId`**. The
+tenant of the inbox row is lost and the correlation chain is severed at exactly the hop this module
+exists to preserve.
+
+It is a **loss, not a bleed**: the default factory produces a fresh context per DI scope, so no
+tenant A row can ever carry tenant B's identifier. Inbox handlers themselves are unaffected — they
+read `TenantId` off the deserialized event. Only cascade writes are.
+
+**The doc is the sharp end.** `PassThroughExecutionScopeFactory.cs:12-24` states that *"any scoped
+service that depends on `IExecutionContext` … receives the message-row values (TenantId,
+CorrelationId, CausationId) rather than the default fresh-Guid factory value"*, and follows it with
+a **"Contract for custom implementations"** telling third parties to bridge the context the same
+way. That instruction cannot be honoured by the mechanism it describes.
+
+**Not fixed here**, because the fix is a change to shared execution infrastructure that both the
+outbox and the inbox depend on, and it wants its own lot with the outbox's cascade path under test.
+The shape: register a scoped `ExecutionContextHolder`, have `IExecutionContext` resolve from it,
+and have `PassThroughExecutionScopeFactory` populate it on the new scope before returning — then
+constructor injection works. Two riders for whoever takes it: correct the XML doc first, since a
+false guarantee in shipped documentation is worse than a missing one; and note that
+`TestExecutionScopeFactory` (`tests/MicroKit.Messaging.UnitTests/TestFixtures.cs:9-21`) **discards
+the `IExecutionContext` parameter entirely**, so the test double is weaker than production and no
+unit test can currently catch this.
+
+
+---
+
+## Finding #22 — the inbox metric names are alert contract, and the window to change them closes at 1.0.0
+
+**Severity: low now, unfixable-in-practice later.** Surfaced by the api-reviewer pass on this lot.
+
+`InboxMetrics` (`src/MicroKit.Messaging/Processing/InboxMetrics.cs`) publishes two instruments and
+one tag key. All three are wrong against OpenTelemetry conventions in ways that are free to fix
+today and expensive the moment anyone builds a dashboard on them.
+
+**1. Two instruments where the convention wants one instrument and an attribute.**
+
+```
+microkit.inbox.messages.added          (:49)
+microkit.inbox.messages.deduplicated   (:54)
+```
+
+These differ only by outcome. The type's own summary says *"the deduplication **rate** is the
+metric worth alerting on"* — and splitting the outcome across two instruments is exactly what turns
+that rate into a two-series join instead of one query with a filter. The conventional shape is a
+single counter, `microkit.inbox.messages`, carrying the outcome as an attribute.
+
+**2. The tag key squats on the namespace OpenTelemetry owns.**
+
+`consumer.type` (`:64`) is unprefixed. The semantic conventions reserve unprefixed dotted attribute
+names, and `messaging.*` already defines consumer attributes — `messaging.consumer.group.name`
+among them. Either prefix it (`microkit.inbox.consumer.type`) or map onto the registered name.
+
+**Why the window matters.** Instrument and attribute names are not source surface — nothing breaks
+at compile time — which is exactly what makes them worse to change late. They become contract on
+first subscription: the moment one consumer writes `AddMeter("MicroKit.Messaging.Inbox")` and
+builds a dashboard, a panel or an alert rule on `microkit.inbox.messages.deduplicated`, renaming it
+silently zeroes their alerting with no error anywhere. There is no obsoletion mechanism and no
+compiler to catch it. **The packages are `1.0.0-preview.*` with no external consumers today, so the
+change is free right now and effectively unavailable after `1.0.0` stable.**
+
+**Not fixed in this lot**, which was scoped to the four merge blockers. It is a deliberate deferral
+with a deadline, not an open question: the decision is already made, only the timing is open, and
+the timing runs out at the first stable release.

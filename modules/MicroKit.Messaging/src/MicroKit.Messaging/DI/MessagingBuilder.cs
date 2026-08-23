@@ -36,7 +36,7 @@ public sealed class MessagingBuilder
     /// <c>IMessagePublisher</c> and <c>IOutboxDispatcher</c> are registered as
     /// <strong>scoped</strong> — they are resolved from the per-message execution scope
     /// created by <c>OutboxProcessor</c>. Registering them as singleton would capture
-    /// the scoped <c>IInboxStore</c> (backed by a scoped <c>DbContext</c> in
+    /// the scoped <c>IInboxWriter</c> (backed by a scoped <c>DbContext</c> in
     /// <c>MicroKit.Messaging.EntityFrameworkCore</c>), causing a captive dependency.
     /// </para>
     /// <para>

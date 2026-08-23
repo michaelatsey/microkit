@@ -71,9 +71,14 @@ Breaking Changes
 
 Result<T> / ValueTask Usage
 [ ] IOutboxWriter.AddAsync returns ValueTask (throws on DB error — propagates through UoW)
-[ ] IOutboxProcessorStore mutation methods return ValueTask<Result> (run outside domain transaction)
-[ ] IInboxStore.AddAsync returns ValueTask (throws DbUpdateException on duplicate — is the real guard)
-[ ] All async methods return ValueTask (not Task) — exception: coordinator/processor chain (ADR-MSG-014)
+[ ] IOutboxProcessorStore returns ValueTask<OutboxClaim> / ValueTask<int> (claim + settlement, ADR-MSG-015)
+[ ] IInboxWriter.AddAsync returns ValueTask<InboxWriteResult> — a redelivery is REPORTED, never
+    thrown. An implementation that throws on a duplicate is the defect ADR-MSG-017 fixed; the
+    unique index is the guard, and the store absorbs the violation (ADR-MSG-017 §6, §7)
+[ ] IInboxSettlementStore stages only, never commits; IsMarkUncommitted / IsLeaseLost are sync,
+    must not throw, and absent-entry must read as uncommitted (ADR-MSG-017 §3)
+[ ] All async methods return ValueTask (not Task). ADR-MSG-014's exception is GONE — all four
+    coordinator/processor seams now return a batch result (ADR-MSG-015 outbox, ADR-MSG-017 inbox)
 ```
 
 ---

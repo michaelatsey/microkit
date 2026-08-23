@@ -176,6 +176,35 @@ public sealed class MessagingAbstractionsArchitectureTests
             "depend on IOutboxCoordinator, or the per-tenant topology cannot be added additively");
     }
 
+    /// <summary>
+    /// The inbox twin of the test above. <c>SharedDbInboxCoordinator</c> carried the same
+    /// ADR-MSG-002 promise in its doc comment from the beginning but had no guard behind it, so
+    /// the promise was enforceable on one side of the module and merely stated on the other.
+    /// </summary>
+    [Fact]
+    public void Core_DependsOnSharedDbInboxCoordinator_OnlyThroughIInboxCoordinator()
+    {
+        const string Coordinator = "MicroKit.Messaging.Processing.SharedDbInboxCoordinator";
+
+        var permitted = new[]
+        {
+            Coordinator,
+            "MicroKit.Messaging.ServiceCollectionExtensions",
+        };
+
+        var offenders = Types.InAssembly(CoreAssembly)
+            .That()
+            .HaveDependencyOn(Coordinator)
+            .GetTypes()
+            .Where(t => !permitted.Contains(t.FullName, StringComparer.Ordinal))
+            .Select(t => t.FullName)
+            .ToList();
+
+        offenders.ShouldBeEmpty(
+            "only the composition root may name SharedDbInboxCoordinator; everything else must " +
+            "depend on IInboxCoordinator, or the per-tenant topology cannot be added additively");
+    }
+
     // ---------------------------------------------------------------------------
     // MediatR glue layer checks (ADR-MSG-009: glue MAY reference MediatR / MediatR.Contracts;
     // it must still stay free of EF Core, ASP.NET Core, and broker dependencies)

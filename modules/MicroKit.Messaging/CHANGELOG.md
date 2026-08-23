@@ -1,10 +1,19 @@
 # Changelog — MicroKit.Messaging
 
-## [Unreleased] — outbox claim rewrite
+## [Unreleased] — outbox and inbox claim rewrites
 
-Replaces the per-message lease with an atomic batch claim carrying an ownership token, buffers
-dispositions in memory, and settles them in one transactional write. Round trips per batch drop
-from `2N+1` to two (three when contended) plus one settlement — flat in `N`.
+Both sides of the module move off the per-message lease and onto an atomic batch claim carrying an
+ownership token. Round trips per batch drop from `2N+1` to two or three plus one settlement — flat
+in `N` — on the outbox, and to three on the inbox.
+
+**The inbox is deliberately not a mirror of the outbox**, and that is the whole of its design. An
+outbox may batch its settlement: widening the crash window there widens only duplication, and the
+inbox absorbs it downstream. For the inbox there is no downstream — the inbox *is* the absorber, so
+a crash between a handler returning and its row being marked reruns the handler with its business
+side effects. Inbox **success** therefore settles inside the handler's own transaction; only
+failures and releases are batched.
+
+See ADR-MSG-015 (outbox) and ADR-MSG-017 (inbox).
 
 ### Fixed
 - **Lost update under lease expiry.** `MarkPublishedAsync` / `MarkFailedAsync` / `DeadLetterAsync`
@@ -86,7 +95,161 @@ from `2N+1` to two (three when contended) plus one settlement — flat in `N`.
 - `TimeProvider` and `Random` registered via `TryAddSingleton`, injected into the processor and
   store so back-off is testable without a wall clock.
 
-### Changed — BREAKING
+### Fixed — inbox
+
+- **A redelivery dead-lettered a correctly delivered message.** `IInboxStore.AddAsync` reported its
+  *nominal* outcome — "already present, nothing done" — by throwing. Under at-least-once delivery a
+  redelivery needs no failure at all; one expired lease after a crash produces it. Nothing caught
+  the exception, so it reached `OutboxProcessor`, was classified a transient dispatch failure, and
+  retried into the same duplicate until the message dead-lettered. `IInboxWriter.AddAsync` now
+  returns `InboxWriteResult`, and `InProcessMessagePublisher` treats `AlreadyPresent` as a
+  successful skip.
+- **A duplicate on one consumer silently lost the rows of every later consumer.** One event fans out
+  to one row per consumer; the escaping exception ended the whole publish, so consumers 3..N never
+  got their row at all — a partial redelivery becoming permanent loss. The publisher now
+  `continue`s.
+- **`MarkProcessingAsync` was not a lease.** No eligibility predicate, `void` return: an
+  unconditional write. Two processors could both "acquire" the same row, both invoke the handler,
+  and neither could tell — in the component whose entire job is deduplication. Replaced by
+  `ClaimBatchAsync`, which replays the eligibility predicate inside a single `UPDATE`.
+- **Lost update on every terminal inbox write.** `MarkProcessedAsync` / `MarkFailedAsync` /
+  `DeadLetterAsync` filtered on the compound key alone, so a processor whose lease had expired
+  overwrote the one that legitimately re-claimed the row. Every write now filters on `ClaimToken`.
+- **Silent success.** All three returned `Result.Success()` regardless of affected rows.
+  `ApplyOutcomesAsync` returns the row count and the processor logs a partial settlement;
+  `RequeueAsync` returns `bool`.
+- **A missing handler registration killed the whole batch.** Handler resolution sat outside the
+  `try`, so it threw straight out of `ProcessBatchAsync`: every lease stranded until expiry, and the
+  worker classified it transient and retried forever. It is now caught structurally as
+  `InboxConfigurationException`; the batch is settled with every row released, then the fault is
+  rethrown and the worker stops.
+- **Two permanent failures burned the full retry budget.** An unregistered `ConsumerType` and a
+  payload that will not deserialize each took `MaxRetries` attempts with exponential back-off for a
+  verdict fixed at the first. Both now raise `InboxPayloadException` and dead-letter on first sight.
+- **An unknown consumer settled an unleased row.** The registry check ran before any lease was
+  taken, yet the failure policy wrote anyway. The check now runs inside the claimed batch, so every
+  write is under a live claim.
+- **A downstream outage failed all N rows, wrote N failure rows and consumed N retry budgets**, then
+  repeated next tick. `InboxDependencyUnavailableException` abandons the batch and releases the
+  remainder as `Released` — no retry consumed.
+- **`AddAsync` poisoned the context on a duplicate.** The rejected entity stayed tracked as added, so
+  the next `SaveChangesAsync` retried the same failing insert — one duplicate broke every later
+  write on that context. It is detached before rethrowing.
+- **Inbox retention was unreachable and had no caller.** There was no `DeleteProcessedAsync` at all,
+  so the table grew without bound. `IInboxRetentionStore` and `InboxRetentionWorker` now exist, and
+  `GetDeadLetteredAsync` takes `string?` so a single-tenant deployment — where every row has a null
+  tenant — matches.
+- **`Action<InboxProcessorOptions>` was a silent no-op**, the same `init`-only defect the outbox
+  options carried. Accessors are now `{ get; set; }`.
+- **The transactional guarantee silently did not exist under `QueryTrackingBehavior.NoTracking`.**
+  `StageProcessedAsync` did not state its tracking mode — the one query in `EfInboxStore` that
+  needs tracking, while the other four all say `AsNoTracking()`. On a consumer `DbContext` with
+  that ordinary global setting the row came back untracked, the mark reached nothing, and
+  `IsMarkUncommitted` reported it committed: the batch returned `Processed` while the row kept its
+  claim token and replayed on every pass, never incrementing `RetryCount` and never
+  dead-lettering. Now `AsTracking()`, and pinned by `InboxSettlementGuaranteeTests`.
+- **`IsMarkUncommitted` read a discarded mark as a committed one.** An absent or detached entry
+  was treated as "nothing pending, therefore saved" — literally true and operationally wrong: a
+  handler calling `ChangeTracker.Clear()` throws the staged mark away, and nothing is pending
+  precisely because the write was discarded. Absent now means uncommitted, so the failure costs a
+  redundant deferred write and a warning instead of a silent infinite replay.
+- **The inbox had no jitter at all.** Back-off is now
+  `Uniform(0, min(2^RetryCount s, MaxRetryBackoff))`, computed by the processor rather than the
+  store so it is testable without a database.
+
+### Added — inbox
+
+- `InboxClaim`, `InboxOutcome` + `InboxOutcomeKind`, `InboxBatchResult` + `InboxBatchAbortReason`,
+  `InboxMessageKey`, `InboxWriteResult`.
+- `InboxPayloadException`, `InboxDependencyUnavailableException`, `InboxConfigurationException`.
+- `IInboxWriter`, `IInboxProcessorStore`, `IInboxSettlementStore`, `IInboxAdminStore`,
+  `IInboxRetentionStore` — `IInboxStore` split five ways (ISP).
+- `InboxMessage.RowId` (`Guid`, the new primary key) and `InboxMessage.ClaimToken` (`Guid?`), plus
+  `UX_InboxMessages_MessageId_ConsumerType`, `IX_InboxMessages_Processable`,
+  `IX_InboxMessages_ClaimToken` and `IX_InboxMessages_TenantId_ProcessedAt`.
+- Adaptive inbox worker cadence, driven by `InboxBatchResult`.
+- `InboxRetentionWorker`, and `InboxMetrics` (`microkit.inbox.messages.added` /
+  `.deduplicated`; subscribe with `AddMeter(InboxMetrics.MeterName)`).
+- `InboxProcessorOptions`: `MaxPollingInterval`, `DependencyUnavailableBackoff`, `MaxRetryBackoff`,
+  `OutcomeFlushTimeout`, `MaxErrorMessageLength`, `RetentionDays`, `RetentionInterval`.
+- `TimeProvider` and `Random` injected into `InboxProcessor`; `TimeProvider` into
+  `EfInboxStore<TContext>`.
+
+### Changed — BREAKING (inbox)
+
+1. `IInboxStore` is **removed**, split into `IInboxWriter`, `IInboxProcessorStore`,
+   `IInboxSettlementStore`, `IInboxAdminStore` and `IInboxRetentionStore`.
+2. `IInboxWriter.AddAsync` returns `ValueTask<InboxWriteResult>` instead of `ValueTask`.
+   **This breaks fewer callers than it looks.** `await writer.AddAsync(message, ct);` compiles
+   unchanged — discarding the value of an awaited expression used as a statement is legal C# and
+   raises no diagnostic, even under `TreatWarningsAsErrors`. Only a caller that assigned the
+   returned `ValueTask` to a variable, or converted it with `.AsTask()`, has to change.
+   So **nothing in the type system stops you ignoring the result**, and an earlier draft of this
+   note claimed otherwise. If you ignore it, a rising deduplication rate — the signal of a lease
+   set too short or a consumer stalling — becomes invisible in your logs. The enforcement that
+   actually exists is `InboxMetrics`: `microkit.inbox.messages.deduplicated` is recorded on the
+   ingestion path whether or not the caller inspects the return value. Subscribe to it.
+3. `IInboxProcessor.ProcessBatchAsync` returns `ValueTask<InboxBatchResult>` (ADR-MSG-017).
+4. `IInboxCoordinator.ExecuteAsync` returns `ValueTask<InboxBatchResult>` (ADR-MSG-017). Together
+   with (3) this closes the inbox half of ADR-MSG-014, which ADR-MSG-015 left dated as debt.
+5. `InboxProcessor` and `EfInboxStore<TContext>` take new constructor dependencies
+   (`TimeProvider`, and `Random` for the processor).
+6. `InboxMessage` gains `RowId` and `ClaimToken`, and **the primary key moves to `RowId`** — see
+   the migration below, which is not optional.
+7. `InboxProcessorOptions` — `init` accessors become `set`.
+8. **`BatchSize` 20 → 100 and `MaxRetries` 10 → 5 are behavioural changes**, not merely new
+   defaults. Both bind unchanged from existing configuration but halve the retry budget.
+9. `InboxProcessorOptions.RetentionDays` defaults to **30, not the outbox's 7, and the asymmetry is
+   deliberate.** On the outbox, deleting early loses history; on the inbox it loses the
+   deduplication guarantee, because the table only deduplicates messages it still holds. The window
+   must exceed the maximum plausible redelivery delay of every upstream transport.
+
+### Migration — inbox schema
+
+**Two structural changes, not one: the claim token *and* the primary key.** A consumer who applies
+only `claim_token` gets a schema the code cannot query.
+
+**Drain the inbox before migrating.** Stop the workers and let the table empty. Rows sitting in
+`Processing` when the primary key changes are the one case with no clean answer. On a table of any
+size steps 1 and 3 take an `ACCESS EXCLUSIVE` lock.
+
+```sql
+-- 1. Surrogate key. Populate existing rows before making it NOT NULL.
+ALTER TABLE inbox_messages ADD COLUMN row_id uuid;
+UPDATE inbox_messages SET row_id = gen_random_uuid() WHERE row_id IS NULL;
+ALTER TABLE inbox_messages ALTER COLUMN row_id SET NOT NULL;
+
+-- 2. Recreate the dedup gate BEFORE dropping the primary key, so the table is never left
+--    without one. Dropping first would leave a window, however short, in which duplicate
+--    ingestion is accepted. A redundant unique index alongside the PK is allowed.
+CREATE UNIQUE INDEX ux_inbox_messages_message_id_consumer_type
+    ON inbox_messages (message_id, consumer_type);
+
+-- 3. Swap the primary key. Confirm the existing constraint name first:
+--      SELECT conname FROM pg_constraint
+--      WHERE conrelid = 'inbox_messages'::regclass AND contype = 'p';
+ALTER TABLE inbox_messages DROP CONSTRAINT pk_inbox_messages;
+ALTER TABLE inbox_messages ADD  CONSTRAINT pk_inbox_messages PRIMARY KEY (row_id);
+
+-- 4. Claim token.
+ALTER TABLE inbox_messages ADD COLUMN claim_token uuid NULL;
+CREATE INDEX ix_inbox_messages_claim_token ON inbox_messages (claim_token);
+
+-- 5. Claim path, ordered by received_at_utc.
+CREATE INDEX ix_inbox_messages_processable
+    ON inbox_messages (dead_lettered, status, next_retry_at_utc, received_at_utc);
+
+-- 6. Retention.
+CREATE INDEX ix_inbox_messages_tenant_id_processed_at
+    ON inbox_messages (tenant_id, processed_at_utc);
+```
+
+> The EF Core configuration ships **unfiltered** indexes because `HasFilter` takes
+> provider-specific SQL and `MicroKit.Messaging.EntityFrameworkCore` is the provider-neutral
+> package. A consumer writing their own DDL should prefer the partial forms
+> (`WHERE claim_token IS NOT NULL`, `WHERE dead_lettered = false`).
+
+### Changed — BREAKING (outbox)
 1. `IOutboxProcessorStore` — five methods replaced by `ClaimBatchAsync` + `ApplyOutcomesAsync`;
    three moved to `IOutboxAdminStore` / `IOutboxRetentionStore`.
 2. `IOutboxProcessor.ProcessBatchAsync` — returns `ValueTask<OutboxBatchResult>` (ADR-MSG-015).
