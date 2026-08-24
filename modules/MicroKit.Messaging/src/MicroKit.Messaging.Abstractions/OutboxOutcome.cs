@@ -1,8 +1,8 @@
 namespace MicroKit.Messaging;
 
 /// <summary>
-/// The disposition of one message, buffered in memory during batch processing and
-/// applied to the store in a single round trip once the batch ends.
+/// The disposition of one message, buffered in memory during batch processing and applied
+/// to the store by one <c>ApplyOutcomesAsync</c> call once the batch ends.
 /// </summary>
 /// <remarks>
 /// A <c>readonly record struct</c> so that buffering an entire batch costs one array,

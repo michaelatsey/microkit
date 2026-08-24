@@ -65,7 +65,19 @@ contract with a real second consumer existed. That trigger is now met: a transve
 ## ADR-MSG-002 - Outbox/Inbox processing decomposition (Worker / Coordinator / Processor)
 
 ### Status
-Accepted.
+Accepted. **The Worker / Coordinator / Processor decomposition stands unchanged and is what
+shipped.** Several mechanisms named in the "v1 scope" section below have since been superseded —
+the body is left as written, because it records the decision as it was taken:
+
+| Superseded | By | What is true now |
+|---|---|---|
+| The per-message lease API (`GetPendingAsync`, `AcquireLeaseAsync`, `MarkPublished`, `MarkFailed`, `DeadLetter`) | outbox claim rewrite (#87), ADR-MSG-017 for the inbox | `ClaimBatchAsync` + `ApplyOutcomesAsync` on both sides. One atomic batch claim stamping a `ClaimToken`; every terminal write filters on that token. `2N+1` round trips became two (three contended) plus one settlement. |
+| Deterministic back-off `2^RetryCount` s, cap 3600 | outbox claim rewrite (#87), ADR-MSG-017 | Full jitter over that ceiling: `Uniform(0, min(2^n s, MaxRetryBackoff))`, on **both** sides. |
+| `Task` return types (ADR-MSG-014) | ADR-MSG-015 (outbox), ADR-MSG-017 (inbox) | All four seams return `ValueTask<OutboxBatchResult>` / `ValueTask<InboxBatchResult>`. |
+| "dedup absorbed in `EfInboxStore.AddAsync` (unique constraint + `DbUpdateException` as authoritative guard)" | ADR-MSG-017 | The unique index is still the sole authority, but a redelivery is reported as `InboxWriteResult.AlreadyPresent`, never thrown, and the store recognises it by **post-hoc verification**, not by decoding a provider error. The inbox PK is now the `RowId` surrogate. |
+| "`InboxProcessor` pure drain … MarkProcessed/MarkFailed" | ADR-MSG-017 | Success settles **inside the handler's own transaction** via `IInboxSettlementStore`; only failures and releases are batched. |
+
+Canonical current contracts: `microkit-messaging-outbox-inbox.md`.
 
 ### Context
 MicroKit must eventually support Single-Tenant, Shared-DB Multi-Tenant, DB-Per-Tenant, later
@@ -188,6 +200,18 @@ Symmetric with Outbox: `MaxRetries` + back-off + dead-letter on the Inbox side (
 as Outbox: `2^RetryCount` s, cap 3600). `MarkFailed` is the per-attempt transition; dead-letter is
 terminal after `MaxRetries`.
 
+> **Superseded in two respects by ADR-MSG-017**, while the at-least-once decision itself stands:
+> the back-off is now full jitter over that ceiling on both sides, and `MarkFailed` no longer
+> exists — the per-attempt transition is a buffered `InboxOutcome.Retry` applied by
+> `ApplyOutcomesAsync`. Dead-lettering is also reached on the **first** attempt for
+> `InboxPayloadException`, not only after `MaxRetries`.
+>
+> **And Option A was not rejected forever.** ADR-MSG-017 achieved transactional settlement for
+> database-backed handlers *without* the coupling this ADR feared: `IInboxSettlementStore` stages
+> the mark into the **handler's own** unit of work rather than into a library-owned one, so Core
+> stays persistence-agnostic. The guarantee is atomicity between the mark and database side
+> effects — still not exactly-once in general, so handler idempotency remains the contract.
+
 ### Consequences
 - Handler idempotency is part of the public contract and must be documented in the Messaging README
   and XML docs.
@@ -201,10 +225,10 @@ terminal after `MaxRetries`.
 | Package | Status | Role |
 |---------|--------|------|
 | `MicroKit.Execution.Abstractions` | new (v1) | `IExecutionScopeFactory`, `IExecutionContext` (Level 0, dep DI.Abstractions only) |
-| `MicroKit.Messaging.Abstractions` | patch | add `IOutboxDispatcher`, `IOutboxCoordinator`/`IInboxCoordinator`, `IOutboxProcessor`/`IInboxProcessor`; remove `tenantId` from `GetPendingAsync` |
-| `MicroKit.Messaging` (Core) | in progress | Worker + SharedDb coordinator + Processor engine + in-process dispatch + pass-through scope factory |
-| `MicroKit.Messaging.EntityFrameworkCore` | planned | EF stores (Shared-DB reservation, optimistic lease, inbox dedup); outbox/inbox entity configuration without tenant filter |
-| `MicroKit.Messaging.MediatR` (glue) | planned | `DomainEventsDispatcher`, `MediatorOutboxDispatcher`, `TransactionBehavior`; sources current `TenantId`, passes it explicitly to `IOutboxWriter.AddAsync` |
+| `MicroKit.Messaging.Abstractions` | shipped | `IOutboxDispatcher`, the coordinator/processor seams, the claim + settlement stores, `IInboxSettlementStore` |
+| `MicroKit.Messaging` (Core) | shipped | Worker + SharedDb coordinator + Processor engine + in-process dispatch + pass-through scope factory + retention workers |
+| `MicroKit.Messaging.EntityFrameworkCore` | shipped | `EfOutboxStore`/`EfInboxStore` (atomic claim, token-fenced settlement, inbox dedup); entity configuration without tenant filter |
+| `MicroKit.Messaging.MediatR` (glue) | shipped | `OutboxDomainEventSink` (an `IDomainEventsSink`, **not** a rival dispatcher — ADR-MEDIATR-014), `MediatROutboxDispatcher`, `DomainEventsCascadeNotificationPublisher`. `TransactionBehavior` lives in `MicroKit.MediatR.Behaviors`, not here |
 | `MicroKit.Multitenancy(.Abstractions/.EFCore)` | deferred | `ITenantSource`, tenant-aware `IExecutionScopeFactory` impl |
 | `MicroKit.Messaging.Multitenancy` | deferred | PerTenant coordinators (integration, reuses Core `IOutboxProcessor`/`IInboxProcessor`) |
 
@@ -252,9 +276,13 @@ question (Core vs EFCore vs caller), whether TenantId is mandatory, and whether 
    `OutboxMessage.TenantId`. It is the responsibility of the host to populate TenantId when
    multi-tenancy is required — not the factory's responsibility to enforce it.
    The EF Core entity configurations treat TenantId as optional (nullable column, no `IsRequired()`).
-   **Pending Abstractions change:** `OutboxMessage.TenantId` and `InboxMessage.TenantId` are currently
-   declared as `string` (non-nullable) in the entity classes — a separate PR must change them to
-   `string?` and update the XML docs to remove the "never null" constraint.
+   ~~**Pending Abstractions change:** `OutboxMessage.TenantId` and `InboxMessage.TenantId` are
+   currently declared as `string` (non-nullable) in the entity classes — a separate PR must change
+   them to `string?` and update the XML docs to remove the "never null" constraint.~~
+   **Done.** Both are `string?` and both XML docs read "Optional. Null in single-tenant
+   deployments." Note the tension that remains one level up: `IIntegrationEvent.TenantId` is
+   declared non-nullable `string`, so an event type must supply *something* even where the
+   persisted column legitimately holds null.
 
 6. **Ambient metadata stamped exactly once, at outbox-write, BEFORE serialization.**
    The values written to `OutboxMessage` columns MUST equal the values embedded in the serialized
@@ -286,7 +314,15 @@ question (Core vs EFCore vs caller), whether TenantId is mandatory, and whether 
 ## ADR-MSG-009 — MediatR.Contracts carve-out for the MediatR glue + notification idempotency
 
 ### Status
-Proposed (to be ratified at architect review).
+**Accepted and implemented.** The carve-out is enforced by
+`MessagingAbstractionsArchitectureTests.AllAssemblies_HaveNoMediatRContractsDependency`, which
+covers Abstractions / Core / EntityFrameworkCore and excludes the glue by design.
+
+> One name in this ADR has since changed: `AddMediatRTransport()` is now
+> **`AddMediatRDomainEvents()`** (ADR-MEDIATR-015 — it is not a transport; the
+> `Add{Provider}Transport()` shape is reserved for brokers). And the glue no longer registers a
+> `DomainEventsDispatcher`: it contributes an `IDomainEventsSink` to the single core dispatcher
+> (ADR-MEDIATR-014).
 
 ### Context
 The general Messaging rule (CLAUDE.md rule #14, ADR-MSG-002) is "no MediatR / MediatR.Contracts

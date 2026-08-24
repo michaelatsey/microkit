@@ -29,8 +29,11 @@ dotnet build modules/MicroKit.Messaging/MicroKit.Messaging.slnx -c Release \
 dotnet build modules/MicroKit.Messaging/src/MicroKit.Messaging.Abstractions/
 dotnet build modules/MicroKit.Messaging/src/MicroKit.Messaging/
 dotnet build modules/MicroKit.Messaging/src/MicroKit.Messaging.EntityFrameworkCore/
-dotnet build modules/MicroKit.Messaging/src/MicroKit.Messaging.Testing/
+dotnet build modules/MicroKit.Messaging/src/MicroKit.Messaging.MediatR/
 ```
+
+> `src/` holds exactly these four projects. `MicroKit.Messaging.Testing` is planned but **not
+> built** (L0 finding #19) — a build or pack command naming it fails.
 
 ## Dependency-Safe Build Order
 
@@ -38,10 +41,10 @@ Build in this order when building incrementally (avoids restore failures):
 
 1. `MicroKit.Messaging.Abstractions`
 2. `MicroKit.Messaging` (Core)
-3. `MicroKit.Messaging.EntityFrameworkCore`
-4. `MicroKit.Messaging.Testing`
-5. `tests/*` (any order)
-6. v2 scaffolds (any order — all `IsPackable=false`)
+3. `MicroKit.Messaging.EntityFrameworkCore` and `MicroKit.Messaging.MediatR` (either order —
+   both depend on Core, neither on the other)
+4. `tests/*` (any order)
+5. v2 scaffolds (any order — all `IsPackable=false`)
 
 ## Common Build Errors
 
@@ -107,7 +110,7 @@ messages that contain "warning" or "error" in informational text.
 dotnet pack modules/MicroKit.Messaging/src/MicroKit.Messaging.Abstractions/ -c Release -o /tmp/messaging-nupkg
 dotnet pack modules/MicroKit.Messaging/src/MicroKit.Messaging/ -c Release -o /tmp/messaging-nupkg
 dotnet pack modules/MicroKit.Messaging/src/MicroKit.Messaging.EntityFrameworkCore/ -c Release -o /tmp/messaging-nupkg
-dotnet pack modules/MicroKit.Messaging/src/MicroKit.Messaging.Testing/ -c Release -o /tmp/messaging-nupkg
+dotnet pack modules/MicroKit.Messaging/src/MicroKit.Messaging.MediatR/ -c Release -o /tmp/messaging-nupkg
 
 ls /tmp/messaging-nupkg/*.nupkg
 ```

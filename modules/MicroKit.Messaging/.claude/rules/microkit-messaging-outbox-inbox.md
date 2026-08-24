@@ -213,7 +213,8 @@ TimeSpan delay = TimeSpan.FromSeconds(retryCount * 30);
 > **The clock and the jitter source are both injected** (`TimeProvider`, `Random`), which is what
 > lets the exponential curve be asserted against exact values with the jitter neutralised, rather
 > than approximated with a tolerance. Production registers `TimeProvider.System` and `Random.Shared`.
-> The inbox retains the older deterministic formula until the inbox lot.
+> **The inbox uses the same formula, jitter included** — see `InboxProcessor.ComputeBackoffCeiling`
+> and `InboxProcessor.ApplyJitter`. The older deterministic inbox curve is gone (ADR-MSG-017).
 
 ---
 
@@ -366,7 +367,11 @@ public interface IOutboxProcessorStore
         int batchSize, TimeSpan lockDuration, CancellationToken ct = default);
 
     /// <summary>
-    /// Persists the disposition of every message from the matching claim, in one round trip.
+    /// Persists the disposition of every message from the matching claim, in ONE CALL at the
+    /// end of the batch — one call, not one statement. The set-based dispositions collapse into
+    /// two statements; retries and dead-letters carry per-message values and cost one each,
+    /// so the statement count scales with FAILURES, not with batch size. All inside one
+    /// transaction.
     /// EVERY write filters on claimToken. Returns the affected-row count: a value below
     /// outcomes.Count means leases were lost mid-batch, which the caller logs rather than
     /// assuming success.
@@ -508,11 +513,21 @@ public interface IInboxRetentionStore
 
 ### Why the inbox is NOT a mirror of the outbox
 
-An outbox may widen its crash window from one message to one batch: that widens only
-*duplication*, and the inbox deduplicates downstream. For the inbox there is no downstream — the
-inbox **is** the deduplication. A crash between a handler returning and its row being marked
-reruns the handler, with its business side effects. Batching that settlement would turn one
-possible replay into N.
+The outbox settles a whole batch at once. That is tolerable there **only to the extent that its
+consumers sit behind this inbox**, where a redelivery costs duplication the unique index absorbs.
+For the inbox there is no downstream — the inbox **is** the deduplication. A crash between a
+handler returning and its row being marked reruns the handler, with its business side effects.
+Batching that settlement would turn one possible replay into N, with nothing underneath to absorb
+them.
+
+> ⚠ **Do not read the outbox's batching as safe in general — it is not, and that is a known
+> defect, not a property to copy.** Where the outbox dispatches to an in-process handler with no
+> inbox row — which is exactly what `MediatROutboxDispatcher` does when it publishes a
+> notification through `IPublisher.Publish` — a batch replay re-runs every notification handler
+> and re-writes whatever they wrote. The outbox needs the counterpart of
+> `IInboxSettlementStore`: a settlement that stages the `Published` mark into the transaction the
+> dispatch target commits. Recorded as **L0 finding #23** and on `OutboxProcessor`'s class
+> remarks; until it is built, notification handlers on that path **must** be idempotent.
 
 | | Scope | Rationale |
 |---|---|---|

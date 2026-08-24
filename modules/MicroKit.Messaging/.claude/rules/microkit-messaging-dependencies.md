@@ -19,7 +19,12 @@ MicroKit.Messaging.EntityFrameworkCore
     ← MicroKit.Persistence.EntityFrameworkCore       ← cross-module (Level 2)
     ← Microsoft.EntityFrameworkCore.Relational       ← ToTable/HasIndex + ExecuteUpdateAsync/DeleteAsync SQL generation
 
-MicroKit.Messaging.Testing
+MicroKit.Messaging.MediatR                          ← the ADR-MSG-009 carve-out
+    ← MicroKit.Messaging (Core)
+    ← MicroKit.MediatR + MicroKit.MediatR.Abstractions
+    ← MediatR / MediatR.Contracts                    ← permitted HERE ONLY
+
+MicroKit.Messaging.Testing                          ← PLANNED, not built (L0 finding #19)
     ← MicroKit.Messaging.Abstractions                ← Abstractions only, never Core
 
 ── v2 providers (IsPackable=false) ─────────────────────────────────────────────

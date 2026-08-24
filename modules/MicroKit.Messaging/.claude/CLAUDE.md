@@ -180,7 +180,12 @@ MessageEnvelope<T>                 // sealed record — wraps T with metadata (M
 
 1. **`IIntegrationEvent` (not `INotification`)** — no MediatR dependency anywhere in Messaging
 2. **`IOutboxWriter` and `IOutboxProcessorStore` live in `Messaging.Abstractions`** — never in `Persistence.Abstractions`
-3. **Tenant-aware mandatory** — `TenantId` on `OutboxMessage` and `InboxMessage` — never null
+3. **Tenant-aware, but `TenantId` is NULLABLE** — `string?` on `OutboxMessage` and
+   `InboxMessage`, with no `IsRequired()` and no global query filter. Messaging must run without
+   Tenancy (ADR-EXEC-001), and a single-tenant deployment legitimately has null on every row
+   (ADR-MSG-008 §5). `TenantId` travels **on the row** and is read from there by the processors,
+   never from `IHttpContextAccessor` — and never used as a filter on the claim, which is
+   cross-tenant by design (ADR-MSG-002)
 4. **Outbox states** — `Pending → Processing → Published` or `Failed+DeadLettered=true`; **`Failed` always means terminal** (DeadLettered=true)
 5. **Inbox dedup key** = `(MessageId + ConsumerType)` — a **unique index** is the real guard, and
    the sole authority. The primary key is the `RowId` surrogate (ADR-MSG-017): a compound-key
@@ -287,10 +292,11 @@ All v1 packages share one version per release.
 
 | Package | Phase | Status |
 |---------|-------|--------|
-| `MicroKit.Messaging.Abstractions` | 1 | ✅ Implemented — build verified, all agents approved |
-| `MicroKit.Messaging` | 1 | 📋 Planned |
-| `MicroKit.Messaging.EntityFrameworkCore` | 1 | 📋 Planned |
-| `MicroKit.Messaging.Testing` | 1 | 📋 Planned |
+| `MicroKit.Messaging.Abstractions` | 1 | ✅ Implemented |
+| `MicroKit.Messaging` | 1 | ✅ Implemented — processors, workers, coordinators, retention |
+| `MicroKit.Messaging.EntityFrameworkCore` | 1 | ✅ Implemented — atomic claim + token-fenced settlement |
+| `MicroKit.Messaging.MediatR` | 1 | ✅ Implemented — sink, routing dispatcher, cascade publisher |
+| `MicroKit.Messaging.Testing` | 1 | 📋 Planned — **not built**; `src/` holds the four above (L0 #19) |
 | `MicroKit.Messaging.RabbitMQ` | 2 | ⏳ Scaffold only (`IsPackable=false`) |
 | `MicroKit.Messaging.AzureServiceBus` | 2 | ⏳ Scaffold only (`IsPackable=false`) |
 | `MicroKit.Messaging.Kafka` | 2 | ⏳ Scaffold only (`IsPackable=false`) |
@@ -302,12 +308,12 @@ All v1 packages share one version per release.
 ## 🔮 Key Architectural Decisions
 
 - **ADR-MSG-001:** `IOutboxWriter`/`IOutboxProcessorStore` live in `Messaging.Abstractions` (not `Persistence.Abstractions`) — outbox is a messaging concern, not a persistence concern
-- **ADR-MSG-002:** `IIntegrationEvent` used throughout (not `INotification`) — zero MediatR dependency
-- **ADR-MSG-003:** Tenant-aware mandatory — `TenantId` is non-negotiable on all outbox/inbox rows
+- **ADR-MSG-002:** `IIntegrationEvent` used throughout (not `INotification`) — zero MediatR dependency in Abstractions, Core, EFCore and the broker providers; the `MicroKit.Messaging.MediatR` glue is the single carve-out (ADR-MSG-009). ⚠ Number collision: the architecture rule file uses ADR-MSG-002 for the Worker/Coordinator/Processor decomposition. Both are live; disambiguate by title, and reconcile the numbering before the next ADR is written
+- **ADR-MSG-003:** Tenant-aware — `TenantId` is carried on every outbox/inbox row rather than in ambient context. **Not the same as non-nullable:** the column is `string?` and null is valid in single-tenant deployments (ADR-MSG-008 §5 settled this). ⚠ Number collision: the architecture rule file uses ADR-MSG-003 for the inbox delivery guarantee
 - **ADR-MSG-004:** In-process transport is the v1 default — broker providers are v2 opt-in
-- **ADR-MSG-005:** Background processors use `IHostedService` with lease/lock pattern for distributed safety
+- **ADR-MSG-005:** Background processors run under an `IHostedService` (`OutboxWorker` / `InboxWorker`, both `internal sealed`) with a lease for distributed safety. **The per-message lease it described is gone:** an atomic `ClaimBatchAsync` reserves a whole batch and stamps a `ClaimToken` that fences every terminal write (outbox rewrite #87, ADR-MSG-017)
 - **ADR-MSG-006:** `OutboxMessage`/`InboxMessage` are `sealed class` (EF Core entities, mutable); `sealed record` is reserved for value objects. `IOutboxStore` split into `IOutboxWriter` (domain write) + `IOutboxProcessorStore` (processor read/write) to enforce ISP. `OutboxMessageStatus.Failed` always means terminal (DeadLettered=true) — there is no transient Failed state.
-- **ADR-MSG-007:** `AcquireLeaseAsync` uses a single `ExecuteUpdateAsync` (atomic UPDATE WHERE) — EF Core SELECT+mutate+SaveChanges is not atomic under concurrent processors and is forbidden for lease acquisition.
+- **ADR-MSG-007:** lease acquisition uses a single `ExecuteUpdateAsync` (atomic UPDATE WHERE) — EF Core SELECT+mutate+SaveChanges is not atomic under concurrent processors and is forbidden. **The principle stands; the method does not:** `AcquireLeaseAsync` was deleted by the outbox claim rewrite and the inbox rewrite (ADR-MSG-017). The atomic write is now `ClaimBatchAsync`, which reserves a whole batch in one `UPDATE` and stamps a `ClaimToken` that every terminal write filters on.
 - **ADR-MSG-010:** `IIntegrationEvent : IEvent` (canonical event taxonomy root from `MicroKit.Domain.Events`). Does NOT extend `IDomainEvent`. `MicroKit.Domain` dependency added to Abstractions.
 - **ADR-MSG-011:** `IOutboxWriter.AddBatchAsync` ratified — batch write optimization for `DomainEventsDispatcher` P4 (single EF Core `AddRange` call). `AddAsync` kept for single-message paths.
 - **ADR-MSG-012:** `DomainEventDispatchBehavior` SUPERSEDED — deleted in favour of `TransactionBehavior` (order 700) as the dispatch+commit owner.

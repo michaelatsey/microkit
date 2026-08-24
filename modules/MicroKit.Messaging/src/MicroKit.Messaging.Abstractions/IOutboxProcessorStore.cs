@@ -1,8 +1,8 @@
 namespace MicroKit.Messaging;
 
 /// <summary>
-/// Claim and settlement operations required by the outbox processor. Two round trips
-/// per batch — no more.
+/// Claim and settlement operations required by the outbox processor: one atomic claim
+/// reserves a whole batch, one settlement writes every disposition back.
 /// </summary>
 /// <remarks>
 /// <para>
@@ -39,7 +39,15 @@ public interface IOutboxProcessorStore
     /// A message is dispatchable when it is pending — or processing with an expired
     /// lease, which is how a crashed processor's work is recovered — is not
     /// dead-lettered, and has reached <see cref="OutboxMessage.NextRetryAtUtc"/>.
-    /// Two concurrent processors must never both win the same row.
+    /// Two concurrent processors must never both win the same row, and the count returned
+    /// must never exceed <paramref name="batchSize"/>.
+    /// <para>
+    /// <b>Clock.</b> The lease expiry is computed from the application clock via
+    /// <see cref="TimeProvider"/>, not from the database clock. That keeps the implementation
+    /// provider-neutral and unit-testable, at the cost of being sensitive to drift between the
+    /// application host and the database. Keep <c>LockDuration</c> comfortably larger than any
+    /// plausible drift; do not tune it to the second.
+    /// </para>
     /// </remarks>
     ValueTask<OutboxClaim> ClaimBatchAsync(
         int batchSize,
@@ -47,9 +55,16 @@ public interface IOutboxProcessorStore
         CancellationToken ct = default);
 
     /// <summary>
-    /// Persists the disposition of every message from the matching claim, in a single
-    /// round trip.
+    /// Persists the disposition of every message from the matching claim, in one call at
+    /// the end of the batch.
     /// </summary>
+    /// <remarks>
+    /// One <i>call</i>, not one statement. The EF implementation groups the set-based
+    /// dispositions and issues a separate statement per retried or dead-lettered message,
+    /// inside one transaction; the count of statements therefore scales with the number of
+    /// <b>failures</b>, not with the batch size. What the contract requires is atomicity and a
+    /// single caller-visible round of settlement, not a specific statement count.
+    /// </remarks>
     /// <param name="claimToken">
     /// The token from the originating <see cref="OutboxClaim"/>. Every write must filter
     /// on it: a message whose lease expired and was re-claimed elsewhere must be left

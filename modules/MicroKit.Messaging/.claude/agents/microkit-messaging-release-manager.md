@@ -38,7 +38,9 @@ Packages — Phase 1
 [ ] MicroKit.Messaging.Abstractions — implemented + tests passing
 [ ] MicroKit.Messaging (Core) — implemented + tests passing
 [ ] MicroKit.Messaging.EntityFrameworkCore — implemented + tests passing
-[ ] MicroKit.Messaging.Testing — implemented + tests passing
+[ ] MicroKit.Messaging.MediatR — implemented + tests passing
+[ ] (MicroKit.Messaging.Testing — NOT built; L0 finding #19. Do not block the release on it, and
+    do not list it as a published package until the project exists.)
 
 v2 Provider Scaffolds
 [ ] MicroKit.Messaging.RabbitMQ — IsPackable=false (not published)

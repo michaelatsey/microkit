@@ -3,8 +3,8 @@ namespace MicroKit.Messaging.Registry;
 using System.Reflection;
 
 /// <summary>
-/// Central registry that maps integration event types to their consuming handlers
-/// and the typed invoker delegates used to call them without boxing.
+/// Central registry that maps integration event types to their consuming handlers and the
+/// delegates used to invoke them.
 /// </summary>
 /// <remarks>
 /// <para>
@@ -41,9 +41,13 @@ public sealed class MessageHandlerRegistry
         Func<object, IIntegrationEvent, CancellationToken, ValueTask> Invoker);
 
     /// <summary>
-    /// Registers a handler using a zero-allocation typed invoker. Called by
-    /// <c>MessagingBuilder.AddMessageHandler&lt;THandler, TEvent&gt;()</c>.
+    /// Registers a handler using an invoker closed over <typeparamref name="TEvent"/> at
+    /// compile time. Called by <c>MessagingBuilder.AddMessageHandler&lt;THandler, TEvent&gt;()</c>.
     /// </summary>
+    /// <remarks>
+    /// Preferred over <see cref="Register"/>: the cast to <c>IMessageHandler&lt;TEvent&gt;</c> is
+    /// resolved by the compiler rather than through reflection at registration time.
+    /// </remarks>
     public void RegisterGeneric<TEvent>(string consumerType, Type handlerType)
         where TEvent : IIntegrationEvent
     {

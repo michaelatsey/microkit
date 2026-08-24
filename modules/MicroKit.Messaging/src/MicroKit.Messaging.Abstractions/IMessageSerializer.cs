@@ -50,10 +50,18 @@ public interface IMessageSerializer
     /// <c>InboxMessage.EventType</c>).
     /// </param>
     /// <returns>
-    /// The deserialized payload, or <see langword="null"/> if
-    /// <paramref name="eventType"/> cannot be resolved or <paramref name="payload"/>
-    /// is malformed. Never throws — callers must handle a <see langword="null"/> return
-    /// as a deserialization failure.
+    /// The deserialized payload, or <see langword="null"/> when <paramref name="eventType"/>
+    /// resolves to no CLR type or <paramref name="payload"/> is not valid JSON for it.
     /// </returns>
+    /// <remarks>
+    /// <b>Callers must handle both a <see langword="null"/> return and an exception.</b> The two
+    /// cases above are reported as <see langword="null"/>, and those are the ones every
+    /// implementation is required to absorb — but this method is not exception-free: the default
+    /// <c>SystemTextJsonMessageSerializer</c> lets a malformed assembly-qualified name and an
+    /// unsupported target type propagate. <c>InboxProcessor</c> therefore wraps the call and
+    /// converts any throw into <see cref="InboxPayloadException"/>, and a
+    /// <see cref="IOutboxDispatcher"/> implementation should do the same rather than let an
+    /// unclassified exception be treated as transient.
+    /// </remarks>
     object? Deserialize(string payload, string eventType);
 }

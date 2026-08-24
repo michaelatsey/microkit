@@ -12,16 +12,24 @@ namespace MicroKit.Messaging.MediatR.Events;
 /// <see cref="IDomainEventsDispatcher.DispatchEventsAsync"/> once after all handlers complete.
 /// </para>
 /// <para>
-/// <strong>Cascade scenario:</strong> a notification handler (P4, post-commit outbox path)
-/// may modify aggregates or call domain services that accumulate new domain events. Those
-/// new events are dispatched by <see cref="IDomainEventsDispatcher.DispatchEventsAsync"/>
-/// after all handlers complete — P2 handlers run, new P3/P4 outbox rows are staged — all
-/// within the same outbox processor scope, without committing a new transaction.
+/// <strong>Cascade scenario:</strong> a notification handler (post-commit outbox path) may
+/// modify aggregates or call domain services that accumulate new domain events. Those new
+/// events are dispatched by <see cref="IDomainEventsDispatcher.DispatchEventsAsync"/> after all
+/// handlers complete: P2 handlers run and new outbox rows are staged on the scope's
+/// <c>DbContext</c>.
 /// </para>
 /// <para>
-/// <strong>No-op on empty queue:</strong> if no domain events were accumulated during
-/// handler execution, <see cref="IDomainEventsDispatcher.DispatchEventsAsync"/> returns
-/// immediately with zero overhead.
+/// <strong>Known defect — staged is not saved.</strong> Nothing on the outbox processing path
+/// calls <c>SaveChanges</c> after this dispatch, so unless a notification handler happens to
+/// commit that same unit of work afterwards, the cascade rows are discarded when the
+/// per-message scope is disposed. <b>Do not rely on cascade dispatch from a notification
+/// handler.</b> Recorded in the module README under "Still moving"; the fix is a code change and
+/// is not made here.
+/// </para>
+/// <para>
+/// <strong>Empty queue:</strong> when no domain events were accumulated,
+/// <see cref="IDomainEventsDispatcher.DispatchEventsAsync"/> drains an empty collection and
+/// returns without invoking a handler or a sink.
 /// </para>
 /// <para>
 /// Replaces the default <c>ForeachAwaitPublisher</c> when <c>AddMediatRDomainEvents()</c>

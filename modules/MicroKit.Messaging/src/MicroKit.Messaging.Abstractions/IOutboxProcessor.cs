@@ -10,9 +10,9 @@ namespace MicroKit.Messaging;
 /// <remarks>
 /// <b>Breaking change (ADR-MSG-015).</b> Previously returned <see cref="Task"/>. The batch now
 /// produces a result the hosting worker needs in order to adapt its cadence; a bare task discards
-/// it and leaves the worker on a fixed timer. This supersedes the return-type mandate of
-/// ADR-MSG-014 for the outbox seam only — <see cref="IInboxProcessor"/> still returns
-/// <see cref="Task"/> until the inbox lot restores the symmetry.
+/// it and leaves the worker on a fixed timer. This superseded the return-type mandate of
+/// ADR-MSG-014 for the outbox seam; ADR-MSG-017 then closed the inbox half, so
+/// <see cref="IInboxProcessor"/> is now symmetric.
 /// </remarks>
 public interface IOutboxProcessor
 {

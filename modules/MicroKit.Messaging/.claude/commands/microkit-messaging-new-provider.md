@@ -27,12 +27,26 @@ The plan must cover:
 - DI extension: `Add{ProviderName}Transport()` on `MessagingBuilder` (not `Add{ProviderName}Messaging()` on `IServiceCollection`)
 
 ### Serialization
-- Default: `System.Text.Json` via `MicroKit.Messaging.Serialization` (v2)
-- `MessageEnvelope<T>` serialization must be symmetric (serialize → deserialize → same object)
+- Default: `IMessageSerializer` — `Serialize(object)` / `Deserialize(string payload, string eventType)`.
+  It serializes the payload's **runtime type**, never `typeof(T)`. `MessageEnvelope<T>` is unused
+  in v1; do not build a provider around it without deciding that question first.
+- A source-generated implementation is planned for `MicroKit.Messaging.Serialization` (v2)
 
-### Error Handling
-- Non-transient broker errors → `IOutboxStore.MarkFailedAsync`
-- Transient errors → retry with back-off (defer to OutboxProcessor retry logic)
+### Error Handling — signal permanence with typed exceptions, never by writing state
+The provider does **not** settle messages. `OutboxProcessor` owns every state transition; a
+dispatcher's only job is to throw the right type.
+
+| Throw | When | Processor response |
+|---|---|---|
+| `OutboxPayloadException` | the row can never be dispatched without changing — unresolvable `EventType`, malformed JSON, a contract the broker rejects outright | dead-letter on FIRST sight |
+| `OutboxTransportUnavailableException` | connection refused, broker down, auth rejected, channel closed — the next message is certain to fail too | abort batch, release remainder, **no retry consumed** |
+| anything untyped | one message rejected while the transport is healthy | transient — retry with back-off |
+
+- ⚠ **Never throw `OutboxPayloadException` for** a broker nack, a timeout, a refused connection,
+  an HTTP 503 or a database timeout. Only proven permanence dead-letters; a provider that guesses
+  wrongly in this direction loses messages.
+- `IOutboxStore.MarkFailedAsync` **does not exist** — that API was deleted by the outbox claim
+  rewrite. A provider that tries to write status is reaching outside its seam.
 - Never silently swallow exceptions
 
 ### Tests

@@ -8,7 +8,7 @@ namespace MicroKit.Messaging.Processing;
 /// Topology-agnostic outbox batch engine. Atomically claims a batch of dispatchable
 /// <see cref="OutboxMessage"/> rows, dispatches each through
 /// <see cref="IOutboxDispatcher"/> inside its own execution scope, and settles every
-/// disposition in a single write.
+/// disposition with one <c>ApplyOutcomesAsync</c> call at the end of the batch.
 /// </summary>
 /// <remarks>
 /// <para>
@@ -33,9 +33,34 @@ namespace MicroKit.Messaging.Processing;
 /// </para>
 /// <para>
 /// <b>Delivery semantics.</b> At-least-once. A crash between dispatch and the settlement
-/// write redelivers that batch, so consumers must be idempotent — which is what the
-/// inbox is for. The window is one batch rather than one message; that widening is the
-/// deliberate price of collapsing <c>2N+1</c> round trips into two.
+/// write redelivers the whole batch, so consumers must be idempotent. Settlement is
+/// deferred to the end of the batch, so the replay window is one batch rather than one
+/// message.
+/// </para>
+/// <para>
+/// <b>Known defect — deferred settlement is not transactional, and the batch window is not
+/// free.</b> The settlement write and any work the dispatcher's target performed are two
+/// separate transactions: the target commits inside the per-message scope, the outcome is
+/// buffered, and <c>ApplyOutcomesAsync</c> runs afterwards on the batch-scoped store. A crash
+/// in between replays every message in the batch.
+/// <list type="bullet">
+///   <item>Where each consumer sits behind the <b>inbox</b>, that costs duplication only —
+///         <c>InProcessMessagePublisher</c> writes inbox rows, the unique index absorbs the
+///         redelivery, and no handler runs twice.</item>
+///   <item>Where the dispatcher invokes a handler <b>in-process with no inbox row</b>, it does
+///         not. <c>MediatROutboxDispatcher</c> publishes a notification through
+///         <c>IPublisher.Publish</c>, and notification handlers have no per-consumer inbox
+///         (ADR-MSG-009): a replay re-runs every one of them and re-writes whatever they
+///         wrote. A handler that projects into a table produces its rows a second time.</item>
+/// </list>
+/// The consumer side already solved this — <see cref="IInboxSettlementStore"/> stages the
+/// processed mark into the handler's own unit of work, so the mark and the side effects commit
+/// together. The outbox needs the counterpart: a settlement store that stages the
+/// <c>Published</c> mark into the transaction the dispatch target commits, instead of writing
+/// it in a separate one afterwards. That changes <see cref="IOutboxProcessorStore"/> and is
+/// deferred to its own lot; until then the mitigation is the documented one — <b>notification
+/// handlers on this path must be idempotent</b>, and the guarantee is at-least-once, not
+/// transactionally atomic as it is on the inbox.
 /// </para>
 /// <para>
 /// <b>Ordering.</b> The loop is sequential, so messages are dispatched in claim order.

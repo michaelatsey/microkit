@@ -41,10 +41,12 @@ Fail if any match found. Broker coupling is confined to provider packages only.
 
 ```bash
 grep -n "Include=\"MicroKit\.Messaging\"" \
-  modules/MicroKit.Messaging/src/MicroKit.Messaging.Testing/MicroKit.Messaging.Testing.csproj
+  modules/MicroKit.Messaging/src/MicroKit.Messaging.MediatR/MicroKit.Messaging.MediatR.csproj
+  # (MicroKit.Messaging.Testing is planned but not built — L0 finding #19)
 ```
 
-Fail if `MicroKit.Messaging` (Core) appears as a dependency of `MicroKit.Messaging.Testing`.
+Fail if `MicroKit.Messaging` (Core) appears as a dependency of `MicroKit.Messaging.Testing` —
+once that project exists. It does not today, so this check is inert.
 Testing depends on Abstractions only.
 
 > The pattern `Include="MicroKit\.Messaging"` (with surrounding quotes) matches the exact

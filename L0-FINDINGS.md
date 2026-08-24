@@ -879,3 +879,68 @@ change is free right now and effectively unavailable after `1.0.0` stable.**
 **Not fixed in this lot**, which was scoped to the four merge blockers. It is a deliberate deferral
 with a deadline, not an open question: the decision is already made, only the timing is open, and
 the timing runs out at the first stable release.
+
+---
+
+## Finding #23 — the outbox settles a batch in a transaction of its own, so a notification handler's writes replay with it
+
+**Severity: high on the MediatR path, none on the inbox path.** Surfaced by the XML-doc accuracy
+pass, which was checking whether the claim *"widening the settlement window only costs
+duplication"* is true. It is not.
+
+### What the code does
+
+`OutboxProcessor.ProcessBatchAsync` (`src/MicroKit.Messaging/Processing/OutboxProcessor.cs`) runs
+the batch in two phases:
+
+1. per message — a fresh `IExecutionScope`, `IOutboxDispatcher.DispatchAsync`, and the outcome
+   **buffered in memory** (`outcomes.Add(OutboxOutcome.Published(...))`);
+2. once, after the loop — `SettleAsync` → `IOutboxProcessorStore.ApplyOutcomesAsync` on the
+   **batch-scoped** store, which opens its own transaction.
+
+Whatever the dispatch target committed in phase 1 and the `Published` mark written in phase 2 are
+therefore **two different transactions**, separated by the rest of the batch. A crash, a lease
+expiry, or a settlement failure between them replays every message in the batch.
+
+### Why that is fine on one path and not the other
+
+| Dispatch target | Replay cost |
+|---|---|
+| `InProcessIntegrationDispatcher` → `IMessagePublisher` → **inbox rows** | Duplication only. The unique index on `(MessageId, ConsumerType)` absorbs the redelivery, `AddAsync` returns `AlreadyPresent`, and **no handler runs twice**. |
+| `MediatROutboxDispatcher` → `IPublisher.Publish` → **`INotificationHandler`s** | **Handlers re-execute.** There is no per-consumer inbox on the notification path — the glue's own docs say so (ADR-MSG-009) — so a replay re-runs every handler for the message and re-writes whatever they wrote. A handler that projects into a read model produces its rows a second time. |
+
+The second row is the default composition for anyone following the README: `AddInProcessTransport()`
+then `AddMediatRDomainEvents()`. The idempotency contract is documented on
+`AddMediatRDomainEvents`, `MediatROutboxDispatcher` and `OutboxDomainEventSink`, so a handler that
+honours it is safe — but the contract is doing load-bearing work that the design could carry
+instead, and it is stated as a retry contract, not as a batch-replay one.
+
+### The asymmetry is the point
+
+The consumer side already solved exactly this. `IInboxSettlementStore.StageProcessedAsync` stages
+the processed mark into the **handler's own unit of work**, so the mark and the side effects commit
+together or not at all — and `InboxMessageConfiguration` maps `ClaimToken` as a concurrency token so
+a lost lease rolls both back. `IInboxSettlementStore`'s own remarks justify that design partly by
+asserting the outbox does not need it "because that only widens duplication and an inbox
+deduplicates downstream". That premise holds only where an inbox is downstream. On the MediatR path
+nothing is.
+
+### Shape of the fix — not taken here
+
+The counterpart of `IInboxSettlementStore`: an outbox settlement store resolved from the
+**per-message** execution scope that stages the `Published` mark into the transaction the dispatch
+target is about to commit, with the batch-scoped `ApplyOutcomesAsync` reduced to the deferred cases
+(retry, dead-letter, release, and success where the target committed nothing). The inbox's
+`IsMarkUncommitted` fallback and its `HandlerDidNotCommit` warning transfer directly.
+
+**Why it is not in this lot.** It changes `IOutboxProcessorStore` — a public contract — adds a
+public interface, and requires the same PostgreSQL lease-expiry and concurrency tests the inbox lot
+needed to prove the equivalent inbox guarantee. That is an implementation lot, not a documentation
+pass. Two riders for whoever takes it: the outbox has **no** `ClaimToken` concurrency-token mapping
+today (`OutboxMessageConfiguration` maps it as a plain `Guid?`), so the inbox's fencing mechanism
+does not transfer for free; and the dispatcher is payload-agnostic by design, so the settlement seam
+must not assume the target owns a `DbContext` — a broker dispatcher owns nothing to join.
+
+**Documented, not fixed.** `OutboxProcessor`'s class remarks now carry this as a named known defect,
+and the false "only costs duplication" premise has been removed from both `OutboxProcessor` and
+`IInboxSettlementStore`.

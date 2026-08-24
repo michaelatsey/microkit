@@ -13,8 +13,16 @@ namespace MicroKit.Messaging;
 /// </para>
 /// <para>
 /// Broker providers (v2): replace this seam with a broker-specific implementation
-/// (e.g., <c>RabbitMqOutboxDispatcher</c>) without modifying the engine.
-/// Register via <c>AddHostedService&lt;OutboxProcessor&lt;TDispatcher&gt;&gt;()</c>.
+/// (e.g. <c>RabbitMqOutboxDispatcher</c>) without modifying the engine. Register it as a
+/// <b>scoped</b> <see cref="IOutboxDispatcher"/> from the provider's own
+/// <c>Add{Provider}Transport()</c> extension; the engine resolves it from the per-message
+/// execution scope. Nothing about this seam is a hosted service — <c>OutboxWorker</c> is the
+/// only hosted service on the outbox path, and it is internal.
+/// </para>
+/// <para>
+/// The message handed over is payload-agnostic. Implementations must not assume the row holds
+/// an <see cref="IIntegrationEvent"/>: see <see cref="OutboxMessage.EventType"/> for what it
+/// may actually carry.
 /// </para>
 /// </remarks>
 public interface IOutboxDispatcher

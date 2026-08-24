@@ -49,9 +49,15 @@ public interface IInboxProcessorStore
         int batchSize, TimeSpan leaseDuration, CancellationToken ct = default);
 
     /// <summary>
-    /// Persists the dispositions the handler transaction did not already settle, in a single
-    /// round trip.
+    /// Persists the dispositions the handler transaction did not already settle, in one call at
+    /// the end of the batch.
     /// </summary>
+    /// <remarks>
+    /// One <i>call</i>, not one statement — see the equivalent remark on
+    /// <see cref="IOutboxProcessorStore.ApplyOutcomesAsync"/>. In normal operation this list is
+    /// empty, because a successful handler settles its own row through
+    /// <see cref="IInboxSettlementStore"/>.
+    /// </remarks>
     /// <param name="claimToken">
     /// The token from the originating <see cref="InboxClaim"/>. Every write filters on it, so a
     /// row whose lease expired and was re-claimed elsewhere is left untouched rather than

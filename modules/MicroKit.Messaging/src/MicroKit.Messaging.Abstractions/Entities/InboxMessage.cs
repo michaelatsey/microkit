@@ -133,11 +133,18 @@ public sealed class InboxMessage
     public DateTimeOffset? NextRetryAtUtc { get; set; }
 
     /// <summary>
-    /// Gets or sets a value indicating whether this message has been permanently
-    /// dead-lettered (i.e. <c>MaxRetries</c> was exceeded). When <see langword="true"/>,
-    /// <see cref="Status"/> is <see cref="InboxMessageStatus.Failed"/> and no further
-    /// retry will be attempted. Symmetric with <c>OutboxMessage.DeadLettered</c>.
+    /// Gets or sets a value indicating whether this message has been permanently dead-lettered.
+    /// When <see langword="true"/>, <see cref="Status"/> is
+    /// <see cref="InboxMessageStatus.Failed"/> and no further retry will be attempted.
+    /// Symmetric with <c>OutboxMessage.DeadLettered</c>.
     /// </summary>
+    /// <remarks>
+    /// Reached two ways, and the retry count only explains one of them: when the incremented
+    /// <see cref="RetryCount"/> reaches <c>MaxRetries</c>, or <b>on the first attempt</b> when
+    /// processing raises <see cref="InboxPayloadException"/> — an unregistered consumer, or a
+    /// payload that cannot be read back. A dead-lettered row can therefore carry a
+    /// <see cref="RetryCount"/> of zero.
+    /// </remarks>
     public bool DeadLettered { get; set; }
 
     /// <summary>

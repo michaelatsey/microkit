@@ -13,11 +13,14 @@ namespace MicroKit.Messaging;
 /// happen effectively once, external effects at least once.
 /// </para>
 /// <para>
-/// An outbox may widen its crash window from one message to one batch, because that only widens
-/// duplication and an inbox deduplicates downstream. For the inbox there is no downstream: the
-/// inbox <i>is</i> the deduplication. A crash between a handler returning and its row being
-/// marked reruns the handler, with its business side effects. Batching that settlement would
-/// turn one possible replay into N.
+/// The outbox settles a whole batch at once. That is tolerable there <b>only</b> to the extent
+/// that its consumers sit behind this inbox, where a redelivery costs duplication that the
+/// unique index absorbs — it is not tolerable where the outbox dispatches to an in-process
+/// handler with no inbox row, which is a known defect recorded on <c>OutboxProcessor</c>, not a
+/// property to copy. For the inbox there is no downstream at all: the inbox <i>is</i> the
+/// deduplication. A crash between a handler returning and its row being marked reruns the
+/// handler, with its business side effects. Batching that settlement would turn one possible
+/// replay into N, with nothing underneath to absorb them.
 /// </para>
 /// <para>
 /// Resolved from the <b>per-message</b> execution scope, so the mark is staged on the same
