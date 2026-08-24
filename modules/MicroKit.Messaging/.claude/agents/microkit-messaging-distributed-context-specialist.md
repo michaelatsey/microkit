@@ -28,12 +28,17 @@ scoped, propagated, and isolated in all async scenarios — including parallel b
 
 ## Mandatory Loading Sequence
 
-1. `.claude/rules/microkit-messaging-architecture.md` — architecture rules
-2. `.claude/rules/microkit-messaging-architecture.md` — layer boundaries and processor rules
-3. `.claude/rules/microkit-messaging-outbox-inbox.md` — outbox/inbox processing patterns
-4. `modules/MicroKit.Messaging/src/MicroKit.Messaging/OutboxProcessor.cs` — if present
-5. `modules/MicroKit.Messaging/src/MicroKit.Messaging/InboxProcessor.cs` — if present
-6. `modules/MicroKit.Messaging/src/MicroKit.Messaging/MessageDispatcher.cs` — if present
+1. `.claude/rules/microkit-messaging-architecture.md` — architecture rules and ADRs
+2. `.claude/rules/microkit-messaging-outbox-inbox.md` — the canonical claim/settlement contracts
+3. `src/MicroKit.Messaging/Processing/OutboxProcessor.cs`
+4. `src/MicroKit.Messaging/Processing/InboxProcessor.cs`
+5. `src/MicroKit.Messaging/Processing/OutboxWorker.cs` and `InboxWorker.cs` — the
+   `BackgroundService` half; the processors are NOT hosted services
+6. `src/MicroKit.Messaging/Execution/PassThroughExecutionScopeFactory.cs` — read the known
+   defect in its remarks before reasoning about context propagation
+
+> `MessageDispatcher` does not exist and must not be re-introduced — the seam is
+> `IOutboxDispatcher`, pinned by `Core_DoesNotContainTypeNamedMessageDispatcher`.
 
 ---
 
@@ -42,80 +47,89 @@ scoped, propagated, and isolated in all async scenarios — including parallel b
 ### IHostedService lifecycle
 
 ```csharp
-// ✅ CORRECT — IHostedService is singleton; create a scope per execution cycle
-public sealed class OutboxProcessor(IServiceScopeFactory scopeFactory, ILogger<OutboxProcessor> logger)
-    : BackgroundService
+// ✅ CORRECT — the shipped split. OutboxWorker is the BackgroundService (singleton) and takes
+//    IServiceScopeFactory and nothing scoped. OutboxProcessor is a SCOPED service resolved from
+//    the per-iteration scope; it is not a hosted service.
+internal sealed class OutboxWorker(
+    IServiceScopeFactory scopeFactory,
+    OutboxProcessorOptions options,
+    ILogger<OutboxWorker> logger) : BackgroundService
 {
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
+        var delay = options.PollingInterval;
+
         while (!stoppingToken.IsCancellationRequested)
         {
-            await ProcessBatchAsync(stoppingToken).ConfigureAwait(false);
-            await Task.Delay(TimeSpan.FromSeconds(5), stoppingToken).ConfigureAwait(false);
-        }
-    }
-
-    private async Task ProcessBatchAsync(string tenantId, CancellationToken ct)
-    {
-        // ✅ Candidate scan — separate read-only scope
-        IReadOnlyList<OutboxMessage> candidates;
-        await using (var scanScope = scopeFactory.CreateAsyncScope())
-        {
-            var scanStore = scanScope.ServiceProvider.GetRequiredService<IOutboxProcessorStore>();
-            candidates = await scanStore.GetPendingAsync(batchSize: 20, tenantId, ct).ConfigureAwait(false);
-        }
-
-        // ✅ ONE scope per message — failure in one does not affect the others
-        foreach (var candidate in candidates)
-        {
+            // One scope per ITERATION — so the coordinator's DbContext is disposed between passes.
             await using var scope = scopeFactory.CreateAsyncScope();
-            var store = scope.ServiceProvider.GetRequiredService<IOutboxProcessorStore>();
-            var publisher = scope.ServiceProvider.GetRequiredService<IMessagePublisher>();
-            await ProcessMessageAsync(store, publisher, candidate, ct).ConfigureAwait(false);
+            var coordinator = scope.ServiceProvider.GetRequiredService<IOutboxCoordinator>();
+
+            var result = await coordinator.ExecuteAsync(stoppingToken).ConfigureAwait(false);
+            delay = NextDelay(result, delay);   // adaptive cadence, not a fixed timer
+
+            if (delay > TimeSpan.Zero)
+                await Task.Delay(delay, stoppingToken).ConfigureAwait(false);
         }
     }
 }
 
-// ❌ WRONG — injecting scoped service directly into singleton IHostedService
-public sealed class OutboxProcessor(IOutboxStore outboxStore) : BackgroundService { }
-//  ↑ outboxStore is scoped; captured in singleton → captive dependency bug
+// ❌ WRONG — injecting a scoped service into a singleton IHostedService
+internal sealed class OutboxWorker(IOutboxProcessorStore store) : BackgroundService { }
+//  ↑ store is scoped; captured in a singleton → captive dependency
 ```
+
+### The two scope levels, and why they differ
+
+```csharp
+// LEVEL 1 — per ITERATION, created by the worker. The coordinator and the batch-scoped
+//           IOutboxProcessorStore / IInboxProcessorStore live here. Batch-scoped is deliberate:
+//           ADR-MSG-002 shared-DB cross-tenant reservation. Do NOT move the claim store into the
+//           per-message scope.
+
+// LEVEL 2 — per MESSAGE, created by the processor through IExecutionScopeFactory. The dispatcher,
+//           the publisher, the handler and IInboxSettlementStore live here.
+await using var scope = await _executionScopeFactory.CreateScopeAsync(ctx, ct);
+```
+
+On the inbox, level 2 is load-bearing twice over: because `IInboxSettlementStore` is registered
+scoped and resolved from that same scope, it necessarily shares its `DbContext` with the handler,
+which is what lets the processed mark commit inside the handler's own transaction. Collapsing the
+levels, or registering either store as anything but scoped, breaks that **silently**.
 
 ### Tenant context propagation
 
 ```csharp
-// ✅ CORRECT — TenantId from OutboxMessage.TenantId; no IHttpContextAccessor
-// MicroKit.Messaging does NOT depend on MicroKit.Multitenancy.
-// TenantId is passed explicitly — no ambient context accessor needed.
-private async Task ProcessMessageAsync(
-    IOutboxProcessorStore store,
-    IMessagePublisher publisher,
-    OutboxMessage message,
-    CancellationToken ct)
+// ✅ CORRECT — TenantId comes off the row and is carried into the scope's IExecutionContext.
+//    MicroKit.Messaging does NOT depend on MicroKit.Tenancy (ADR-EXEC-001 inversion).
+private async ValueTask DispatchAsync(OutboxMessage message, CancellationToken ct)
 {
-    // Acquire lease first — returns false if another processor won
-    var lockExpiry = DateTimeOffset.UtcNow.AddMinutes(5);
-    var acquired = await store.AcquireLeaseAsync(message.Id, lockExpiry, ct).ConfigureAwait(false);
-    if (!acquired) return;
-
-    try
+    var ctx = new ExecutionContext
     {
-        // message.TenantId is always available — never read from IHttpContextAccessor
-        logger.LogDebug("Processing {MessageId} for tenant {TenantId}", message.Id, message.TenantId);
+        TenantId      = message.TenantId,                          // off the row, never ambient
+        CorrelationId = message.CorrelationId?.Value.ToString(),
+        CausationId   = message.CausationId?.Value.ToString(),
+    };
 
-        await publisher.PublishAsync(message, ct).ConfigureAwait(false);
-        await store.MarkPublishedAsync(message.Id, ct).ConfigureAwait(false);
-    }
-    catch (Exception ex)
-    {
-        logger.LogError(ex, "Failed to publish message {MessageId}", message.Id);
-        var nextRetry = message.RetryCount + 1;
-        if (nextRetry >= maxRetries)
-            await store.DeadLetterAsync(message.Id, ex.Message, ct).ConfigureAwait(false);
-        else
-            await store.MarkFailedAsync(message.Id, ex.Message, nextRetry, ct).ConfigureAwait(false);
-    }
+    // Scope creation sits INSIDE the caller's try: a tenant-aware factory may do I/O to resolve a
+    // per-tenant connection, and that failure is a dispatch failure. Outside, it would abort the
+    // batch without settling a single outcome — stranding every lease.
+    await using var scope = await _executionScopeFactory.CreateScopeAsync(ctx, ct);
+    var dispatcher = scope.ServiceProvider.GetRequiredService<IOutboxDispatcher>();
+
+    await dispatcher.DispatchAsync(message, ct).ConfigureAwait(false);
 }
+
+// The lease is NOT acquired per message. ClaimBatchAsync reserved the whole batch atomically
+// before this ran, and the disposition is buffered as an OutboxOutcome and settled once at the
+// end. There is no AcquireLeaseAsync / MarkPublishedAsync / MarkFailedAsync / DeadLetterAsync.
+
+// ⚠ KNOWN DEFECT — the context bridge does not reach constructor injection.
+// PassThroughExecutionScope wraps the provider, so `scope.ServiceProvider.GetService<IExecutionContext>()`
+// returns `ctx` — but MS DI activates CONSTRUCTOR dependencies from the real scope, which never
+// sees the wrapper. A scoped service taking IExecutionContext in its constructor gets the default
+// registration: a fresh CorrelationId and a null TenantId. L0 finding #21. Check this before
+// concluding that context propagation works on any given path.
 
 // ❌ WRONG — reading tenant from IHttpContextAccessor in a background processor
 var tenantId = _httpContextAccessor.HttpContext?.Items["TenantId"]; // null in background service
@@ -192,8 +206,9 @@ await Task.WhenAll(messages.Select(async m =>
 - [ ] `Task.Run` paths use `CreateScope`, not raw set before scheduling
 
 ### Test isolation
-- [ ] `FakeMessagePublisher` does not leak published messages between tests (fresh per test)
-- [ ] `InMemoryOutboxStore` / `InMemoryInboxStore` are fresh per test instance
+- [ ] Test doubles are fresh per test — a fresh NSubstitute mock and a fresh isolated SQLite
+      connection. (`FakeMessagePublisher` / `InMemoryOutboxStore` / `InMemoryInboxStore` do not
+      exist: `MicroKit.Messaging.Testing` was never built — L0 finding #19.)
 
 ---
 

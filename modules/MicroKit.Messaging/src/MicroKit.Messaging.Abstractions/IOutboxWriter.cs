@@ -4,8 +4,8 @@ namespace MicroKit.Messaging;
 /// Write-only access to the transactional outbox for use within domain command handlers.
 /// </summary>
 /// <remarks>
-/// <see cref="IOutboxWriter"/> is intentionally minimal — it exposes only
-/// <see cref="AddAsync"/>. Domain handlers must never have access to
+/// <see cref="IOutboxWriter"/> is intentionally minimal — it exposes staging only, through
+/// <see cref="AddAsync"/> and <see cref="AddBatchAsync"/>. Domain handlers must never have access to
 /// <see cref="IOutboxProcessorStore"/> methods such as <c>ClaimBatchAsync</c> or
 /// <c>ApplyOutcomesAsync</c>, which are reserved for the background processor.
 /// <para>

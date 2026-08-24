@@ -83,8 +83,11 @@ cat modules/MicroKit.Messaging/version.json
 MicroKit.Messaging.Abstractions
 MicroKit.Messaging
 MicroKit.Messaging.EntityFrameworkCore
-MicroKit.Messaging.Testing
+MicroKit.Messaging.MediatR
 ```
+
+> `MicroKit.Messaging.Testing` is **not** in this list: the project does not exist yet
+> (L0 finding #19). Add it here when it is built, not before.
 
 ## NOT Published (Phase 2 scaffolds, IsPackable=false)
 

@@ -1,3 +1,4 @@
+using MicroKit.Messaging.Options;
 using Microsoft.Extensions.Time.Testing;
 
 namespace MicroKit.Messaging.IntegrationTests.Stores;
@@ -683,4 +684,36 @@ public sealed class EfOutboxStoreTests
 
             (await Store(ctx).DeleteProcessedAsync(Now.AddDays(-7))).ShouldBe(0);
         });
+
+    /// <summary>
+    /// <c>OutboxProcessorOptions.MaxErrorMessageLength</c> documents itself as fitting the
+    /// <c>ErrorMessage</c> column, but the two live in different packages with nothing linking
+    /// them: the default is in Core, the column width in the EF Core configuration. Either can
+    /// be changed alone, and truncation past the column would surface only as a failed
+    /// settlement write in production — after a dispatch failure, which is already the worst
+    /// moment to lose the batch.
+    /// </summary>
+    [Fact]
+    public void DefaultErrorMessageLength_FitsTheMappedColumn()
+    {
+        var (conn, ctx) = CreateIsolatedDb();
+        using var _ = conn;
+        using var __ = ctx;
+
+        var columnLength = ctx.Model
+            .FindEntityType(typeof(OutboxMessage))!
+            .FindProperty(nameof(OutboxMessage.ErrorMessage))!
+            .GetMaxLength();
+
+        columnLength.ShouldNotBeNull("an unbounded ErrorMessage column makes truncation pointless");
+        new OutboxProcessorOptions().MaxErrorMessageLength.ShouldBeLessThanOrEqualTo(
+            columnLength!.Value,
+            "the truncation ceiling must fit the column it is truncating for");
+        new InboxProcessorOptions().MaxErrorMessageLength.ShouldBeLessThanOrEqualTo(
+            ctx.Model
+                .FindEntityType(typeof(InboxMessage))!
+                .FindProperty(nameof(InboxMessage.ErrorMessage))!
+                .GetMaxLength()!.Value,
+            "the inbox carries the same coupling");
+    }
 }

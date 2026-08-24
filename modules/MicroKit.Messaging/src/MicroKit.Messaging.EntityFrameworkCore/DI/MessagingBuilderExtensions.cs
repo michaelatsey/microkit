@@ -17,10 +17,23 @@ public static class MessagingBuilderExtensions
     /// <c>AddMicroKitMessaging()</c>.</param>
     /// <returns>The same <paramref name="builder"/> for chaining.</returns>
     /// <remarks>
-    /// The EF Core outbox store is registered once as scoped and resolved via factory lambdas
-    /// for both <see cref="IOutboxWriter"/> and <see cref="IOutboxProcessorStore"/> —
-    /// guaranteeing a single <typeparamref name="TContext"/> instance is shared within
-    /// the scope (no double-instantiation).
+    /// <para>
+    /// <b>The name is a misnomer: this wires the inbox too.</b> Each store is registered once as
+    /// scoped by concrete type, and every interface resolves to that instance through a factory
+    /// lambda — <see cref="IOutboxWriter"/>, <see cref="IOutboxProcessorStore"/>,
+    /// <see cref="IOutboxAdminStore"/> and <see cref="IOutboxRetentionStore"/> for the outbox;
+    /// <see cref="IInboxWriter"/>, <see cref="IInboxProcessorStore"/>,
+    /// <see cref="IInboxSettlementStore"/>, <see cref="IInboxAdminStore"/> and
+    /// <see cref="IInboxRetentionStore"/> for the inbox. One scope therefore holds one store
+    /// over one <typeparamref name="TContext"/>.
+    /// </para>
+    /// <para>
+    /// That is also what makes inbox settlement transactional. Resolved from the per-message
+    /// execution scope, <see cref="IInboxSettlementStore"/> necessarily shares its
+    /// <typeparamref name="TContext"/> with the handler resolved from the same scope, so the
+    /// staged processed mark commits in the handler's own transaction. <b>Registering either
+    /// store with any lifetime other than scoped breaks that guarantee silently.</b>
+    /// </para>
     /// </remarks>
     public static MessagingBuilder AddEfCoreOutbox<TContext>(this MessagingBuilder builder)
         where TContext : DbContext

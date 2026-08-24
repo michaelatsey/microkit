@@ -1,195 +1,159 @@
 # Skill: microkit-messaging-testing
 
-How to run, filter, and interpret tests for MicroKit.Messaging.
+How to run, filter, and write tests for MicroKit.Messaging.
 
-## Run All Tests
+> ⚠ Rewritten after the outbox (#87) and inbox (#90) claim rewrites. The per-message lease API
+> (`GetPendingAsync`, `AcquireLeaseAsync`, `MarkPublishedAsync`, `MarkFailedAsync`,
+> `DeadLetterAsync`, `MarkProcessingAsync`, `MarkProcessedAsync`) no longer exists, and
+> **`MicroKit.Messaging.Testing` has not been built** — see "Test doubles" below for what the
+> suite does instead.
+
+---
+
+## Projects that exist
+
+| Project | What it covers |
+|---|---|
+| `MicroKit.Messaging.UnitTests` | processors, workers, coordinators, publisher, serializer |
+| `MicroKit.Messaging.IntegrationTests` | EF stores on SQLite; `PostgreSql/` subset behind Docker |
+| `MicroKit.Messaging.ArchitectureTests` | dependency boundaries, ADR-MSG-009 carve-out |
+| `MicroKit.Messaging.MediatR.UnitTests` | glue registration, sink, dispatcher, message factory |
+| `MicroKit.Messaging.MediatR.IntegrationTests` | end-to-end domain event → outbox → notification |
+
+There is **no** `MicroKit.Messaging.PerformanceTests`. The directory exists but is empty and is
+absent from `MicroKit.Messaging.slnx`; do not add it to a run command until it holds a project.
+
+---
+
+## Run
 
 ```bash
-dotnet test modules/MicroKit.Messaging/MicroKit.Messaging.slnx
-```
+# Everything (this is the gate — must be green before merge)
+dotnet test modules/MicroKit.Messaging/MicroKit.Messaging.slnx -c Release
 
-## Run by Category
-
-```bash
-# Unit tests only
+# One project
 dotnet test modules/MicroKit.Messaging/tests/MicroKit.Messaging.UnitTests/
-
-# Integration tests (requires SQLite or Testcontainers)
 dotnet test modules/MicroKit.Messaging/tests/MicroKit.Messaging.IntegrationTests/
-
-# Architecture tests
 dotnet test modules/MicroKit.Messaging/tests/MicroKit.Messaging.ArchitectureTests/
-
-# Performance tests (BenchmarkDotNet — Release config required)
-dotnet run --project modules/MicroKit.Messaging/tests/MicroKit.Messaging.PerformanceTests/ -c Release
 ```
 
-## Filter Tests by Name
+### Filter
 
 ```bash
-# All outbox-related tests
-dotnet test modules/MicroKit.Messaging/MicroKit.Messaging.slnx \
-  --filter "FullyQualifiedName~Outbox"
+# The claim path, both sides
+--filter "FullyQualifiedName~ClaimBatchAsync"
 
-# Dedup tests only
-dotnet test modules/MicroKit.Messaging/MicroKit.Messaging.slnx \
-  --filter "FullyQualifiedName~ExistsAsync"
+# Settlement, including the token guard
+--filter "FullyQualifiedName~ApplyOutcomes"
 
-# Failed/retry tests
-dotnet test modules/MicroKit.Messaging/MicroKit.Messaging.slnx \
-  --filter "FullyQualifiedName~Failed OR FullyQualifiedName~Retry OR FullyQualifiedName~DeadLetter"
+# Ingestion dedup (NOT ~ExistsAsync — ExistsAsync is a diagnostic, not the gate)
+--filter "FullyQualifiedName~Redelivery|FullyQualifiedName~duplicate"
+
+# Retry / dead-letter / back-off
+--filter "FullyQualifiedName~Backoff|FullyQualifiedName~DeadLetter|FullyQualifiedName~Retry"
 ```
 
-## Background Worker Testing Patterns
+### PostgreSQL subset
 
-### Testing OutboxProcessor in isolation
+`tests/.../PostgreSql/` uses `[DockerRequiredFact]` and skips silently without Docker. Two of
+those tests decide whether the design is correct and cannot be replaced by reading code:
+
+- `InboxLeaseExpiryTests.WhenTheLeaseExpiresMidHandler_TheLoserRollsBackEntirelyAndTheWinnerStands`
+  — fails if `ClaimToken` is not mapped as an EF concurrency token. Verified by mutation.
+- `InboxClaimConcurrencyTests.ClaimBatchAsync_TwoProcessorsOverAFannedOutQueue_AreDisjointAndBounded`
+  — seeds rows sharing a `MessageId` across `ConsumerType` values and asserts **neither claim
+  exceeds `batchSize`**. That is the assertion the compound-key cross-product bug failed.
+
+**Run them before merging anything that touches a claim, a settlement or an EF configuration.**
+
+---
+
+## Test doubles — what the suite actually uses
+
+`MicroKit.Messaging.Testing` is planned but **not implemented**; `src/` holds four projects and
+none of them is it (L0 finding #19). Until it exists, follow what the suite does:
 
 ```csharp
-[Fact]
-public async Task ProcessBatch_WhenMessagesPending_PublishesAndMarksPublished()
-{
-    // Arrange
-    var store = new InMemoryOutboxStore();
-    var publisher = new FakeMessagePublisher();
-    var logger = NSubstitute.Substitute.For<ILogger<OutboxProcessor>>();
-    // OutboxMessage is sealed class with { get; set; } — not a record
-    var message = new OutboxMessage
-    {
-        Id = new MessageId(Guid.NewGuid()),
-        TenantId = "tenant-abc",
-        EventType = typeof(OrderPlacedEvent).FullName!,
-        Payload = """{"OrderId":"..."}""",
-        Status = OutboxMessageStatus.Pending,
-        OccurredOnUtc = DateTimeOffset.UtcNow,
-        CreatedAtUtc = DateTimeOffset.UtcNow,
-        CorrelationId = new CorrelationId(Guid.NewGuid()),
-    };
-    await store.AddAsync(message);
+// ✅ Seams → NSubstitute. Processors, coordinators and workers take interfaces; substitute them.
+var store = Substitute.For<IOutboxProcessorStore>();
+store.ClaimBatchAsync(Arg.Any<int>(), Arg.Any<TimeSpan>(), Arg.Any<CancellationToken>())
+     .Returns(new OutboxClaim(token, [message]));
 
-    var processor = new OutboxProcessor(
-        CreateScopeFactory(store, publisher), logger,
-        new OutboxProcessorOptions { BatchSize = 10 });
+// ✅ Clock and jitter → injected, so back-off is asserted against EXACT values, not a tolerance.
+var processor = new OutboxProcessor(
+    store, scopeFactory, options,
+    new FakeTimeProvider(Now),          // Microsoft.Extensions.TimeProvider.Testing
+    FixedRandom.NoJitter,               // draw = 1.0 → the ceiling exactly; TestFixtures.cs
+                                        // (FixedRandom.ZeroDelay is the 0.0 counterpart)
+    NullLogger<OutboxProcessor>.Instance);
 
-    using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(5));
-
-    // Act
-    await processor.ProcessBatchAsync(cts.Token);
-
-    // Assert
-    publisher.ShouldHavePublished<OrderPlacedEvent>();
-    var pending = await store.GetPendingAsync(10, tenantId: "tenant-abc", cts.Token);
-    pending.ShouldBeEmpty();
-}
+// ✅ Store behaviour → the REAL EF store on an isolated SQLite connection. The claim carries no
+//    provider-specific SQL, so the production code path is exactly what runs.
+var conn = new SqliteConnection("Data Source=:memory:");
+conn.Open();
+var ctx = new TestMessagingDbContext(
+    new DbContextOptionsBuilder<TestMessagingDbContext>().UseSqlite(conn).Options);
+ctx.Database.EnsureCreated();
+var store = new EfOutboxStore<TestMessagingDbContext>(ctx, new FakeTimeProvider(Now));
 ```
 
-### Testing idempotency gate (InboxProcessor)
+> **Why the real store and not a hand-written in-memory double.** The claim and the dedup gate are
+> both *database* behaviour — an atomic `UPDATE … WHERE` and a unique index. A double would assert
+> the behaviour it was written to have, which is precisely the bug class these tests exist to
+> catch.
+
+---
+
+## Writing tests — the constraints that bite
 
 ```csharp
-[Fact]
-public async Task ProcessMessage_WhenAlreadyProcessed_SkipsHandler()
-{
-    // Arrange
-    var inboxStore = new InMemoryInboxStore();
-    var handler = NSubstitute.Substitute.For<IMessageHandler<OrderPlacedEvent>>();
-    var messageId = new MessageId(Guid.NewGuid());
-    // consumerType comes from the handler type — not from the inbox row
-    var consumerType = handler.GetType().FullName!;
+// ✅ One isolated connection per test, and per Task.Run inside a test.
+private static (SqliteConnection conn, TestMessagingDbContext ctx) CreateIsolatedDb() { ... }
 
-    // Pre-seed as already processed
-    await inboxStore.AddAsync(new InboxMessage
-    {
-        MessageId = messageId,
-        ConsumerType = consumerType,
-        TenantId = "tenant-abc",
-        Status = InboxMessageStatus.Processed,
-        ReceivedAtUtc = DateTimeOffset.UtcNow,
-        EventType = typeof(OrderPlacedEvent).FullName!,
-        Payload = """{}""",
-        CorrelationId = new CorrelationId(Guid.NewGuid()),
-    });
+// ✅ Concurrency tests need a SECOND context over the SAME connection — one processor's
+//    change tracker must not be able to see the other's staged work.
+private static TestMessagingDbContext SecondContext(SqliteConnection conn) => new(...);
 
-    var processor = new InboxProcessor(
-        CreateScopeFactory(inboxStore, handler), logger,
-        new InboxProcessorOptions { BatchSize = 10 });
-
-    var envelope = new MessageEnvelope<OrderPlacedEvent>
-    {
-        MessageId = messageId,
-        TenantId = "tenant-abc",
-        Event = new OrderPlacedEvent(...),
-        CorrelationId = new CorrelationId(Guid.NewGuid()),
-    };
-
-    // Act — processor sees the existing row; handler must NOT be invoked
-    await processor.ProcessAsync(envelope, CancellationToken.None);
-
-    // Assert — handler was never called because idempotency gate fired
-    await handler.DidNotReceive().HandleAsync(Arg.Any<OrderPlacedEvent>(), Arg.Any<CancellationToken>());
-}
+// ❌ Shared static database name — state bleeds between tests.
+private static readonly string _dbName = "shared-test-db";
 ```
 
-### Tenant-scoped test helper pattern
+- **Shouldly only.** FluentAssertions is banned (Xceed commercial licence v8+). No `.Should().`
+- **`TenantId`** — set it in fixtures. `null` is *valid* in production (single-tenant,
+  ADR-MSG-008 §5), so test both a real tenant and `null` where a query filters on it.
+- **No `Thread.Sleep`.** Drive `FakeTimeProvider` instead; that is why it is injected.
+- **`GenerateDocumentationFile=false`** and **`NoWarn CS1591;CA1707`** in every test `.csproj`.
 
-```csharp
-// ✅ Tenant-scoped InMemoryOutboxStore query
-// GetPendingAsync always requires a tenantId — cross-tenant queries are forbidden
-[Fact]
-public async Task GetPendingAsync_OnlyReturnsTenantMessages()
-{
-    var store = new InMemoryOutboxStore();
+---
 
-    await store.AddAsync(CreateOutboxMessage(tenantId: "tenant-a"));
-    await store.AddAsync(CreateOutboxMessage(tenantId: "tenant-b"));
+## Banned-library checks
 
-    var tenantAMessages = await store.GetPendingAsync(
-        batchSize: 10, tenantId: "tenant-a", CancellationToken.None);
-    tenantAMessages.Count.ShouldBe(1);
-    tenantAMessages[0].TenantId.ShouldBe("tenant-a");
-}
+```bash
+# FluentAssertions — must return nothing
+grep -rn "FluentAssertions\|\.Should()\." modules/MicroKit.Messaging/ --include="*.cs"
+
+# MediatR — must return hits ONLY under MicroKit.Messaging.MediatR{,.UnitTests,.IntegrationTests}
+grep -rln "MediatR" modules/MicroKit.Messaging/src modules/MicroKit.Messaging/tests --include="*.cs"
 ```
 
-## Architecture Test Quick-Run
+> The second command **is expected to produce output**. `MicroKit.Messaging.MediatR` is the single
+> package permitted to reference MediatR / MediatR.Contracts (ADR-MSG-009 carve-out), and its two
+> test projects reference it transitively. A hit anywhere else is a violation.
+> `AllAssemblies_HaveNoMediatRContractsDependency` enforces exactly this split — trust the
+> architecture test over a grep.
+
+---
+
+## Architecture tests
 
 ```bash
 dotnet test modules/MicroKit.Messaging/tests/MicroKit.Messaging.ArchitectureTests/ -v normal
 ```
 
-Expected output: all tests pass. Any failure indicates a layer boundary violation.
+Any failure is a layer-boundary violation. Two are worth knowing about before you touch them:
 
-## Detecting Banned Libraries
-
-```bash
-# FluentAssertions check
-grep -rn "FluentAssertions\|\.Should()\." \
-  modules/MicroKit.Messaging/tests/ --include="*.cs" | head -20
-
-# MediatR.Contracts check
-grep -rn "MediatR\.Contracts\|INotification" \
-  modules/MicroKit.Messaging/ --include="*.cs" --include="*.csproj" | head -20
-```
-
-Both commands must return no output for a clean module.
-
-## SQLite Integration Test Isolation
-
-Each integration test must use an isolated SQLite in-memory database:
-
-```csharp
-// ✅ Per-test isolation — unique database name prevents cross-test contamination
-public class OutboxIntegrationTests : IAsyncLifetime
-{
-    private readonly string _dbName = $"test-{Guid.NewGuid():N}";
-
-    public async Task InitializeAsync()
-    {
-        // Each test gets its own SQLite in-memory database
-        var options = new DbContextOptionsBuilder<MessagingDbContext>()
-            .UseSqlite($"Data Source={_dbName};Mode=Memory;Cache=Shared")
-            .Options;
-        // ...
-    }
-}
-
-// ❌ Shared database across tests — state bleeds between tests
-private static readonly string _dbName = "shared-test-db"; // ← static = shared state
-```
+- `Core_DoesNotContainTypeNamedMessageDispatcher` — pins the removal of the old `MessageDispatcher`
+  in favour of the `IOutboxDispatcher` seam. Re-introducing that name is blocked deliberately.
+- `Core_DependsOn{SharedDbOutbox,SharedDbInbox}Coordinator_OnlyThroughI*Coordinator` — the
+  concrete coordinators stay `internal sealed` so a future per-tenant coordinator composes the
+  public engine rather than reimplementing it.

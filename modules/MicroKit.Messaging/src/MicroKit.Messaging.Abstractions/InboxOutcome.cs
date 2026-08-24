@@ -2,7 +2,7 @@ namespace MicroKit.Messaging;
 
 /// <summary>
 /// The disposition of one inbox row, buffered in memory during batch processing and applied to
-/// the store in a single round trip once the batch ends.
+/// the store by one <c>ApplyOutcomesAsync</c> call once the batch ends.
 /// </summary>
 /// <remarks>
 /// <para>

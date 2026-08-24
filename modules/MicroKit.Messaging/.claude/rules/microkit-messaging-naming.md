@@ -148,7 +148,7 @@ Examples:
 
 | Pattern | Example |
 |---------|---------|
-| `IMessageSerializer` | `Serialize(MessageEnvelope<T>)` → `string`; `Deserialize<T>(string)` → `MessageEnvelope<T>` |
+| `IMessageSerializer` | `Serialize(object)` → `string` (runtime type, never `typeof(T)`); `Deserialize(string payload, string eventType)` → `object?`. It serializes the **payload**, not an envelope: `MessageEnvelope<T>` is unused in v1 |
 | `SystemTextJsonMessageSerializer` | default v1 implementation using `System.Text.Json` |
 
 ---

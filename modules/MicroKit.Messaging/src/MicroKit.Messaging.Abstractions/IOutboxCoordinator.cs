@@ -7,9 +7,9 @@ namespace MicroKit.Messaging;
 /// <remarks>
 /// <b>Breaking change (ADR-MSG-015).</b> Previously returned <see cref="Task"/>, which discarded
 /// everything the pass learned and forced the hosting worker to poll on a fixed timer. Returning
-/// the aggregate result is what lets the worker adapt its cadence. This supersedes the
-/// return-type mandate of ADR-MSG-014 for the outbox seam only; the inbox pair still returns
-/// <see cref="Task"/> until the inbox lot restores the symmetry.
+/// the aggregate result is what lets the worker adapt its cadence. This superseded the
+/// return-type mandate of ADR-MSG-014 for the outbox seam; ADR-MSG-017 then closed the inbox
+/// half, so <see cref="IInboxCoordinator"/> is now symmetric.
 /// </remarks>
 public interface IOutboxCoordinator
 {

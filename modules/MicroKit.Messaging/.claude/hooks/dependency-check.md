@@ -20,7 +20,7 @@ grep -rn "MediatR\.Contracts" modules/MicroKit.Messaging/ \
 grep -rn "MicroKit\.Persistence\.EntityFrameworkCore" \
   modules/MicroKit.Messaging/src/MicroKit.Messaging.Abstractions/ \
   modules/MicroKit.Messaging/src/MicroKit.Messaging/ \
-  modules/MicroKit.Messaging/src/MicroKit.Messaging.Testing/ \
+  modules/MicroKit.Messaging/src/MicroKit.Messaging.MediatR/ \
   --include="*.csproj"
 ```
 

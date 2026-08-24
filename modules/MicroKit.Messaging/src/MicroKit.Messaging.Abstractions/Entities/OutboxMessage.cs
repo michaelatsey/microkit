@@ -30,12 +30,36 @@ public sealed class OutboxMessage
     public string? TenantId { get; set; }
 
     /// <summary>
-    /// Gets or sets the assembly-qualified CLR type name of the integration event
-    /// (e.g. <c>"MyApp.Orders.OrderPlacedEvent, MyApp"</c>).
+    /// Gets or sets the assembly-qualified CLR type name of the serialized
+    /// <see cref="Payload"/> — always its runtime type, never a declared or generic one.
     /// </summary>
+    /// <remarks>
+    /// <b>This is not necessarily an integration event, and on the domain-event path it is
+    /// not one at all.</b> The outbox is payload-agnostic: <c>OutboxMessageFactory.Create</c>
+    /// accepts <see cref="object"/> and stamps <c>payload.GetType().AssemblyQualifiedName</c>.
+    /// What ends up here depends on who wrote the row:
+    /// <list type="bullet">
+    ///   <item>via <c>MicroKit.Messaging.MediatR</c> — a
+    ///         <c>DomainEventNotification&lt;TEvent&gt;</c>, which is a MediatR
+    ///         <c>INotification</c> and is <b>not</b> an <see cref="IIntegrationEvent"/>;</item>
+    ///   <item>via a direct <see cref="IOutboxWriter"/> write — whatever that caller serialized,
+    ///         typically an <see cref="IIntegrationEvent"/>.</item>
+    /// </list>
+    /// Do not wire a publisher that assumes one kind. <c>IOutboxDispatcher</c> is the seam that
+    /// decides: <c>MediatROutboxDispatcher</c> routes by deserialized CLR type, and
+    /// <c>InProcessIntegrationDispatcher</c> dead-letters a payload that is not an
+    /// <see cref="IIntegrationEvent"/>.
+    /// <para>
+    /// The name is narrower than the contract. Widening it is a breaking change and is
+    /// deferred to the integration-event work.
+    /// </para>
+    /// </remarks>
     public string EventType { get; set; } = null!;
 
-    /// <summary>Gets or sets the JSON-serialized integration event payload.</summary>
+    /// <summary>
+    /// Gets or sets the JSON-serialized payload, produced by <c>IMessageSerializer</c> from the
+    /// type named in <see cref="EventType"/>. See that property for what it may hold.
+    /// </summary>
     public string Payload { get; set; } = null!;
 
     /// <summary>Gets or sets the current lifecycle state of this message.</summary>
@@ -48,7 +72,15 @@ public sealed class OutboxMessage
     /// </summary>
     public int RetryCount { get; set; }
 
-    /// <summary>Gets or sets the UTC time at which the domain event occurred.</summary>
+    /// <summary>
+    /// Gets or sets the UTC time at which the originating event occurred, supplied by the
+    /// caller from the event's own timestamp rather than generated at write time.
+    /// </summary>
+    /// <remarks>
+    /// Intrinsic to the event, not to the row (ADR-MSG-008 §4) — unlike
+    /// <see cref="CreatedAtUtc"/>. The claim orders on it, so it is also the outbox's dispatch
+    /// order.
+    /// </remarks>
     public DateTimeOffset OccurredOnUtc { get; set; }
 
     /// <summary>Gets or sets the UTC time at which this outbox row was created.</summary>
@@ -102,10 +134,16 @@ public sealed class OutboxMessage
 
     /// <summary>
     /// Gets or sets a value indicating whether this message has been permanently
-    /// dead-lettered after exceeding the maximum retry count.
-    /// Always <see langword="true"/> when <see cref="Status"/> is
-    /// <see cref="OutboxMessageStatus.Failed"/>.
+    /// dead-lettered. Always <see langword="true"/> when <see cref="Status"/> is
+    /// <see cref="OutboxMessageStatus.Failed"/>, and always set in the same write.
     /// </summary>
+    /// <remarks>
+    /// Reached two ways, and the retry count only explains one of them: when the incremented
+    /// <see cref="RetryCount"/> reaches <c>MaxRetries</c>, or <b>on the first attempt</b> when
+    /// the dispatcher raises <see cref="OutboxPayloadException"/> — a payload that cannot be
+    /// dispatched without the persisted row itself changing. A dead-lettered row can therefore
+    /// carry a <see cref="RetryCount"/> of zero.
+    /// </remarks>
     public bool DeadLettered { get; set; }
 
     /// <summary>

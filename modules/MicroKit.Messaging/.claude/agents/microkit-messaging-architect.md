@@ -84,40 +84,81 @@ When reviewing outbox/inbox proposals, always verify:
 ### At-least-once delivery
 ```
 OutboxMessage lifecycle must guarantee:
-  Pending    → message written atomically with the domain commit (via IOutboxWriter)
-  Processing → lease acquired atomically via AcquireLeaseAsync (single UPDATE WHERE)
-  Published  → broker/handler confirmed delivery (terminal)
-  Failed     → RetryCount >= MaxRetries, DeadLettered=true (terminal — ALWAYS terminal)
+  Pending    → message written atomically with the domain commit (via IOutboxWriter, staged only)
+  Processing → claimed by ClaimBatchAsync: ONE UPDATE WHERE over the candidate ids, replaying the
+               eligibility predicate inside the UPDATE, stamping Status + LockedUntilUtc +
+               ClaimToken. There is no per-message AcquireLeaseAsync — it was deleted.
+  Published  → dispatch confirmed (terminal)
+  Pending    → released: claimed but never attempted. Lease + token cleared, NO retry consumed.
+  Failed     → DeadLettered=true (terminal — ALWAYS terminal)
 
-Transient failures reset to Pending (NOT to Failed) with NextRetryAtUtc set.
-Failed status ALWAYS means permanent, terminal, DeadLettered=true.
+Transient failures reset to Pending (NOT to Failed) with NextRetryAtUtc set to full jitter over an
+exponential ceiling: Uniform(0, min(2^RetryCount s, MaxRetryBackoff)).
+Failed ALWAYS means permanent + DeadLettered=true, reached either at MaxRetries or on the FIRST
+attempt for OutboxPayloadException / InboxPayloadException.
 
 Any proposal that skips Pending→Processing atomically is REJECT.
-Any proposal using SELECT+mutate+SaveChanges for lease acquisition is REJECT (not atomic).
+Any proposal using SELECT+mutate+SaveChanges for the claim is REJECT (not atomic).
 Any proposal that sets Status=Failed for a transient (retryable) failure is REJECT.
+Any settlement write that does NOT filter on ClaimToken is REJECT — that is a lost update.
+Any proposal that conflates Released with Retry is REJECT — an outage would burn the whole
+  queue's retry budget.
 ```
 
-### Idempotency gate (Inbox)
-```
-Before processing any inbound message:
-  1. ExistsAsync(messageId, consumerType) — fast-path read optimization
-  2. If exists → skip
-  3. If not exists → AddAsync (compound PK is the real concurrency guard)
-  4. On DbUpdateException (unique constraint) → skip (concurrent processor won)
-  5. MarkProcessingAsync — acquire lease
-  6. handler.HandleAsync — invoke
-  7. MarkProcessedAsync — confirm
+### Idempotency gate (Inbox) — ingestion and drain are SEPARATE paths
 
-Any proposal that invokes the handler before AddAsync succeeds is REJECT.
-Any proposal that treats ExistsAsync as the sole concurrency guard (ignoring unique constraint) is REJECT.
+```
+INGESTION (publisher / broker adapter — never the processor):
+  1. AddAsync UNCONDITIONALLY. Read the InboxWriteResult.
+  2. Added          → carry on
+  3. AlreadyPresent → log Debug, count the metric, `continue` to the NEXT consumer
+  The UNIQUE INDEX on (MessageId, ConsumerType) is the sole authority. The PK is the RowId
+  surrogate. The store recognises a duplicate by POST-HOC verification after the failed insert,
+  never by decoding a provider error code.
+
+DRAIN (processor — never calls ExistsAsync or AddAsync):
+  1. ClaimBatchAsync — atomic, selects candidates by single-column RowId, stamps ClaimToken
+  2. per-message execution scope
+  3. StageProcessedAsync — stages the mark BEFORE the handler runs; false ⇒ lease lost, do not invoke
+  4. handler.HandleAsync — its SaveChanges commits side effects AND the mark together
+  5. IsMarkUncommitted ⇒ the handler committed nothing: deferred outcome + warning
+  Failures and releases only are buffered and written by one ApplyOutcomesAsync.
+
+Any proposal that guards AddAsync with ExistsAsync is REJECT — time-of-check-to-time-of-use race.
+Any proposal that makes a redelivery throw is REJECT — it is the NOMINAL path under at-least-once,
+  and treating it as a dispatch failure dead-letters correctly delivered messages (ADR-MSG-017).
+Any proposal that returns early instead of continuing to the next consumer is REJECT — consumers
+  after a duplicated one would silently lose their row.
+Any proposal that batches the SUCCESS settlement is REJECT — it turns one possible replay into N,
+  and the inbox has no downstream to absorb them.
+Any proposal that drops the ClaimToken concurrency-token mapping is REJECT — ownership would be
+  checked at read time only and the lost update returns.
+Any proposal that claims by filtering an UPDATE on the compound key with two Contains is REJECT —
+  it selects the CROSS PRODUCT and can exceed batchSize several times over.
 ```
 
-### Tenant isolation
+### Tenant isolation — NOT a query filter on these two tables
 ```
-Every query on OutboxMessage / InboxMessage must include TenantId as a filter.
-Cross-tenant message visibility is FORBIDDEN — no exceptions.
-A proposal that queries without TenantId is REJECT unless it's a system-level
-admin operation with explicit justification.
+⚠ This section previously said "every query must filter on TenantId, cross-tenant visibility
+FORBIDDEN". That was wrong and would REJECT the shipped design.
+
+OutboxMessage and InboxMessage are INFRASTRUCTURE tables, deliberately read CROSS-TENANT by the
+processors: ADR-MSG-002 specifies shared-DB cross-tenant reservation, ClaimBatchAsync takes no
+tenantId, and neither entity configuration carries a global query filter.
+
+The model is: TenantId TRAVELS ON THE ROW, and the processor contextualises per message by
+building an IExecutionContext from message.TenantId. Isolation is achieved by the execution scope,
+not by filtering the claim.
+
+TenantId is NULLABLE on both tables (ADR-MSG-008 §5) — Messaging must run without Tenancy, and in
+a single-tenant deployment every row's TenantId is null. Admin and retention APIs therefore take
+`string? tenantId = null` meaning "every tenant", which is also the only value that matches
+anything in a single-tenant deployment.
+
+A proposal that adds a tenant filter to the claim is REJECT — it breaks cross-tenant reservation.
+A proposal that makes TenantId non-nullable is REJECT — it breaks single-tenant deployments.
+A proposal that reads tenant from IHttpContextAccessor in a processor is REJECT — null in a
+  background service.
 ```
 
 ### Background worker scoping
