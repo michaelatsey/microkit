@@ -1,62 +1,49 @@
 namespace MicroKit.Messaging;
 
 /// <summary>
-/// Marker contract for integration events published across service boundaries
-/// via the transactional outbox.
+/// Marks a type as an integration event: a fact one bounded context publishes for others.
 /// </summary>
 /// <remarks>
-/// All integration events must implement this interface. Implementations should be
-/// <c>sealed record</c> types named with the past-tense domain language and an
-/// <c>Event</c> suffix (e.g. <c>OrderPlacedEvent</c>, not <c>OrderMessage</c>).
 /// <para>
-/// It extends <c>MicroKit.Domain.Events.IEvent</c>, the canonical event-taxonomy root
-/// (ADR-MSG-010). It does NOT extend <c>IDomainEvent</c>, <c>INotification</c>, or any MediatR
-/// type, and carries no domain-event semantics — it is a standalone transport contract.
+/// <b>A marker, deliberately (ADR-MSG-018).</b> This interface used to declare
+/// <c>MessageId</c>, <c>TenantId</c>, <c>CorrelationId</c>, <c>CausationId</c> and
+/// <c>OccurredOnUtc</c>. Every one of them then existed twice — on the event instance and on the
+/// persisted message row — with nothing keeping the two in agreement. An event built in a test, a
+/// tenant set before the ambient context resolved, and the row was written with one tenant while
+/// the trace said another: a discrepancy nothing detects, on the field that governs isolation.
 /// </para>
 /// <para>
-/// <c>Abstractions</c>, <c>Core</c>, <c>EntityFrameworkCore</c> and the broker providers have
-/// zero MediatR dependency, enforced by architecture tests. The single exception is the
-/// <c>MicroKit.Messaging.MediatR</c> glue package, which bridges domain-event notifications
-/// onto the outbox (ADR-MSG-009 carve-out).
+/// The identity was already contradictory. The interface required a <c>MessageId</c>, and the
+/// only thing that ever deduplicated on it was the inbox — which keys on the <i>outbox row's</i>
+/// id, not the event's. The declared identity was a field the contract demanded and the system
+/// worked around.
+/// </para>
+/// <para>
+/// An integration event now carries business payload only. Everything about its delivery lives on
+/// the message row, assigned at staging by <see cref="IIntegrationEventPublisher"/> from the
+/// ambient execution context:
+/// </para>
+/// <code>
+/// [IntegrationEvent("saasbtp.safety.constat-recorded.v1")]
+/// public sealed record ConstatRecorded(Guid ConstatId, Guid SiteId) : IIntegrationEvent;
+/// </code>
+/// <para>
+/// Distinct from a domain event, which never leaves its aggregate's transaction, and from a
+/// domain event notification, which never leaves the process. Three types rather than one is what
+/// lets an architecture test forbid an aggregate from referencing this one.
+/// </para>
+/// <para>
+/// <b>The <see cref="IEvent"/> base stays.</b> It ties this interface to <c>MicroKit.Domain</c>,
+/// the canonical event-taxonomy root, which would matter if the contract had to travel outward —
+/// but it does not. A transport carries an envelope: a contract name, a source, a serialized
+/// payload, metadata. Serialization happens at publication, inside this module, so nothing
+/// downstream ever names this type. The coupling exists and stops at the edge of one assembly.
+/// </para>
+/// <para>
+/// It does NOT extend <c>IDomainEvent</c>, <c>INotification</c>, or any MediatR type.
+/// <c>Abstractions</c>, <c>Core</c>, <c>EntityFrameworkCore</c> and the broker providers have zero
+/// MediatR dependency, enforced by architecture tests; the single exception is the
+/// <c>MicroKit.Messaging.MediatR</c> glue package (ADR-MSG-009 carve-out).
 /// </para>
 /// </remarks>
-public interface IIntegrationEvent : IEvent
-{
-    /// <summary>
-    /// Gets the unique identifier of this specific event instance.
-    /// Used as the message identifier in the outbox and for deduplication in the inbox.
-    /// </summary>
-    MessageId MessageId { get; }
-
-    /// <summary>
-    /// Gets the identifier of the tenant in whose context this event was published.
-    /// </summary>
-    /// <remarks>
-    /// Declared non-nullable, so the compiler requires a value in nullable-enabled code.
-    /// <b>Emptiness is not validated anywhere</b> — treat "must not be empty" as a requirement
-    /// on your event types, not as something this library checks.
-    /// <para>
-    /// A single-tenant deployment has no tenant to name. Messaging must run without
-    /// Multitenancy (ADR-EXEC-001), so the persisted columns
-    /// (<see cref="OutboxMessage.TenantId"/>, <see cref="InboxMessage.TenantId"/>) are
-    /// <b>nullable</b> and a null there is valid (ADR-MSG-008 §5). Populating a meaningful
-    /// tenant id is a host responsibility; this contract does not enforce it.
-    /// </para>
-    /// </remarks>
-    string TenantId { get; }
-
-    /// <summary>
-    /// Gets the correlation identifier linking this event to the originating request chain.
-    /// <see langword="null"/> when no upstream correlation context is available.
-    /// </summary>
-    CorrelationId? CorrelationId { get; }
-
-    /// <summary>
-    /// Gets the causation identifier of the message that directly caused this event.
-    /// <see langword="null"/> for root events originating from user commands.
-    /// </summary>
-    CausationId? CausationId { get; }
-
-    /// <summary>Gets the UTC time at which this event occurred.</summary>
-    DateTimeOffset OccurredOnUtc { get; }
-}
+public interface IIntegrationEvent : IEvent;

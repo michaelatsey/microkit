@@ -72,7 +72,5 @@ internal sealed record TestOrderPlacedEvent(
     Guid OrderId,
     decimal Amount) : IIntegrationEvent
 {
-    public CorrelationId? CorrelationId => null;
-    public CausationId? CausationId => null;
     public DateTimeOffset OccurredOnUtc { get; } = DateTimeOffset.UtcNow;
 }

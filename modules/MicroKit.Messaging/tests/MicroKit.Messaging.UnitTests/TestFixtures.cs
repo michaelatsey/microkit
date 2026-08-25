@@ -198,9 +198,5 @@ internal sealed class RecordingInboxHandler : IMessageHandler<InboxTestEvent>
 /// <summary>The integration event the inbox unit tests round-trip.</summary>
 internal sealed record InboxTestEvent(MessageId MessageId, string TenantId) : IIntegrationEvent
 {
-    public CorrelationId? CorrelationId => null;
-
-    public CausationId? CausationId => null;
-
     public DateTimeOffset OccurredOnUtc { get; } = DateTimeOffset.UnixEpoch;
 }

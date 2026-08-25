@@ -264,6 +264,151 @@ CREATE INDEX ix_inbox_messages_tenant_id_processed_at
 8. `MediatROutboxDispatcher` and `InProcessIntegrationDispatcher` throw `OutboxPayloadException`
    instead of `InvalidOperationException` on an unresolvable or malformed payload.
 
+### Added — integration event publishing
+
+The first half of the integration-event path: a notification handler states that a domain fact
+becomes a published contract, and the row is staged durably in the handler's own transaction.
+Nothing delivers it yet — the relay, the envelope and the broker adapters are the transport lot.
+
+See ADR-MSG-018.
+
+- **`IIntegrationEventPublisher`** — `PublishAsync<TEvent>(evt, occurredOnUtc, ct)` returns the
+  assigned `MessageId`. It **stages and never commits**: if the caller's transaction rolls back,
+  the event was never published. Same contract `IOutboxWriter.AddAsync` has one transaction
+  earlier.
+- **`[IntegrationEvent("name.v1")]`** — mandatory on every published event. The CLR type name
+  cannot serve as a wire identity: a consumer in another service holds a different type in a
+  different assembly, and a namespace rename would invalidate rows already in flight.
+- **`IntegrationEventMessage`** and its own table. Metadata lives in columns so a claim can filter
+  and order without parsing JSON. Two timestamps, deliberately: `CreatedAtUtc` (staging, always
+  set, what a claim orders on) and `OccurredOnUtc` (the business fact, optional). Ordering on the
+  business timestamp would let a backdated event jump the queue.
+- **Per-module registration.** `AddIntegrationEventContracts(source, …)` once per module,
+  `AddIntegrationEventPublishing()` once per application, `AddEfCoreIntegrationEvents<TContext>()`
+  for the staging writer. The `source` is stored per registration, not in a shared singleton that
+  the last module to register would overwrite for all the others. Composing every module into one
+  registry is also what makes a cross-module contract-name collision detectable at all.
+- **Startup validation.** A duplicated contract name fails at boot, not on the one code path that
+  emits that event — where it would roll back a transaction and be retried forever as a transient
+  failure.
+
+**A handler must publish inside a transaction it opened, and `CommitAsync` alone is not that.**
+`IUnitOfWork.CommitAsync` is a bare `SaveChangesAsync` running under the provider's implicit
+per-call transaction, which never appears as an open one. Publishing therefore belongs inside
+`ITransactionalContext.ExecuteAsync`; `IntegrationEventPublishException` says so at the point of
+failure, and `IIntegrationEventPublisher` carries a worked example.
+
+### Fixed
+
+- **`IExecutionContext` reached constructor injection for the first time.** The per-message
+  execution scope exposed the message-row context by wrapping the scope's `IServiceProvider`, and
+  that wrapper is consulted only for a direct `GetService` call — Microsoft DI activates
+  constructor dependencies from its own scope and never sees it. Every service taking
+  `IExecutionContext` as a constructor parameter therefore received the default registration: a
+  fresh `CorrelationId` with a null `TenantId`. Cascade outbox rows written by
+  `OutboxDomainEventSink` lost their tenant and had their correlation chain severed at exactly the
+  hop this module exists to preserve. `IExecutionContext` now resolves through a scoped
+  `ExecutionContextHolder` that the scope factory populates, so constructor injection sees the
+  message row. The `PassThroughExecutionScopeFactory` docs, which described the old behaviour as a
+  permanent defect, are corrected.
+
+### Changed — BREAKING (in-process transport withdrawn)
+
+- **`IMessagePublisher` and `InProcessMessagePublisher` are deleted.** The fan-out they performed —
+  one `InboxMessage` per registered consumer — moves into `InProcessIntegrationDispatcher`, with
+  **every field taken from the `OutboxMessage` row** rather than from the event instance.
+  Behaviour is unchanged; the metadata source is not.
+
+  This closes a latent bug. The inbox deduplicates on `(MessageId, ConsumerType)`, and that
+  `MessageId` must be stable across redeliveries of the same outbox row. Reading it off the
+  deserialized event survived that only by accident: the same payload happens to deserialize to
+  the same value, but nothing guaranteed it — not the contract, not the serializer, and not an
+  event type free to compute its identity in a property initializer.
+
+  **Migration:** none for consumers who compose with `AddInProcessTransport()`, which keeps its
+  `IMessageSerializer` and `IOutboxDispatcher` registrations. A consumer who implemented
+  `IMessagePublisher` themselves has no replacement in this release; the transport seam arrives
+  with the transport libraries.
+
+- **`IIntegrationEvent` loses every member and becomes a bare marker**, keeping its `IEvent` base.
+  `MessageId`, `TenantId`, `CorrelationId`, `CausationId` and `OccurredOnUtc` are gone. They
+  existed only because `IMessagePublisher` had no other metadata source, and every one of them
+  also existed as a column on the message row with nothing keeping the two in agreement — a
+  discrepancy nothing detects, on the field that governs isolation.
+
+  **Migration:** delete those members from your event types. They are inert the moment the
+  interface stops declaring them, so the compiler will point at each one (CA1822 on any that were
+  expression-bodied). Metadata is assigned at staging from the ambient `IExecutionContext`.
+
+  Both packages are `1.0.0-preview.*` with no external consumers, so both breaks ship outright
+  rather than accumulating a permanent shim. After `1.0.0` neither is available at any reasonable
+  cost.
+
+### Migration — integration event schema
+
+One new table. Nothing existing changes, so this is additive and needs no downtime.
+
+Consumers who call `modelBuilder.ApplyMessagingConfiguration()` and generate their own EF
+migrations need no manual step — the configuration is applied automatically. The DDL below is for
+consumers who own their schema, and is the script EF Core emits for this model on PostgreSQL,
+reproduced verbatim rather than transcribed.
+
+```sql
+CREATE TABLE "IntegrationEventMessages" (
+    "Id" uuid NOT NULL,
+    "ContractName" character varying(256) NOT NULL,
+    "Source" character varying(256) NOT NULL,
+    "Data" text NOT NULL,
+    "TenantId" character varying(256),
+    "CorrelationId" uuid,
+    "CausationId" uuid,
+    "TraceParent" character varying(64),
+
+    -- Two timestamps, deliberately. CreatedAtUtc is when the row was staged and is always set;
+    -- OccurredOnUtc is when the fact happened and is null when the caller did not say. A claim
+    -- orders on the first — ordering on the second would let a backdated event jump the queue
+    -- and make queue order depend on caller-supplied data.
+    "CreatedAtUtc" timestamp with time zone NOT NULL,
+    "OccurredOnUtc" timestamp with time zone,
+
+    -- Status answers "where is this now"; DeadLettered answers "was it ever given up on".
+    -- Orthogonal on purpose: a single Failed status would lose the second answer the moment a
+    -- requeue moved the row back to pending. A dead-lettered row reads Pending + flag set.
+    "Status" character varying(32) NOT NULL,
+    "DeadLettered" boolean NOT NULL,
+
+    "RetryCount" integer NOT NULL,
+    "NextRetryAtUtc" timestamp with time zone,
+    "LockedUntilUtc" timestamp with time zone,
+    "ClaimToken" uuid,
+    "ProcessedAtUtc" timestamp with time zone,
+    "ErrorMessage" character varying(2048),
+    CONSTRAINT "PK_IntegrationEventMessages" PRIMARY KEY ("Id")
+);
+
+-- The claim path: not dead-lettered, pending or past its back-off deadline, oldest staged first.
+CREATE INDEX "IX_IntegrationEventMessages_Dispatchable"
+    ON "IntegrationEventMessages" ("DeadLettered", "Status", "NextRetryAtUtc", "CreatedAtUtc");
+
+-- Read-back by token, and lease recovery after a crashed relay.
+CREATE INDEX "IX_IntegrationEventMessages_ClaimToken"
+    ON "IntegrationEventMessages" ("ClaimToken");
+
+-- Retention sweeps delivered rows by age.
+CREATE INDEX "IX_IntegrationEventMessages_TenantId_ProcessedAt"
+    ON "IntegrationEventMessages" ("TenantId", "ProcessedAtUtc");
+```
+
+> The EF Core configuration ships **unfiltered** indexes because `HasFilter` takes
+> provider-specific SQL and `MicroKit.Messaging.EntityFrameworkCore` is the provider-neutral
+> package. A consumer writing their own DDL should prefer the partial forms
+> (`WHERE "ClaimToken" IS NOT NULL`, `WHERE "DeadLettered" = false`).
+
+> ⚠ Identifier casing differs from the inbox migration published above, and the divergence is
+> pre-existing rather than introduced here: the shipped EF configuration emits quoted PascalCase
+> identifiers, while that earlier SQL block is snake_case. This block matches the code. See
+> `L0-FINDINGS.md` #24.
+
 ## [1.0.0-preview.4] — 2026-06-27
 
 ### Packages Released

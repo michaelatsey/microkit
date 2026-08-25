@@ -34,7 +34,7 @@ transaction is durable, and nothing durable goes unpublished.
 
 | Package | Description |
 |---------|-------------|
-| `MicroKit.Messaging.Abstractions` | Contracts: `IIntegrationEvent`, `IMessagePublisher`, `IMessageHandler<T>`, `IOutboxWriter`, the outbox/inbox stores, `OutboxMessage`, `InboxMessage` |
+| `MicroKit.Messaging.Abstractions` | Contracts: `IIntegrationEvent`, `IIntegrationEventPublisher`, `IMessageHandler<T>`, `IOutboxWriter`, the outbox/inbox stores, `OutboxMessage`, `InboxMessage`, `IntegrationEventMessage` |
 | `MicroKit.Messaging` | Outbox/inbox processors and workers, in-process transport, `OutboxMessageFactory`, DI |
 | `MicroKit.Messaging.EntityFrameworkCore` | `EfOutboxStore`, `EfInboxStore`, entity configuration for your `DbContext` |
 | `MicroKit.Messaging.MediatR` | Glue: puts MicroKit.MediatR domain events on the outbox as notifications |
@@ -131,6 +131,81 @@ public sealed class ProjectOrderHandler(IReadModel readModel)
 
 Sending the command writes the aggregate and one outbox row in a single transaction. `OutboxWorker`
 picks the row up on its next poll and publishes it; `ProjectOrderHandler` runs then, not before.
+
+---
+
+## Publishing an integration event
+
+A domain event is internal. An **integration event** is the contract you publish for other bounded
+contexts, and it is a different type on purpose — an aggregate should never reference one.
+
+```csharp
+// Business payload only. Everything about delivery — identity, tenant, correlation, timestamps —
+// is assigned when the row is staged. The attribute is the wire name and is mandatory: a CLR type
+// name cannot serve as one, because a consumer in another service holds a different type.
+[IntegrationEvent("shop.orders.order-placed.v1")]
+public sealed record OrderPlaced(Guid OrderId, Guid CustomerId) : IIntegrationEvent;
+```
+
+Composition — contracts once per module, publishing once per application:
+
+```csharp
+services.AddIntegrationEventContracts("/shop/orders", events =>
+{
+    events.Publishes<OrderPlaced>();
+});
+
+services.AddMicroKitMessaging()
+        .AddEfCoreOutbox<AppDbContext>()
+        .AddInProcessTransport()
+        .AddIntegrationEventPublishing()
+        .AddEfCoreIntegrationEvents<AppDbContext>();
+```
+
+The call site is a notification handler — the point where a domain fact becomes a published
+contract:
+
+```csharp
+public sealed class PublishOrderPlacedHandler(
+    IIntegrationEventPublisher publisher,
+    ITransactionalContext transaction,
+    IUnitOfWork unitOfWork)
+    : INotificationHandler<OrderPlacedNotification>
+{
+    public Task Handle(OrderPlacedNotification n, CancellationToken ct) =>
+        transaction.ExecuteAsync(
+            static async (state, token) =>
+            {
+                await state.Publisher.PublishAsync(
+                    new OrderPlaced(state.OrderId, state.CustomerId),
+                    occurredOnUtc: state.OccurredAt,
+                    token);
+
+                await state.UnitOfWork.CommitAsync(token);
+            },
+            (Publisher: publisher,
+             UnitOfWork: unitOfWork,
+             n.DomainEvent.OrderId,
+             CustomerId: n.DomainEvent.CustomerId,
+             OccurredAt: n.DomainEvent.OccurredAt),
+            ct);
+}
+```
+
+> ⚠ **`ExecuteAsync` is not decoration.** Publishing stages a row into the caller's transaction and
+> never commits, so without an open transaction the row goes to a change tracker nobody saves and
+> the event silently never existed. `IUnitOfWork.CommitAsync` **alone is not enough**: it is a bare
+> `SaveChangesAsync` under the provider's implicit per-call transaction, which never appears as an
+> open one. The publisher refuses rather than accept a publication it cannot honour, and
+> `IntegrationEventPublishException` says exactly this.
+
+Pass `occurredOnUtc` when you have it. The row keeps two timestamps — when the fact happened and
+when it was staged — and they are not the same instant: staging happens one relay later, minutes
+under load. Omitted, a consumer reads the relay's clock as the business time.
+
+**Nothing delivers these rows yet.** After the commit the event is durable and has been sent
+nowhere, which is the correct intermediate state: nothing is announced for a fact that did not
+happen, and the row survives a crash. The relay and the broker adapters are the transport work.
 
 ---
 

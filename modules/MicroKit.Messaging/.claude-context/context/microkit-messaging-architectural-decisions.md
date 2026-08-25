@@ -806,3 +806,179 @@ exception from `IExecutionScopeFactory` the two are indistinguishable, and guess
 not guessing. The right repair is startup validation — assert at registration that
 `IInboxSettlementStore` and every registered handler type resolve — which is tracked, not silently
 dropped.
+
+---
+
+## ADR-MSG-018: Integration Events Are a Marker Contract, and the In-Process Transport Is Withdrawn
+
+**Status:** Accepted
+**Date:** 2026-08-24
+**Supersedes (in part):** ADR-MSG-010 — the `IIntegrationEvent : IEvent` line stands; nothing else about the interface does
+**Related:** ADR-MSG-002, ADR-MSG-008, ADR-MSG-009, ADR-EXEC-001
+
+### Context
+
+`IIntegrationEvent` was a typed contract carrying its own identity and execution context:
+
+```csharp
+public interface IIntegrationEvent : IEvent
+{
+    MessageId MessageId { get; }
+    string TenantId { get; }
+    CorrelationId? CorrelationId { get; }
+    CausationId? CausationId { get; }
+    DateTimeOffset OccurredOnUtc { get; }
+}
+```
+
+Every one of those fields also exists as a column on the message row, with nothing keeping the two
+in agreement. An event built in a test, a tenant set before the ambient context resolved, and the
+row is written with one tenant while the trace says another — a discrepancy nothing detects, on the
+field that governs isolation.
+
+**The review that settled this found the cause rather than the symptom.** The members were not a
+design preference; they were forced by a seam. `IMessagePublisher.PublishAsync<T>(T evt, ct)`
+receives an event and nothing else, so `InProcessMessagePublisher` — the only implementation ever
+written — had to reconstruct `MessageId`, `TenantId`, `CorrelationId` and `CausationId` by reading
+them off the event instance. It had no other source. The interface carried metadata because the
+seam threw the metadata away.
+
+`InProcessIntegrationDispatcher`, one call earlier, holds the `OutboxMessage` those four fields are
+columns on.
+
+### Decision
+
+**1. `IIntegrationEvent` becomes a marker.** It loses every member and keeps the `IEvent` base. All
+message metadata lives on `IntegrationEventMessage`, assigned by `IIntegrationEventPublisher` at
+staging from the ambient `IExecutionContext`.
+
+```csharp
+[IntegrationEvent("saasbtp.safety.constat-recorded.v1")]
+public sealed record ConstatRecorded(Guid ConstatId, Guid SiteId) : IIntegrationEvent;
+```
+
+**2. The contract name moves to `[IntegrationEvent]`.** The assembly-qualified CLR type name is not
+usable as a wire identity: a namespace rename invalidates rows already in flight, and a consumer in
+another service holds a different type in a different assembly, so the name could never match. This
+is what makes extracting a module into its own service invisible to consumers.
+
+**3. `IMessagePublisher` and `InProcessMessagePublisher` are deleted, and the fan-out moves into
+`InProcessIntegrationDispatcher`.** Every field of the inbox row now comes from the outbox row.
+This is the part that makes decision 1 possible rather than merely tolerable: removing the seam
+removes the reason the members existed.
+
+**4. `IIntegrationEventPublisher` requires an open transaction and says so loudly.** A row staged
+with no transaction to commit it is not an error anyone sees — the change tracker is discarded and
+the event silently never existed.
+
+**5. Publication is registered explicitly per module,** with the contract name **and source** stored
+per registration rather than in a shared options singleton, which the last module to register would
+otherwise overwrite for all the others.
+
+### Rationale
+
+**Single source of truth, not aesthetics.** With the typed contract there is no mechanism keeping
+`event.TenantId` and `row.TenantId` in agreement. The marker removes the question: there is one
+tenant, read from the execution context at staging.
+
+**The identity was already contradictory — and the contradiction was load-bearing.** The interface
+declared a `MessageId`, but the value the inbox deduplicates on is the *outbox row's* id. Reading it
+off the deserialized event survived redelivery only by accident: the same payload happens to
+deserialize to the same value, but nothing guaranteed it — not the contract, not the serializer, and
+not an event type free to compute its identity in a property initializer. Sourcing it from the row
+makes the guarantee structural. That latent bug is closed by decision 3, not merely avoided.
+
+**The `MicroKit.Domain` coupling is solved by the transport boundary, not by the hierarchy.** A
+transport carries an envelope — contract name, source, serialized payload, metadata — and none of
+those fields requires knowing the event type. Serialization happens at publication, inside this
+module, so nothing downstream ever names `IIntegrationEvent`. The coupling exists and stops at the
+edge of one assembly, which is why `IEvent` stays.
+
+**Two timestamps, because they are two facts.** `CreatedAtUtc` is when the row was staged and is
+always set; `OccurredOnUtc` is when the fact happened and is null when the caller did not say. A
+claim orders on the first — ordering on the second would let a backdated event jump the whole queue
+and make queue order depend on caller-supplied data.
+
+**A separate table.** The outbox carries domain event notifications and is drained by a MediatR
+fan-out. Behind a discriminator, one misregistration would feed integration events into that
+fan-out with a `WHERE` clause as the only thing preventing it. Separate tables make the mistake
+inexpressible rather than detectable — and that exact confusion has already cost this codebase once.
+
+### Consequences
+
+**The in-process transport is withdrawn.** `IMessagePublisher` had one implementation and one
+consumer; both are gone. `AddInProcessTransport()` keeps its `IMessageSerializer` and
+`IOutboxDispatcher` registrations — removing the latter would break `AddMediatRDomainEvents()`,
+which throws without a dispatcher to decorate. A real transport seam arrives with the transport
+libraries; nothing here is generalised in anticipation of it.
+
+**Breaking on a published package, deliberately now.** Both `MicroKit.Messaging.Abstractions` and
+`MicroKit.Messaging` are `1.0.0-preview.*` with no external consumers. After `1.0.0` neither change
+is available at any reasonable cost.
+
+**An integration event instance no longer knows its own identity.** Code that needs it takes the
+`MessageId` returned by `PublishAsync`. That is a real loss for a handler wanting to log the id
+before staging — and it is the point: before staging there is no message, therefore no identity.
+
+**`MessageEnvelope<T>` still declares `MessageId`, `TenantId` and `OccurredOnUtc` as its own
+parameters.** It is dead public API — nothing in v1 constructs, consumes or transmits one — and is
+reserved for the transport work. Left alone deliberately; it is not evidence the metadata still
+belongs on the contract.
+
+**Composition is split three ways**, because `MicroKit.Messaging` has no EF Core dependency and must
+not acquire one:
+
+```csharp
+services.AddIntegrationEventContracts("/saasbtp/safety", e => e.Publishes<ConstatRecorded>());
+services.AddMicroKitMessaging()
+        .AddIntegrationEventPublishing()             // registry + publisher + startup validation
+        .AddEfCoreIntegrationEvents<AppDbContext>(); // the staging writer
+```
+
+**Startup validation is not optional.** The registry is a factory-built singleton, so it would be
+constructed on first resolve — which on this path is the first publication, inside a handler, inside
+a transaction. A duplicated contract name would roll that transaction back and be classified as a
+transient failure, retrying forever against something no retry can fix.
+`IntegrationEventRegistryValidator` resolves it at boot instead.
+
+**`ClaimToken` is mapped as an EF concurrency token**, unlike `OutboxMessage.ClaimToken` and like
+`InboxMessage.ClaimToken`. The relay that consumes it is a later lot; the column belongs to the row
+now, and leaving the mapping to that lot means the day someone forgets, no test that does not
+exercise concurrency will notice. Pinned by a model-metadata assertion for exactly that reason.
+
+### Enforcement
+
+- `MicroKit.Domain` must not reference the publishing assembly.
+- In the consuming application, because these are application rules a library cannot impose:
+  no aggregate references `IIntegrationEvent`; no `ICommandHandler` references
+  `IIntegrationEventPublisher`; every `IIntegrationEvent` in a module is registered; and the set of
+  contract names matches a snapshot, so an accidental rename fails the build.
+
+### Alternatives considered
+
+**Keep the typed contract and drop the execution context as a source.** Would make the event the
+single source of truth instead. Rejected: it forces every notification handler to populate five
+fields correctly on every event, and puts tenant plumbing into the code that translates a domain
+fact — precisely the coupling the execution scope exists to remove.
+
+**Keep both and reconcile at staging.** Rejected: it makes the discrepancy silent rather than
+impossible, and "reconcile" would mean choosing a winner on the tenant field.
+
+**Make the interface a marker but keep `IMessagePublisher`.** Rejected on discovery that it is not
+possible: the publisher has no other metadata source, so the in-process path would have had to be
+given an envelope — the transport work this lot explicitly defers. Keeping the seam and keeping the
+members was the only consistent alternative, and it preserves the defect.
+
+**Have `InProcessIntegrationDispatcher` throw "no transport registered" instead of fanning out.**
+Rejected on evidence: the claim that no producer of integration events exists is false.
+`MicroKit.Messaging.MediatR.IntegrationTests.InboxRedeliveryTests` drives that exact path and
+asserts the fan-out, and it must pass unchanged.
+
+**Move `IIntegrationEvent` into `MicroKit.Domain` next to `IDomainEvent`.** Rejected: if both
+interfaces live in the assembly the domain references by construction, "no aggregate references
+`IIntegrationEvent`" stops being a dependency constraint and becomes a type inspection — verifiable,
+but weaker and easier to work around.
+
+**Upcasters instead of a version suffix in the contract name.** Rejected as premature: schema
+evolution machinery carries a permanent maintenance cost before a single breaking change has
+occurred. Versioning stays additive-only. Revisit under the rule of three.

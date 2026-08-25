@@ -829,6 +829,16 @@ CorrelationId, CausationId) rather than the default fresh-Guid factory value"*, 
 a **"Contract for custom implementations"** telling third parties to bridge the context the same
 way. That instruction cannot be honoured by the mechanism it describes.
 
+> **FIXED** by the integration-event publishing lot (ADR-MSG-018). `IExecutionContext` now
+> resolves through a scoped `ExecutionContextHolder` that `PassThroughExecutionScopeFactory`
+> populates before returning the scope, so constructor injection sees the message row. The false
+> XML doc was corrected first, as the rider below asked. The wrapper is kept for direct
+> `GetService` callers. Pinned by
+> `IntegrationEventStagingTests.ThePublisherReadsTheMessageScopesExecutionContext`, which asserts a
+> staged row carries the scope's tenant and correlation id — an assertion that could not have
+> passed before the fix. `TestExecutionScopeFactory` still discards the context parameter, so the
+> unit-test double remains weaker than production; that part stands.
+
 **Not fixed here**, because the fix is a change to shared execution infrastructure that both the
 outbox and the inbox depend on, and it wants its own lot with the outbox's cascade path under test.
 The shape: register a scoped `ExecutionContextHolder`, have `IExecutionContext` resolve from it,
@@ -944,3 +954,198 @@ must not assume the target owns a `DbContext` — a broker dispatcher owns nothi
 **Documented, not fixed.** `OutboxProcessor`'s class remarks now carry this as a named known defect,
 and the false "only costs duplication" premise has been removed from both `OutboxProcessor` and
 `IInboxSettlementStore`.
+
+---
+
+# Findings — integration event publishing (`feature/messaging/integration-event-publishing`)
+
+Findings surfaced while building `IIntegrationEventPublisher` and withdrawing the in-process
+transport (ADR-MSG-018). Same convention as the groups above: these are findings, not decisions.
+Nothing below was fixed, and each says why.
+
+Reproduced by: `dotnet test modules/MicroKit.Messaging/MicroKit.Messaging.slnx -c Release`
+
+---
+
+## Finding #24 — the published migration SQL and the shipped EF mapping disagree on identifier casing
+
+**Severity: medium for any consumer who owns their own DDL, none for anyone who generates
+migrations.** Pre-existing; surfaced by having to write a second migration block and needing to
+decide which convention it followed.
+
+The EF Core configurations emit **quoted PascalCase, unschemaed** identifiers. That is not
+inference — it is the script `Database.GenerateCreateScript()` produces for this model on Npgsql:
+
+```sql
+CREATE TABLE "InboxMessages" (
+    "RowId" uuid NOT NULL,
+    "MessageId" uuid NOT NULL,
+    ...
+```
+
+The migration published in `CHANGELOG.md` for the inbox claim rewrite is **snake_case**:
+
+```sql
+ALTER TABLE inbox_messages ADD COLUMN row_id uuid;
+CREATE INDEX ix_inbox_messages_claim_token ON inbox_messages (claim_token);
+```
+
+Under PostgreSQL's folding rules `inbox_messages` and `"InboxMessages"` are different tables, and
+`row_id` is a different column from `"RowId"`. A consumer who applied that block literally against
+a schema this library created did not migrate the table the code reads.
+
+**Both can be right, and that is the actual problem: the module never says which it assumes.** The
+snake_case form is correct for a consumer who applies a naming convention
+(`UseSnakeCaseNamingConvention()`, or `EFCore.NamingConventions`) — a common and reasonable choice,
+and the one the SQL was evidently written for. The PascalCase form is correct for everyone else,
+which is the default. There is no note anywhere telling a reader which world they are in.
+
+**Not fixed**, because picking one is a documentation decision with a real consequence either way:
+declaring PascalCase canonical invalidates a migration block that has already shipped, and
+declaring snake_case canonical means the library's own default output is non-canonical. It wants a
+short section in the README stating the assumption once, plus a re-issue of the inbox block in the
+chosen form. **The integration-event migration added in this lot matches the EF mapping**, is
+labelled as doing so, and carries a pointer to this finding — a migration that does not match the
+code the module emits is worse than no migration, so the divergence is now at least visible.
+
+Related: the README already records "no published canonical SQL" as open debt (`README.md` §Schema
+ownership). This finding is the sharper half of it — not that the SQL is missing, but that the SQL
+that exists contradicts the code.
+
+---
+
+## Finding #25 — `ReceivedAtUtc` is still stamped from the wall clock, and finding #14 has moved house
+
+**Severity: low. Pointer update, not a new defect.**
+
+Finding #14 recorded that `ReceivedAtUtc` is stamped with `DateTimeOffset.UtcNow` rather than an
+injected `TimeProvider`. That line lived in `InProcessMessagePublisher`, which this lot deleted. The
+fan-out moved into `InProcessIntegrationDispatcher`
+(`src/MicroKit.Messaging/Dispatch/InProcessIntegrationDispatcher.cs`) and the wall-clock call moved
+with it, unchanged:
+
+```csharp
+ReceivedAtUtc = DateTimeOffset.UtcNow,
+```
+
+**Deliberately not fixed while moving it**, even though `TimeProvider` is already registered by
+`AddMicroKitMessaging` and injecting it here would have cost one constructor parameter. The move
+was scoped to relocating behaviour without altering it, and silently repairing a tracked finding in
+the same change makes the diff lie about what it did — the next reader would find #14 apparently
+resolved with no record of when or why. Whoever takes #14 should take it on both the inbox
+ingestion path and here, in one lot.
+
+---
+
+## Finding #26 — three DI methods each `TryAdd` the same `IMessageSerializer` default, and none owns it
+
+**Severity: low, and the shape is load-bearing enough to be worth naming.** Surfaced by a real
+activation failure: `AddIntegrationEventPublishing()` initially did not register a serializer, and
+composing integration-event publishing *without* `AddInProcessTransport()` threw
+`Unable to resolve service for type 'IMessageSerializer'` when the publisher was first activated —
+inside a handler, inside a transaction. Fixed in this lot by adding a fourth `TryAdd`.
+
+`IMessageSerializer` is now defaulted by three separate composition methods:
+
+| Method | Package |
+|---|---|
+| `AddInProcessTransport()` | `MicroKit.Messaging` |
+| `AddIntegrationEventPublishing()` | `MicroKit.Messaging` |
+| `AddMediatRDomainEvents()` | `MicroKit.Messaging.MediatR` |
+
+Each uses `TryAdd`, so composition is order-independent and the duplication is harmless today. What
+it signals is that a service every path needs has no owner: `AddMicroKitMessaging()` registers the
+clock, the jitter source and the metrics with `TryAdd` for exactly this reason and could register
+the serializer too, leaving the three call sites to override rather than to supply.
+
+**Not fixed**, because moving it is a behavioural change on a published surface — a consumer who
+today registers their own serializer *after* `AddMicroKitMessaging()` but *before*
+`AddInProcessTransport()` relies on the current ordering, and `TryAdd` would then keep the wrong
+one. It is a small change that wants its own reasoning, not a drive-by.
+
+The general failure mode is L0 finding #1's: a service resolved lazily on a rarely-exercised path
+turns a composition gap into a runtime exception long after startup. Both new composition methods in
+this lot are covered by tests that resolve the publisher from a real container, which is what caught
+this one.
+
+---
+
+## Finding #27 — the L0 harness fixture still models the pre-marker event shape
+
+**Severity: cosmetic. Recorded so the next reader does not mistake it for a live contract.**
+
+`IIntegrationEvent` is now a bare marker, but
+`tests/MicroKit.Messaging.MediatR.IntegrationTests/Fixtures/InboxRedeliveryFixtures.cs` still
+declares `WidgetSyncedEvent` with `MessageId`, `TenantId`, `CorrelationId`, `CausationId` and
+`OccurredOnUtc`. It compiles and passes: those are now the record's own properties, and
+`SyncWidgetHandler` genuinely reads two of them to build the outbox row it seeds.
+
+**Deliberately not touched.** The harness is the gate that proved the deletion was bounded
+correctly, and it had to pass **unchanged** for that evidence to mean anything — editing it to look
+tidier would have destroyed the only signal that mattered. It is worth simplifying in a later lot,
+where a failure would be attributable.
+
+The comment on line 17 — `// Never null or empty in fixtures — messaging rule 3` — refers to a rule
+about the *persisted* `TenantId` column, which is still accurate; it no longer refers to an
+interface requirement.
+
+---
+
+## Finding #28 — `InProcessIntegrationDispatcher` now holds two roles, and T3 must split the type rather than add a transport beside it
+
+**Severity: none today. This is a recorded staging point, not an oversight** — the fold was the
+correct move for this lot and is deliberate. It is recorded because the next lot has to undo half
+of it, and the half is not obvious from the type's name.
+
+`src/MicroKit.Messaging/Dispatch/InProcessIntegrationDispatcher.cs` currently does two things:
+
+**1. Routing.** It is the `IOutboxDispatcher` seam — the point where an outbox row is deserialized
+and sent somewhere. `MediatROutboxDispatcher` decorates it to sort a domain-event notification from
+an integration event (`payload is INotification` first, delegate otherwise; ADR-MSG-009). **This
+role is legitimate and stays.** It is what `IOutboxDispatcher` exists to be, and the decorator
+composition around it is settled.
+
+**2. Delivery.** It writes one `InboxMessage` per registered consumer for the in-process path. This
+is **transport work**, folded in from the deleted `InProcessMessagePublisher` by ADR-MSG-018.
+
+### Why the fold was right, and why it is still not the end state
+
+The fold was not a convenience. `IMessagePublisher.PublishAsync<T>(T evt, ct)` received an event and
+nothing else, so the fan-out behind it had no access to the `OutboxMessage` and had to reconstruct
+`MessageId`, `TenantId`, `CorrelationId` and `CausationId` by reading them off the event instance.
+That is the sole reason `IIntegrationEvent` declared those members, and it is why the inbox dedup key
+was read from a deserialized payload — surviving redelivery only by accident. Removing the seam
+removed both problems at once: the members lost their justification, and the dedup key became the
+outbox row's own id. Neither repair was available while the publisher existed.
+
+What the fold did **not** do is make inbox writing a dispatcher responsibility. It parked it there,
+in the one type that already held the row.
+
+### What T3 has to do with it
+
+**Split the type. Do not add a transport alongside it.**
+
+On the Messaging side, writing an inbox row is **envelope reception**, not dispatch: a message
+arrives from somewhere and is recorded for local consumers. That it currently happens inside a
+dispatcher is an artefact of where the code was parked, not a statement about where the
+responsibility belongs.
+
+The distinction has a concrete consequence, and it is the reason to record this now rather than
+discover it later: **a broker transport must never learn what an inbox is.** If T3 introduces
+`IMessageTransport` as a sibling of the in-process dispatcher — the obvious move, and the wrong one —
+then either every transport implementation carries an inbox-writing branch it has no business
+knowing about, or the in-process path stays special-cased forever and the seam means two different
+things depending on which implementation answers. A RabbitMQ adapter publishes an envelope to a
+broker; it does not write rows into the consumer's database.
+
+The shape that avoids it: the dispatcher keeps routing and hands off an envelope; reception —
+whether that envelope becomes inbox rows locally or bytes on a wire — is the thing that varies. Then
+the in-process path is one reception implementation among several rather than the one the seam was
+shaped around.
+
+**Two riders for whoever takes it.** The `IOutboxDispatcher` decoration by `MediatROutboxDispatcher`
+must survive the split untouched — `AddMediatRDomainEvents()` throws without a dispatcher to
+decorate, and the L0 harness composes both. And `MicroKit.Messaging.MediatR.IntegrationTests.InboxRedeliveryTests`
+asserts the fan-out behaviour end to end — two inbox rows on first drain, deduplicated to two on
+redelivery, outbox `Published` with no retry charged. It passed unchanged across this lot and is the
+evidence the split is bounded correctly next time.

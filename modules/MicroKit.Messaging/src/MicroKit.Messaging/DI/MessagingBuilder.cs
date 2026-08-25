@@ -1,7 +1,6 @@
 using System.Diagnostics.CodeAnalysis;
 using MicroKit.Messaging.Dispatch;
 using MicroKit.Messaging.Execution;
-using MicroKit.Messaging.Publishing;
 using MicroKit.Messaging.Registry;
 using MicroKit.Messaging.Serialization;
 using Microsoft.Extensions.DependencyInjection.Extensions;
@@ -28,19 +27,27 @@ public sealed class MessagingBuilder
     public IServiceCollection Services { get; }
 
     /// <summary>
-    /// Registers the in-process transport: <c>SystemTextJsonMessageSerializer</c>,
-    /// <c>InProcessMessagePublisher</c>, and <c>InProcessIntegrationDispatcher</c>.
+    /// Registers the in-process transport: <c>SystemTextJsonMessageSerializer</c> and
+    /// <c>InProcessIntegrationDispatcher</c>.
     /// </summary>
     /// <remarks>
     /// <para>
-    /// <c>IMessagePublisher</c> and <c>IOutboxDispatcher</c> are registered as
-    /// <strong>scoped</strong> — they are resolved from the per-message execution scope
-    /// created by <c>OutboxProcessor</c>. Registering them as singleton would capture
-    /// the scoped <c>IInboxWriter</c> (backed by a scoped <c>DbContext</c> in
+    /// <b><c>IMessagePublisher</c> is gone (ADR-MSG-018).</b> It handed a dispatcher's payload on
+    /// as a bare event, so the fan-out behind it had to reconstruct message metadata by reading it
+    /// off the event instance — the sole reason <c>IIntegrationEvent</c> carried
+    /// <c>MessageId</c>, <c>TenantId</c>, <c>CorrelationId</c> and <c>CausationId</c>. The
+    /// fan-out now lives in <c>InProcessIntegrationDispatcher</c>, which holds the
+    /// <c>OutboxMessage</c> those fields are columns on. A real transport seam arrives with the
+    /// transport libraries; this method wires the in-process path and nothing else.
+    /// </para>
+    /// <para>
+    /// <c>IOutboxDispatcher</c> is registered as <strong>scoped</strong> — it is resolved from the
+    /// per-message execution scope created by <c>OutboxProcessor</c>. Registering it as singleton
+    /// would capture the scoped <c>IInboxWriter</c> (backed by a scoped <c>DbContext</c> in
     /// <c>MicroKit.Messaging.EntityFrameworkCore</c>), causing a captive dependency.
     /// </para>
     /// <para>
-    /// All three are registered with <c>TryAdd</c>: a transport supplies a default and abstains if
+    /// Both are registered with <c>TryAdd</c>: a transport supplies a default and abstains if
     /// something already holds the slot. This is what makes the composition order-independent.
     /// Under a plain <c>Add</c>, calling this method <em>after</em> a package that decorates
     /// <c>IOutboxDispatcher</c> appended a second descriptor, Microsoft DI resolved the last one,
@@ -53,7 +60,6 @@ public sealed class MessagingBuilder
     public MessagingBuilder AddInProcessTransport()
     {
         Services.TryAddSingleton<IMessageSerializer, SystemTextJsonMessageSerializer>();
-        Services.TryAddScoped<IMessagePublisher, InProcessMessagePublisher>();
         Services.TryAddScoped<IOutboxDispatcher, InProcessIntegrationDispatcher>();
         return this;
     }

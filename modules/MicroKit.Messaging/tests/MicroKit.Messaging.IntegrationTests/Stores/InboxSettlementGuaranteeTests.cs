@@ -283,18 +283,9 @@ internal sealed class SettlementExecutionContext : IExecutionContext
         new Dictionary<string, object?>();
 }
 
-internal sealed record SettlementTestEvent : IIntegrationEvent
-{
-    public MessageId MessageId { get; init; } = MessageId.New();
-
-    public string TenantId { get; init; } = "tenant-a";
-
-    public CorrelationId? CorrelationId => null;
-
-    public CausationId? CausationId => null;
-
-    public DateTimeOffset OccurredOnUtc { get; init; } = DateTimeOffset.UnixEpoch;
-}
+// A bare marker (ADR-MSG-018). The seeded payload below still carries the old fields as JSON;
+// deserialization ignores members the type no longer declares, so the fixture is unaffected.
+internal sealed record SettlementTestEvent : IIntegrationEvent;
 
 internal sealed class InvocationRecorder
 {

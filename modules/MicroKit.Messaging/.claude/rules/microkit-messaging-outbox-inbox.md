@@ -609,20 +609,31 @@ foreach (var message in batch)
 
 ## Silent Success Prohibition
 
+A path that cannot deliver must say so. Returning as if it had is the failure mode this module
+treats as blocking, because nothing downstream can detect it.
+
 ```csharp
-// ❌ FORBIDDEN — fake success when publisher is null
-public async ValueTask PublishAsync<T>(T evt, CancellationToken ct = default) where T : IIntegrationEvent
+// ❌ FORBIDDEN — a staged row with no transaction to commit it
+public async ValueTask<MessageId> PublishAsync<T>(T evt, ...)
 {
-    if (_innerPublisher is null) return; // ← message lost with no error
-}
+    await _writer.AddAsync(message, ct);   // ← change tracker discarded, event never existed,
+    return message.Id;                     //   and no log, metric or trace records that it was
+}                                          //   meant to
 
-// ✅ REQUIRED — throw on null publisher
-public async ValueTask PublishAsync<T>(T evt, CancellationToken ct = default) where T : IIntegrationEvent
-{
-    if (_innerPublisher is null)
-        throw new InvalidOperationException(
-            "No IMessagePublisher registered. Call AddInProcessTransport() or a broker provider.");
-
-    await _innerPublisher.PublishAsync(evt, ct).ConfigureAwait(false);
-}
+// ✅ REQUIRED — refuse loudly, BEFORE staging
+if (!_writer.HasOpenTransaction)
+    throw new IntegrationEventPublishException(
+        $"'{typeof(T).Name}' was published with no open transaction. ...");
 ```
+
+> The guard runs **before** any other work, and the order is the contract: a guard placed after
+> staging would leave the row for whatever transaction the caller happened to have, and the event
+> would be published by an unrelated commit. `PublishAsync_WithNoOpenTransaction_ThrowsAndStagesNothing`
+> asserts both halves.
+
+> ⚠ `IUnitOfWork.CommitAsync` is **not** an open transaction. It is a bare `SaveChangesAsync`
+> running under the provider's implicit per-call transaction, which never appears in
+> `Database.CurrentTransaction`. Publishing belongs inside `ITransactionalContext.ExecuteAsync`.
+
+A missing **subscriber**, by contrast, is not an error: it is valid for a multi-service deployment
+where an event has no local consumer. `InProcessIntegrationDispatcher` logs a warning and returns.

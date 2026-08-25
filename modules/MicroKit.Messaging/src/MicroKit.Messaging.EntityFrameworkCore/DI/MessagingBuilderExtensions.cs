@@ -73,4 +73,38 @@ public static class MessagingBuilderExtensions
             sp => sp.GetRequiredService<EfInboxStore<TContext>>());
         return builder;
     }
+
+    /// <summary>
+    /// Registers the EF Core staging writer for integration events.
+    /// </summary>
+    /// <typeparam name="TContext">
+    /// The application's <see cref="DbContext"/> type. Must have
+    /// <see cref="ModelBuilderExtensions.ApplyMessagingConfiguration"/> called in
+    /// <c>OnModelCreating</c>.
+    /// </typeparam>
+    /// <param name="builder">The <see cref="MessagingBuilder"/> returned by
+    /// <c>AddMicroKitMessaging()</c>.</param>
+    /// <returns>The same <paramref name="builder"/> for chaining.</returns>
+    /// <remarks>
+    /// <para>
+    /// Separate from <c>AddIntegrationEventPublishing()</c> because that call lives in
+    /// <c>MicroKit.Messaging</c>, which has no EF Core dependency and must not acquire one. Pair
+    /// the two: the publisher cannot be activated without a writer.
+    /// </para>
+    /// <para>
+    /// <b>Scoped, and it is load-bearing.</b> The writer's <c>HasOpenTransaction</c> guard reads
+    /// the transaction on the <typeparamref name="TContext"/> instance it holds, so the writer and
+    /// the caller's unit of work must be the same instance — which is exactly what one scoped
+    /// registration over one scoped <c>DbContext</c> gives. Registering it with any other lifetime
+    /// makes the guard pass while the row commits somewhere else.
+    /// </para>
+    /// </remarks>
+    public static MessagingBuilder AddEfCoreIntegrationEvents<TContext>(this MessagingBuilder builder)
+        where TContext : DbContext
+    {
+        ArgumentNullException.ThrowIfNull(builder);
+
+        builder.Services.AddScoped<IIntegrationEventWriter, EfIntegrationEventWriter<TContext>>();
+        return builder;
+    }
 }

@@ -42,7 +42,7 @@ public static class ServiceCollectionExtensions
     /// transaction.
     /// </description></item>
     /// <item><description>
-    /// <c>IMessageSerializer</c>, <c>IMessagePublisher</c>, <c>IOutboxDispatcher</c> — call
+    /// <c>IMessageSerializer</c> and <c>IOutboxDispatcher</c> — call
     /// <see cref="MessagingBuilder.AddInProcessTransport"/> on the returned builder.
     /// </description></item>
     /// </list>
@@ -76,13 +76,25 @@ public static class ServiceCollectionExtensions
         services.TryAddSingleton(TimeProvider.System);
         services.TryAddSingleton(Random.Shared);
 
-        // Default pass-through IExecutionContext (ADR-EXEC-001 / ADR-MSG-008 §7): one stable
-        // CorrelationId per DI scope, TenantId/CausationId null. A tenant-aware host (e.g.
-        // MicroKit.Multitenancy) overrides this via a non-Try AddScoped<IExecutionContext>().
-        // Scoped — never injected into the singleton OutboxMessageFactory (it takes IExecutionContext
-        // as a method parameter), so there is no captive dependency.
+        // IExecutionContext resolves THROUGH a scoped holder, and the indirection is the whole
+        // point (L0 finding #21). PassThroughExecutionScopeFactory writes the message-row context
+        // into the holder when it creates a scope, so a service that takes IExecutionContext as a
+        // CONSTRUCTOR parameter sees it. Registering the context directly — as this used to —
+        // meant only a direct GetService call could ever observe the message row, because
+        // Microsoft DI activates constructor dependencies from its own scope and never consults
+        // the scope's IServiceProvider wrapper. Every constructor-injected consumer silently got
+        // a fresh CorrelationId with a null TenantId instead.
+        //
+        // The holder's default value covers a scope created outside the messaging pipeline: one
+        // stable CorrelationId per DI scope, TenantId/CausationId null (ADR-EXEC-001,
+        // ADR-MSG-008 §7). A tenant-aware host overrides IExecutionContext via a non-Try
+        // AddScoped<IExecutionContext>(), which bypasses the holder and takes hydration on itself.
+        //
+        // Scoped — never injected into the singleton OutboxMessageFactory (it takes
+        // IExecutionContext as a method parameter), so there is no captive dependency.
+        services.TryAddScoped<ExecutionContextHolder>();
         services.TryAddScoped<IExecutionContext>(
-            _ => new Execution.ExecutionContext { CorrelationId = Guid.NewGuid().ToString() });
+            sp => sp.GetRequiredService<ExecutionContextHolder>().Context);
 
         services.AddScoped<IOutboxProcessor, OutboxProcessor>();
         services.AddScoped<IOutboxCoordinator, SharedDbOutboxCoordinator>();

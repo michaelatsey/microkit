@@ -15,8 +15,9 @@ namespace MicroKit.Messaging;
 /// Must implement <see cref="IIntegrationEvent"/>.</typeparam>
 /// <param name="Event">The integration event payload.</param>
 /// <param name="MessageId">The unique identifier for this message.</param>
-/// <param name="TenantId">The tenant identifier. See <see cref="IIntegrationEvent.TenantId"/> —
-/// non-null by declaration, emptiness unvalidated, and absent in single-tenant deployments.</param>
+/// <param name="TenantId">The tenant identifier. Absent in single-tenant deployments; emptiness is
+/// unvalidated. <c>IIntegrationEvent</c> no longer declares a tenant (ADR-MSG-018), so this
+/// parameter is this record's own and is populated by whoever constructs the envelope.</param>
 /// <param name="OccurredOnUtc">The UTC time at which the event occurred.</param>
 /// <param name="CorrelationId">The correlation identifier, or <see langword="null"/> when no upstream chain exists.</param>
 /// <param name="CausationId">The causation identifier, or <see langword="null"/> for root events.</param>
