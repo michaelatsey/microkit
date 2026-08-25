@@ -9,7 +9,7 @@ namespace MicroKit.Messaging;
 /// <para>
 /// In-process v1 default: <c>InProcessIntegrationDispatcher</c> (Core package) —
 /// deserializes the payload via <c>IMessageSerializer</c> and calls
-/// <c>IMessagePublisher.PublishAsync</c> to write inbox rows.
+/// the in-process dispatcher to write inbox rows.
 /// </para>
 /// <para>
 /// Broker providers (v2): replace this seam with a broker-specific implementation

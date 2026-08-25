@@ -6,9 +6,10 @@ namespace MicroKit.Messaging.Execution;
 /// <see cref="PassThroughExecutionScopeFactory"/> as the v1 default.
 /// </summary>
 /// <remarks>
-/// The override applies to direct <c>GetService</c> calls on <see cref="ServiceProvider"/> only,
-/// not to constructor injection — see the known defect on
-/// <see cref="PassThroughExecutionScopeFactory"/>.
+/// The factory has already written the context into the scope's
+/// <see cref="ExecutionContextHolder"/>, which is what constructor injection reads. The wrapper
+/// below covers the other direction — a direct <c>GetService</c> call on
+/// <see cref="ServiceProvider"/> — so both resolve to the same instance.
 /// </remarks>
 internal sealed class PassThroughExecutionScope : IExecutionScope
 {
@@ -18,12 +19,6 @@ internal sealed class PassThroughExecutionScope : IExecutionScope
     internal PassThroughExecutionScope(AsyncServiceScope scope, IExecutionContext context)
     {
         _scope = scope;
-        // Wrap the scope's provider so that a direct GetService<IExecutionContext>() resolves
-        // to the message-row context (TenantId, CorrelationId, CausationId) rather than the
-        // default scoped factory that produces a fresh Guid.
-        //
-        // This does NOT reach constructor-injected dependencies: MS DI activates them from its
-        // own scope, which never sees this wrapper. L0 finding #21.
         _serviceProvider = new ContextAwareServiceProvider(scope.ServiceProvider, context);
     }
 
@@ -38,10 +33,9 @@ internal sealed class PassThroughExecutionScope : IExecutionScope
     /// resolution with a pre-built instance, delegating all other lookups to the inner provider.
     /// </summary>
     /// <remarks>
-    /// Only <see cref="GetService"/> calls made against this instance are intercepted. The
-    /// container activates constructor dependencies from the inner scope, so a service whose
-    /// constructor takes <see cref="IExecutionContext"/> gets the default scoped registration,
-    /// not <c>context</c>.
+    /// Serves direct <c>GetService</c> calls made against this instance. Constructor injection is
+    /// covered by <see cref="ExecutionContextHolder"/> instead — the container activates
+    /// constructor dependencies from the inner scope, which never sees this wrapper.
     /// </remarks>
     private sealed class ContextAwareServiceProvider(
         IServiceProvider inner,

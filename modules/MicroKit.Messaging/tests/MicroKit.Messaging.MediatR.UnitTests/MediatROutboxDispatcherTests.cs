@@ -85,12 +85,7 @@ public sealed class MediatROutboxDispatcherTests
 
     private sealed class FakeNotification : INotification { }
 
-    private sealed record FakeIntegrationEvent : IIntegrationEvent
-    {
-        public MessageId MessageId { get; } = MessageId.New();
-        public string TenantId => "tenant-1";
-        public CorrelationId? CorrelationId => null;
-        public CausationId? CausationId => null;
-        public DateTimeOffset OccurredOnUtc { get; } = DateTimeOffset.UtcNow;
-    }
+    // A bare marker (ADR-MSG-018): the metadata members this used to declare existed only to
+    // satisfy the interface, and the routing decorator never read them.
+    private sealed record FakeIntegrationEvent : IIntegrationEvent;
 }

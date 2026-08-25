@@ -212,20 +212,61 @@ InboxClaimConcurrencyTests.ClaimBatchAsync_TwoProcessorsOverAFannedOutQueue_AreD
 > **neither claim exceeds `batchSize`**; that assertion is the one the cross-product bug failed,
 > and nothing else in the suite would have caught it.
 
-### In-process publisher (InProcessMessagePublisher)
+### In-process fan-out (InProcessIntegrationDispatcher)
 
-> Not `FakeMessagePublisher` — that type does not exist. These run against the real publisher with
-> a substituted `IInboxWriter`, or against `EfInboxStore` on SQLite.
+> `InProcessMessagePublisher` and `IMessagePublisher` no longer exist (ADR-MSG-018). The fan-out
+> moved into `InProcessIntegrationDispatcher`, which sources every field from the `OutboxMessage`
+> row rather than from the event. These run against the real dispatcher with a substituted
+> `IInboxWriter` and a real `MessageHandlerRegistry`.
 
 ```
-PublishAsync_WhenSubscriberRegistered_WritesInboxRow
-PublishAsync_WhenMultipleSubscribersRegistered_WritesRowPerConsumer
-PublishAsync_WhenNoSubscriberRegistered_LogsWarningAndReturns      (valid, not an error)
-PublishAsync_UsesRuntimeTypeNotGenericTypeForLookup
-PublishAsync_WhenRowAlreadyPresent_ReturnsWithoutThrowing
-PublishAsync_WhenOneConsumerIsAlreadyPresent_StillWritesTheOthers  (the partial-loss fix)
-PublishAsync_WhenTheWriteFailsForReal_Propagates
-PublishAsync_EveryRowCarriesItsOwnRowId
+DispatchAsync_TakesTheDedupKeyFromTheOutboxRow_NotTheEvent    (the latent bug this closed)
+DispatchAsync_TakesEveryFieldFromTheOutboxRow
+DispatchAsync_WhenMultipleSubscribersRegistered_WritesOneRowPerConsumer
+DispatchAsync_WhenNoSubscriberRegistered_WritesNothingAndDoesNotThrow   (valid, not an error)
+DispatchAsync_WhenOneConsumerIsAlreadyPresent_StillWritesTheOthers      (the partial-loss fix)
+DispatchAsync_WhenDeserializeReturnsNull_ThrowsOutboxPayloadException
+DispatchAsync_WhenTheWriteFailsForReal_Propagates
+DispatchAsync_ResolvesConsumersByRuntimeType_NotTheStaticType
+```
+
+### Integration event publishing (ADR-MSG-018)
+
+Two properties matter more than the rest and cannot be replaced by reading code:
+
+```
+PublishAsync_WithNoOpenTransaction_ThrowsAndStagesNothing   (unit — asserts the row never existed,
+                                                             not merely that it threw: a guard
+                                                             placed after staging also throws)
+PublishAsync_StagesTheRow_WithoutWritingIt                  (integration — asserts the ChangeTracker
+                                                             entry is still Added. A rollback test
+                                                             passes even if the writer committed
+                                                             internally; this one cannot)
+```
+
+> Use a **recording fake** for `IIntegrationEventWriter`, never a mock. A negative assertion against
+> a mock only holds if it names a method the subject actually calls — `DidNotReceive().AddAsync(...)`
+> against code calling something else is green whatever happens, and no mutation exposes it.
+
+```
+PublishAsync_WhenEventNotRegistered_ThrowsAndNamesTheType
+PublishAsync_StagesTheContractTheSourceAndTheExecutionContext
+PublishAsync_WhenCorrelationIdIsUnparseable_DegradesToNullRatherThanFailing
+PublishAsync_RecordsOccurrenceTimeSeparatelyFromStagingTime
+PublishAsync_ResolvesTheContractFromTheRuntimeType_NotTheGenericArgument
+Registry_KeepsEachModulesOwnSource
+Registry_WhenTwoModulesClaimOneContractName_IsRejected
+Registry_ContractSurface_MatchesTheSnapshot                 (a contract name is public API)
+RegistryValidator_OnStart_FailsOnADuplicatedContractName    (drive the hosted service directly —
+                                                             starting a host would start four
+                                                             messaging workers needing stores the
+                                                             test has no reason to wire)
+TheWriterAndTheCallersUnitOfWorkShareOneDbContext           (the guard reads the WRITER's context;
+                                                             if they diverge it passes while the row
+                                                             commits elsewhere)
+ThePublisherReadsTheMessageScopesExecutionContext           (pins the L0 #21 fix)
+TheClaimTokenIsMappedAsAConcurrencyToken                    (no relay exists to exercise it yet,
+                                                             so the model is asserted instead)
 ```
 
 ---

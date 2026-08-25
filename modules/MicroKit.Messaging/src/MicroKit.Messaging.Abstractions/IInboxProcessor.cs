@@ -16,7 +16,7 @@ namespace MicroKit.Messaging;
 /// <para>
 /// The processor must never call <see cref="IInboxWriter.ExistsAsync"/> or
 /// <see cref="IInboxWriter.AddAsync"/> — those belong to the ingestion path
-/// (<see cref="IMessagePublisher"/>). The processor is a pure drain loop, and its narrowed
+/// (the in-process dispatcher). The processor is a pure drain loop, and its narrowed
 /// dependency on <see cref="IInboxProcessorStore"/> makes that structural rather than a
 /// convention.
 /// </para>

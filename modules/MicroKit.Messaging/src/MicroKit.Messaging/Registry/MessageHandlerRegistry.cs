@@ -11,7 +11,7 @@ using System.Reflection;
 /// Two lookup directions are maintained:
 /// <list type="bullet">
 /// <item><description>
-/// <strong>By event type</strong> — used by <c>InProcessMessagePublisher</c> to
+/// <strong>By event type</strong> — used by <c>InProcessIntegrationDispatcher</c> to
 /// discover which consumers should receive an envelope and create
 /// <see cref="InboxMessage"/> rows.
 /// </description></item>

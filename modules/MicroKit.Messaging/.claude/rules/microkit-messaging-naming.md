@@ -14,8 +14,11 @@
 
 | Pattern | Example |
 |---------|---------|
-| `IIntegrationEvent` | typed contract — all integration events implement this; defines TenantId, CorrelationId, CausationId, OccurredOnUtc |
-| `IMessagePublisher` | publishes outbound messages to broker or in-process |
+| `IIntegrationEvent` | **bare marker** (ADR-MSG-018) — business payload only, `IEvent` base retained. Metadata lives on `IntegrationEventMessage`, assigned at staging |
+| `IntegrationEventAttribute` | `[IntegrationEvent("name.v1")]` — mandatory wire contract name; the CLR type name cannot serve as one |
+| `IIntegrationEventPublisher` | `PublishAsync<T>` — stages into the caller's open transaction, never commits, never delivers |
+| `IIntegrationEventWriter` | `AddAsync` + `HasOpenTransaction` — staging port; stages only, never calls `SaveChangesAsync` |
+| ~~`IMessagePublisher`~~ | **deleted** (ADR-MSG-018). The seam discarded the `OutboxMessage`, forcing the fan-out to re-read metadata off the event — the sole reason `IIntegrationEvent` had members. The in-process fan-out lives in `InProcessIntegrationDispatcher`; a real transport seam comes with the transport libraries |
 | `IMessageHandler<T>` | handles a specific integration event type |
 | `IOutboxWriter` | write-only outbox access for domain handlers — `AddAsync` (single) + `AddBatchAsync` (ADR-MSG-011, the path `OutboxDomainEventSink` uses) |
 | `IOutboxProcessorStore` | claim + settlement for the background processor — `ClaimBatchAsync`, `ApplyOutcomesAsync`. The per-message lease API (`GetPendingAsync`, `AcquireLeaseAsync`, `MarkPublishedAsync`, `MarkFailedAsync`, `DeadLetterAsync`) was removed by the outbox claim rewrite |
@@ -39,7 +42,8 @@
 | `CausationId` | causal parent identifier — `sealed record CausationId(Guid Value)` |
 | `OutboxMessage` | outbox EF Core entity — `sealed class OutboxMessage` with `{ get; set; }` |
 | `InboxMessage` | inbox EF Core entity — `sealed class InboxMessage` with `{ get; set; }` |
-| `MessageEnvelope<T>` | wraps `T : IIntegrationEvent` with routing metadata — `sealed record` |
+| `MessageEnvelope<T>` | wraps `T : IIntegrationEvent` with routing metadata — `sealed record`. **Dead API**: nothing in v1 constructs, consumes or transmits one |
+| `IntegrationEventMessage` | integration event EF Core entity — `sealed class` with `{ get; set; }`, its own table |
 | `{Name}Options` | configuration record — `MessagingOptions`, `OutboxProcessorOptions` |
 
 > `OutboxMessage` and `InboxMessage` are `sealed class` (not `sealed record`) because
@@ -70,7 +74,7 @@
 
 | Pattern | Example |
 |---------|---------|
-| `InProcess{Noun}` | `InProcessMessagePublisher` — in-process default |
+| `InProcess{Noun}` | `InProcessIntegrationDispatcher` — in-process default |
 | `{Provider}{Noun}` | `RabbitMqMessagePublisher`, `AzureServiceBusPublisher` |
 | `Ef{Noun}` | `EfOutboxStore`, `EfInboxStore` — EF Core implementations |
 | `{Noun}Processor` | `OutboxProcessor`, `InboxProcessor` — topology-agnostic batch engines |
@@ -104,7 +108,10 @@ public class OrderPlacedNotification { ... }        // ← Notification = Mediat
 |---------|---------|
 | `AddMicroKitMessaging()` | on `IServiceCollection` — main registration entry point |
 | `AddEfCoreOutbox()` | on `MessagingBuilder` — wires `EfOutboxStore` and `EfInboxStore`. Each is registered **once as scoped by concrete type**, with every interface resolving to that instance through a factory lambda, so one scope holds one store over one `DbContext`. That is also what makes `IInboxSettlementStore` transactional: resolved from the per-message execution scope it necessarily shares its `TContext` with the handler resolved from the same scope. Registering either store as anything other than scoped breaks the guarantee silently. The name is now a misnomer — it wires the inbox too |
-| `AddInProcessTransport()` | on `MessagingBuilder` — wires `InProcessMessagePublisher` |
+| `AddInProcessTransport()` | on `MessagingBuilder` — wires `IMessageSerializer` and the `InProcessIntegrationDispatcher`. No longer wires a publisher (ADR-MSG-018) |
+| `AddIntegrationEventContracts()` | on `IServiceCollection` — **once per module**; declares that module's published contracts and its `source`. Accumulates (`AddSingleton`, never `TryAdd`) so every module composes into one registry, which is what makes a cross-module name collision detectable |
+| `AddIntegrationEventPublishing()` | on `MessagingBuilder` — **once per application**; the registry, the publisher, a serializer default, and the startup validator |
+| `AddEfCoreIntegrationEvents<TContext>()` | on `MessagingBuilder` — the staging writer. Separate from the call above because Core has no EF Core dependency and must not acquire one |
 | `Add{Provider}Transport()` | on `MessagingBuilder` — **broker providers ONLY** (e.g. `AddRabbitMqTransport()`). This shape is reserved: a method that does not wire a broker must not use it |
 | `AddMediatRDomainEvents()` | on `MessagingBuilder` — wires the MicroKit.MediatR glue, four registrations: contributes the outbox `IDomainEventsSink` (`TryAddEnumerable`), decorates `IOutboxDispatcher` with the notification router, replaces `INotificationPublisher` with the cascade publisher, and `TryAdd`s an `IMessageSerializer` default the decorator requires. **Not a transport** — it moves nothing between processes (ADR-MEDIATR-015, ADR-MSG-016) |
 | `AddMessageHandler<THandler, TEvent>()` | on `MessagingBuilder` — registers a handler |

@@ -57,7 +57,8 @@ MicroKit.Messaging/
 │   │                                              OutboxMessage (sealed class), InboxMessage (sealed class),
 │   │                                              MessageEnvelope<T> (sealed record)
 │   ├── MicroKit.Messaging/                     ← OutboxProcessor, InboxProcessor,
-│   │                                              InProcessMessagePublisher, MessageDispatcher,
+│   │                                              InProcessIntegrationDispatcher (owns the
+│   │                                              in-process fan-out), IntegrationEventPublisher,
 │   │                                              DI extensions, background workers
 │   ├── MicroKit.Messaging.EntityFrameworkCore/ ← EfOutboxStore, EfInboxStore, EF configurations,
 │   │                                              migrations helper
@@ -128,8 +129,15 @@ which may reference `MicroKit.MediatR` / `MediatR` / `MediatR.Contracts` (ADR-MS
 
 ### Event contracts
 ```csharp
-IIntegrationEvent                  // typed contract — all integration events implement this;
-                                   //   defines TenantId, CorrelationId, CausationId, OccurredOnUtc
+IIntegrationEvent                  // BARE MARKER (ADR-MSG-018) — business payload only. It once
+                                   //   declared MessageId/TenantId/CorrelationId/CausationId/
+                                   //   OccurredOnUtc; all message metadata now lives on the row,
+                                   //   assigned at staging from IExecutionContext
+IntegrationEventAttribute          // [IntegrationEvent("name.v1")] — mandatory wire contract name
+IIntegrationEventPublisher         // PublishAsync<T>(evt, occurredOnUtc, ct) → ValueTask<MessageId>
+                                   //   stages into the CALLER's open transaction; never commits
+IIntegrationEventWriter            // AddAsync + HasOpenTransaction — staging port, EFCore implements
+IntegrationEventMessage            // sealed class — its own table, NOT a slice of the outbox
 MessageId                          // sealed record — strongly-typed message identifier
 CorrelationId                      // sealed record — correlation chain identifier
 CausationId                        // sealed record — causal parent identifier (nullable on root events)
@@ -137,7 +145,11 @@ CausationId                        // sealed record — causal parent identifier
 
 ### Publishing
 ```csharp
-IMessagePublisher                  // PublishAsync<T>(T evt, CancellationToken ct) → ValueTask
+// IMessagePublisher is DELETED (ADR-MSG-018). It handed a dispatcher's payload on as a bare
+// event, so the fan-out behind it had to reconstruct message metadata by reading it off the
+// event — the sole reason IIntegrationEvent carried those members. The in-process fan-out now
+// lives in InProcessIntegrationDispatcher, which holds the OutboxMessage they are columns on.
+// A real transport seam arrives with the transport libraries.
 // IMessageDispatcher is internal to Core — not a public Abstractions contract
 ```
 
@@ -192,7 +204,11 @@ MessageEnvelope<T>                 // sealed record — wraps T with metadata (M
    claim filters an `UPDATE` with two `Contains` and selects the CROSS PRODUCT of both lists,
    which claims rows nobody chose and breaks the `batchSize` bound. A redelivery is reported
    through `InboxWriteResult.AlreadyPresent`, never thrown
-6. **No silent success when publisher is null** — throw `InvalidOperationException`, not fake success
+6. **No silent success** — a path that cannot deliver must throw, never return as if it had.
+   `InProcessIntegrationDispatcher` logs a warning when an event has no local subscriber (valid in a
+   multi-service deployment) but throws `OutboxPayloadException` on a payload it cannot resolve, and
+   `IIntegrationEventPublisher` throws `IntegrationEventPublishException` rather than stage a row
+   into a change tracker nobody will save
 7. **Background processors never use `IHttpContextAccessor`** — `TenantId` read from `OutboxMessage`/`InboxMessage` only
 8. **`sealed class`** for EF Core entities (`OutboxMessage`, `InboxMessage`) | **`sealed record`** for VOs (`MessageId`, `CorrelationId`, `CausationId`, options) | **`sealed class`** for processors/handlers/publishers
 9. **`ValueTask<T>`** for all async methods | **`ConfigureAwait(false)`** throughout lib code
@@ -327,6 +343,7 @@ All v1 packages share one version per release.
   `AddInProcessTransport()` now uses `TryAdd` so a later transport registration cannot silently
   displace the `IOutboxDispatcher` decorator. Requires MicroKit.MediatR from the same release.
 - **ADR-MSG-015:** `IOutboxCoordinator.ExecuteAsync` and `IOutboxProcessor.ProcessBatchAsync` return `ValueTask<OutboxBatchResult>` — the batch now produces a result the worker needs to adapt its cadence, and ADR-MSG-014's `.AsTask()` rationale was factually wrong. The inbox asymmetry it recorded was closed by ADR-MSG-017.
+- **ADR-MSG-018:** integration events are a **marker** contract — `IIntegrationEvent` loses every member and keeps only the `IEvent` base; the wire name moves to `[IntegrationEvent]`; metadata is assigned at staging from `IExecutionContext` onto `IntegrationEventMessage`, which gets **its own table**. `IMessagePublisher`/`InProcessMessagePublisher` are **deleted** and the in-process fan-out moves into `InProcessIntegrationDispatcher`, sourcing every field from the `OutboxMessage` row — which is what made the marker possible and closes a latent bug (the inbox dedup key was read off the event and survived redelivery only by accident). Publishing requires an open transaction the caller owns: `IUnitOfWork.CommitAsync` alone is **not** one. Also fixes L0 #21 — `IExecutionContext` now resolves through a scoped holder, so constructor injection finally sees the message row.
 - **ADR-MSG-017:** the inbox rewrite. Atomic `ClaimBatchAsync` + token-fenced `ApplyOutcomesAsync` replace the per-message lease; the primary key moves to a `RowId` surrogate with the compound key surviving as the unique dedup index (a compound-key claim selected a CROSS PRODUCT and could exceed `batchSize` several times over); **success settles inside the handler's own transaction** via `IInboxSettlementStore`, which is why the inbox is NOT a mirror of the outbox; `ClaimToken` is an EF concurrency token, without which the ownership mechanism is decorative; `IInboxWriter.AddAsync` returns `InboxWriteResult` instead of throwing on a redelivery — the defect that dead-lettered correctly delivered messages. Closes the inbox half of ADR-MSG-014.
 
 ---
