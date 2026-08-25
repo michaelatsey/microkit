@@ -83,6 +83,13 @@ services.AddMicroKitMessaging()
     .AddMediatRDomainEvents();    // only with MicroKit.Messaging.MediatR
 ```
 
+> **PostgreSQL and SQLite only.** `ApplyMessagingConfiguration()` declares a unique index over
+> `(OriginMessageId, ContractName)` on the outbox, and that index is a model invariant rather than
+> an index you may skip. **SQL Server is not supported for it**: it compares nulls as equal in a
+> unique index, and every notification row carries `(NULL, NULL)` — so the second notification row
+> your application ever writes is rejected. Not at DDL time, not on the first row: in production, on
+> the second insert. See *State* below for the workaround you would own.
+
 `AddInProcessTransport()` before `AddMediatRDomainEvents()` is the one ordering requirement, and
 getting it wrong throws at startup naming the fix. Everything else composes in any order.
 
@@ -244,8 +251,8 @@ door to reprocessing.
   is reverse-engineering it. The CHANGELOG publishes the *migration* for the inbox claim rewrite
   (including the primary-key move, which is not optional) and for the outbox message-kind columns —
   that is a step, not the fix.
-- **Provider support for the outbox replay key.** `UX_OutboxMessages_Source_ContractName`, unique
-  over `(SourceMessageId, ContractName)`, is what stops a redelivered dispatch from writing a
+- **Provider support for the outbox replay key.** `UX_OutboxMessages_Origin_ContractName`, unique
+  over `(OriginMessageId, ContractName)`, is what stops a redelivered dispatch from writing a
   duplicate integration message. It is a **model invariant, not an index you may skip**, and it is
   supported on **PostgreSQL and SQLite**, where nulls are distinct in a unique index — every
   notification row carries `(NULL, NULL)`, so unlimited such rows must coexist. **SQL Server is not

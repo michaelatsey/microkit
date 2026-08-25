@@ -15,72 +15,109 @@ failures and releases are batched.
 
 See ADR-MSG-015 (outbox) and ADR-MSG-017 (inbox).
 
-### Added — outbox schema: message kind, contract name, replay natural key
+### Changed — BREAKING (outbox schema): SQL Server is no longer supported for the outbox
 
 The outbox becomes **reentrant**: one table, two natures of row, distinguished by an explicit column
 rather than a CLR type test. A message may pass through the queue twice — once as a `Notification`
 fanned out in process, once as a `Contract` handed to a transport.
 
-- **`OutboxMessage.MessageKind`** (`Notification` | `Contract`) — the routing decision, declared on
-  the row and queryable in SQL. Stored as a string: the column exists so an operator can ask what is
-  in the queue, and an int discriminator is unreadable in `psql` or the Supabase dashboard.
-- **`OutboxMessage.ContractName`** — the stable wire identity, e.g.
-  `saasbtp.safety.constat-recorded.v1`. `EventType` cannot serve: it holds an assembly-qualified
-  name the receiving process cannot resolve, so it works in process by accident and fails across a
-  service boundary. `EventType` is now documented for what it is — a local deserialization detail.
-- **`OutboxMessage.SourceMessageId`** — the `Id` of the outbox row whose dispatch produced this one.
-  Deliberately **not** named after causation: `CorrelationId` and `CausationId` are tracing values
-  that degrade to null when unparseable, and this one cannot, because a silent null switches
-  deduplication off.
-- **`UX_OutboxMessages_Source_ContractName`** — unique over `(SourceMessageId, ContractName)`. A
-  redelivered dispatch re-runs its handlers, which publish the same contract from the same source
-  row, so the second write collides instead of duplicating. This covers a crash occurring *after*
-  the commit, which per-message settlement alone cannot.
-
-Both new nullable columns are meaningful only for a `Contract` row. The pairing is not enforced by
-the entity — it is an EF Core entity with no constructor to enforce it in, and a guard in a setter
-would throw part-way through materialization. Enforcement belongs to whoever builds the row.
-
-**Two handlers of one notification must not publish the same contract.** They would collide on this
-key and the second would be absorbed as a duplicate. Forbidden by convention, not detected.
-
-#### Provider support for the unique index
-
-This index carries a **model invariant**, not a performance hint, so the module declares where it
-holds rather than leaving a consumer to reconstruct it:
+The three new columns are additive: an existing consumer's C# compiles untouched. The unique index
+that makes them worth having is not, because it changes which providers this module runs on.
 
 | Provider | Supported | Why |
 |---|---|---|
 | PostgreSQL | ✅ | Nulls are distinct in a unique index; `NULLS NOT DISTINCT` is opt-in (PG15+) and is not used |
 | SQLite | ✅ | Same rule |
-| **SQL Server** | ❌ **not supported** | Nulls compare **equal**, so at most one `(NULL, NULL)` row exists — the second notification row ever written is rejected |
+| **SQL Server** | ❌ **no longer supported** | Nulls compare **equal**, so at most one `(NULL, NULL)` row exists — the second notification row ever written is rejected |
 
 Every notification row carries `(NULL, NULL)`, which is why the distinction decides the whole table.
 The SQL Server failure is not visible at DDL time and not on the first row: it appears on the
 *second* insert, in production, as a uniqueness violation on a column pair nobody connects to
-notifications.
+notifications. This index carries a **model invariant**, not a performance hint, so it is declared
+rather than left to a consumer to reconstruct — and the declaration now also lives in the XML docs
+of `ApplyMessagingConfiguration` and `OutboxMessageConfiguration`, which is where a consumer meets
+it without going looking for it.
 
-Note the scope on the supported providers too: a `NULL` on either side is distinct, so a contract
-staged outside a dispatch does not deduplicate. Intended — the key guards the replay path, where a
-source row always exists.
+#### What was added
 
-**Migration** (PostgreSQL / SQLite):
+- **`OutboxMessage.MessageKind`** (`Notification` | `Contract`) — the routing decision, declared on
+  the row and queryable in SQL. Stored as a string: the column exists so an operator can ask what is
+  in the queue, and an int discriminator is unreadable in `psql` or the Supabase dashboard.
+  **No dispatcher reads it yet** — routing today is still the CLR type test `payload is
+  INotification` in `MediatROutboxDispatcher`. The column is declared now because the table is
+  empty now; after the first production row this becomes a data migration.
+- **`OutboxMessage.ContractName`** — the stable wire identity, e.g.
+  `saasbtp.safety.constat-recorded.v1`. `EventType` cannot serve: it holds an assembly-qualified
+  name the receiving process cannot resolve, so it works in process by accident and fails across a
+  service boundary. `EventType` is now documented for what it is — a local deserialization detail.
+- **`OutboxMessage.OriginMessageId`** — the `Id` of the outbox row whose dispatch produced this one.
+  Deliberately **not** named after causation: `CorrelationId` and `CausationId` are tracing values
+  that degrade to null when unparseable, and this one cannot, because a silent null switches
+  deduplication off. Deliberately not named `Source` either — `Source` already means *the emitting
+  module* in this package (`IntegrationEventMessage.Source`, `IntegrationEventRegistration.Source`),
+  and both notions land on `OutboxMessage` once the dedicated integration-event table is retired.
+- **`UX_OutboxMessages_Origin_ContractName`** — unique over `(OriginMessageId, ContractName)`. A
+  redelivered dispatch re-runs its handlers, which publish the same contract from the same origin
+  row, so the second write collides instead of duplicating. This covers a crash occurring *after*
+  the commit, which per-message settlement alone cannot.
+
+Both new nullable columns are meaningful only for a `Contract` row, and nothing enforces that
+pairing. That is a **deferral, not an omission**: the integration-event publisher is the only writer
+that will ever set these columns, so enforcement belongs there rather than being scattered across a
+schema anyone can write to. A database check constraint is the obvious alternative and is the wrong
+instrument — its predicate has to spell `MessageKind <> 'Contract'`, which hardcodes an enum member
+name into the schema, so renaming a member would break the constraint on top of the column.
+
+**Two handlers of one notification must not publish the same contract.** They would collide on this
+key and the second would be absorbed as a duplicate. Forbidden by convention, not detected.
+
+Note the scope of the guarantee on the supported providers: a `NULL` on either side is distinct, so
+a contract staged outside a dispatch does not deduplicate. Intended — the key guards the replay
+path, where an origin row always exists.
+
+### Migration — outbox schema
+
+**Required.** `MessageKind` is `NOT NULL`; an existing table does not migrate itself.
+
+PostgreSQL:
 
 ```sql
 ALTER TABLE "OutboxMessages" ADD COLUMN "MessageKind"     varchar(32)  NOT NULL DEFAULT 'Notification';
 ALTER TABLE "OutboxMessages" ADD COLUMN "ContractName"    varchar(256) NULL;
-ALTER TABLE "OutboxMessages" ADD COLUMN "SourceMessageId" uuid         NULL;
+ALTER TABLE "OutboxMessages" ADD COLUMN "OriginMessageId" uuid         NULL;
 
-CREATE UNIQUE INDEX "UX_OutboxMessages_Source_ContractName"
-    ON "OutboxMessages" ("SourceMessageId", "ContractName");
+CREATE UNIQUE INDEX "UX_OutboxMessages_Origin_ContractName"
+    ON "OutboxMessages" ("OriginMessageId", "ContractName");
 ```
 
-`'Notification'` is the correct default rather than a convenient one: every row written before this
-column existed came through the domain-event path and carries a notification payload. It is also the
-zero value of the enum, so a row predating the column and a fixture omitting the property agree.
+SQLite:
+
+```sql
+ALTER TABLE "OutboxMessages" ADD COLUMN "MessageKind"     TEXT NOT NULL DEFAULT 'Notification';
+ALTER TABLE "OutboxMessages" ADD COLUMN "ContractName"    TEXT NULL;
+ALTER TABLE "OutboxMessages" ADD COLUMN "OriginMessageId" TEXT NULL;
+
+CREATE UNIQUE INDEX "UX_OutboxMessages_Origin_ContractName"
+    ON "OutboxMessages" ("OriginMessageId", "ContractName");
+```
+
+`TEXT` on all three, and `uuid` on none of them, because SQLite has **type affinity rather than
+types**: `uuid` matches no affinity rule and resolves to NUMERIC, while the EF Core SQLite provider
+writes a `Guid` as a TEXT string. The column would still work — SQLite stores a value it cannot
+convert as TEXT regardless of affinity — but the declaration would describe something the table
+never holds, and a consumer reverse-engineering their DDL from it would carry the mistake forward.
+The lengths go too: SQLite does not enforce `varchar(n)`, so writing one states a constraint that is
+not there. This is the same asymmetry the `MessageKind` XML docs warn about from the other
+direction — a member name longer than the column passes on SQLite and fails on PostgreSQL.
+
+`DEFAULT 'Notification'` is the correct value rather than a convenient one: every row written before
+this column existed came through the domain-event path and carries a notification payload. Note
+which mechanism does what — the column stores a string, so it is the `DEFAULT` clause that backfills
+existing rows, not the enum's zero value. The zero value covers the other case: a writer that omits
+the property, which is every writer today.
 
 > Footnote, for anyone who must run this on SQL Server anyway: a filtered index
-> (`WHERE "SourceMessageId" IS NOT NULL AND "ContractName" IS NOT NULL`) restores the behaviour. It
+> (`WHERE "OriginMessageId" IS NOT NULL AND "ContractName" IS NOT NULL`) restores the behaviour. It
 > is not shipped — `HasFilter` takes provider-specific SQL and this is the provider-neutral EF Core
 > package — and it is a workaround you own, not a supported configuration.
 
@@ -281,6 +318,14 @@ only `claim_token` gets a schema the code cannot query.
 **Drain the inbox before migrating.** Stop the workers and let the table empty. Rows sitting in
 `Processing` when the primary key changes are the one case with no clean answer. On a table of any
 size steps 1 and 3 take an `ACCESS EXCLUSIVE` lock.
+
+Consumers who call `modelBuilder.ApplyMessagingConfiguration()` and generate their own EF
+migrations need no manual step — the configuration is applied automatically. The DDL below is for
+consumers who own their schema, and is **PostgreSQL**: `gen_random_uuid()` and `ACCESS EXCLUSIVE`
+have no SQLite equivalent, and SQLite cannot drop or add a primary-key constraint in place at all —
+step 3 there means rebuilding the table. Unlike the integration-event script further down, this one
+is written by hand rather than reproduced from EF Core, so its identifiers are snake_case; adapt
+them if your context maps the default PascalCase names.
 
 ```sql
 -- 1. Surrogate key. Populate existing rows before making it NOT NULL.

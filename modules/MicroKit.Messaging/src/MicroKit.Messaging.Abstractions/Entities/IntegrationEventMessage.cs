@@ -14,6 +14,15 @@ namespace MicroKit.Messaging;
 /// readers wired a publisher straight onto <see cref="IOutboxWriter"/>.
 /// </para>
 /// <para>
+/// <b>That argument has since been revisited, and this table is being retired onto outbox rows.</b>
+/// The paragraph above is kept because its reasoning still holds against what it was aimed at — a
+/// discriminator <i>inferred</i> from the payload's CLR type. <see cref="OutboxMessage.MessageKind"/>
+/// is not that: the nature of a row is <i>declared</i> by whoever wrote it and read back from a
+/// column, so the misregistration this feared is no longer expressible either, and it is visible to
+/// SQL besides. Both models are live in the interval — see
+/// <see cref="OutboxMessage.ContractName"/>.
+/// </para>
+/// <para>
 /// The two also diverge operationally: different transports, different dead-letter audiences, and
 /// different retention windows — a notification may be purged once handled, an integration event
 /// must outlive the longest plausible redelivery of any consumer.
@@ -48,6 +57,11 @@ public sealed class IntegrationEventMessage
     /// <summary>
     /// Gets or sets the contract name, e.g. <c>saasbtp.safety.constat-recorded.v1</c>.
     /// </summary>
+    /// <remarks>
+    /// <see cref="OutboxMessage.ContractName"/> carries the same notion on the outbox row and is
+    /// the model that supersedes this one. The two are mapped to the same width deliberately; both
+    /// are live until the publisher moves onto outbox rows.
+    /// </remarks>
     public string ContractName { get; set; } = null!;
 
     /// <summary>Gets or sets the emitting module, e.g. <c>/saasbtp/safety</c>.</summary>

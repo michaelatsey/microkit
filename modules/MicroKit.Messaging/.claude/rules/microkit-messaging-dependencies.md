@@ -97,8 +97,18 @@ See monorepo root `.claude/rules/cross-module-references.md` for the full canoni
 > `ToTable()` and `HasIndex()` with database-specific options are relational-only APIs defined in
 > `Microsoft.EntityFrameworkCore.Relational`. `ExecuteUpdateAsync` and `ExecuteDeleteAsync` generate
 > SQL — their implementation lives in the relational assembly. The EFCore package only targets
-> relational databases (PostgreSQL, SQL Server, SQLite); the in-memory provider is never a target,
-> so depending on `.Relational` directly is the correct choice.
+> relational databases; the in-memory provider is never a target, so depending on `.Relational`
+> directly is the correct choice.
+>
+> ⚠ **Supported relational providers are PostgreSQL and SQLite. SQL Server is NOT supported for the
+> outbox**, and this is a real narrowing rather than a footnote: `UX_OutboxMessages_Origin_ContractName`
+> is unique over `(OriginMessageId, ContractName)`, every `MessageKind.Notification` row carries
+> `(NULL, NULL)`, and SQL Server compares nulls as equal — so the second notification row ever
+> written is rejected, in production, on the second insert. The index carries a model invariant and
+> cannot be dropped to make the provider work. Declared on `ApplyMessagingConfiguration`,
+> `OutboxMessageConfiguration`, the README and the CHANGELOG. Note that SQL Server is still
+> accommodated elsewhere — `EfInboxStore` caps savepoint names at 24 characters for it — so do not
+> read this as the module dropping the provider wholesale.
 
 ---
 

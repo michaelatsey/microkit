@@ -33,11 +33,19 @@ public sealed class OutboxMessage
     /// Gets or sets the nature of this message — what the dispatcher routes it to.
     /// </summary>
     /// <remarks>
+    /// <para>
     /// The outbox is reentrant: one table, two natures, and a message may pass through the queue
     /// twice. Declared here rather than inferred from the payload's CLR type so that the routing
     /// decision is visible to SQL and does not require the payload-agnostic core to recognise a
-    /// notification. Defaults to <see cref="MessageKind.Notification"/>, which is the zero value —
-    /// see that type for why the declaration order matters.
+    /// notification. Defaults to <see cref="MessageKind.Notification"/>, the zero value.
+    /// </para>
+    /// <para>
+    /// <b>No dispatcher reads this yet.</b> Routing today is still the CLR type test
+    /// <c>payload is INotification</c> in <c>MediatROutboxDispatcher</c>, so setting
+    /// <see cref="MessageKind.Contract"/> here changes nothing about where the row goes. The column
+    /// is declared ahead of the dispatcher that will honour it because the table is empty now:
+    /// after the first production row this becomes a data migration rather than a schema change.
+    /// </para>
     /// </remarks>
     public MessageKind MessageKind { get; set; }
 
@@ -53,10 +61,17 @@ public sealed class OutboxMessage
     /// it is an assembly-qualified name the receiving process cannot resolve.
     /// </para>
     /// <para>
-    /// Half of the replay natural key, with <see cref="SourceMessageId"/>. The pairing with
-    /// <see cref="MessageKind"/> is <b>not</b> enforced by this type: it is an EF Core entity with
-    /// no constructor to enforce it in, and a guard in a setter would throw part-way through
-    /// materialization. Enforcement belongs to whoever builds the row.
+    /// Half of the replay natural key, with <see cref="OriginMessageId"/>. Nothing enforces that a
+    /// <see cref="MessageKind.Contract"/> row actually carries one, and that is a <b>deferral, not
+    /// an omission</b>: the integration-event publisher is the only writer that will ever set these
+    /// columns, so the invariant belongs there — next to the code that knows the contract — rather
+    /// than scattered across a schema anyone can write to.
+    /// </para>
+    /// <para>
+    /// A database check constraint is the obvious alternative and is the wrong instrument. Its
+    /// predicate has to spell <c>MessageKind &lt;&gt; 'Contract'</c>, hardcoding an enum member name
+    /// into the schema: renaming a member would then break the constraint on top of the column, and
+    /// the column at least fails at compile time where the constraint fails at run time.
     /// </para>
     /// <para>
     /// <c>IntegrationEventMessage.ContractName</c> carries the same notion on its own table, which
@@ -75,12 +90,20 @@ public sealed class OutboxMessage
     /// <see cref="CorrelationId"/> and <see cref="CausationId"/> are diagnostic values rebuilt from
     /// strings, and both degrade to <see langword="null"/> when the string does not parse: losing a
     /// trace link is preferable to losing a message. This one cannot degrade. It is half of the
-    /// unique key on (<see cref="SourceMessageId"/>, <see cref="ContractName"/>), so a silent null
+    /// unique key on (<see cref="OriginMessageId"/>, <see cref="ContractName"/>), so a silent null
     /// here silently switches deduplication off rather than merely blurring a trace.
     /// </para>
     /// <para>
+    /// <b>Not <c>Source</c> either</b>, and that is not a matter of taste: <c>Source</c> already
+    /// means <i>the emitting module</i> in this package — see <c>IntegrationEventMessage.Source</c>
+    /// and <c>IntegrationEventRegistration.Source</c>, and the log line that reads "as
+    /// '{ContractName}' from '{Source}'". Both notions land on this entity once the dedicated
+    /// integration-event table is retired, so one of them had to take another word before the first
+    /// production row made the choice a migration.
+    /// </para>
+    /// <para>
     /// <b>What it buys.</b> A redelivered dispatch re-runs its handlers, which publish the same
-    /// contract again with the same source row — so the second write collides on the unique index
+    /// contract again with the same origin row — so the second write collides on the unique index
     /// instead of producing a duplicate integration message. This closes the window a per-message
     /// settlement leaves open, because it also covers a crash occurring <i>after</i> the commit,
     /// which atomicity alone cannot.
@@ -90,8 +113,18 @@ public sealed class OutboxMessage
     /// would collide on this key and the second would be absorbed as a duplicate. Forbidden by
     /// convention rather than detected.
     /// </para>
+    /// <para>
+    /// <b>Forward note — the guarantee is bounded by retention.</b> This key can only reject a
+    /// duplicate while the row it produced is still in the table, and <c>OutboxRetentionWorker</c>
+    /// deletes <c>Published</c> rows after <c>OutboxProcessorOptions.RetentionDays</c> (default 7).
+    /// A dead-lettered origin row is never deleted, so an operator requeue long after the contract
+    /// row it produced was purged writes a duplicate with nothing left to collide with. Narrow, and
+    /// deliberately left alone for now — but the inbox already reasons this way, its retention
+    /// defaulting to 30 precisely because a table only deduplicates what it still holds. Worth
+    /// revisiting when the publisher that depends on this key is built.
+    /// </para>
     /// </remarks>
-    public MessageId? SourceMessageId { get; set; }
+    public MessageId? OriginMessageId { get; set; }
 
     /// <summary>
     /// Gets or sets the assembly-qualified CLR type name of the serialized
