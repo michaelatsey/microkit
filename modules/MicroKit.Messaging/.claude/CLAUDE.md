@@ -380,7 +380,7 @@ All v1 packages share one version per release.
   `AddInProcessTransport()` are **deleted**; the `IMessageSerializer` default moves to
   `AddMicroKitMessaging()`. ⚠ **The inbox consequently has no producer** — the drain is intact but
   unfed, and `AddMessageHandler<,>` now fails at boot via `InboxIngestionValidator`. Also records
-  per-message settlement, the `(SourceMessageId, ContractName)` natural key, the abandonment of
+  per-message settlement, the `(OriginMessageId, ContractName)` natural key, the abandonment of
   `IOutboxSettlementStore` (fan-out makes the target transaction ambiguous), and the registry's
   reversal from publishing-only to bidirectional.
 - **ADR-MSG-017:** the inbox rewrite. Atomic `ClaimBatchAsync` + token-fenced `ApplyOutcomesAsync` replace the per-message lease; the primary key moves to a `RowId` surrogate with the compound key surviving as the unique dedup index (a compound-key claim selected a CROSS PRODUCT and could exceed `batchSize` several times over); **success settles inside the handler's own transaction** via `IInboxSettlementStore`, which is why the inbox is NOT a mirror of the outbox; `ClaimToken` is an EF concurrency token, without which the ownership mechanism is decorative; `IInboxWriter.AddAsync` returns `InboxWriteResult` instead of throwing on a redelivery — the defect that dead-lettered correctly delivered messages. Closes the inbox half of ADR-MSG-014.

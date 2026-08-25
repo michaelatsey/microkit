@@ -15,6 +15,40 @@ failures and releases are batched.
 
 See ADR-MSG-015 (outbox) and ADR-MSG-017 (inbox).
 
+### Fixed — recovered the step-1 api-reviewer corrections, and renamed `SourceMessageId`
+
+**`OutboxMessage.SourceMessageId` is now `OutboxMessage.OriginMessageId`**, and
+`UX_OutboxMessages_Source_ContractName` is now `UX_OutboxMessages_Origin_ContractName`. `Source`
+already means *the emitting module* everywhere else in this package — `OutboxMessage.Source`,
+`IntegrationEventMessage.Source`, `IntegrationEventRegistration.Source`, and the log line reading
+`as '{ContractName}' from '{Source}'`. Both notions land on the same entity once the dedicated
+integration-event table is retired, so one of them had to take another word. The column is still
+empty, which is the only reason this is a rename rather than a data migration.
+
+**Why it is arriving late.** The api-reviewer raised it against the PR that added the column, and
+the commit applying that review was pushed to the source branch two minutes *after* the PR had been
+squash-merged and closed. A push to a merged PR's branch does not reopen it and produces no signal,
+so the correction sat unmerged while three further PRs built on top. Recovered here in full, and
+reconciled against what landed in between rather than replayed.
+
+Also recovered, from the same review:
+
+- **The provider narrowing is now declared on the public API.** `ApplyMessagingConfiguration` and
+  `OutboxMessageConfiguration` carry it in XML docs, and the README states it beside the composition
+  snippet. It was previously only in this CHANGELOG and one code comment, so a consumer had to read
+  the release notes to learn their provider was unsupported.
+- **`MessageKind.Notification = 0` / `Contract = 1`** carry explicit values, so the zero-value
+  guarantee survives a reordering of the declarations rather than depending on one.
+- **`OutboxMessage.CreatedAtUtc` is mapped explicitly** (`IsRequired`) instead of by convention. No
+  behaviour change today; it is about to become the claim's ordering key.
+
+**Migration.** For a released package this is a no-op: none of these columns has shipped, so the
+migration published under *Added — outbox schema* below already carries the final names. If you
+tracked `dev` and applied that migration before this entry existed, rename the column and the index
+(`ALTER TABLE "OutboxMessages" RENAME COLUMN "SourceMessageId" TO "OriginMessageId";` and
+`ALTER INDEX "UX_OutboxMessages_Source_ContractName" RENAME TO "UX_OutboxMessages_Origin_ContractName";`)
+rather than letting EF generate a drop-and-add, which would drop the unique constraint.
+
 ### Changed — the MediatR package decorates instead of replacing, and routes on `MessageKind`
 
 `MediatROutboxDispatcher` no longer deserializes every payload and branches on
@@ -110,18 +144,19 @@ fanned out in process, once as a `Contract` handed to a transport.
   `saasbtp.safety.constat-recorded.v1`. `EventType` cannot serve: it holds an assembly-qualified
   name the receiving process cannot resolve, so it works in process by accident and fails across a
   service boundary. `EventType` is now documented for what it is — a local deserialization detail.
-- **`OutboxMessage.SourceMessageId`** — the `Id` of the outbox row whose dispatch produced this one.
+- **`OutboxMessage.OriginMessageId`** — the `Id` of the outbox row whose dispatch produced this one.
   Deliberately **not** named after causation: `CorrelationId` and `CausationId` are tracing values
   that degrade to null when unparseable, and this one cannot, because a silent null switches
   deduplication off.
-- **`UX_OutboxMessages_Source_ContractName`** — unique over `(SourceMessageId, ContractName)`. A
-  redelivered dispatch re-runs its handlers, which publish the same contract from the same source
+- **`UX_OutboxMessages_Origin_ContractName`** — unique over `(OriginMessageId, ContractName)`. A
+  redelivered dispatch re-runs its handlers, which publish the same contract from the same origin
   row, so the second write collides instead of duplicating. This covers a crash occurring *after*
   the commit, which per-message settlement alone cannot.
 
-Both new nullable columns are meaningful only for a `Contract` row. The pairing is not enforced by
-the entity — it is an EF Core entity with no constructor to enforce it in, and a guard in a setter
-would throw part-way through materialization. Enforcement belongs to whoever builds the row.
+Both new nullable columns are meaningful only for a `Contract` row. The pairing is not enforced at
+that layer: the integration-event publisher is the only writer that will ever set them, so the
+invariant belongs there, next to the code that knows the contract. A check constraint would have to
+spell `MessageKind <> 'Contract'`, hardcoding an enum member name into the schema.
 
 **Two handlers of one notification must not publish the same contract.** They would collide on this
 key and the second would be absorbed as a duplicate. Forbidden by convention, not detected.
@@ -143,18 +178,18 @@ The SQL Server failure is not visible at DDL time and not on the first row: it a
 notifications.
 
 Note the scope on the supported providers too: a `NULL` on either side is distinct, so a contract
-staged outside a dispatch does not deduplicate. Intended — the key guards the replay path, where a
-source row always exists.
+staged outside a dispatch does not deduplicate. Intended — the key guards the replay path, where an
+origin row always exists.
 
 **Migration** (PostgreSQL / SQLite):
 
 ```sql
 ALTER TABLE "OutboxMessages" ADD COLUMN "MessageKind"     varchar(32)  NOT NULL DEFAULT 'Notification';
 ALTER TABLE "OutboxMessages" ADD COLUMN "ContractName"    varchar(256) NULL;
-ALTER TABLE "OutboxMessages" ADD COLUMN "SourceMessageId" uuid         NULL;
+ALTER TABLE "OutboxMessages" ADD COLUMN "OriginMessageId" uuid         NULL;
 
-CREATE UNIQUE INDEX "UX_OutboxMessages_Source_ContractName"
-    ON "OutboxMessages" ("SourceMessageId", "ContractName");
+CREATE UNIQUE INDEX "UX_OutboxMessages_Origin_ContractName"
+    ON "OutboxMessages" ("OriginMessageId", "ContractName");
 ```
 
 `'Notification'` is the correct default rather than a convenient one: every row written before this
@@ -162,7 +197,7 @@ column existed came through the domain-event path and carries a notification pay
 zero value of the enum, so a row predating the column and a fixture omitting the property agree.
 
 > Footnote, for anyone who must run this on SQL Server anyway: a filtered index
-> (`WHERE "SourceMessageId" IS NOT NULL AND "ContractName" IS NOT NULL`) restores the behaviour. It
+> (`WHERE "OriginMessageId" IS NOT NULL AND "ContractName" IS NOT NULL`) restores the behaviour. It
 > is not shipped — `HasFilter` takes provider-specific SQL and this is the provider-neutral EF Core
 > package — and it is a workaround you own, not a supported configuration.
 
@@ -303,7 +338,7 @@ with nothing to exercise it would only be designed twice.
 
 Deliberately absent: **`EventType`** (an assembly-qualified name is meaningless in the receiving
 process — shipping it would invite `Type.GetType`, which works in a monolith and fails on
-extraction), **`SourceMessageId`** (the producer's internal replay key), **a trace parent** (the
+extraction), **`OriginMessageId`** (the producer's internal replay key), **a trace parent** (the
 right thing to propagate, but `OutboxMessage` carries no such column yet, and a member that could
 only ever be null is worse than an absent one), delivery bookkeeping, and an envelope version.
 
@@ -434,7 +469,7 @@ where the entity cannot.
 
 It lands now rather than with the publisher because the envelope should ship complete **before the
 first message travels**, and no contract row exists yet — the same "the table is empty" argument
-that justified the `MessageKind` / `ContractName` / `SourceMessageId` columns. The publisher needs
+that justified the `MessageKind` / `ContractName` / `OriginMessageId` columns. The publisher needs
 the column regardless, so this is one migration instead of two.
 
 **Stamped at staging, never resolved at dispatch.** Reading it from `IntegrationEventRegistry` when

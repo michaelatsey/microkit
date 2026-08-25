@@ -28,14 +28,14 @@ public sealed class OutboxContractKeyTests(PostgreSqlFixture fixture)
     private static OutboxMessage Row(
         MessageKind messageKind = MessageKind.Notification,
         string? contractName = null,
-        MessageId? sourceMessageId = null)
+        MessageId? originMessageId = null)
         => new()
         {
             Id = MessageId.New(),
             TenantId = "tenant-a",
             MessageKind = messageKind,
             ContractName = contractName,
-            SourceMessageId = sourceMessageId,
+            OriginMessageId = originMessageId,
             EventType = "MicroKit.Test.TestEvent, MicroKit.Test",
             Payload = "{}",
             Status = OutboxMessageStatus.Pending,
@@ -65,18 +65,18 @@ public sealed class OutboxContractKeyTests(PostgreSqlFixture fixture)
     }
 
     [DockerRequiredFact]
-    public async Task A_second_row_with_the_same_source_and_contract_is_rejected()
+    public async Task A_second_row_with_the_same_origin_and_contract_is_rejected()
     {
         await using var database = await InboxTestDatabase.CreateAsync(fixture.ConnectionString);
 
-        var source = MessageId.New();
+        var origin = MessageId.New();
 
         await using var context = InboxTestDatabase.NewContext(database.ConnectionString);
 
-        context.OutboxMessages.Add(Row(MessageKind.Contract, Contract, source));
+        context.OutboxMessages.Add(Row(MessageKind.Contract, Contract, origin));
         await context.SaveChangesAsync();
 
-        context.OutboxMessages.Add(Row(MessageKind.Contract, Contract, source));
+        context.OutboxMessages.Add(Row(MessageKind.Contract, Contract, origin));
 
         await Should.ThrowAsync<DbUpdateException>(() => context.SaveChangesAsync());
     }

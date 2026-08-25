@@ -1056,10 +1056,19 @@ worker stops.
 **6. Per-message settlement** (implemented separately): `ApplyOutcomesAsync` moves inside the loop,
 narrowing the replay window from one batch to one message.
 
-**7. The replay guard is a natural key, not a settlement store.** `(SourceMessageId, ContractName)`
-unique — note the shipped column name; the design session called it `CausedByMessageId`. A replay
-re-runs the notification handler, which publishes the same contract from the same source row, which
-collides; the publisher absorbs the collision as "already published".
+**7. The replay guard is a natural key, not a settlement store.** `(OriginMessageId, ContractName)`
+unique. A replay re-runs the notification handler, which publishes the same contract from the same
+origin row, which collides; the publisher absorbs the collision as "already published".
+
+The column's naming path is `CausedByMessageId` → `SourceMessageId` → **`OriginMessageId`**, and the
+middle name reached `dev` by accident rather than by decision. The design session called it
+`CausedByMessageId`; that was rejected because the value is structural and cannot degrade to null,
+unlike `CorrelationId` and `CausationId`. It shipped as `SourceMessageId`, which the api-reviewer
+then rejected in turn: `Source` already means *the emitting module* in this package, and both
+notions land on `OutboxMessage` once the dedicated integration-event table is retired. The commit
+applying that review was pushed to its source branch two minutes after the PR had been squash-merged
+and closed, so it never landed, and three further PRs built on the un-renamed column before anyone
+noticed. Recovered under *Fixed* in the module CHANGELOG. `OriginMessageId` is the settled name.
 
 **8. `IOutboxSettlementStore` is abandoned.** `IInboxSettlementStore` works because one inbox row =
 one handler = one transaction, so "the" transaction to stage the mark into is unambiguous. The
@@ -1163,7 +1172,7 @@ because the drain loop was never driven.
 `TransportOutboxDispatcher` builds a `MessageEnvelope` carrying `MessageId` from the row — the same
 stable identity the fan-out copied into `InboxMessage.MessageId`, for the same stated reason.
 Property 1 becomes the receiver's subscription fan-out, and properties 2–5 become the receiver's
-inbox, both over the wire. On the producing side, the `(SourceMessageId, ContractName)` unique index
+inbox, both over the wire. On the producing side, the `(OriginMessageId, ContractName)` unique index
 already covers the replay this test was probing.
 
 **What is genuinely uncovered until the receiving seam lands:** the *end-to-end* assertion that a

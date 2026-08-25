@@ -7,6 +7,22 @@ namespace MicroKit.Messaging.EntityFrameworkCore;
 /// EF Core entity configuration for <see cref="OutboxMessage"/>.
 /// Apply via <see cref="ModelBuilderExtensions.ApplyMessagingConfiguration"/>.
 /// </summary>
+/// <remarks>
+/// <para>
+/// One decision here is a support declaration rather than a mapping preference, and it is stated
+/// on the type for that reason: <c>UX_OutboxMessages_Origin_ContractName</c>, unique over
+/// (<see cref="OutboxMessage.OriginMessageId"/>, <see cref="OutboxMessage.ContractName"/>), is
+/// <b>supported on PostgreSQL and SQLite and NOT supported on SQL Server</b>.
+/// </para>
+/// <para>
+/// Every <see cref="MessageKind.Notification"/> row carries <see langword="null"/> in both columns.
+/// PostgreSQL and SQLite treat nulls as distinct in a unique index, so unlimited such rows coexist;
+/// SQL Server treats them as equal, so the <b>second</b> notification row ever written is rejected
+/// — in production, on the second insert, never at DDL time. The index carries a model invariant
+/// rather than a performance hint, so it cannot be dropped to make an unsupported provider work.
+/// See <see cref="ModelBuilderExtensions.ApplyMessagingConfiguration"/> and the module CHANGELOG.
+/// </para>
+/// </remarks>
 public sealed class OutboxMessageConfiguration : IEntityTypeConfiguration<OutboxMessage>
 {
     /// <inheritdoc/>
@@ -45,7 +61,7 @@ public sealed class OutboxMessageConfiguration : IEntityTypeConfiguration<Outbox
         builder.Property(m => m.Source)
             .HasMaxLength(256);
 
-        builder.Property(m => m.SourceMessageId)
+        builder.Property(m => m.OriginMessageId)
             .HasConversion(new ValueConverter<MessageId?, Guid?>(
                 v => v == null ? null : v.Value,
                 v => v == null ? null : new MessageId(v.Value)));
@@ -80,6 +96,15 @@ public sealed class OutboxMessageConfiguration : IEntityTypeConfiguration<Outbox
         // cleared by every terminal write.
         builder.Property(m => m.ClaimToken);
 
+        // Mapped explicitly rather than by convention, because it is about to carry weight. The
+        // value is the WRITER's responsibility — nothing defaults it — and a row written straight
+        // through IOutboxWriter with the property omitted persists 0001-01-01. That is true of any
+        // unset DateTimeOffset and is not new, but step 5 promotes this column to the claim's sort
+        // key, at which point such a row heads the queue permanently rather than merely carrying a
+        // wrong timestamp. Declared here so the promotion lands on a column with a stated shape.
+        builder.Property(m => m.CreatedAtUtc)
+            .IsRequired();
+
         // No HasQueryFilter — infrastructure table, read cross-tenant by processors (ADR-MSG-002).
 
         // Claim index: ClaimBatchAsync candidate filter + OrderBy(OccurredOnUtc). Column order
@@ -103,7 +128,7 @@ public sealed class OutboxMessageConfiguration : IEntityTypeConfiguration<Outbox
             .HasDatabaseName("IX_OutboxMessages_Status_NextRetryAt_LockedUntil");
 
         // The replay natural key. A redelivered dispatch re-runs its handlers, which publish the
-        // same contract from the same source row — so the second write collides here instead of
+        // same contract from the same origin row — so the second write collides here instead of
         // producing a duplicate integration message.
         //
         // UNFILTERED, and that is a support declaration rather than an oversight. A notification
@@ -122,11 +147,20 @@ public sealed class OutboxMessageConfiguration : IEntityTypeConfiguration<Outbox
         // left to a consumer to reconstruct. See the README and CHANGELOG.
         //
         // Note what the null semantics also mean: a NULL on either side is DISTINCT, so a contract
-        // row staged outside a dispatch (no source row) does not deduplicate. That is the intended
-        // scope — the key guards the replay path, where a source row always exists.
-        builder.HasIndex(m => new { m.SourceMessageId, m.ContractName })
+        // row staged outside a dispatch (no origin row) does not deduplicate. That is the intended
+        // scope — the key guards the replay path, where an origin row always exists.
+        //
+        // FORWARD NOTE for the step-5 publisher, which is what will absorb a collision here:
+        // this INSERT happens inside the caller's business transaction, and on PostgreSQL a unique
+        // violation aborts the whole transaction, not just the statement. Catching DbUpdateException
+        // and carrying on is therefore not enough — the pattern that works is already in this
+        // package at EfInboxStore.AddAsync: take a savepoint before the insert, detach the entry and
+        // roll back to it on violation, then verify post-hoc rather than decoding a provider error
+        // code. Note the 24-character savepoint-name cap documented there; it exists for a provider
+        // this index no longer supports, but the cap is cheap to keep and expensive to rediscover.
+        builder.HasIndex(m => new { m.OriginMessageId, m.ContractName })
             .IsUnique()
-            .HasDatabaseName("UX_OutboxMessages_Source_ContractName");
+            .HasDatabaseName("UX_OutboxMessages_Origin_ContractName");
 
         // Cleanup index: DeleteProcessedAsync filter on (TenantId, ProcessedAtUtc).
         builder.HasIndex(m => new { m.TenantId, m.ProcessedAtUtc })

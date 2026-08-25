@@ -31,6 +31,36 @@ dev     ← jamais de push direct — uniquement via PR ou merge de feature
 5. Release : PR de dev → main + tag
 ```
 
+## ⚠ Corrections post-review — le piège du squash-merge
+
+**Ne jamais pousser sur la branche source d'une PR déjà mergée.** GitHub ne rouvre pas une PR
+fermée quand sa branche reçoit un nouveau commit, et n'émet aucun signal : ni notification, ni
+statut, ni conflit. Le commit reste sur une branche fermée et personne ne le voit.
+
+C'est arrivé sur `MicroKit.Messaging` #93 : les corrections de l'`api-reviewer` ont été poussées
+**deux minutes après** le squash-merge. Elles sont restées orphelines pendant que #94, #95 et #96
+se construisaient sur la colonne non renommée — quatre PR de dérive, détectées seulement en
+relisant un nom de colonne.
+
+```
+✅ Correction après merge  → nouvelle branche + nouvelle PR (fix/<scope>/<desc>)
+❌ Correction après merge  → push sur la branche de la PR mergée
+```
+
+### Détection
+
+Une branche squash-mergée n'a aucun commit en commun avec `dev` : `git log dev..<branche>` est donc
+toujours non vide et ne prouve rien. Ce qui prouve qu'une branche a bien atterri, c'est que **l'arbre
+de son tip existe quelque part dans l'historique de `dev`** :
+
+```bash
+git rev-list dev --format="%T" | grep -v '^commit' | sort -u > /tmp/devtrees
+git rev-parse <branche>^{tree} | grep -qf /tmp/devtrees || echo "TIP TREE NOT ON DEV"
+```
+
+À passer sur toutes les branches distantes après une série de PR, ou avant d'ouvrir un lot qui
+dépend du précédent.
+
 ## Workflow de release
 
 ```

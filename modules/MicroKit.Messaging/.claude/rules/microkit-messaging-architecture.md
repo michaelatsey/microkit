@@ -151,7 +151,11 @@ Role definitions:
   NO tenant global query filter (infrastructure tables, read cross-tenant by the processor).
 - Lease/locking: optimistic lease via `ExecuteUpdateAsync`, internal to the store. No orthogonal
   `IOutboxLockingStrategy` seam in v1 (the lock mechanism is coupled to the reservation control-flow;
-  an "orthogonal" seam would leak). Portable across PostgreSQL and SqlServer.
+  an "orthogonal" seam would leak). Portable across PostgreSQL and SqlServer — true of the *lease*,
+  and no longer true of the outbox schema as a whole: the replay natural key added in step 1 of the
+  outbox redesign (`UX_OutboxMessages_Origin_ContractName`) relies on nulls being distinct in a
+  unique index, which SQL Server does not do. Supported providers for the outbox are PostgreSQL and
+  SQLite.
 - Ingestion (formerly `InProcessMessagePublisher`, then `InProcessIntegrationDispatcher`, **both
   now deleted** — ADR-MSG-018, ADR-MSG-019): wrote one `InboxMessage` per subscribed `ConsumerType`;
   dedup absorbed in `EfInboxStore.AddAsync` (unique constraint + `DbUpdateException` as authoritative

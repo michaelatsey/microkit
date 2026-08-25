@@ -29,7 +29,13 @@ public sealed class OutboxMessageFactory(IMessageSerializer serializer)
     /// <c>CausationId</c>. Passed as a method parameter (not constructor-injected) because this
     /// factory is a singleton.
     /// </param>
-    /// <returns>A new <see cref="OutboxMessage"/> with <see cref="OutboxMessageStatus.Pending"/> status.</returns>
+    /// <returns>
+    /// A new <see cref="OutboxMessage"/> with <see cref="OutboxMessageStatus.Pending"/> status and
+    /// <see cref="MessageKind.Notification"/> kind. The kind is not a parameter because this factory
+    /// serves the domain-event path, where it is always correct; a contract row is written by the
+    /// integration-event publisher, which sets <see cref="OutboxMessage.ContractName"/> and
+    /// <see cref="OutboxMessage.OriginMessageId"/> alongside it.
+    /// </returns>
     public OutboxMessage Create(
         object payload,
         Guid messageId,
