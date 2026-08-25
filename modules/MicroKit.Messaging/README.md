@@ -242,7 +242,17 @@ door to reprocessing.
 - **Schema ownership.** There is still no published canonical SQL for the outbox and inbox tables;
   the only full definition is the EF Core entity configuration, so a consumer who owns their own DDL
   is reverse-engineering it. The CHANGELOG publishes the *migration* for the inbox claim rewrite
-  (including the primary-key move, which is not optional) — that is a step, not the fix.
+  (including the primary-key move, which is not optional) and for the outbox message-kind columns —
+  that is a step, not the fix.
+- **Provider support for the outbox replay key.** `UX_OutboxMessages_Source_ContractName`, unique
+  over `(SourceMessageId, ContractName)`, is what stops a redelivered dispatch from writing a
+  duplicate integration message. It is a **model invariant, not an index you may skip**, and it is
+  supported on **PostgreSQL and SQLite**, where nulls are distinct in a unique index — every
+  notification row carries `(NULL, NULL)`, so unlimited such rows must coexist. **SQL Server is not
+  supported for this constraint**: it compares nulls as equal, so the second notification row ever
+  written is rejected — not at DDL time and not on the first row, but on the second insert in
+  production. The CHANGELOG carries the filtered-index workaround for anyone who must run there
+  anyway; it is a workaround you own, not a supported configuration.
 - Domain events raised by a notification handler are staged but never flushed, so cascade events are
   currently lost. Tracked; do not rely on cascade dispatch.
 
