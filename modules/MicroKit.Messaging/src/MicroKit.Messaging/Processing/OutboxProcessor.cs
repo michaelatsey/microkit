@@ -44,9 +44,9 @@ namespace MicroKit.Messaging.Processing;
 /// buffered, and <c>ApplyOutcomesAsync</c> runs afterwards on the batch-scoped store. A crash
 /// in between replays every message in the batch.
 /// <list type="bullet">
-///   <item>Where each consumer sits behind the <b>inbox</b>, that costs duplication only —
-///         <c>InProcessIntegrationDispatcher</c> writes one inbox row per consumer, the unique
-///         index absorbs the redelivery, and no handler runs twice.</item>
+///   <item>Where each consumer sits behind an <b>inbox</b>, that costs duplication only — the
+///         receiver writes one row per consumer, the unique index absorbs the redelivery, and no
+///         handler runs twice.</item>
 ///   <item>Where the dispatcher invokes a handler <b>in-process with no inbox row</b>, it does
 ///         not. <c>MediatROutboxDispatcher</c> publishes a notification through
 ///         <c>IPublisher.Publish</c>, and notification handlers have no per-consumer inbox

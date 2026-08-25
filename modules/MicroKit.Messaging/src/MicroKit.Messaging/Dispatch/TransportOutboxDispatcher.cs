@@ -18,11 +18,11 @@ namespace MicroKit.Messaging.Dispatch;
 /// </para>
 /// <para>
 /// The consequence is worth stating rather than discovering: this dispatcher <b>cannot detect a
-/// malformed payload</b>, where <c>InProcessIntegrationDispatcher</c> can, because that one must
-/// deserialize to find its consumers. A corrupt payload therefore travels and dead-letters at the
-/// consumer, in the consumer's inbox — the correct place for it, since the receiver is the party
-/// that knows what the name should deserialize into, but it means a producer-side operator can see
-/// a healthy queue during a consumer-side incident.
+/// malformed payload</b>, because detecting one means deserializing, and it deliberately does not.
+/// A corrupt payload therefore travels and dead-letters at the consumer, in the consumer's inbox —
+/// the correct place for it, since the receiver is the party that knows what the name should
+/// deserialize into, but it means a producer-side operator can see a healthy queue during a
+/// consumer-side incident.
 /// </para>
 /// <para>
 /// <b><see cref="IMessageTransport"/> must stay a constructor dependency.</b> Resolving it lazily

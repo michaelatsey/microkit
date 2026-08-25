@@ -44,7 +44,9 @@ public sealed class TransportOutboxDispatcherTests
     /// anyone ever reintroduces "read the id off the deserialized event". That source only survived
     /// a retry by coincidence — the same payload happens to deserialize to the same value, but
     /// nothing guaranteed it — and closing it was the point of ADR-MSG-018 on the in-process path.
-    /// The twin assertion lives in <see cref="InProcessIntegrationDispatcherTests"/>.
+    /// The twin assertion lived in <c>InProcessIntegrationDispatcherTests</c>, deleted with the
+/// in-process fan-out (ADR-MSG-019). Its surviving counterpart is
+/// <c>MediatROutboxDispatcherTests.DispatchAsync_WhenKindIsContract_NeverTouchesTheSerializer</c>.
     /// </remarks>
     [Fact]
     public async Task DispatchAsync_UsesTheRowIdAsTheMessageId()

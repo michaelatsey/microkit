@@ -613,10 +613,11 @@ must exceed the maximum plausible redelivery delay of every upstream transport.
 foreach (var message in batch)
 {
     await using var scope = _scopeFactory.CreateAsyncScope();
-    var processorStore = scope.ServiceProvider.GetRequiredService<IOutboxProcessorStore>();
-    var publisher = scope.ServiceProvider.GetRequiredService<IMessagePublisher>();
+    // IOutboxDispatcher, resolved per message. NOT IMessagePublisher — that seam was deleted by
+    // ADR-MSG-018 and its in-process implementation by ADR-MSG-019.
+    var dispatcher = scope.ServiceProvider.GetRequiredService<IOutboxDispatcher>();
 
-    await ProcessSingleAsync(processorStore, publisher, message, ct).ConfigureAwait(false);
+    await ProcessSingleAsync(dispatcher, message, ct).ConfigureAwait(false);
 }
 
 // ❌ Shared scope across batch — DbContext state from message N bleeds into message N+1
@@ -662,4 +663,6 @@ if (!_writer.HasOpenTransaction)
 > `Database.CurrentTransaction`. Publishing belongs inside `ITransactionalContext.ExecuteAsync`.
 
 A missing **subscriber**, by contrast, is not an error: it is valid for a multi-service deployment
-where an event has no local consumer. `InProcessIntegrationDispatcher` logs a warning and returns.
+where an event has no local consumer. That judgement now belongs to the receiving side — the
+in-process fan-out that used to log a warning and return was deleted with the in-process transport
+(ADR-MSG-019).

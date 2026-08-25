@@ -811,9 +811,14 @@ dropped.
 
 ## ADR-MSG-018: Integration Events Are a Marker Contract, and the In-Process Transport Is Withdrawn
 
-**Status:** Accepted
+**Status:** Accepted — **superseded in part by ADR-MSG-019 (three points, enumerated there)**
 **Date:** 2026-08-24
 **Supersedes (in part):** ADR-MSG-010 — the `IIntegrationEvent : IEvent` line stands; nothing else about the interface does
+**Superseded (in part) by:** ADR-MSG-019 — §3's relocation of the fan-out into
+`InProcessIntegrationDispatcher` (it was **withdrawn**, not relocated; the type does not exist), the
+consequence about `AddInProcessTransport()` keeping its registrations, and the rejected alternative
+that cited `InboxRedeliveryTests` as blocking evidence. **Everything else below stands** — read §3
+against ADR-MSG-019's supersession list before relying on it.
 **Related:** ADR-MSG-002, ADR-MSG-008, ADR-MSG-009, ADR-EXEC-001
 
 ### Context
@@ -982,3 +987,257 @@ but weaker and easier to work around.
 **Upcasters instead of a version suffix in the contract name.** Rejected as premature: schema
 evolution machinery carries a permanent maintenance cost before a single breaking change has
 occurred. Versioning stays additive-only. Revisit under the rule of three.
+
+---
+
+## ADR-MSG-019: The Reentrant Outbox — One Table, Routed by Kind, Decorated Not Replaced
+
+**Status:** Accepted
+**Date:** 2026-08-25
+**Supersedes (in part):** ADR-MSG-018 — three specific points, enumerated below; the rest stands
+**Related:** ADR-MSG-002, ADR-MSG-009, ADR-MSG-016, ADR-MSG-017, ADR-MEDIATR-014/-015
+
+### Context
+
+ADR-MSG-018 made `IIntegrationEvent` a marker and moved every field of message metadata onto the
+row. It could not finish the job, and said so: the in-process fan-out stayed, because no transport
+existed to replace it, and `MediatROutboxDispatcher` still routed by testing the deserialized
+payload for `is INotification`.
+
+Both are now wrong for the same underlying reason. The outbox is **reentrant** — one table carrying
+two natures of row — and the nature of a row is a fact about the row, not about a CLR type someone
+can recover from it. A type test is invisible to SQL, so an operator cannot ask what is stuck in the
+queue. It forces the payload-agnostic core to know about the notification abstraction it
+deliberately does not reference. And it only works in process at all by accident: a consumer in
+another service holds neither the producer's assembly nor its types.
+
+### Decision
+
+**1. One table, two natures, routed by `MessageKind`.** A domain event is staged as a
+`Notification` and fanned out in process; a handler in that fan-out may publish an integration
+event, staged as a `Contract` and handed to a transport on a second pass through the same queue.
+The two share one set of reliability machinery — claim, lease, back-off, dead-letter — and two
+tables would mean two processors and two copies of it, in two packages, with nothing keeping them
+from diverging.
+
+**2. `MicroKit.Messaging.MediatR` decorates; it does not replace.**
+
+| Composition | Behaviour |
+|---|---|
+| Core alone | every row goes to the transport |
+| Core + `.MediatR` | `Kind = Notification` → `IPublisher.Publish`; everything else → the inner dispatcher |
+
+Core never sees `INotification`. A user who does not install `.MediatR` gets a fully working
+messaging path; installing it changes the behaviour of notifications only.
+
+**3. The decoration uses a keyed inner seam, so no registration order can bypass it.** Two slots
+with two owners: `AddTransportDispatcher()` writes the standard dispatcher into a keyed slot
+(`OutboxDispatcherKeys.Standard`) that only Core ever touches, plus an unkeyed `TryAdd` forwarder;
+the glue removes unkeyed `IOutboxDispatcher` descriptors and takes that slot outright, resolving its
+inner through the key.
+
+| Order | Result |
+|---|---|
+| transport → glue | glue removes the forwarder and wraps the keyed dispatcher |
+| glue → transport | keyed `TryAdd` lands; the unkeyed one correctly abstains |
+| glue alone | keyed lookup yields null — a legal composition, see decision 5 |
+| glue twice | remove-then-add nets one descriptor |
+
+**4. `InProcessIntegrationDispatcher` and `AddInProcessTransport()` are deleted.** The in-process
+fan-out wrote inbox rows on the *producing* side, which is the confusion the contract-name
+indirection exists to remove. `AddInProcessTransport()` would otherwise have survived as a public
+method registering nothing but a JSON serializer.
+
+**5. The inner dispatcher is optional, and a notification-only host is a first-class composition.**
+It calls `AddMediatRDomainEvents()` and no transport method at all. A `Contract` row in such a host
+raises `OutboxConfigurationException`: batch released, no retry consumed, rows stay `Pending`, the
+worker stops.
+
+**6. Per-message settlement** (implemented separately): `ApplyOutcomesAsync` moves inside the loop,
+narrowing the replay window from one batch to one message.
+
+**7. The replay guard is a natural key, not a settlement store.** `(SourceMessageId, ContractName)`
+unique — note the shipped column name; the design session called it `CausedByMessageId`. A replay
+re-runs the notification handler, which publishes the same contract from the same source row, which
+collides; the publisher absorbs the collision as "already published".
+
+**8. `IOutboxSettlementStore` is abandoned.** `IInboxSettlementStore` works because one inbox row =
+one handler = one transaction, so "the" transaction to stage the mark into is unambiguous. The
+outbox fans out: one row, N handlers, N transactions. If the mark commits with handler A and handler
+B then fails, the row is `Published` and B is never replayed. There is no single transaction to
+stage into, and per-message settlement plus the natural key reach the goal without having to answer
+an unanswerable question.
+
+**9. Handlers registered with no producer fail at boot.** `InboxIngestionValidator` throws when
+`MessageHandlerRegistry` holds an entry — see Consequences.
+
+### Two behavioural decisions, recorded so neither reads later as an oversight
+
+**`AddTransportDispatcher()` with no `IMessageTransport` now stops notifications too.**
+
+| | Before | After |
+|---|---|---|
+| `AddTransportDispatcher()`, no transport, notification row | dispatches — the inner was never reached | `OutboxConfigurationException`, batch released |
+| `AddTransportDispatcher()`, no transport, contract row | `OutboxConfigurationException` | unchanged |
+| no `AddTransportDispatcher()`, notification row | not composable — the glue threw at registration | dispatches |
+
+The decorator activates its keyed inner when constructed, so a missing transport fails inside the
+resolution `OutboxProcessor` wraps, before any row is examined. Calling that method declares an
+intent to send contracts; a host that only fans out notifications now has a composition that says
+exactly that, and did not before. The old behaviour bought working notifications at the price of a
+host sitting half-composed indefinitely — contracts piling up `Pending` while notifications drained
+and everything looked healthy. **Lazy resolution inside the `Contract` branch is rejected:** it needs
+a service-locator dependency in the decorator plus a second copy of the
+`InvalidOperationException` → `OutboxConfigurationException` conversion that
+`OutboxProcessor.ResolveDispatcher` already owns, and a second copy is how a classification drifts.
+
+**An unknown `MessageKind` reaching the decorator with a null inner is released, not dead-lettered.**
+`TransportOutboxDispatcher` dead-letters one, correctly: it is a fully composed build, so a kind it
+cannot interpret is permanent for that deployment. With no inner registered this build is by its own
+admission incomplete — the missing registration may be the very package that understands the kind —
+so the reversible verdict is the honest one. A row must not be destroyed on the strength of a host
+that was never finished assembling. Where an inner *is* registered the row is delegated and the
+inner's verdict stands unchanged.
+
+### The registry's publishing-only position is reversed
+
+Recorded here because it has been living in `IntegrationEventRegistry`'s XML docs since the contract
+registry landed, and a decision of this weight does not belong in a class comment.
+
+`IntegrationEventRegistry` is **bidirectional**. `ResolveContract(Type)` gives the wire name a type
+publishes under; `ResolveLocalType(name)` gives the local CLR type a wire name deserializes into.
+The reverse direction is the precondition for any transport: a consumer holds a payload and a name,
+not the producer's assembly, so `Type.GetType(assemblyQualifiedName)` cannot resolve across a
+process — it works in process only by accident. `Publishes<T>()` binds both directions, so a modular
+monolith routes its own contracts without a second declaration; `Consumes<T>()` exists for a
+contract a module does not publish itself, and declaring both is a no-op rather than a conflict —
+a module must not have to know whether its dependency happens to be in-process. One local type per
+contract name per process; a second claimant is a boot failure, because a relay deserializes once
+before any fan-out and an ambiguous name would be resolved by picking arbitrarily, silently
+producing the wrong type from structurally compatible JSON.
+
+### What this supersedes in ADR-MSG-018 — three points, and no more
+
+1. **§3's "the fan-out moves into `InProcessIntegrationDispatcher`".** The fan-out is withdrawn, not
+   relocated. The reasoning that justified the move — the row, not the event, is the authoritative
+   source of message metadata — remains correct and is now carried by `TransportOutboxDispatcher`,
+   which builds every envelope field from the row.
+2. **The consequence "`AddInProcessTransport()` keeps its `IMessageSerializer` and
+   `IOutboxDispatcher` registrations — removing the latter would break `AddMediatRDomainEvents()`,
+   which throws without a dispatcher to decorate."** No longer true in either half: the decorator
+   tolerates a null inner, and the serializer default now lives on `AddMicroKitMessaging()`, which is
+   where it belongs — Core registers `InboxProcessor` and `OutboxMessageFactory`, and both require
+   one, so an optional builder method was never the right owner.
+3. **The rejected alternative that cited `InboxRedeliveryTests` as blocking evidence** — below.
+
+Everything else in ADR-MSG-018 stands: `IIntegrationEvent` as a bare marker; `[IntegrationEvent]` as
+the wire identity; metadata assigned at staging from `IExecutionContext`; `IntegrationEventMessage`
+on its own table; `IIntegrationEventPublisher` requiring an open transaction the caller owns;
+per-module registration carrying `source`; `IMessagePublisher` and `InProcessMessagePublisher`
+staying deleted; the two timestamps; `ClaimToken` as an EF concurrency token.
+
+### The retirement of `InboxRedeliveryTests`
+
+ADR-MSG-018 rejected "have `InProcessIntegrationDispatcher` throw *no transport registered* instead
+of fanning out" with: *"Rejected on evidence: `InboxRedeliveryTests` drives that exact path and
+asserts the fan-out, and it must pass unchanged."* **That rejection was correct when it was
+written.** This ADR deletes the test, so it must record what the test proved — otherwise the option
+it closed becomes an option nobody examined.
+
+`Redelivery_AfterInboxRowsWritten_IsDeduplicatedAndTheOutboxRowIsPublished` drove one command to one
+outbox row, then drained twice with a forced redelivery in between, and asserted five properties:
+
+1. one outbox row fans out to exactly **one inbox row per registered `ConsumerType`** — two here;
+2. the second drain's duplicate insert is absorbed by the inbox unique index and reported as
+   `InboxWriteResult.AlreadyPresent`, never thrown;
+3. the redelivered outbox row therefore reaches `Published` with **`RetryCount == 0`** — the
+   regression it existed to prevent was a correctly-delivered message being retried to death and
+   dead-lettered because a redelivery escaped as an exception;
+4. a duplicate for one consumer does not cost the consumers after it their rows;
+5. nothing logs at `Warning` or above — a redelivery is nominal, not a fault.
+
+Note what it did *not* assert: the handlers never ran. The inbox rows were the delivery evidence,
+because the drain loop was never driven.
+
+**What changed is that the fan-out is no longer the only way to reach those properties.**
+`TransportOutboxDispatcher` builds a `MessageEnvelope` carrying `MessageId` from the row — the same
+stable identity the fan-out copied into `InboxMessage.MessageId`, for the same stated reason.
+Property 1 becomes the receiver's subscription fan-out, and properties 2–5 become the receiver's
+inbox, both over the wire. On the producing side, the `(SourceMessageId, ContractName)` unique index
+already covers the replay this test was probing.
+
+**What is genuinely uncovered until the receiving seam lands:** the *end-to-end* assertion that a
+redelivered dispatch produces no duplicate and no dead-letter. The mechanism itself is still pinned
+by `IntegrationTests/Stores/InboxIngestionTests.cs`
+(`Redelivery_is_reported_as_already_present_and_does_not_throw`,
+`A_duplicate_for_one_consumer_does_not_block_the_others`,
+`The_unique_index_is_what_rejects_the_duplicate`); only the composition through a dispatcher is not.
+**That step owes this test back.**
+
+### Consequences
+
+**The inbox is unfed, not broken, and the distinction is the whole risk of this lot.** Nothing in
+`MicroKit.Messaging` writes an `InboxMessage` any more — `InProcessIntegrationDispatcher` held the
+only call to `IInboxWriter.AddAsync`. `InboxProcessor`, `InboxWorker`, `SharedDbInboxCoordinator`,
+both retention workers, all five store interfaces and `MessageHandlerRegistry.TryGetInvoker` are
+unchanged, still correct, still registered, and still proven end-to-end by
+`InboxSettlementGuaranteeTests`, which seeds its own rows. They have no producer. Pinned by
+`Core_DoesNotDependOnIInboxWriter`, which is **expected to fail when the receiving seam arrives** —
+deliberately, so that step revisits this ADR instead of quietly reinstating an in-process producer.
+
+**A registered handler is therefore a boot failure.** `InboxIngestionValidator` throws
+`InboxConfigurationException` naming the consumers and the reason. Without it the shortfall is
+undetectable: no row is written, the processor claims nothing, logs nothing above `Debug`, and
+reports a healthy empty queue indistinguishable from an idle one. Like
+`IntegrationEventRegistryValidator` it is a hosted service, so it reaches a real host only — a test
+container built with `BuildServiceProvider()` is unaffected. **Delete it with the receiving seam.**
+
+**`MessageHandlerRegistry.GetHandlers` loses its only caller and is kept.** It is the seam the
+receiving side needs — a wire name resolves to a local type, and that type resolves to its consumers
+here. Covered directly by `MessageHandlerRegistryTests` so it is an uncalled seam rather than
+untested code.
+
+**`AddInProcessTransport()` is removed outright, a breaking change on a preview package.** Migration:
+call `AddTransportDispatcher()`, or nothing at all for a notification-only host.
+
+**No `[Obsolete]` bridge, and that is a standing policy rather than a fresh judgement.** ADR-MSG-016
+§4 settled it when `AddMediatRTransport()` was renamed outright: *"Both packages are
+`1.0.0-preview.*` with zero external consumers and one in-repo call site — this is the cheapest the
+rename will ever be,"* and it explicitly rejected keeping the old name behind an alias because that
+*"commits to carrying it past 1.0.0."* Every term of that argument holds here unchanged. The
+consequence is that a consumer meets `CS1061` with no text attached, so the migration line above and
+the CHANGELOG entry are the only places it is written down — which is why both say the same thing in
+the same words. Revisit this policy at 1.0.0, not per-removal: an unexplained break and a consistent
+one read very differently to whoever hits it.
+
+**The decorator no longer deserializes a contract row**, which closes the double-deserialization
+item the design session left open. It is also the discipline most easily broken by accident:
+deserializing in front of `TransportOutboxDispatcher` would reinstate the producer-type-graph
+coupling that class was built to avoid while leaving it looking correct. Pinned by
+`DispatchAsync_WhenKindIsContract_NeverTouchesTheSerializer`, which uses a recording fake rather than
+`DidNotReceive()` — a negative assertion against a mock stays green if the subject starts calling a
+different method.
+
+**`E2EHarness` is now the standing proof of the notification-only composition.** It registers no
+transport at all, and its four suites pass unchanged.
+
+### Alternatives considered
+
+**Keep descriptor surgery (`LastOrDefault` + `Remove` + `CreateInner` + a marker descriptor) and just
+relax the "nothing to decorate" precondition.** Smaller diff, no new public constant. Rejected: it
+leaves glue-then-transport wrong. Core's `TryAdd` would find the decorator holding the only slot and
+abstain entirely, so the transport dispatcher would never be registered and every contract row would
+fail with a message telling the operator to call a method they had already called.
+
+**A route collection — Core owns one `IOutboxDispatcher` router resolving `IEnumerable<IOutboxRoute>`,
+each package contributing a route per `MessageKind` via `TryAddEnumerable`.** Order-independent by
+construction, and the same shape as the `IDomainEventsSink` fix in ADR-MSG-016. Rejected on cost, not
+on merit: it reshapes `TransportOutboxDispatcher` one step after it shipped, adds a public
+Abstractions type, and carries the identical wrinkle that resolving the collection activates every
+route. Worth revisiting if a third nature of row ever appears.
+
+**Delete `MessageHandlerRegistry.GetHandlers` along with its caller.** Rejected: the receiving seam
+rebuilds it two steps later, and a direct test costs less than the round trip.
+
+**Leave the unfed inbox silent and document it.** Rejected: it is precisely the silent gap this
+module treats as blocking, and documentation is not a signal a running host can emit.

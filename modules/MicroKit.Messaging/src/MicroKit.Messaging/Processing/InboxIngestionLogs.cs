@@ -1,8 +1,14 @@
 namespace MicroKit.Messaging.Processing;
 
 /// <summary>
-/// Source-generated log methods for the inbox ingestion path, used by
-/// <c>InProcessIntegrationDispatcher</c> and by broker adapters.
+/// Source-generated log methods for the inbox ingestion path, for broker adapters and the
+/// receiving seam that turns a <see cref="MessageEnvelope"/> into inbox rows.
+/// <para>
+/// ⚠ <b>No caller ships in this release.</b> The in-process fan-out that used these was withdrawn
+/// with the in-process transport (ADR-MSG-019). They are kept rather than deleted and re-added
+/// because ingestion needs exactly this pair — one row written, one redelivery deduplicated — and
+/// the wording of a log message is a thing operators build alerts on.
+/// </para>
 /// </summary>
 /// <remarks>
 /// Separate from <see cref="InboxProcessorLogs"/> because ingestion and drain are separate

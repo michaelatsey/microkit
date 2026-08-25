@@ -571,7 +571,11 @@ public sealed class IntegrationEventRegistryTests
     {
         var services = new ServiceCollection();
         services.AddLogging();
-        services.AddMicroKitMessaging().AddInProcessTransport();
+        // AddMicroKitMessaging() is where the IMessageSerializer default lives now that
+        // AddInProcessTransport() is gone (ADR-MSG-019) — NOT AddIntegrationEventPublishing(),
+        // which registers none of its own. The publishing call is here only because this helper
+        // serializes contract payloads; see MessagingSerializerDefaultTests for the ownership.
+        services.AddMicroKitMessaging().AddIntegrationEventPublishing();
 
         return services.BuildServiceProvider().GetRequiredService<IMessageSerializer>();
     }

@@ -8,16 +8,21 @@ using System.Reflection;
 /// </summary>
 /// <remarks>
 /// <para>
-/// Two lookup directions are maintained:
+/// Two lookup directions are maintained, and they are at different stages of their life:
 /// <list type="bullet">
 /// <item><description>
-/// <strong>By event type</strong> — used by <c>InProcessIntegrationDispatcher</c> to
-/// discover which consumers should receive an envelope and create
-/// <see cref="InboxMessage"/> rows.
+/// <strong>By consumer type name</strong> (<see cref="TryGetInvoker"/>) — used by
+/// <c>InboxProcessor</c> to find the invoker for a specific <c>InboxMessage.ConsumerType</c>
+/// during drain. Live.
 /// </description></item>
 /// <item><description>
-/// <strong>By consumer type name</strong> — used by <c>InboxProcessor</c> to
-/// find the invoker for a specific <c>InboxMessage.ConsumerType</c> during drain.
+/// <strong>By event type</strong> (<see cref="GetHandlers"/>) — discovers which consumers should
+/// receive a message. Its only caller was the in-process fan-out, deleted with the in-process
+/// transport (ADR-MSG-019), so it currently has <b>none</b>. It is kept rather than deleted
+/// because it is the seam the receiving side needs once an envelope can be turned back into inbox
+/// rows: a wire name resolves to a local type through <c>IntegrationEventRegistry</c>, and that
+/// type resolves to its consumers here. Covered directly by <c>MessageHandlerRegistryTests</c>,
+/// so it is an uncalled seam rather than untested code.
 /// </description></item>
 /// </list>
 /// </para>
@@ -104,4 +109,15 @@ public sealed class MessageHandlerRegistry
     /// </summary>
     public bool TryGetInvoker(string consumerType, out HandlerEntry entry)
         => _byConsumerType.TryGetValue(consumerType, out entry);
+
+    /// <summary>
+    /// Every distinct consumer type name registered so far. Unordered — it is a dictionary key
+    /// set, and nothing here depends on the order.
+    /// </summary>
+    /// <remarks>
+    /// Exists so <c>InboxIngestionValidator</c> can report at startup that handlers are registered
+    /// while nothing produces inbox rows for them, and name them in the failure. A count alone
+    /// would say a host is misconfigured without saying which registration to look at.
+    /// </remarks>
+    public IReadOnlyCollection<string> RegisteredConsumerTypes => _byConsumerType.Keys;
 }

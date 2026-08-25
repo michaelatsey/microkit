@@ -15,6 +15,88 @@ failures and releases are batched.
 
 See ADR-MSG-015 (outbox) and ADR-MSG-017 (inbox).
 
+### Changed — the MediatR package decorates instead of replacing, and routes on `MessageKind`
+
+`MediatROutboxDispatcher` no longer deserializes every payload and branches on
+`payload is INotification`. It reads `OutboxMessage.MessageKind`: a `Notification` row is published
+in process, everything else is delegated inward **without being deserialized at all**.
+
+- **A contract row never touches `IMessageSerializer` on this path.** Deserializing in front of
+  `TransportOutboxDispatcher` would make dispatch depend on the producer's type graph — the one
+  thing that does not cross a process boundary — reinstating the coupling that class was built to
+  avoid while leaving it looking correct. This also removes the double deserialization the previous
+  decorator performed on every integration event.
+- **The disjointness assumption is gone.** Routing by CLR type required assuming `IIntegrationEvent`
+  and `IDomainEventNotification` could never overlap; nothing enforced that. The column decides.
+- **A `Notification` row whose payload is not an `INotification`** is now an `OutboxPayloadException`
+  (dead-letter on first sight) rather than being delegated inward, where the inner would answer with
+  a configuration fault telling the operator to install a package they already have.
+
+### Changed — the outbox dispatcher seam has two slots, and registration order no longer matters
+
+`AddTransportDispatcher()` now makes two registrations: the dispatcher under the keyed slot
+`OutboxDispatcherKeys.Standard`, which only `MicroKit.Messaging` writes, plus an unkeyed `TryAdd`
+forwarder. `AddMediatRDomainEvents()` removes unkeyed `IOutboxDispatcher` descriptors, takes that
+slot, and resolves its inner through the key.
+
+| Order | Before | After |
+|---|---|---|
+| transport then glue | correct | correct |
+| glue then transport | **threw at registration**, and once `TryAdd` landed, silently left the transport dispatcher unregistered | correct |
+| glue alone | threw at registration | correct, see below |
+| glue twice | guarded by a marker descriptor nothing asserted | one descriptor, structurally |
+
+`OutboxDispatcherKeys.Standard` is public API and a compatibility commitment: changing the string
+unlinks a decorator from its inner with no compile error and no startup failure.
+
+**A notification-only host is now a first-class composition.** `AddMediatRDomainEvents()` alone, no
+transport method: the keyed lookup yields null, notifications dispatch, and a `Contract` row raises
+`OutboxConfigurationException` — released, no retry consumed, drains once a transport is deployed.
+
+Behavioural, both directions. Calling `AddTransportDispatcher()` **without** registering an
+`IMessageTransport` now stops notification rows as well as contract rows, because the decorator
+activates its keyed inner when constructed. Calling that method declares an intent to send
+contracts; a host that only fans out notifications should not call it. See ADR-MSG-019.
+
+### Removed — the in-process fan-out
+
+- **`InProcessIntegrationDispatcher` is deleted.** It wrote inbox rows on the *producing* side,
+  which is the confusion the contract-name indirection exists to remove. A `Contract` row now
+  travels to a transport as a `MessageEnvelope` and the receiving side writes its own inbox rows.
+- **`AddInProcessTransport()` is removed outright** — a breaking change on a preview package. It
+  would otherwise have survived as a public method registering nothing but a JSON serializer.
+  **Migration:** call `AddTransportDispatcher()`, or nothing at all for a notification-only host.
+- The `IMessageSerializer` default moves to **`AddMicroKitMessaging()`**, which is where it belongs:
+  that method registers `InboxProcessor` and `OutboxMessageFactory`, and both require one. The
+  duplicate `TryAdd`s in `AddIntegrationEventPublishing()` and `AddMediatRDomainEvents()` are
+  removed as unreachable — both are extensions on the builder `AddMicroKitMessaging()` returns.
+
+### Changed — the inbox has no producer, and a registered handler now fails at boot
+
+`InProcessIntegrationDispatcher` held the only call to `IInboxWriter.AddAsync` in the module.
+**Nothing writes an `InboxMessage` in this release.**
+
+`InboxProcessor`, `InboxWorker`, `SharedDbInboxCoordinator`, both retention workers, all five inbox
+store interfaces and the whole claim/settlement mechanism are **unchanged, still correct, and still
+registered** — they simply have no producer, which is not the same as being broken. A host that
+writes inbox rows itself can drive the entire drain, and the integration suite does exactly that.
+
+**`AddMessageHandler<THandler, TEvent>()` therefore fails at startup.** A new
+`InboxIngestionValidator` throws `InboxConfigurationException` naming the registered consumers and
+the reason. Without it the gap is undetectable: no row is written, the processor claims nothing,
+logs nothing above `Debug`, and reports a healthy empty queue indistinguishable from an idle one.
+Like `IntegrationEventRegistryValidator` it is a hosted service, so it reaches a real host only —
+containers built with `BuildServiceProvider()` in tests are unaffected. It is removed when the
+receiving seam ships.
+
+`Core_DoesNotDependOnIInboxWriter` pins this and is **expected to fail** when that seam arrives.
+
+**Removed test:** `InboxRedeliveryTests` — the fan-out was its entire subject. ADR-MSG-018 cited it
+as the evidence blocking this deletion; ADR-MSG-019 records the five properties it proved, what the
+transport now covers, and the one end-to-end assertion the receiving seam owes back.
+
+See ADR-MSG-019.
+
 ### Added — outbox schema: message kind, contract name, replay natural key
 
 The outbox becomes **reentrant**: one table, two natures of row, distinguished by an explicit column

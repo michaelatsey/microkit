@@ -54,7 +54,11 @@ redelivered.ShouldBe(InboxWriteResult.AlreadyPresent);   // the nominal path, no
 ## Test Categories
 
 ### Unit Tests (`MicroKit.Messaging.UnitTests`)
-- `IMessagePublisher` ingestion (subscriber fan-out, no subscriber, redelivery, cancellation)
+- `MediatROutboxDispatcher` routing by `MessageKind`, and the notification-only composition
+  (`IMessagePublisher` ingestion is **gone** — the seam was deleted by ADR-MSG-018 and the
+  in-process fan-out behind it by ADR-MSG-019; do not write a test against either)
+- `InboxIngestionValidator` — a registered handler with no producer fails at boot
+- `OutboxDispatcherKeys.Standard` value snapshot, and the `IMessageSerializer` default's owner
 - `OutboxProcessor` state transitions (Pending → Processing → Published/Failed)
 - `InboxProcessor` claim, settlement and failure classification (drives `FakeTimeProvider`)
 - `OutboxMessage` retry back-off formula verification
@@ -215,23 +219,72 @@ InboxClaimConcurrencyTests.ClaimBatchAsync_TwoProcessorsOverAFannedOutQueue_AreD
 > **neither claim exceeds `batchSize`**; that assertion is the one the cross-product bug failed,
 > and nothing else in the suite would have caught it.
 
-### In-process fan-out (InProcessIntegrationDispatcher)
+### Outbox dispatch routing (MediatROutboxDispatcher)
 
-> `InProcessMessagePublisher` and `IMessagePublisher` no longer exist (ADR-MSG-018). The fan-out
-> moved into `InProcessIntegrationDispatcher`, which sources every field from the `OutboxMessage`
-> row rather than from the event. These run against the real dispatcher with a substituted
-> `IInboxWriter` and a real `MessageHandlerRegistry`.
+> ⚠ **The in-process fan-out is gone.** `IMessagePublisher` and `InProcessMessagePublisher` went
+> with ADR-MSG-018; `InProcessIntegrationDispatcher` went with ADR-MSG-019, and its test file with
+> it. Nothing writes an `InboxMessage` in this release — do not write a test against a producer that
+> does not exist. Re-introduction of the type is blocked by
+> `Core_DoesNotContainTypeNamedInProcessIntegrationDispatcher`, and the absence of a producer is
+> pinned by `Core_DoesNotDependOnIInboxWriter`.
+
+Routing is now decided by `OutboxMessage.MessageKind`, never by the payload's CLR type. The two
+tests that carry the design are marked; the rest would each pass under the old implementation.
 
 ```
-DispatchAsync_TakesTheDedupKeyFromTheOutboxRow_NotTheEvent    (the latent bug this closed)
-DispatchAsync_TakesEveryFieldFromTheOutboxRow
-DispatchAsync_WhenMultipleSubscribersRegistered_WritesOneRowPerConsumer
-DispatchAsync_WhenNoSubscriberRegistered_WritesNothingAndDoesNotThrow   (valid, not an error)
-DispatchAsync_WhenOneConsumerIsAlreadyPresent_StillWritesTheOthers      (the partial-loss fix)
-DispatchAsync_WhenDeserializeReturnsNull_ThrowsOutboxPayloadException
-DispatchAsync_WhenTheWriteFailsForReal_Propagates
-DispatchAsync_ResolvesConsumersByRuntimeType_NotTheStaticType
+DispatchAsync_WhenKindIsNotification_PublishesViaMediatR
+DispatchAsync_WhenKindIsContract_DelegatesToTheInner
+DispatchAsync_WhenKindIsContract_NeverTouchesTheSerializer        ← recording fake, empty call log
+DispatchAsync_WhenKindIsContract_AndPayloadIsANotification_StillDelegates   ← kills a CLR-type router
+DispatchAsync_WhenKindIsNotification_AndPayloadIsNotANotification_ThrowsOutboxPayloadException
+DispatchAsync_WhenKindIsNotification_AndPayloadDoesNotDeserialize_ThrowsOutboxPayloadException
+DispatchAsync_WhenKindIsUnknown_DelegatesToTheInner
+DispatchAsync_WhenContractAndNoInner_ThrowsOutboxConfigurationException
+DispatchAsync_WhenUnknownKindAndNoInner_IsReleasedRatherThanDeadLettered
+DispatchAsync_WhenNotificationAndNoInner_StillPublishes
 ```
+
+> **Why a recording fake for the serializer and not `DidNotReceive()`.** The assertion is that a
+> contract row is never deserialized — deserializing in front of `TransportOutboxDispatcher` would
+> reinstate the producer-type-graph coupling that class exists to avoid. A mock's
+> `DidNotReceive().Deserialize(...)` stays green the moment the subject calls `Serialize` instead.
+> An empty call log cannot.
+
+### Composition and registration order (AddMediatRDomainEvents)
+
+> These are the tests for the failure mode that has already shipped once: a second
+> `IOutboxDispatcher` descriptor, DI resolving the last one, the decorator bypassed with no
+> exception and no log. Descriptor assertions prove *shape*; only the last one proves the *chain*.
+
+```
+Registration_WithTransportFirst_ResolvesTheDecorator
+Registration_WithGlueFirst_ResolvesTheDecorator
+Registration_WithGlueFirst_StillRegistersTheKeyedStandardDispatcher
+Registration_InEitherOrder_LeavesExactlyOneUnkeyedDispatcher                (Theory, both orders)
+Registration_InEitherOrder_TheDecoratorActuallyReachesTheTransport          ← recording transport
+AddMediatRDomainEvents_CalledTwice_ContributesTheSinkOnce
+AddMediatRDomainEvents_CalledTwice_LeavesOneDispatcher
+Registration_WithNoTransportDispatcher_ComposesAndDispatchesNotifications   (notification-only host)
+Registration_WithNoTransportDispatcher_ContractRowIsAConfigurationFault
+```
+
+> A fixture that RESOLVES the decorator while a transport dispatcher is registered must also
+> register an `IMessageTransport`: the keyed inner is activated when the decorator is constructed,
+> so a missing transport fails the whole resolution, notifications included. That is the deliberate
+> consequence recorded in ADR-MSG-019, not a fixture defect — the notification-only tests register
+> no transport dispatcher at all rather than working around it.
+
+### The unfed inbox (InboxIngestionValidator)
+
+```
+StartAsync_WhenNoHandlersRegistered_DoesNotThrow
+StartAsync_WhenAHandlerIsRegistered_ThrowsInboxConfigurationException
+StartAsync_NamesTheRegisteredConsumersAndTheReason
+```
+
+> Driven **directly**, never by starting a host — a host would start four messaging workers needing
+> stores these tests have no reason to wire. That is also why every other suite may still call
+> `AddMessageHandler` freely: `BuildServiceProvider()` starts no hosted service.
 
 ### Integration event publishing (ADR-MSG-018)
 
@@ -296,7 +349,7 @@ public void AllAssemblies_ShouldNot_ReferenceMediatRContracts()
     var assemblies = new[]
     {
         typeof(IIntegrationEvent).Assembly,       // Abstractions
-        typeof(InProcessMessagePublisher).Assembly, // Core
+        typeof(MessagingBuilder).Assembly,         // Core
         typeof(EfOutboxStore<>).Assembly,          // EntityFrameworkCore (generic in TContext)
         // MicroKit.Messaging.Testing goes here once it exists — it does not today.
     };

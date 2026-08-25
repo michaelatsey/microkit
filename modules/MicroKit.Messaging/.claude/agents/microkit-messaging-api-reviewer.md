@@ -42,15 +42,29 @@ Public API Surface
 [ ] Naming follows microkit-messaging-naming.md conventions
 [ ] IIntegrationEvent used (not INotification, not MediatR types)
 [ ] No framework types (HttpContext, DbContext) in Abstractions
-[ ] ValueTask<T> used for all async methods (exception ADR-MSG-014: IOutboxCoordinator.ExecuteAsync,
-    IInboxCoordinator.ExecuteAsync, IOutboxProcessor.ProcessBatchAsync, IInboxProcessor.ProcessBatchAsync
-    return Task — BackgroundService chain compatibility, see ADR-MSG-014)
+[ ] ValueTask<T> used for all async methods. ADR-MSG-014's Task exception is GONE — superseded
+    for the outbox seams by ADR-MSG-015 and for the inbox seams by ADR-MSG-017. All four now
+    return ValueTask<OutboxBatchResult> / ValueTask<InboxBatchResult>. BackgroundService overrides
+    still return Task; that is the framework's signature, not ours
 [ ] CancellationToken ct = default always last parameter
 [ ] sealed on all records, services, processors, publishers
 
+Dispatch Seam (ADR-MSG-019)
+[ ] IOutboxDispatcher implementations route on OutboxMessage.MessageKind, NEVER on the payload's
+    CLR type — a type test is invisible to SQL and reinstates producer-type-graph coupling
+[ ] A decorator resolves its inner from the keyed OutboxDispatcherKeys.Standard slot and treats it
+    as OPTIONAL; only Core writes that key, and a notification-only host legitimately has no inner
+[ ] OutboxDispatcherKeys.Standard's literal value is a cross-package compatibility commitment —
+    a change is a breaking change to Abstractions, and it is a const, so already-compiled
+    decorators carry the old value inlined
+[ ] A null inner never returns as though it had delivered — OutboxConfigurationException, released
+
 Outbox / Inbox Contracts
 [ ] TenantId present on OutboxMessage and InboxMessage
-[ ] Inbox dedup key = (MessageId + ConsumerType) — compound PK in DB config
+[ ] Inbox dedup key = (MessageId + ConsumerType) — a UNIQUE INDEX, and the PK is the RowId
+    surrogate (ADR-MSG-017). NOT a compound PK: a compound-key claim filters an UPDATE with two
+    Contains and selects the CROSS PRODUCT of both lists, claiming rows nobody chose and breaking
+    the batchSize bound. Flagging a RowId PK as a violation would block correct code
 [ ] OutboxMessage states: Pending / Processing / Published / Failed (always + DeadLettered=true)
 [ ] IOutboxWriter and IOutboxProcessorStore in Messaging.Abstractions — not in Persistence.Abstractions
 [ ] IOutboxWriter has write methods only (AddAsync + AddBatchAsync per ADR-MSG-011) — no GetPendingAsync or state-mutation methods
@@ -67,6 +81,11 @@ Dependency Safety
 Breaking Changes
 [ ] No interface member added without default implementation or new interface
 [ ] No public member renamed without obsolete bridge
+[ ] A public member REMOVED outright is not covered by the line above and is not automatically a
+    BLOCK. This module's standing policy (ADR-MSG-016 §4, applied again by ADR-MSG-019) is that a
+    1.0.0-preview.* package with no external consumers takes the break rather than carrying an
+    [Obsolete] alias past 1.0.0. Require instead: the removal is recorded in an ADR, the migration
+    is in CHANGELOG.md, and any in-repo call site is updated
 [ ] No namespace change without migration note
 
 Result<T> / ValueTask Usage
