@@ -112,7 +112,7 @@ namespace MicroKit.Messaging;
 ///         monolith and fails the day the producing module is extracted into its own service. That
 ///         accident is precisely what <see cref="ContractName"/> exists to remove, so excluding it
 ///         is load-bearing.</item>
-///   <item><see cref="OutboxMessage.SourceMessageId"/> — the producer's own replay key, internal to
+///   <item><see cref="OutboxMessage.OriginMessageId"/> — the producer's own replay key, internal to
 ///         its outbox. A consumer deduplicates on <see cref="MessageId"/>; exposing the producer's
 ///         reentrancy model on the wire would freeze it there.</item>
 ///   <item>A trace parent — the right thing to propagate, and

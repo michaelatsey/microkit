@@ -17,17 +17,33 @@ namespace MicroKit.Messaging;
 /// reference.
 /// </para>
 /// <para>
+/// <b>Both dispatchers read this column, and neither performs a type test.</b>
+/// <c>TransportOutboxDispatcher</c> switches on it to build an envelope or to refuse the row;
+/// <c>MediatROutboxDispatcher</c> switches on it to publish in process or to delegate inward
+/// without deserializing at all. That a <see cref="Contract"/> row is delegated even when its
+/// payload happens to be an <c>INotification</c> is pinned by
+/// <c>DispatchAsync_WhenKindIsContract_AndPayloadIsANotification_StillDelegates</c>, which exists
+/// specifically to kill a CLR-type router should one ever come back.
+/// </para>
+/// <para>
 /// <b>Persisted as a string</b> (<c>HasConversion&lt;string&gt;</c>, 32 characters), so inserting
 /// a member cannot silently remap existing rows and renaming one is a schema change. Keep the
 /// names short: SQLite does not enforce column width and PostgreSQL does, so a name longer than
 /// the column would pass the fast suite and fail in production.
 /// </para>
 /// <para>
-/// <b><see cref="Notification"/> is declared first, and that is load-bearing.</b> It is the zero
-/// value, so it is what a row predating the column materializes as, and what a fixture that omits
-/// the property gets. That default is factually correct rather than convenient: every outbox row
-/// written before this column existed came through the domain-event path and carries a
-/// notification payload. Reordering these members changes the default.
+/// <b><see cref="Notification"/> is the zero value, and that is load-bearing.</b> It is what a
+/// writer that omits the property gets — which today is every writer, <c>OutboxMessageFactory</c>
+/// included. The default is factually correct rather than convenient: a row written without stating
+/// a kind came through the domain-event path and carries a notification payload. The members carry
+/// explicit values so that this survives a reordering of the declarations instead of depending on
+/// one.
+/// </para>
+/// <para>
+/// Backfilling an existing table is a <i>different</i> mechanism, and the two are easy to conflate.
+/// The column stores a string, so a row predating it reads <c>'Notification'</c> from the
+/// migration's <c>DEFAULT</c> clause — not from the CLR zero value, which never reaches a row
+/// nobody wrote. The migration is in the module CHANGELOG.
 /// </para>
 /// </remarks>
 public enum MessageKind
@@ -36,9 +52,9 @@ public enum MessageKind
     /// An in-process notification, dispatched through the MediatR fan-out contributed by
     /// <c>MicroKit.Messaging.MediatR</c>. It never crosses a service boundary, so it has no wire
     /// identity: <see cref="OutboxMessage.ContractName"/> and
-    /// <see cref="OutboxMessage.SourceMessageId"/> are both <see langword="null"/> on such a row.
+    /// <see cref="OutboxMessage.OriginMessageId"/> are both <see langword="null"/> on such a row.
     /// </summary>
-    Notification,
+    Notification = 0,
 
     /// <summary>
     /// An integration contract, handed to a transport and addressed by its
@@ -46,5 +62,5 @@ public enum MessageKind
     /// identified by that stable wire name rather than by the CLR type in
     /// <see cref="OutboxMessage.EventType"/>, which the receiving process cannot resolve.
     /// </summary>
-    Contract,
+    Contract = 1,
 }
