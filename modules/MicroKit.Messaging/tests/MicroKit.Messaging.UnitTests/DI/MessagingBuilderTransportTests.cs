@@ -1,36 +1,90 @@
 namespace MicroKit.Messaging.UnitTests.DI;
 
 using MicroKit.Messaging.Dispatch;
+using Microsoft.Extensions.Logging;
 
 /// <summary>
 /// Composition properties of <see cref="MessagingBuilder.AddTransportDispatcher"/>.
 /// </summary>
 /// <remarks>
+/// <para>
 /// Asserted against the <see cref="IServiceCollection"/> descriptors rather than a built provider:
 /// what matters here is <i>how many</i> descriptors exist and with what lifetime, and a built
 /// provider hides a duplicate by resolving the last one — which is precisely the failure these
 /// tests exist to catch.
+/// </para>
+/// <para>
+/// <b>That discipline alone stopped being sufficient</b> when the method grew a second registration
+/// (ADR-MSG-019). The dispatcher now lives in a keyed slot, and the unkeyed
+/// <see cref="IOutboxDispatcher"/> is a <i>factory</i> forwarder whose
+/// <see cref="ServiceDescriptor.ImplementationType"/> is null — so a descriptor assertion can no
+/// longer see what the unkeyed slot resolves to. Both layers are therefore kept: descriptors for
+/// counting, and one resolution test for what the forwarder actually yields.
+/// </para>
 /// </remarks>
 public sealed class MessagingBuilderTransportTests
 {
     private static MessagingBuilder Builder(IServiceCollection services)
         => services.AddMicroKitMessaging();
 
+    private static ServiceDescriptor KeyedDispatcher(IServiceCollection services)
+        => services
+            .Where(d => d.ServiceType == typeof(IOutboxDispatcher) && d.IsKeyedService)
+            .ShouldHaveSingleItem();
+
+    private static List<ServiceDescriptor> UnkeyedDispatchers(IServiceCollection services)
+        => [.. services.Where(d =>
+            d.ServiceType == typeof(IOutboxDispatcher) && !d.IsKeyedService)];
+
     [Fact]
-    public void AddTransportDispatcher_RegistersTheDispatcherScoped()
+    public void AddTransportDispatcher_RegistersTheDispatcherKeyedAndScoped()
     {
         var services = new ServiceCollection();
 
         Builder(services).AddTransportDispatcher();
 
-        var descriptor = services
-            .Where(d => d.ServiceType == typeof(IOutboxDispatcher))
-            .ShouldHaveSingleItem();
-        descriptor.ImplementationType.ShouldBe(typeof(TransportOutboxDispatcher));
+        var descriptor = KeyedDispatcher(services);
+        // KeyedImplementationType, not ImplementationType: the unkeyed property is not the one a
+        // keyed descriptor populates, and reading the wrong one yields null rather than failing.
+        descriptor.KeyedImplementationType.ShouldBe(typeof(TransportOutboxDispatcher));
+        descriptor.ServiceKey.ShouldBe(OutboxDispatcherKeys.Standard);
 
         // Scoped, not singleton: it is resolved from the per-message execution scope, and a
         // singleton would capture whatever scoped dependencies a transport brings with it.
         descriptor.Lifetime.ShouldBe(ServiceLifetime.Scoped);
+    }
+
+    [Fact]
+    public void AddTransportDispatcher_RegistersOneUnkeyedForwarder()
+    {
+        var services = new ServiceCollection();
+
+        Builder(services).AddTransportDispatcher();
+
+        var forwarder = UnkeyedDispatchers(services).ShouldHaveSingleItem();
+        forwarder.Lifetime.ShouldBe(ServiceLifetime.Scoped);
+
+        // A factory, so ImplementationType is null and no descriptor assertion can tell what it
+        // resolves to. That is what the next test is for.
+        forwarder.ImplementationType.ShouldBeNull();
+    }
+
+    [Fact]
+    public void AddTransportDispatcher_TheUnkeyedSeamResolvesToTheTransportDispatcher()
+    {
+        // Core alone: every row goes to the transport. The forwarder is the only thing making that
+        // true, and it is invisible to the descriptor assertions above.
+        var services = new ServiceCollection();
+        services.AddSingleton(Substitute.For<IMessageTransport>());
+        services.AddSingleton(typeof(ILogger<>), typeof(NullLogger<>));
+
+        Builder(services).AddTransportDispatcher();
+
+        using var provider = services.BuildServiceProvider();
+        using var scope = provider.CreateScope();
+
+        scope.ServiceProvider.GetRequiredService<IOutboxDispatcher>()
+            .ShouldBeOfType<TransportOutboxDispatcher>();
     }
 
     /// <summary>
@@ -53,53 +107,69 @@ public sealed class MessagingBuilderTransportTests
     }
 
     [Fact]
+    public void AddTransportDispatcher_AddsNoSerializerOfItsOwn()
+    {
+        // The transport path carries the payload opaque and never deserializes it, so this method
+        // has no business registering an IMessageSerializer. Asserted as a DELTA rather than an
+        // absence: AddMicroKitMessaging() supplies the default — it owns InboxProcessor and
+        // OutboxMessageFactory, which both require one — so "no serializer in the collection" would
+        // be asserting the wrong thing and would fail for the right reason.
+        var services = new ServiceCollection();
+        var builder = Builder(services);
+        var before = services.Count(d => d.ServiceType == typeof(IMessageSerializer));
+
+        builder.AddTransportDispatcher();
+
+        services.Count(d => d.ServiceType == typeof(IMessageSerializer)).ShouldBe(before);
+    }
+
+    [Fact]
     public void AddTransportDispatcher_IsIdempotent()
     {
         var services = new ServiceCollection();
 
         Builder(services).AddTransportDispatcher().AddTransportDispatcher();
 
-        services.Count(d => d.ServiceType == typeof(IOutboxDispatcher)).ShouldBe(1);
+        UnkeyedDispatchers(services).Count.ShouldBe(1);
+        services.Count(d => d.ServiceType == typeof(IOutboxDispatcher) && d.IsKeyedService)
+            .ShouldBe(1);
     }
 
-    /// <summary>
-    /// It abstains when something already holds the <see cref="IOutboxDispatcher"/> slot.
-    /// </summary>
-    /// <remarks>
-    /// This is the <c>TryAdd</c> property, and it is not a nicety. Under a plain <c>Add</c> a second
-    /// descriptor is appended, Microsoft DI resolves the <i>last</i> one, and a decorator registered
-    /// earlier — the MediatR routing dispatcher, for instance — is bypassed with no exception and no
-    /// log: the outbox keeps draining while nothing it routes is ever delivered. The same defect
-    /// was found and fixed on <see cref="MessagingBuilder.AddInProcessTransport"/>.
-    /// </remarks>
     [Fact]
-    public void AddTransportDispatcher_DoesNotDisplaceAnExistingDispatcher()
+    public void AddTransportDispatcher_DoesNotDisplaceAnExistingUnkeyedDispatcher()
     {
+        // A decorating package takes the unkeyed seam outright. Calling this method afterwards must
+        // leave it alone — the direction that had shipped as a silent bypass under a plain Add
+        // (ADR-MSG-016), and the direction that then broke the other way when TryAdd made the whole
+        // method abstain. The keyed half must still land; see the next test.
         var services = new ServiceCollection();
         var builder = Builder(services);
-        builder.AddInProcessTransport();
+        services.AddScoped<IOutboxDispatcher, StubDispatcher>();
 
         builder.AddTransportDispatcher();
 
-        var descriptor = services
-            .Where(d => d.ServiceType == typeof(IOutboxDispatcher))
-            .ShouldHaveSingleItem();
-        descriptor.ImplementationType.ShouldBe(typeof(InProcessIntegrationDispatcher));
+        UnkeyedDispatchers(services).ShouldHaveSingleItem()
+            .ImplementationType.ShouldBe(typeof(StubDispatcher));
     }
 
-    /// <summary>The two dispatchers are interchangeable at the seam, in either composition order.</summary>
     [Fact]
-    public void AddInProcessTransport_DoesNotDisplaceTheTransportDispatcher()
+    public void AddTransportDispatcher_StillRegistersTheKeyedSlotWhenTheSeamIsTaken()
     {
+        // The half that must NOT abstain with the forwarder. Without it a decorator registered
+        // first would find no inner, and every contract row would fail as a configuration fault in
+        // a host that had wired everything correctly — just in the other order.
         var services = new ServiceCollection();
         var builder = Builder(services);
+        services.AddScoped<IOutboxDispatcher, StubDispatcher>();
+
         builder.AddTransportDispatcher();
 
-        builder.AddInProcessTransport();
+        KeyedDispatcher(services).KeyedImplementationType.ShouldBe(typeof(TransportOutboxDispatcher));
+    }
 
-        var descriptor = services
-            .Where(d => d.ServiceType == typeof(IOutboxDispatcher))
-            .ShouldHaveSingleItem();
-        descriptor.ImplementationType.ShouldBe(typeof(TransportOutboxDispatcher));
+    private sealed class StubDispatcher : IOutboxDispatcher
+    {
+        public ValueTask DispatchAsync(OutboxMessage message, CancellationToken ct = default)
+            => ValueTask.CompletedTask;
     }
 }

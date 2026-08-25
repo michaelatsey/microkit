@@ -19,7 +19,7 @@
     <PackageReference Include="NSubstitute" />
     <PackageReference Include="Microsoft.Extensions.DependencyInjection" />
     <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" />
-    <!-- AddLogging() lives here, not in .Abstractions. OutboxProcessor, InProcessMessagePublisher
+    <!-- AddLogging() lives here, not in .Abstractions. OutboxProcessor, MediatROutboxDispatcher
          and MediatROutboxDispatcher all take an ILogger<T>; without it the drain cannot activate. -->
     <PackageReference Include="Microsoft.Extensions.Logging" />
     <!-- The whole point of this suite: a real DbContext on SQLite is the only way to observe the

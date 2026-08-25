@@ -158,9 +158,10 @@ public sealed class OutboxMessage
     ///         typically an <see cref="IIntegrationEvent"/>.</item>
     /// </list>
     /// Do not wire a publisher that assumes one kind. <c>IOutboxDispatcher</c> is the seam that
-    /// decides: <c>MediatROutboxDispatcher</c> routes by deserialized CLR type, and
-    /// <c>InProcessIntegrationDispatcher</c> dead-letters a payload that is not an
-    /// <see cref="IIntegrationEvent"/>.
+    /// decides, and it routes on <see cref="MessageKind"/> rather than on the type named here:
+    /// <c>MediatROutboxDispatcher</c> serves a <see cref="MessageKind.Notification"/> row and
+    /// delegates the rest, and <c>TransportOutboxDispatcher</c> sends a
+    /// <see cref="MessageKind.Contract"/> row without deserializing it at all.
     /// <para>
     /// <b>A local deserialization detail, not a contract.</b> An assembly-qualified name does not
     /// cross a service boundary — the consumer does not have the producer's assembly, so

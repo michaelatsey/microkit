@@ -13,9 +13,16 @@ namespace MicroKit.Messaging.Processing;
 /// <para>
 /// A pure drain loop — it never calls <see cref="IInboxWriter.ExistsAsync"/> or
 /// <see cref="IInboxWriter.AddAsync"/>, and its narrowed dependency on
-/// <see cref="IInboxProcessorStore"/> makes that structural rather than a convention. Ingestion
-/// is performed by <c>InProcessIntegrationDispatcher</c>, which writes one row per registered
-/// consumer, or by a broker adapter.
+/// <see cref="IInboxProcessorStore"/> makes that structural rather than a convention. Ingestion is
+/// somebody else's job — a broker adapter, or the receiving seam that turns a
+/// <see cref="MessageEnvelope"/> back into one row per registered consumer.
+/// </para>
+/// <para>
+/// ⚠ <b>No such producer ships in this release.</b> The in-process fan-out that used to write those
+/// rows was withdrawn with the in-process transport (ADR-MSG-019) and its replacement has not
+/// arrived, so this loop is correct and unfed: it claims from an empty table until a host writes
+/// rows itself. <c>InboxIngestionValidator</c> fails startup if handlers are registered so the gap
+/// cannot be mistaken for an idle queue.
 /// </para>
 /// <para>
 /// <b>Isolation.</b> One <see cref="IExecutionScope"/> per message — never shared across a

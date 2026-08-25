@@ -2,6 +2,7 @@ using MicroKit.Messaging.Execution;
 using MicroKit.Messaging.Outbox;
 using MicroKit.Messaging.Processing;
 using MicroKit.Messaging.Registry;
+using MicroKit.Messaging.Serialization;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 
 namespace MicroKit.Messaging;
@@ -42,12 +43,31 @@ public static class ServiceCollectionExtensions
     /// transaction.
     /// </description></item>
     /// <item><description>
-    /// <c>IMessageSerializer</c> and <c>IOutboxDispatcher</c> — call
-    /// <see cref="MessagingBuilder.AddInProcessTransport"/> on the returned builder.
+    /// <c>IOutboxDispatcher</c> — call <see cref="MessagingBuilder.AddTransportDispatcher"/> on the
+    /// returned builder, or a broker provider's <c>Add{Provider}Transport()</c>, which calls it.
+    /// A host that publishes only domain-event notifications registers none of them and gets its
+    /// dispatcher from <c>MicroKit.Messaging.MediatR</c> instead.
     /// </description></item>
     /// </list>
     /// The outbox and inbox workers will log a critical error and stop if required services
     /// are missing at runtime.
+    /// </para>
+    /// <para>
+    /// <b><c>IMessageSerializer</c> IS registered here</b>, as a <c>TryAdd</c>ed
+    /// <c>SystemTextJsonMessageSerializer</c> default. It belongs to this method rather than to an
+    /// optional builder call because this method registers <c>InboxProcessor</c> and
+    /// <c>OutboxMessageFactory</c> unconditionally and both require one (ADR-MSG-019).
+    /// <b>To supply your own, register it BEFORE calling this method</b> — a registration made
+    /// afterwards loses to the default that is already in the collection. Neither
+    /// <c>AddIntegrationEventPublishing()</c> nor <c>AddMediatRDomainEvents()</c> registers a
+    /// serializer any more; both are extensions on the builder this method returns, so a
+    /// <c>TryAdd</c> in either could never have been reached.
+    /// </para>
+    /// <para>
+    /// <b>One check does run at startup here:</b> <c>InboxIngestionValidator</c> fails the host when
+    /// message handlers are registered while nothing in this release produces the inbox rows that
+    /// would reach them (ADR-MSG-019). It is contributed with <c>TryAddEnumerable</c>, so calling
+    /// this method twice yields one validator.
     /// </para>
     /// </remarks>
     public static MessagingBuilder AddMicroKitMessaging(
@@ -96,6 +116,14 @@ public static class ServiceCollectionExtensions
         services.TryAddScoped<IExecutionContext>(
             sp => sp.GetRequiredService<ExecutionContextHolder>().Context);
 
+        // The serializer default. It belongs HERE and not on an optional builder method, because
+        // the two types that require it — InboxProcessor and OutboxMessageFactory — are registered
+        // by this method unconditionally. It used to come from AddInProcessTransport(), and when
+        // that was deleted (ADR-MSG-019) a host composing plain outbox + transport was left with a
+        // registered InboxProcessor it could not activate: a gap that surfaces at the first worker
+        // tick, not at composition. TryAdd, so a host registering its own beforehand keeps it.
+        services.TryAddSingleton<IMessageSerializer, SystemTextJsonMessageSerializer>();
+
         services.AddScoped<IOutboxProcessor, OutboxProcessor>();
         services.AddScoped<IOutboxCoordinator, SharedDbOutboxCoordinator>();
         services.AddHostedService<OutboxWorker>();
@@ -115,7 +143,16 @@ public static class ServiceCollectionExtensions
 
         // Ingestion counters. Owns its Meter rather than taking IMeterFactory, so no host is
         // obliged to call AddMetrics(); subscribe with AddMeter(InboxMetrics.MeterName).
+        // No producer records into them in this release — the counters belong to the ingestion
+        // seam that ADR-MSG-019 defers, and are left registered rather than churned out and back.
         services.TryAddSingleton<InboxMetrics>();
+
+        // Fails the host when handlers are registered but nothing writes the inbox rows that would
+        // reach them. TryAddEnumerable so a second AddMicroKitMessaging() contributes one validator
+        // rather than two; ServiceDescriptor rather than AddHostedService<T>() for the same reason,
+        // since AddHostedService is a plain Add and would stack.
+        services.TryAddEnumerable(
+            ServiceDescriptor.Singleton<IHostedService, InboxIngestionValidator>());
 
         return new MessagingBuilder(services, registry);
     }

@@ -61,8 +61,10 @@ internal static class E2EHarness
     /// <param name="recorder">The invocation recorder, registered as a singleton.</param>
     /// <param name="logs">Captures every log record so the drain's decisions are observable.</param>
     /// <param name="configureMessaging">
-    /// Optional extra messaging registration (e.g. <c>AddMessageHandler</c>), applied after the
-    /// transports are wired.
+    /// Optional extra messaging registration, applied after the messaging chain is wired. Note
+    /// that <c>AddMessageHandler</c> is no longer a useful example: nothing produces inbox rows in
+    /// this release, and a host that started would fail on <c>InboxIngestionValidator</c>
+    /// (ADR-MSG-019).
     /// </param>
     internal static ServiceProvider BuildProvider(
         SqliteConnection connection,
@@ -104,18 +106,25 @@ internal static class E2EHarness
             .FromAssemblyContaining<CreateWidgetCommand>()
             .AddTransactionBehavior());
 
-        // Registration order is load-bearing in exactly ONE place now: AddMediatRDomainEvents()
-        // decorates the transport's IOutboxDispatcher, so a transport must be registered first —
-        // and calling it first throws InvalidOperationException rather than failing silently.
-        // Nothing else here is order-sensitive: the glue contributes an IDomainEventsSink to the
-        // single core dispatcher rather than registering a rival one (ADR-MEDIATR-014), and
-        // AddInProcessTransport() now uses TryAdd so a later transport cannot displace the
-        // decorator (ADR-MEDIATR-015).
+        // NO TRANSPORT IS REGISTERED HERE, and that is the point of this composition rather than an
+        // omission. Every suite on this harness exercises the domain-event path, which stages
+        // MessageKind.Notification rows and fans them out in process through MediatR — so the
+        // notification-only host of ADR-MSG-019 is exactly what these tests need, and this harness
+        // is the standing proof that it composes and drains. MediatROutboxDispatcher's inner is
+        // null throughout; a MessageKind.Contract row would raise OutboxConfigurationException, and
+        // nothing here stages one.
+        //
+        // Registration order is no longer load-bearing anywhere. The standard dispatcher lives in a
+        // keyed slot only MicroKit.Messaging writes, so AddMediatRDomainEvents() never competes for
+        // the seam and no longer requires a transport to have been registered first; the glue
+        // contributes an IDomainEventsSink to the single core dispatcher rather than registering a
+        // rival one (ADR-MEDIATR-014).
+        //
         // AddHostedService<OutboxWorker> is registered by AddMicroKitMessaging and starts nothing
-        // without an IHost. It is left alone; every drain goes through DrainOnceAsync.
+        // without an IHost. It is left alone; every drain goes through DrainOnceAsync. The same is
+        // true of InboxIngestionValidator — no host, so no startup check runs.
         var messaging = services.AddMicroKitMessaging()
             .AddEfCoreOutbox<E2EDbContext>()
-            .AddInProcessTransport()
             .AddMediatRDomainEvents();
 
         configureMessaging?.Invoke(messaging);

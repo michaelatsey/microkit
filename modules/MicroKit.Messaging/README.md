@@ -1,6 +1,6 @@
 # MicroKit.Messaging
 
-Transactional outbox, idempotent inbox, and in-process transport for .NET 10 — without coupling your domain to a broker.
+Transactional outbox, idempotent inbox, and a broker-agnostic transport seam for .NET 10 — without coupling your domain to a broker.
 
 ---
 
@@ -22,7 +22,7 @@ The row and the aggregate commit together or not at all. Nothing is published un
 transaction is durable, and nothing durable goes unpublished.
 
 **Key design points:**
-- Broker-agnostic core — the v1 transport is in-process; brokers are separate v2 packages
+- Broker-agnostic core — it defines `IMessageTransport` and ships no implementation; brokers are separate v2 packages
 - Outbox claim is one atomic `UPDATE … WHERE` carrying an ownership token; a lost lease writes zero rows
 - Retries use full jitter (`Uniform(0, min(2^n s, cap))`), so a broker outage does not resynchronise the queue
 - One DI scope per message — a failure on message N cannot corrupt message N+1
@@ -35,7 +35,7 @@ transaction is durable, and nothing durable goes unpublished.
 | Package | Description |
 |---------|-------------|
 | `MicroKit.Messaging.Abstractions` | Contracts: `IIntegrationEvent`, `IIntegrationEventPublisher`, `IMessageHandler<T>`, `IOutboxWriter`, `IMessageTransport`, `MessageEnvelope`, the outbox/inbox stores, `OutboxMessage`, `InboxMessage`, `IntegrationEventMessage` |
-| `MicroKit.Messaging` | Outbox/inbox processors and workers, the transport and in-process dispatchers, integration-event publishing, `OutboxMessageFactory`, DI |
+| `MicroKit.Messaging` | Outbox/inbox processors and workers, the transport dispatcher, integration-event publishing, `OutboxMessageFactory`, DI |
 | `MicroKit.Messaging.EntityFrameworkCore` | `EfOutboxStore`, `EfInboxStore`, entity configuration for your `DbContext` |
 | `MicroKit.Messaging.MediatR` | Glue: puts MicroKit.MediatR domain events on the outbox as notifications |
 
@@ -76,15 +76,26 @@ services.AddMicroKitMediatR(cfg => cfg
     .FromAssemblyContaining<CreateOrderCommand>()
     .AddTransactionBehavior());
 
-// 4. Messaging.
+// 4. Messaging. Domain events only — no transport, and none needed.
 services.AddMicroKitMessaging()
     .AddEfCoreOutbox<AppDbContext>()
-    .AddInProcessTransport()      // must precede the line below — it registers what that decorates
     .AddMediatRDomainEvents();    // only with MicroKit.Messaging.MediatR
 ```
 
-`AddInProcessTransport()` before `AddMediatRDomainEvents()` is the one ordering requirement, and
-getting it wrong throws at startup naming the fix. Everything else composes in any order.
+**Nothing here composes in a required order.** Add `.AddTransportDispatcher()` (or a broker
+provider's `Add{Provider}Transport()`, which calls it) when you publish integration events, before
+or after `AddMediatRDomainEvents()` — either works.
+
+A host that publishes only domain-event notifications registers no transport at all, as above. Do
+**not** call `AddTransportDispatcher()` "just in case": it declares an intent to send contracts, and
+without an `IMessageTransport` behind it the outbox stops on the first row of any kind — loudly,
+with the batch released and nothing lost, but stopped.
+
+> ⚠ **`AddMessageHandler<THandler, TEvent>()` fails at startup in this release.** Nothing produces
+> inbox rows yet — the in-process fan-out was withdrawn and the receiving seam that turns a
+> `MessageEnvelope` back into per-consumer rows has not shipped. The inbox drain itself is intact
+> and correct; it simply has no producer, and a host is told so rather than left believing it
+> consumes events. See ADR-MSG-019.
 
 A host built with `Host.CreateApplicationBuilder()` or `WebApplication.CreateBuilder()` already has
 logging. A bare `ServiceCollection` does not, and several types here require `ILogger<T>` — call
@@ -157,7 +168,7 @@ services.AddIntegrationEventContracts("/shop/orders", events =>
 
 services.AddMicroKitMessaging()
         .AddEfCoreOutbox<AppDbContext>()
-        .AddInProcessTransport()
+        .AddTransportDispatcher()   // plus an IMessageTransport from a broker provider
         .AddIntegrationEventPublishing()
         .AddEfCoreIntegrationEvents<AppDbContext>();
 ```
@@ -313,8 +324,13 @@ healthy queue while a consumer is dead-lettering.
 **Stable.** The outbox: atomic batch claim with an ownership token, buffered outcomes settled in one
 write, full-jitter retry, dead-lettering, and the retention worker. **The inbox: the same atomic
 claim, the dedup gate actually implemented, and success settled inside the handler's own
-transaction.** The EF Core stores. The in-process transport. The MicroKit.MediatR glue and the
-domain-event → notification → outbox path.
+transaction.** The EF Core stores. The `MessageKind`-routed dispatch seam. The MicroKit.MediatR
+glue and the domain-event → notification → outbox path.
+
+**Not shipping yet.** No `IMessageTransport` implementation (broker providers are v2), and no
+receiving seam — so nothing writes inbox rows in this release and `AddMessageHandler<,>()` fails at
+startup rather than letting a host believe it consumes events. The inbox drain itself is complete
+and correct; it has no producer. See ADR-MSG-019.
 
 ### What the inbox guarantees
 

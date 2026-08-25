@@ -157,8 +157,11 @@ public sealed class OutboxMessage
 ### Parallel batch safety
 
 ```csharp
+// The per-message seam is IOutboxDispatcher. IMessagePublisher was deleted by ADR-MSG-018 and
+// its in-process implementation by ADR-MSG-019 — do not reintroduce it in a sample.
+
 // ⚠️ DANGER — Task.WhenAll shares ExecutionContext snapshot captured at call site
-await Task.WhenAll(messages.Select(m => ProcessMessageAsync(store, publisher, m, ct)));
+await Task.WhenAll(messages.Select(m => ProcessMessageAsync(store, dispatcher, m, ct)));
 // If ProcessMessageAsync sets any AsyncLocal, tasks may see each other's context
 
 // ✅ CORRECT — sequential per-message processing with isolated scope per message
@@ -167,8 +170,8 @@ foreach (var message in messages)
 {
     await using var scope = scopeFactory.CreateAsyncScope();
     var store = scope.ServiceProvider.GetRequiredService<IOutboxProcessorStore>();
-    var publisher = scope.ServiceProvider.GetRequiredService<IMessagePublisher>();
-    await ProcessMessageAsync(store, publisher, message, ct).ConfigureAwait(false);
+    var dispatcher = scope.ServiceProvider.GetRequiredService<IOutboxDispatcher>();
+    await ProcessMessageAsync(store, dispatcher, message, ct).ConfigureAwait(false);
 }
 
 // ✅ If parallel processing is required, each task must have its own scope
@@ -176,8 +179,8 @@ await Task.WhenAll(messages.Select(async m =>
 {
     await using var scope = scopeFactory.CreateAsyncScope();
     var store = scope.ServiceProvider.GetRequiredService<IOutboxProcessorStore>();
-    var publisher = scope.ServiceProvider.GetRequiredService<IMessagePublisher>();
-    await ProcessMessageAsync(store, publisher, m, ct).ConfigureAwait(false);
+    var dispatcher = scope.ServiceProvider.GetRequiredService<IOutboxDispatcher>();
+    await ProcessMessageAsync(store, dispatcher, m, ct).ConfigureAwait(false);
 }));
 ```
 

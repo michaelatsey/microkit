@@ -1,5 +1,5 @@
 ---
-description: Scaffold a new broker provider adapter in MicroKit.Messaging (e.g., RabbitMQ, AzureServiceBus, Kafka). Produces an implementation plan for the provider package structure, IMessagePublisher adapter, DI registration, and tests.
+description: Scaffold a new broker provider adapter in MicroKit.Messaging (e.g., RabbitMQ, AzureServiceBus, Kafka). Produces an implementation plan for the provider package structure, IMessageTransport adapter, DI registration, and tests.
 ---
 
 Use the microkit-messaging-implementer agent.
@@ -21,7 +21,14 @@ The plan must cover:
 - Target framework: `net10.0`
 
 ### Core Components
-- Publisher adapter: `{ProviderName}MessagePublisher : IMessagePublisher`
+- Transport adapter: `{ProviderName}MessageTransport : IMessageTransport`
+  - ⚠ **`IMessagePublisher` no longer exists** — it was deleted by ADR-MSG-018 and its in-process
+    implementation by ADR-MSG-019. A provider implements `IMessageTransport.SendAsync(MessageEnvelope, ct)`
+    and nothing else. It does **not** implement `IOutboxDispatcher`: `TransportOutboxDispatcher`
+    (Core) owns that seam and feeds your transport.
+  - **No `IMessageTransport` implementation ships in any MicroKit package.** Yours is the first,
+    which is why the acknowledgement rule below is a conformance obligation rather than a
+    convention it could be checked against.
 - Connection/channel management: `{ProviderName}ConnectionManager` (if stateful broker)
 - Options: `{ProviderName}MessagingOptions` (sealed record)
 - DI extension: `Add{ProviderName}Transport()` on `MessagingBuilder` (not `Add{ProviderName}Messaging()` on `IServiceCollection`)
@@ -57,7 +64,10 @@ dispatcher's only job is to throw the right type.
 - Never silently swallow exceptions
 
 ### Tests
-- Unit: publisher happy path + failure (broker unavailable)
+- Unit: `SendAsync` happy path + failure classification (broker unavailable →
+  `OutboxTransportUnavailableException`, never `OutboxPayloadException`)
+- **Conformance: `SendAsync` does not return before the broker acknowledges.** Non-negotiable —
+  see the Serialization section. This is the test that makes the provider usable.
 - Integration: publish → consume round-trip (using TestContainers or emulator)
 
 ### Dependencies

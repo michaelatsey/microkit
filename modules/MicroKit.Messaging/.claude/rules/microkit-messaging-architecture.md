@@ -124,7 +124,8 @@ Role definitions:
 - Public: `IOutboxCoordinator`, `IOutboxProcessor`, `IOutboxDispatcher` (+ inbox symmetry) + DI
   registration extensions.
 - Internal sealed: `OutboxWorker`, `SharedDbOutboxCoordinator`, `OutboxProcessor`,
-  `InProcessIntegrationDispatcher` (+ inbox symmetry).
+  `TransportOutboxDispatcher` (+ inbox symmetry). `InProcessIntegrationDispatcher` was deleted by
+  ADR-MSG-019.
 - Rationale: the deferred PerTenant coordinator (separate assembly) must compose the public
   `IOutboxProcessor` / `IInboxProcessor`, never duplicate the engine.
 
@@ -135,8 +136,12 @@ Role definitions:
 - `OutboxProcessor`: drain `IOutboxProcessorStore` -> lease -> `IExecutionScopeFactory.CreateScopeAsync`
   (per message in v1) -> `IOutboxDispatcher.DispatchAsync` -> `MarkPublished` / retry back-off
   (`2^RetryCount` s, cap 3600) / `DeadLetter`. Payload-agnostic.
-- `IOutboxDispatcher` (Abstractions) + `InProcessIntegrationDispatcher` (Core): deserialize by
-  `EventType` (runtime type, `evt.GetType()`, never `typeof(T)`) -> `IMessagePublisher.PublishAsync`.
+- `IOutboxDispatcher` (Abstractions) + `TransportOutboxDispatcher` (Core): route on
+  `MessageKind`, and for a `Contract` row build a `MessageEnvelope` from the columns and hand it to
+  `IMessageTransport` **without deserializing the payload** (ADR-MSG-019). The
+  deserialize-by-`EventType` design recorded here belonged to the in-process fan-out, which is
+  deleted: an assembly-qualified name does not resolve in the receiving process, so it can only ever
+  have been a local detail.
 - Shared-DB model: `GetPendingAsync(batchSize, ct)` with no `tenantId` (cross-tenant reservation);
   `TenantId` travels on the row; the scope contextualizes via `IExecutionContext.TenantId`.
 - Transactional outbox atomicity: `IOutboxWriter.AddAsync` tracks the `OutboxMessage` in the
@@ -147,7 +152,8 @@ Role definitions:
 - Lease/locking: optimistic lease via `ExecuteUpdateAsync`, internal to the store. No orthogonal
   `IOutboxLockingStrategy` seam in v1 (the lock mechanism is coupled to the reservation control-flow;
   an "orthogonal" seam would leak). Portable across PostgreSQL and SqlServer.
-- Ingestion (`InProcessMessagePublisher`): writes one `InboxMessage` per subscribed `ConsumerType`;
+- Ingestion (formerly `InProcessMessagePublisher`, then `InProcessIntegrationDispatcher`, **both
+  now deleted** — ADR-MSG-018, ADR-MSG-019): wrote one `InboxMessage` per subscribed `ConsumerType`;
   dedup absorbed in `EfInboxStore.AddAsync` (unique constraint + `DbUpdateException` as authoritative
   guard); never calls a handler directly.
 - `InboxProcessor` pure drain: GetPending -> lease -> deserialize -> resolve handler by
@@ -336,8 +342,14 @@ notifications onto the Messaging outbox. The decided topology is:
   would double-execute every handler).
 - `MediatROutboxDispatcher` (glue) is a **routing decorator** over the Core `IOutboxDispatcher`:
   payload `is INotification` → `IPublisher.Publish`; otherwise delegate to the wrapped Core
-  dispatcher (`InProcessIntegrationDispatcher`), preserving integration-events-via-outbox
-  (ADR-MSG-002).
+  dispatcher, preserving integration-events-via-outbox (ADR-MSG-002).
+
+> **Superseded by ADR-MSG-019 on the routing rule only.** The decorator routes on
+> `OutboxMessage.MessageKind`, never on the payload's CLR type, and never deserializes a
+> `Contract` row at all. Decision 2 below — "routing disjointness" — is therefore **moot**: it
+> required assuming `IIntegrationEvent` and `IDomainEventNotification` can never overlap, and the
+> column removes the assumption rather than documenting it. The carve-out itself (decision 1) and
+> the notification idempotency contract (decision 3) stand unchanged.
 
 This requires the glue to reference `MediatR` (`IPublisher`) and, transitively,
 `MediatR.Contracts` (`INotification`, since `IDomainEventNotification<out TEvent> : INotification`).

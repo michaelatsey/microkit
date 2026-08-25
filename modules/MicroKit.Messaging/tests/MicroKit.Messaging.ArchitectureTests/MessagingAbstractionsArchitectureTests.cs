@@ -109,6 +109,68 @@ public sealed class MessagingAbstractionsArchitectureTests
             .ShouldBeEmpty("MessageDispatcher was eliminated — use IOutboxDispatcher instead");
     }
 
+    [Fact]
+    public void Core_DoesNotContainTypeNamedInProcessIntegrationDispatcher()
+    {
+        // The in-process fan-out was withdrawn by ADR-MSG-019: a Contract row now travels to a
+        // transport as a MessageEnvelope, and the receiving side writes its own inbox rows. This
+        // test prevents accidental re-introduction, on the MessageDispatcher precedent above.
+        //
+        // Re-introducing it would not merely duplicate the transport — it would restore a producer
+        // that writes inbox rows on the PRODUCING side, which is the confusion the contract-name
+        // indirection exists to remove.
+        Types.InAssembly(CoreAssembly)
+            .That()
+            .HaveNameEndingWith("IntegrationDispatcher")
+            .GetTypes()
+            .ShouldBeEmpty(
+                "the in-process fan-out was withdrawn (ADR-MSG-019) — a contract row goes to " +
+                "IMessageTransport, and the receiver writes its own inbox rows");
+    }
+
+    /// <summary>
+    /// Nothing in Core depends on <see cref="IInboxWriter"/> — the inbox has no producer in this
+    /// release, and this is what proves it rather than asserting it in prose.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// After ADR-MSG-019 the ingestion half of the inbox is <i>unfed</i>, not deleted:
+    /// <c>InboxProcessor</c>, the claim, the settlement and both retention workers are unchanged
+    /// and still correct, but nothing in this package writes a row for them to drain. Prose says
+    /// that; this test makes it checkable.
+    /// </para>
+    /// <para>
+    /// <b>It is expected to fail when the receiving seam arrives</b>, and that is the point. Whoever
+    /// builds it must come back to this assertion and to the ADR rather than quietly reinstating an
+    /// in-process producer — which is exactly how the fan-out survived two rewrites that should
+    /// have removed it.
+    /// </para>
+    /// </remarks>
+    [Fact]
+    public void Core_DoesNotDependOnIInboxWriter()
+    {
+        // CONTROL FIRST. An emptiness assertion is worthless if the query can never match anything
+        // — a misspelled name, or a matching rule that does not see interface implementations,
+        // would make this test permanently green and permanently useless. EfCoreAssembly is known
+        // to depend on IInboxWriter (EfInboxStore implements it), so this proves the query works
+        // before the real assertion below rests on it.
+        Types.InAssembly(EfCoreAssembly)
+            .That()
+            .HaveDependencyOn(typeof(IInboxWriter).FullName)
+            .GetTypes()
+            .ShouldNotBeEmpty(
+                "control assertion: if this is empty the query below cannot detect anything and " +
+                "the real assertion is vacuous");
+
+        Types.InAssembly(CoreAssembly)
+            .That()
+            .HaveDependencyOn(typeof(IInboxWriter).FullName)
+            .GetTypes()
+            .ShouldBeEmpty(
+                "the inbox has no producer in this release (ADR-MSG-019). If the envelope receiver " +
+                "has landed, update this test AND the ADR rather than deleting the assertion");
+    }
+
     /// <summary>
     /// No MicroKit package implements <see cref="IMessageTransport"/>, and none must.
     /// </summary>

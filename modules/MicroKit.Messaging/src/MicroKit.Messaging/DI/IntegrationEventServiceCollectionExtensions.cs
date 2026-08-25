@@ -133,14 +133,10 @@ public static class IntegrationEventServiceCollectionExtensions
 
         AddRegistryAndValidator(builder.Services);
 
-        // The publisher needs a serializer, and nothing else in this call chain supplies one:
-        // IMessageSerializer is otherwise registered only by AddInProcessTransport() and
-        // AddMediatRDomainEvents(). Without this line, publishing integration events without also
-        // wiring the in-process transport fails when the publisher is first activated — inside a
-        // handler, inside a transaction — rather than at composition. TryAdd, so a host or another
-        // package that already supplied one keeps it; AddMediatRDomainEvents does the same for the
-        // same reason.
-        builder.Services.TryAddSingleton<IMessageSerializer, SystemTextJsonMessageSerializer>();
+        // No IMessageSerializer TryAdd here. AddMicroKitMessaging() supplies the default, and this
+        // method is an extension on the builder that method returns — so it cannot run without it
+        // (ADR-MSG-019). A fourth TryAdd of the same service would be unreachable code that reads
+        // like a safeguard.
 
         builder.Services.TryAddScoped<IIntegrationEventPublisher, IntegrationEventPublisher>();
 
