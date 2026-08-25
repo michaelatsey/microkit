@@ -141,14 +141,16 @@ using var tenantScope = _tenantContextAccessor.CreateScope(message.TenantId); //
 ### CorrelationId / CausationId chain
 
 ```csharp
-// ✅ CORRECT — new event carries CorrelationId from triggering event
-public sealed class MessageEnvelope<T> where T : IIntegrationEvent
+// ✅ CORRECT — a new row carries CorrelationId from the triggering message.
+//    The chain lives in COLUMNS on OutboxMessage / InboxMessage, which is where a background
+//    processor can read it without an ambient context. MessageEnvelope is the wire form of that
+//    same chain, built from the row at dispatch and never the source of truth for it.
+public sealed class OutboxMessage
 {
     // CorrelationId propagated: the CorrelationId of the cause becomes the CorrelationId of the effect
-    // CausationId: the MessageId of the cause — nullable on root events (no causal parent)
-    public CorrelationId CorrelationId { get; init; }   // inherited from triggering message
-    public CausationId? CausationId { get; init; }       // nullable — root events have no cause
-    public MessageId MessageId { get; init; }            // new, unique per message
+    public CorrelationId CorrelationId { get; set; }   // inherited from the triggering message
+    public CausationId? CausationId { get; set; }      // the cause's MessageId — null on root events
+    public MessageId Id { get; set; }                  // new, unique per message
 }
 ```
 
@@ -196,7 +198,7 @@ await Task.WhenAll(messages.Select(async m =>
 - [ ] `TenantId` passed explicitly as a parameter — no ambient tenant context in background processors
 
 ### CorrelationId / CausationId chain
-- [ ] New `MessageEnvelope<T>` inherits `CorrelationId` from parent message
+- [ ] A new `OutboxMessage` inherits `CorrelationId` from the parent message, and `MessageEnvelope` carries it onto the wire unchanged
 - [ ] `CausationId` set to parent message's `MessageId`
 - [ ] Chain preserved across publish → consume → re-publish cycles
 

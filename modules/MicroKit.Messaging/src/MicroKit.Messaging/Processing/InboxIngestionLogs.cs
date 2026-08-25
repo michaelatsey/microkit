@@ -2,7 +2,7 @@ namespace MicroKit.Messaging.Processing;
 
 /// <summary>
 /// Source-generated log methods for the inbox ingestion path, used by
-/// <c>InProcessMessagePublisher</c> and by broker adapters.
+/// <c>InProcessIntegrationDispatcher</c> and by broker adapters.
 /// </summary>
 /// <remarks>
 /// Separate from <see cref="InboxProcessorLogs"/> because ingestion and drain are separate

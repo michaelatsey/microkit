@@ -63,14 +63,55 @@ public sealed class OutboxMessage
     /// is the model this one supersedes. Both are live until the publisher moves onto outbox rows.
     /// </para>
     /// <para>
-    /// <b>Not yet a deserialization key.</b> Resolving this name to a local CLR type is what
-    /// <c>IntegrationEventRegistry.TryResolveLocalType</c> exists for, and it becomes the key on
-    /// the paths that cross a process boundary — a transport dispatcher and the receiving side.
-    /// Until those exist, every dispatch path in this module is in-process and resolves by
-    /// <see cref="EventType"/>. See that property for where the boundary falls.
+    /// <b>The addressing key once a message leaves the process.</b> A
+    /// <see cref="MessageKind.Contract"/> row is handed to <c>IMessageTransport</c> addressed by
+    /// this name, and the receiving process resolves it to its <i>own</i> local CLR type through
+    /// <c>IntegrationEventRegistry.TryResolveLocalType</c>. <see cref="EventType"/> remains the
+    /// deserialization key on every path that stays in one process, and the two are not rivals —
+    /// they serve disjoint sets of rows, because a <see cref="MessageKind.Notification"/> row has
+    /// no contract name at all.
+    /// </para>
+    /// <para>
+    /// <b>Non-null is a precondition of dispatch, enforced by the dispatcher.</b> Nullable here
+    /// because a notification row legitimately has none; <c>TransportOutboxDispatcher</c> raises
+    /// <see cref="OutboxPayloadException"/> on a contract row that reaches it without one, since
+    /// such a row is unaddressable and no retry can change that.
     /// </para>
     /// </remarks>
     public string? ContractName { get; set; }
+
+    /// <summary>
+    /// Gets or sets the module that emitted this message, e.g. <c>/saasbtp/safety</c>.
+    /// <see langword="null"/> for a <see cref="MessageKind.Notification"/>, which never leaves the
+    /// process and so has no emitter to declare.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Identifies the <b>module</b>, not the deployment, and stays constant when that module is
+    /// extracted into its own service — which is what makes the extraction a non-event for
+    /// consumers. Recorded per contract at registration rather than per host, so several modules
+    /// composed into one process each keep their own identity.
+    /// </para>
+    /// <para>
+    /// <b>Unrelated to <see cref="SourceMessageId"/> despite the shared prefix.</b> This one names
+    /// <i>who emitted</i> the message; that one names <i>which row's dispatch produced</i> it. They
+    /// share three letters and nothing else.
+    /// </para>
+    /// <para>
+    /// <b>Stamped on the row at staging, never resolved at dispatch.</b> Reading it from
+    /// <c>IntegrationEventRegistry</c> when the message is sent would look equivalent and is not:
+    /// it would make the emitted source a function of the composition running <i>now</i> rather
+    /// than of what was staged, so a row staged before a rename would travel under the new name.
+    /// That is the defect ADR-MSG-018 removed by sourcing every field from the row, and it must not
+    /// be reintroduced as a simplification.
+    /// </para>
+    /// <para>
+    /// <c>IntegrationEventMessage.Source</c> carries the same notion on its own table, with the
+    /// same column width. Both are live until the publisher moves onto outbox rows; they must not
+    /// be allowed to disagree.
+    /// </para>
+    /// </remarks>
+    public string? Source { get; set; }
 
     /// <summary>
     /// Gets or sets the <see cref="Id"/> of the outbox row whose dispatch produced this one.

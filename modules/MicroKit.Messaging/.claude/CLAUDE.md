@@ -55,11 +55,12 @@ MicroKit.Messaging/
 │   │                                              IOutboxProcessorStore, IInboxWriter,
 │   │                                              IInboxProcessorStore, IInboxSettlementStore,
 │   │                                              OutboxMessage (sealed class), InboxMessage (sealed class),
-│   │                                              MessageEnvelope<T> (sealed record)
+│   │                                              IMessageTransport, MessageEnvelope (wire form)
 │   ├── MicroKit.Messaging/                     ← OutboxProcessor, InboxProcessor,
-│   │                                              InProcessIntegrationDispatcher (owns the
-│   │                                              in-process fan-out), IntegrationEventPublisher,
-│   │                                              DI extensions, background workers
+│   │                                              TransportOutboxDispatcher (Kind=Contract →
+│   │                                              IMessageTransport), InProcessIntegrationDispatcher
+│   │                                              (owns the in-process fan-out),
+│   │                                              IntegrationEventPublisher, DI, background workers
 │   ├── MicroKit.Messaging.EntityFrameworkCore/ ← EfOutboxStore, EfInboxStore, EF configurations,
 │   │                                              migrations helper
 │   └── MicroKit.Messaging.Testing/             ← FakeMessagePublisher, InMemoryOutboxStore,
@@ -154,7 +155,11 @@ CausationId                        // sealed record — causal parent identifier
 // event, so the fan-out behind it had to reconstruct message metadata by reading it off the
 // event — the sole reason IIntegrationEvent carried those members. The in-process fan-out now
 // lives in InProcessIntegrationDispatcher, which holds the OutboxMessage they are columns on.
-// A real transport seam arrives with the transport libraries.
+// The real transport seam has now arrived: IMessageTransport + MessageEnvelope, fed by
+// TransportOutboxDispatcher. NO IMessageTransport IMPLEMENTATION SHIPS — a broker provider
+// supplies one, and owes a conformance test that SendAsync does not return before the broker
+// acknowledges. With none registered, a Contract row releases the batch, consumes no retry
+// budget and stops the worker (OutboxConfigurationException) rather than failing silently.
 // IMessageDispatcher is internal to Core — not a public Abstractions contract
 ```
 
@@ -188,7 +193,11 @@ IInboxRetentionStore               // DeleteProcessedAsync — the inbox retenti
 OutboxMessage                      // sealed class — EF Core entity; Id, TenantId, EventType, Payload,
                                    //   Status, RetryCount, LockedUntilUtc, NextRetryAtUtc, DeadLettered, ...
 InboxMessage                       // sealed class — EF Core entity; MessageId, ConsumerType, Status, ...
-MessageEnvelope<T>                 // sealed record — wraps T with metadata (MessageId, CorrelationId, ...)
+MessageEnvelope                    // sealed record — the WIRE FORM. MessageId/ContractName/Source/
+                                   //   opaque Payload/TenantId/Correlation/Causation/OccurredOnUtc.
+                                   //   A COMPATIBILITY COMMITMENT: adding a member is additive,
+                                   //   removing or renaming one breaks every deployed consumer.
+                                   //   Identifiers are bare Guids, not the VO records
 ```
 
 ---

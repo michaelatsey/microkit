@@ -137,6 +137,236 @@ the type is absent from `1.0.0-preview.4` and has never shipped. The same applie
 `Resolve(Type)` → **`ResolveContract(Type)`**, renamed now that the registry answers in two
 directions and `Resolve` alone no longer says which one is meant.
 
+### Added — the transport seam: `IMessageTransport`, `MessageEnvelope`, `TransportOutboxDispatcher`
+
+A message can now leave the process. Three pieces land together, and Core alone — with no MediatR
+glue installed — finally has a defined, loud behaviour for every row it can meet.
+
+- **`IMessageTransport`** — one method, `SendAsync(MessageEnvelope, CancellationToken)`. The seam a
+  broker provider implements.
+- **`MessageEnvelope`** — the wire format. See the compatibility note below.
+- **`TransportOutboxDispatcher`** (Core, internal) — turns a `MessageKind.Contract` row into an
+  envelope and hands it over. Registered by the new **`MessagingBuilder.AddTransportDispatcher()`**.
+
+**`SendAsync` returning means the destination acknowledged the message.** Not that it was enqueued,
+buffered, or fired and forgotten. `OutboxProcessor` marks the row `Published` on that return and
+`Published` is terminal, so a transport that hands off asynchronously turns the mark into a lie: a
+confirmation that never arrives becomes indistinguishable from one that did. RabbitMQ — return after
+the publisher confirm; Azure Service Bus — after `SendMessagesAsync`; Kafka — after the delivery
+report.
+
+**No implementation of `IMessageTransport` ships in any MicroKit package**, and that is deliberate
+rather than an omission. An in-process transport is meaningless until the receiving seam exists, and
+one that returned successfully with nowhere to deliver would be the silent-success failure this
+module treats as blocking. A broker provider supplies the implementation. Pinned by
+`NoMicroKitPackageShipsAnIMessageTransportImplementation`, which asserts all four shipped assemblies
+— Abstractions, Core, EntityFrameworkCore and the MediatR glue — because that is the claim being
+made.
+
+**With no transport registered, a contract row fails loudly and reversibly.** The dispatcher takes
+`IMessageTransport` through its constructor, so the container fails while `OutboxProcessor` is
+resolving the dispatcher — which that processor converts into `OutboxConfigurationException`. The
+batch is released untouched, no retry budget is consumed, the rows stay `Pending`, and the worker
+stops. This is deliberately not a startup validation: whether a transport is *needed* depends on
+whether any contract row exists, which is data rather than composition, so a host publishing only
+notifications must compose without one and must not fail at boot.
+
+#### Conformance obligation — owed by the first broker provider
+
+The acknowledgement rule above cannot be enforced from this repository: no test here can observe
+whether somebody else's `SendAsync` returned before its broker confirmed. It is therefore recorded
+as a debt rather than left to be rediscovered.
+
+> **The first broker provider owes a conformance test asserting that `SendAsync` does not return
+> before the broker has acknowledged the message. A transport that fails it is unusable** —
+> regardless of whether it compiles, and regardless of what its other tests show.
+
+The consequence of not paying it is not a degraded transport but a silently lying one: every
+`Published` mark in the producing system becomes false, and nothing downstream can detect it. No
+conformance harness ships today because there is no provider to run one against, and one written
+blind would only be designed twice. The obligation is repeated in `IMessageTransport`'s XML
+remarks, which ship inside the package.
+
+#### The envelope is a compatibility commitment — at the member level
+
+Once a message has travelled, every member is something a deployed consumer must still read a year
+later — including one built by someone who does not share this repository. Removing or renaming one
+breaks every deployed consumer at once.
+
+**What this package does not own is the byte encoding**, and the distinction is worth stating before
+the first message travels rather than after. Nothing in MicroKit serializes an envelope:
+`TransportOutboxDispatcher` hands the object to `IMessageTransport.SendAsync`, and the provider
+behind that seam decides how it reaches the broker. Property casing, whether a null member is
+written or omitted, and the `DateTimeOffset` format are a provider's decisions. So the member set is
+what this type guarantees; the bytes are what a provider guarantees.
+
+> **The first broker provider owes that decision explicitly** — casing, null omission, timestamp
+> format — rather than inheriting whatever its serializer happens to default to. **Once one ships,
+> its encoding is the de-facto standard** and every later provider matches it. A second provider
+> that chooses differently splits the wire format in two while every member name still agrees, which
+> is the harder version of this problem: nothing about the C# type looks wrong.
+
+No canonical encoder ships today, deliberately — there is no provider to use one, and one written
+with nothing to exercise it would only be designed twice.
+
+| Member | Type | Why it travels |
+|---|---|---|
+| `MessageId` | `Guid` | The consumer's idempotency key. The **producing row's** id, so it is identical across every redelivery |
+| `ContractName` | `string` | The only identity the receiving process can act on |
+| `Source` | `string` | The emitting module — routing, provenance, and `(source, id)` uniqueness |
+| `Payload` | `string` | The JSON, opaque, byte for byte |
+| `TenantId` | `string?` | A consumer in a shared-database deployment cannot process a message without it |
+| `CorrelationId` / `CausationId` | `Guid?` | The trace chain, at the boundary where it is least reconstructible |
+| `OccurredOnUtc` | `DateTimeOffset` | The business timeline, not the relay's clock |
+
+Deliberately absent: **`EventType`** (an assembly-qualified name is meaningless in the receiving
+process — shipping it would invite `Type.GetType`, which works in a monolith and fails on
+extraction), **`SourceMessageId`** (the producer's internal replay key), **a trace parent** (the
+right thing to propagate, but `OutboxMessage` carries no such column yet, and a member that could
+only ever be null is worse than an absent one), delivery bookkeeping, and an envelope version.
+
+`Payload` being a `string` **commits the wire to a text payload**, recorded here as an accepted
+constraint rather than left implicit: `IMessageSerializer.Serialize` returns a string, so the row
+already holds text, and a JSON body is what every broker this module targets carries without
+ceremony. A binary format later means base64 into that member or a second member beside it.
+
+#### How a member is added to `MessageEnvelope`
+
+Decided now, because `TraceParent` is already anticipated and the first addition would otherwise
+make this decision by accident. **The primary constructor signature is frozen.** A new member is
+declared as an `init` property in the record body, with a default:
+
+```csharp
+public sealed record MessageEnvelope(/* … unchanged … */)
+{
+    public string? TraceParent { get; init; }
+}
+```
+
+Adding a parameter to the primary constructor instead would be source- *and* binary-breaking for
+every `new MessageEnvelope(…)` call site — which is exactly where an inbound receiver builds one
+from a broker message — and would change the deconstructor's arity with it. "Additive" holds on the
+wire, where a consumer that does not know a member ignores it; it does not hold for a public
+positional record, and conflating the two is how the first addition becomes a break. `with`
+expressions, value equality and `System.Text.Json` treat a body-declared `init` property exactly as
+they treat a positional one.
+
+**The identifiers are `Guid`s, not the `MessageId` / `CorrelationId` / `CausationId` records used
+everywhere else.** Those are positional wrappers, so a reflection-based serializer emits them as
+`{"value":"…"}` — a C# detail a non-.NET consumer would read as `envelope.messageId.value` forever.
+A `JsonConverter` was rejected because it would push the decision down into serializer
+*configuration*, where a provider registering its own serializer, or a swap to the planned
+source-generated one, silently drops it. The declared member type is the one part of the encoding
+this package can fix from here, which is why it is the part worth spending: casing and null handling
+belong to a provider, the shape of an identifier does not. Pinned by
+`MessageEnvelope_SerializesToTheDeclaredWireShape` and
+`MessageEnvelope_CarriesIdentifiersAsBareStrings`.
+
+#### Routing, and why a notification is a configuration fault
+
+| Row | Response |
+|---|---|
+| `Contract`, valid | envelope → `IMessageTransport.SendAsync` |
+| `Contract`, no `ContractName` or `Source` | `OutboxPayloadException` — unaddressable, dead-letter |
+| `Notification` | **`OutboxConfigurationException`** |
+| unknown `MessageKind` | `OutboxPayloadException` |
+
+A notification reaching the standard dispatcher is not a bad payload — the row is fine and would
+dispatch correctly the moment `AddMediatRDomainEvents()` is called. It is a missing registration.
+The classification decides whether a one-line omission in a composition root is recoverable:
+`OutboxPayloadException` dead-letters on *first sight*, so it would silently dead-letter every
+domain event in the system on the first poll, recoverable only by operator requeue.
+`OutboxConfigurationException` releases the batch untouched and stops the worker, so the rows
+survive and deploying the missing package drains them.
+
+An **unknown** kind is the opposite, and the asymmetry is deliberate: `MessageKind` is persisted as
+a string, so a later build or a hand edit can produce a value this build cannot interpret at all.
+That is permanent for this deployment, so it dead-letters.
+
+#### `OutboxConfigurationException` now has three origins, and the diagnostics say so
+
+Before this release it had one: `IOutboxDispatcher` was not registered. It now has three, and the
+messages an operator reads first were still describing only the first — which sends them to verify a
+registration that is already in their composition root.
+
+| Origin | Was reported as | Now |
+|---|---|---|
+| `IOutboxDispatcher` unregistered | "IOutboxDispatcher is not registered" | unchanged in substance |
+| A **dependency** of a registered dispatcher unregistered — a transport dispatcher with no `IMessageTransport`, the **likeliest of the three** once `AddTransportDispatcher()` is composed | same text, which is false | names `IMessageTransport` and points at the inner exception, which carries the type the container could not supply |
+| A dispatcher handed a row it structurally cannot serve — a `Notification` with no MediatR glue | same text, which is false | the dispatcher's own message already named `AddMediatRDomainEvents()`; the log headline no longer contradicts it |
+
+`OutboxProcessorLogs.DispatcherUnresolvable` is renamed **`DispatchMisconfigured`** (internal to
+Core) and its message names no particular registration, deferring to the exception it is logged
+with. `EventId` 1006 is unchanged, so log-based alerting keyed on it is unaffected.
+
+The test that pinned the old text now pins `IMessageTransport` instead: an assertion holding
+misleading text in place is worse than no assertion, because it makes correcting the message look
+like breaking a contract.
+
+#### Which layer may raise `OutboxConfigurationException`
+
+`IMessageTransport`'s remarks forbade raising it "from here" on the grounds that the classification
+belongs to service *resolution* — a rule `TransportOutboxDispatcher` itself does not follow, since it
+raises the exception from a dispatch for a `Notification` row. The design is right; the doc was
+stale, and read as written it would tell a provider author the classification is reserved to the
+processor.
+
+Stated correctly now, on both the interface and the exception: **a transport must never raise it**,
+because by the time a transport runs the composition has already been proven adequate by the fact
+that the transport was resolved and called. **A dispatcher may**, for a row it structurally cannot
+serve in this composition. Both engine origins establish the fault before any delivery is attempted,
+which is what distinguishes them from a runtime failure.
+
+#### Nothing deserializes on the send path
+
+`TransportOutboxDispatcher` takes no `IMessageSerializer` and no `IntegrationEventRegistry`. The
+payload was serialized by this same process at staging, so materializing it would resolve a type,
+build an object and re-serialize it to identical bytes — while making the send path depend on the
+producer's type graph, which is precisely what does not cross a boundary. It would also make a
+message unsendable whenever its CLR type moved assemblies between staging and dispatch, though the
+bytes on the wire were fine. The receiver resolves the contract name to its own local type.
+
+One consequence, stated so it is not met during an incident: this dispatcher **cannot detect a
+malformed payload**, where `InProcessIntegrationDispatcher` can. A corrupt payload travels and
+dead-letters at the consumer, in the consumer's inbox — the correct place, since the receiver is the
+party that knows what the name should deserialize into, but it means a producer-side operator can
+see a healthy queue during a consumer-side incident.
+
+### Changed — BREAKING: `MessageEnvelope<T>` → `MessageEnvelope`
+
+The generic envelope is replaced by a non-generic record. It had zero references anywhere — nothing
+constructed, consumed or transmitted one — so the break is nominal, but it is an arity change on a
+public type and is recorded as one.
+
+The old shape was unusable as a wire format: it was generic over `T : IIntegrationEvent` and carried
+a *deserialized instance*, so a sender holding JSON would have had to materialize an object purely
+to re-serialize it, and `IMessageTransport` would have had to be generic or box. It had **no
+`ContractName`** at all — the disqualifying omission, since without one a receiver has nothing to
+resolve. Its `TenantId` was non-nullable, contradicting `OutboxMessage.TenantId` and ADR-MSG-008 §5.
+
+### Added — `OutboxMessage.Source`
+
+The emitting module, e.g. `/shop/orders`, mirroring `IntegrationEventMessage.Source` and its width.
+Null on a notification row; `TransportOutboxDispatcher` enforces non-null on the contract path,
+where the entity cannot.
+
+It lands now rather than with the publisher because the envelope should ship complete **before the
+first message travels**, and no contract row exists yet — the same "the table is empty" argument
+that justified the `MessageKind` / `ContractName` / `SourceMessageId` columns. The publisher needs
+the column regardless, so this is one migration instead of two.
+
+**Stamped at staging, never resolved at dispatch.** Reading it from `IntegrationEventRegistry` when
+the message is sent looks equivalent and is not: it would make the emitted source a function of the
+composition running *now* rather than of what was staged, so a row staged before a rename would
+travel under the new name. That is the defect ADR-MSG-018 removed by sourcing every field from the
+row.
+
+**Migration** (PostgreSQL / SQLite):
+
+```sql
+ALTER TABLE "OutboxMessages" ADD COLUMN "Source" varchar(256) NULL;
+```
+
 ### Changed — `[IntegrationEvent]` rejects a blank contract name
 
 `IntegrationEventAttribute` now calls `ArgumentException.ThrowIfNullOrWhiteSpace(contractName)`.

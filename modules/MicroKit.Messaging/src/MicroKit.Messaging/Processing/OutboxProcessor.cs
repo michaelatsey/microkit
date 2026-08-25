@@ -45,8 +45,8 @@ namespace MicroKit.Messaging.Processing;
 /// in between replays every message in the batch.
 /// <list type="bullet">
 ///   <item>Where each consumer sits behind the <b>inbox</b>, that costs duplication only —
-///         <c>InProcessMessagePublisher</c> writes inbox rows, the unique index absorbs the
-///         redelivery, and no handler runs twice.</item>
+///         <c>InProcessIntegrationDispatcher</c> writes one inbox row per consumer, the unique
+///         index absorbs the redelivery, and no handler runs twice.</item>
 ///   <item>Where the dispatcher invokes a handler <b>in-process with no inbox row</b>, it does
 ///         not. <c>MediatROutboxDispatcher</c> publishes a notification through
 ///         <c>IPublisher.Publish</c>, and notification handlers have no per-consumer inbox
@@ -169,7 +169,7 @@ internal sealed class OutboxProcessor : IOutboxProcessor
                 // stop without stranding a single lease.
                 abortReason = OutboxBatchAbortReason.ConfigurationError;
                 configurationFault = ex;
-                OutboxProcessorLogs.DispatcherUnresolvable(_logger, ex, messages.Count - index);
+                OutboxProcessorLogs.DispatchMisconfigured(_logger, ex, messages.Count - index);
                 break;
             }
             catch (OutboxPayloadException ex)
@@ -237,13 +237,24 @@ internal sealed class OutboxProcessor : IOutboxProcessor
         await dispatcher.DispatchAsync(message, cancellationToken).ConfigureAwait(false);
     }
 
-    /// <summary>Resolves the dispatcher, converting a missing registration into a typed fault.</summary>
+    /// <summary>Resolves the dispatcher, converting an activation failure into a typed fault.</summary>
     /// <remarks>
+    /// <para>
     /// The try block wraps the resolution call and nothing else, so the classification is
     /// structural. Matching on <c>InvalidOperationException.Message</c> instead would depend
     /// on text emitted by the DI container — text that varies by version and container — and
     /// would misclassify a genuine <see cref="InvalidOperationException"/> thrown by the
     /// dispatcher whose message happened to name the same type.
+    /// </para>
+    /// <para>
+    /// It catches <b>activation</b> failures, not merely a missing <see cref="IOutboxDispatcher"/>
+    /// descriptor, and the message says so because the two are no longer equally likely. A
+    /// registered <c>TransportOutboxDispatcher</c> with no <see cref="IMessageTransport"/> behind
+    /// it fails right here — that is the whole reason the transport is a constructor dependency —
+    /// and it is the commoner fault of the two once <c>AddTransportDispatcher()</c> is composed.
+    /// A message asserting the dispatcher is unregistered would send an operator to verify a line
+    /// that is already in their composition root.
+    /// </para>
     /// </remarks>
     private static IOutboxDispatcher ResolveDispatcher(IServiceProvider serviceProvider)
     {
@@ -254,8 +265,11 @@ internal sealed class OutboxProcessor : IOutboxProcessor
         catch (InvalidOperationException ex)
         {
             throw new OutboxConfigurationException(
-                $"{nameof(IOutboxDispatcher)} is not registered. The outbox cannot dispatch " +
-                "anything until it is; retrying will not help.",
+                $"{nameof(IOutboxDispatcher)} could not be resolved: either it is not registered, " +
+                $"or one of its dependencies is not. A {nameof(IMessageTransport)} missing behind " +
+                "a registered transport dispatcher fails here and is the likelier of the two — " +
+                "register one from a broker provider's Add{Provider}Transport(). The inner " +
+                "exception names the type the container could not supply. Retrying will not help.",
                 ex);
         }
     }

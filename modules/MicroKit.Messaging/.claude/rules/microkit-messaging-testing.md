@@ -59,7 +59,10 @@ redelivered.ShouldBe(InboxWriteResult.AlreadyPresent);   // the nominal path, no
 - `InboxProcessor` claim, settlement and failure classification (drives `FakeTimeProvider`)
 - `OutboxMessage` retry back-off formula verification
 - `InboxMessage` compound dedup key isolation (unique index; the PK is the `RowId` surrogate)
-- `MessageEnvelope<T>` CorrelationId/CausationId chain propagation
+- `MessageEnvelope` wire shape (property names and bare-string identifiers — a rename is a
+  breaking change for every deployed consumer) and verbatim payload carriage
+- `TransportOutboxDispatcher` routing by `MessageKind`, and the no-transport case failing as a
+  configuration fault rather than a transient one
 - Inbox claim/settlement contracts via `EfInboxStore` on SQLite (the claim carries no
   provider-specific SQL, so the production path is what runs)
 

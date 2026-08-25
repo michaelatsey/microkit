@@ -434,6 +434,32 @@ write. Four kinds, and the difference between the last two is load-bearing:
 > HTTP 503 or a database timeout. Only proven permanence dead-letters; everything unrecognised stays
 > transient. A library that guesses permanence wrongly loses messages.
 
+### Routing verdicts — `TransportOutboxDispatcher` (Core, `AddTransportDispatcher()`)
+
+The standard dispatcher routes on `MessageKind` and builds a `MessageEnvelope` from the row. It
+takes **no serializer and no registry**: the payload travels opaque, and `IMessageTransport` must
+stay a *constructor* dependency or a missing transport is misclassified as transient.
+
+| Row | Verdict |
+|---|---|
+| `Contract`, with `ContractName` and `Source` | envelope → `IMessageTransport.SendAsync` |
+| `Contract`, missing either | `OutboxPayloadException` — unaddressable, dead-letter on first sight |
+| `Notification` | **`OutboxConfigurationException`** — batch released, worker stops, rows survive |
+| unknown `MessageKind` | `OutboxPayloadException` |
+
+> ⚠ **The asymmetry between the last two is deliberate and must not be harmonised.** A notification
+> is a kind this build *understands* and cannot serve: the row is fine and dispatches the moment
+> `AddMediatRDomainEvents()` is called, so it is a missing registration. Classifying it as a payload
+> fault would dead-letter every domain event in the system on the first poll after a one-line
+> omission in a composition root, recoverable only by operator requeue. An unknown kind cannot be
+> interpreted at all and re-reading the row will never change that — permanent for this deployment,
+> so it dead-letters. Loud and reversible where a redeployment fixes it; terminal where nothing can.
+
+**`OutboxConfigurationException` therefore has three origins, not one**, and any log or message
+about it must name none of them specifically: `IOutboxDispatcher` unregistered; a *dependency* of a
+registered dispatcher unregistered (a transport dispatcher with no `IMessageTransport` — the
+likeliest of the three); or a dispatcher handed a row it structurally cannot serve. A transport
+implementation must never raise it — by the time one runs, the composition is already proven.
 
 ## Inbox Store Contracts (Abstractions — split by consumer, ISP)
 

@@ -61,13 +61,24 @@ internal static partial class OutboxProcessorLogs
         Message = "Outbox batch cancelled. Releasing {ReleasedCount} unattempted message(s).")]
     public static partial void BatchCancelled(ILogger logger, int releasedCount);
 
+    /// <remarks>
+    /// Deliberately names no particular registration. <c>OutboxConfigurationException</c> is
+    /// raised from three places that a single sentence cannot cover: <c>IOutboxDispatcher</c>
+    /// itself is unregistered; the dispatcher resolved but one of its dependencies did not (a
+    /// transport dispatcher with no <c>IMessageTransport</c> — the likeliest of the three once
+    /// <c>AddTransportDispatcher()</c> is composed); or a dispatcher was handed a row it
+    /// structurally cannot serve, such as a notification with no MediatR glue installed. The
+    /// exception carries which one, and is logged with this event; a headline naming only the
+    /// first sends an operator to check a registration that is already there.
+    /// </remarks>
     [LoggerMessage(
         EventId = 1006,
         Level = LogLevel.Critical,
-        Message = "IOutboxDispatcher cannot be resolved — the outbox is misconfigured. " +
-                  "Abandoning batch and releasing {ReleasedCount} message(s) with no retry " +
-                  "consumed. Register a dispatcher; retrying will not help.")]
-    public static partial void DispatcherUnresolvable(
+        Message = "The outbox cannot dispatch — a required registration is missing; the " +
+                  "accompanying exception says which. Abandoning batch and releasing " +
+                  "{ReleasedCount} message(s) with no retry consumed. Retrying will not help: " +
+                  "fix the composition root and redeploy.")]
+    public static partial void DispatchMisconfigured(
         ILogger logger, Exception exception, int releasedCount);
 
     [LoggerMessage(

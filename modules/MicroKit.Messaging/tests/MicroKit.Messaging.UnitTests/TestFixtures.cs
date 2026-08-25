@@ -101,8 +101,63 @@ internal static class OutboxFixtures
             CorrelationId = CorrelationId.New(),
         };
 
+    /// <summary>
+    /// A <see cref="MessageKind.Contract"/> row — one the transport dispatcher can actually send.
+    /// </summary>
+    /// <remarks>
+    /// Separate from <see cref="Message"/> rather than a parameter on it, because the two carry
+    /// genuinely different column sets: a contract row must have <c>ContractName</c> and
+    /// <c>Source</c>, and a notification row must not. A single builder with nullable defaults
+    /// would let a test silently construct a row that cannot exist in production.
+    /// </remarks>
+    internal static OutboxMessage ContractMessage(
+        string? contractName = "shop.orders.order-placed.v1",
+        string? source = "/shop/orders",
+        string payload = """{"orderId":"e0b3a1f2-0000-4000-8000-000000000001"}""",
+        string? tenantId = "tenant-a",
+        int retryCount = 0)
+    {
+        var message = Message(retryCount: retryCount, tenantId: tenantId);
+        message.MessageKind = MessageKind.Contract;
+        message.ContractName = contractName;
+        message.Source = source;
+        message.Payload = payload;
+        message.CausationId = CausationId.New();
+        return message;
+    }
+
     internal static OutboxClaim Claim(params OutboxMessage[] messages)
         => new(Guid.NewGuid(), messages);
+}
+
+/// <summary>
+/// An <see cref="IMessageTransport"/> that records every envelope it was handed and throws
+/// whatever a script tells it to.
+/// </summary>
+/// <remarks>
+/// <b>A recording fake rather than an NSubstitute mock, deliberately.</b> Several of these tests
+/// assert that nothing was sent, and a negative assertion against a mock only holds if it names a
+/// method the subject actually calls — <c>DidNotReceive().SendAsync(...)</c> against code that
+/// calls something else is green whatever happens, and no mutation exposes it. Asserting that
+/// <see cref="Sent"/> is empty cannot be satisfied that way.
+/// </remarks>
+internal sealed class RecordingMessageTransport(Func<MessageEnvelope, Exception?>? script = null)
+    : IMessageTransport
+{
+    /// <summary>Every envelope this transport was handed, in order.</summary>
+    public List<MessageEnvelope> Sent { get; } = [];
+
+    public ValueTask SendAsync(MessageEnvelope envelope, CancellationToken ct = default)
+    {
+        var fault = script?.Invoke(envelope);
+        if (fault is not null)
+        {
+            return ValueTask.FromException(fault);
+        }
+
+        Sent.Add(envelope);
+        return ValueTask.CompletedTask;
+    }
 }
 
 /// <summary>Builders for inbox rows and claims, so tests state only what they care about.</summary>
