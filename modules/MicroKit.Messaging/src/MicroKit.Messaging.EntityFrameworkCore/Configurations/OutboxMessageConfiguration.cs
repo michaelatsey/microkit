@@ -38,6 +38,13 @@ public sealed class OutboxMessageConfiguration : IEntityTypeConfiguration<Outbox
         builder.Property(m => m.ContractName)
             .HasMaxLength(256);
 
+        // Same width and the same notion as IntegrationEventMessageConfiguration.Source — the two
+        // must not disagree while both tables are live. Not IsRequired: null on a Notification row,
+        // which never leaves the process and so has no emitter to declare. TransportOutboxDispatcher
+        // enforces non-null on the Contract path, where the entity cannot.
+        builder.Property(m => m.Source)
+            .HasMaxLength(256);
+
         builder.Property(m => m.SourceMessageId)
             .HasConversion(new ValueConverter<MessageId?, Guid?>(
                 v => v == null ? null : v.Value,

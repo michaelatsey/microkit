@@ -27,9 +27,16 @@ The plan must cover:
 - DI extension: `Add{ProviderName}Transport()` on `MessagingBuilder` (not `Add{ProviderName}Messaging()` on `IServiceCollection`)
 
 ### Serialization
-- Default: `IMessageSerializer` — `Serialize(object)` / `Deserialize(string payload, string eventType)`.
-  It serializes the payload's **runtime type**, never `typeof(T)`. `MessageEnvelope<T>` is unused
-  in v1; do not build a provider around it without deciding that question first.
+- A provider implements **`IMessageTransport`**, not `IOutboxDispatcher`. It receives a
+  `MessageEnvelope` — already built from the outbox row by `TransportOutboxDispatcher` — whose
+  `Payload` is **opaque JSON**. A provider does not deserialize it and needs no
+  `IMessageSerializer`: the receiving process resolves `ContractName` to its own local type.
+- **`SendAsync` must not return before the broker has acknowledged the message.** The processor
+  marks the row `Published` on that return and `Published` is terminal, so an asynchronous hand-off
+  makes the mark a lie. **Your provider owes a conformance test proving this**; one that fails it is
+  unusable whether or not it compiles.
+- Call `AddTransportDispatcher()` from your `Add{ProviderName}Transport()` so a consumer writes one
+  line rather than two.
 - A source-generated implementation is planned for `MicroKit.Messaging.Serialization` (v2)
 
 ### Error Handling — signal permanence with typed exceptions, never by writing state

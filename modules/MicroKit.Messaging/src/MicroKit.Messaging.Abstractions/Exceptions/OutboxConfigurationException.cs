@@ -1,17 +1,36 @@
 namespace MicroKit.Messaging;
 
 /// <summary>
-/// Thrown when a service the outbox requires is not registered. A deployment defect,
-/// never a runtime fault.
+/// Thrown when the outbox cannot dispatch because of how the application is composed, rather than
+/// because of anything about the message or the moment. A deployment defect, never a runtime fault.
 /// </summary>
 /// <remarks>
 /// <para>
-/// Raised by wrapping the resolution call itself, so the classification is structural
-/// rather than heuristic. Inspecting <c>InvalidOperationException.Message</c> for a
-/// service name would depend on text produced by the DI container — text that changes
-/// between versions and containers — and would misclassify a genuine
-/// <see cref="InvalidOperationException"/> thrown by the dispatcher whose message
-/// happened to mention the same type.
+/// <b>Raised from two kinds of place, both of which establish the fault before any delivery is
+/// attempted.</b>
+/// <list type="bullet">
+///   <item><b>Service resolution</b> — <c>OutboxProcessor</c> wraps the container call that
+///         activates <see cref="IOutboxDispatcher"/>, so the classification is structural rather
+///         than heuristic. That covers a missing dispatcher <i>and</i> a missing dependency of
+///         one: a registered <c>TransportOutboxDispatcher</c> with no
+///         <see cref="IMessageTransport"/> behind it fails exactly here, which is the reason the
+///         transport is a constructor dependency rather than a lazy lookup.</item>
+///   <item><b>A dispatcher handed a row it structurally cannot serve in this composition</b> —
+///         <c>TransportOutboxDispatcher</c> raises it for a <see cref="MessageKind.Notification"/>
+///         row, which nothing in the process can fan out unless
+///         <c>MicroKit.Messaging.MediatR</c> is registered. The row is valid and the payload is
+///         fine; its arrival is what proves the package is missing.</item>
+/// </list>
+/// A <see cref="IMessageTransport"/> implementation must <b>not</b> raise it — see that
+/// interface's remarks. By the time a transport runs, the composition has already been proven
+/// adequate by the fact that the transport was resolved and called.
+/// </para>
+/// <para>
+/// Inspecting <c>InvalidOperationException.Message</c> for a service name would be the
+/// alternative to the structural detection above, and is rejected: it depends on text produced by
+/// the DI container — text that changes between versions and containers — and would misclassify a
+/// genuine <see cref="InvalidOperationException"/> thrown by the dispatcher whose message happened
+/// to mention the same type.
 /// </para>
 /// <para>
 /// The processor settles the batch (releasing every message untouched) and then

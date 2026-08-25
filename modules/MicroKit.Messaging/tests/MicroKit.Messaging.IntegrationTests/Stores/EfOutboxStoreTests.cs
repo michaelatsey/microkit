@@ -41,6 +41,7 @@ public sealed class EfOutboxStoreTests
         Guid? claimToken = null,
         MessageKind messageKind = MessageKind.Notification,
         string? contractName = null,
+        string? source = null,
         MessageId? sourceMessageId = null)
     {
         return new OutboxMessage
@@ -49,6 +50,7 @@ public sealed class EfOutboxStoreTests
             TenantId = tenantId,
             MessageKind = messageKind,
             ContractName = contractName,
+            Source = source,
             SourceMessageId = sourceMessageId,
             EventType = "MicroKit.Test.TestEvent, MicroKit.Test",
             Payload = "{}",
@@ -87,6 +89,72 @@ public sealed class EfOutboxStoreTests
 
             await using var after = SecondContext(conn);
             (await after.OutboxMessages.CountAsync()).ShouldBe(1);
+        });
+
+    /// <summary>
+    /// The columns a message is addressed by survive a write and a read on a real provider.
+    /// </summary>
+    /// <remarks>
+    /// Read back through a SECOND context, so the assertion cannot be satisfied by the change
+    /// tracker still holding the instance that was written — which is what an unmapped property
+    /// would do: <c>Source</c> missing from the configuration produces a green in-memory assertion
+    /// and a null column.
+    /// </remarks>
+    [Fact]
+    public Task AddAsync_RoundTripsTheContractAddressingColumns()
+        => Task.Run(async () =>
+        {
+            var (conn, ctx) = CreateIsolatedDb();
+            await using var _ = conn;
+            await using var __ = ctx;
+
+            var sourceRow = MessageId.New();
+            var message = BuildOutboxMessage(
+                messageKind: MessageKind.Contract,
+                contractName: "shop.orders.order-placed.v1",
+                source: "/shop/orders",
+                sourceMessageId: sourceRow);
+
+            await Store(ctx).AddAsync(message);
+            await ctx.SaveChangesAsync();
+
+            await using var probe = SecondContext(conn);
+            var stored = await probe.OutboxMessages.SingleAsync();
+
+            stored.MessageKind.ShouldBe(MessageKind.Contract);
+            stored.ContractName.ShouldBe("shop.orders.order-placed.v1");
+            stored.Source.ShouldBe("/shop/orders");
+            stored.SourceMessageId.ShouldBe(sourceRow);
+        });
+
+    /// <summary>
+    /// A notification row stores null in both wire columns, and the schema permits it.
+    /// </summary>
+    /// <remarks>
+    /// Not a trivial mirror of the test above: marking <c>Source</c> or <c>ContractName</c>
+    /// <c>IsRequired()</c> would break every notification write in the module, and this is what
+    /// would catch it. It also covers the unique index over
+    /// <c>(SourceMessageId, ContractName)</c> — two all-null rows must coexist, which they do on
+    /// SQLite and PostgreSQL because nulls are distinct there.
+    /// </remarks>
+    [Fact]
+    public Task AddAsync_AllowsNullWireColumnsOnNotificationRows()
+        => Task.Run(async () =>
+        {
+            var (conn, ctx) = CreateIsolatedDb();
+            await using var _ = conn;
+            await using var __ = ctx;
+
+            await Store(ctx).AddBatchAsync(
+                [BuildOutboxMessage(), BuildOutboxMessage()]);
+            await ctx.SaveChangesAsync();
+
+            await using var probe = SecondContext(conn);
+            var stored = await probe.OutboxMessages.ToListAsync();
+
+            stored.Count.ShouldBe(2);
+            stored.ShouldAllBe(m => m.Source == null);
+            stored.ShouldAllBe(m => m.ContractName == null);
         });
 
     [Fact]

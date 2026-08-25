@@ -109,6 +109,51 @@ public sealed class MessagingAbstractionsArchitectureTests
             .ShouldBeEmpty("MessageDispatcher was eliminated — use IOutboxDispatcher instead");
     }
 
+    /// <summary>
+    /// No MicroKit package implements <see cref="IMessageTransport"/>, and none must.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// An <c>InProcessTransport</c> is the obvious missing piece and the reason this test exists.
+    /// Until the receiving seam is built, such a type has exactly two possible behaviours and both
+    /// are defects: returning normally is the silent success this module treats as blocking — the
+    /// processor marks the row <c>Published</c>, <c>Published</c> is terminal, and the message is
+    /// gone with nothing recording that no delivery happened — while throwing on every send makes
+    /// it a type that exists only to fail, which someone will nevertheless register.
+    /// </para>
+    /// <para>
+    /// Every shipped assembly is asserted, not only Core, because that is the claim being made:
+    /// the docs, the CHANGELOG and <c>AddTransportDispatcher</c> all say "no implementation ships
+    /// in <i>any</i> MicroKit package", and a test covering two of the four would leave the glue
+    /// and the EF Core package free to contradict it.
+    /// </para>
+    /// <para>
+    /// A transport ships from a broker provider package, or not at all. If this test fails, read
+    /// the new type's delivery path before deleting the assertion.
+    /// </para>
+    /// </remarks>
+    [Fact]
+    public void NoMicroKitPackageShipsAnIMessageTransportImplementation()
+    {
+        Assembly[] shipped =
+            [AbstractionsAssembly, CoreAssembly, EfCoreAssembly, MediatRGlueAssembly];
+
+        foreach (var assembly in shipped)
+        {
+            var implementations = Types.InAssembly(assembly)
+                .That()
+                .ImplementInterface(typeof(IMessageTransport))
+                .GetTypes()
+                .Select(t => t.FullName)
+                .ToList();
+
+            implementations.ShouldBeEmpty(
+                $"{assembly.GetName().Name} must ship no IMessageTransport: with no receiver, an " +
+                "in-process transport can only succeed silently on messages it never delivered, " +
+                "or exist purely to throw. Broker providers supply the implementation.");
+        }
+    }
+
     [Fact]
     public void Core_HasNoMediatRDependency()
     {

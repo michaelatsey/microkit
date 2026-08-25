@@ -7,17 +7,29 @@ namespace MicroKit.Messaging;
 /// </summary>
 /// <remarks>
 /// <para>
-/// In-process v1 default: <c>InProcessIntegrationDispatcher</c> (Core package) —
-/// deserializes the payload via <c>IMessageSerializer</c> and calls
-/// the in-process dispatcher to write inbox rows.
+/// Core ships two implementations, and which one is registered decides what the outbox does with a
+/// row:
+/// <list type="bullet">
+///   <item><c>TransportOutboxDispatcher</c> (<c>AddTransportDispatcher()</c>) — routes a
+///         <see cref="MessageKind.Contract"/> row to <see cref="IMessageTransport"/> as a
+///         <see cref="MessageEnvelope"/>. It does not deserialize: the payload travels
+///         opaque.</item>
+///   <item><c>InProcessIntegrationDispatcher</c> (<c>AddInProcessTransport()</c>) — deserializes
+///         the payload to find its registered consumers and writes one inbox row per
+///         consumer.</item>
+/// </list>
 /// </para>
 /// <para>
-/// Broker providers (v2): replace this seam with a broker-specific implementation
-/// (e.g. <c>RabbitMqOutboxDispatcher</c>) without modifying the engine. Register it as a
-/// <b>scoped</b> <see cref="IOutboxDispatcher"/> from the provider's own
-/// <c>Add{Provider}Transport()</c> extension; the engine resolves it from the per-message
-/// execution scope. Nothing about this seam is a hosted service — <c>OutboxWorker</c> is the
-/// only hosted service on the outbox path, and it is internal.
+/// <b>A broker provider does not implement this seam.</b> It implements
+/// <see cref="IMessageTransport"/> and registers it from its own <c>Add{Provider}Transport()</c>
+/// extension; <c>TransportOutboxDispatcher</c> is what feeds it. Nothing about either seam is a
+/// hosted service — <c>OutboxWorker</c> is the only hosted service on the outbox path, and it is
+/// internal.
+/// </para>
+/// <para>
+/// Implementations are registered as <b>scoped</b>, with <c>TryAdd</c>: the engine resolves one
+/// from the per-message execution scope, and a plain <c>Add</c> would append a second descriptor
+/// that Microsoft DI resolves in preference — silently bypassing any decorator over this seam.
 /// </para>
 /// <para>
 /// The message handed over is payload-agnostic. Implementations must not assume the row holds

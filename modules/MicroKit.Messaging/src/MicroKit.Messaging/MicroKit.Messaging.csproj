@@ -2,8 +2,8 @@
   <PropertyGroup>
     <AssemblyName>MicroKit.Messaging</AssemblyName>
     <RootNamespace>MicroKit.Messaging</RootNamespace>
-    <Description>In-process messaging core for MicroKit — OutboxProcessor, InboxProcessor,
-    InProcessMessagePublisher, InProcessIntegrationDispatcher, DI extensions.</Description>
+    <Description>Messaging core for MicroKit — OutboxProcessor, InboxProcessor, the transport
+    and in-process outbox dispatchers, integration-event publishing, DI extensions.</Description>
     <PackageTags>microkit;messaging;outbox;inbox;integration-events;dotnet</PackageTags>
     <Authors>Ange-Michaël Atsé</Authors>
     <PackageLicenseExpression>MIT</PackageLicenseExpression>

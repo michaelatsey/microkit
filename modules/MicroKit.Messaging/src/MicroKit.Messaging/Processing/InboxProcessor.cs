@@ -14,7 +14,8 @@ namespace MicroKit.Messaging.Processing;
 /// A pure drain loop — it never calls <see cref="IInboxWriter.ExistsAsync"/> or
 /// <see cref="IInboxWriter.AddAsync"/>, and its narrowed dependency on
 /// <see cref="IInboxProcessorStore"/> makes that structural rather than a convention. Ingestion
-/// is performed by <c>InProcessMessagePublisher</c> or a broker adapter.
+/// is performed by <c>InProcessIntegrationDispatcher</c>, which writes one row per registered
+/// consumer, or by a broker adapter.
 /// </para>
 /// <para>
 /// <b>Isolation.</b> One <see cref="IExecutionScope"/> per message — never shared across a

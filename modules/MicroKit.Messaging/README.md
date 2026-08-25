@@ -34,8 +34,8 @@ transaction is durable, and nothing durable goes unpublished.
 
 | Package | Description |
 |---------|-------------|
-| `MicroKit.Messaging.Abstractions` | Contracts: `IIntegrationEvent`, `IIntegrationEventPublisher`, `IMessageHandler<T>`, `IOutboxWriter`, the outbox/inbox stores, `OutboxMessage`, `InboxMessage`, `IntegrationEventMessage` |
-| `MicroKit.Messaging` | Outbox/inbox processors and workers, in-process transport, `OutboxMessageFactory`, DI |
+| `MicroKit.Messaging.Abstractions` | Contracts: `IIntegrationEvent`, `IIntegrationEventPublisher`, `IMessageHandler<T>`, `IOutboxWriter`, `IMessageTransport`, `MessageEnvelope`, the outbox/inbox stores, `OutboxMessage`, `InboxMessage`, `IntegrationEventMessage` |
+| `MicroKit.Messaging` | Outbox/inbox processors and workers, the transport and in-process dispatchers, integration-event publishing, `OutboxMessageFactory`, DI |
 | `MicroKit.Messaging.EntityFrameworkCore` | `EfOutboxStore`, `EfInboxStore`, entity configuration for your `DbContext` |
 | `MicroKit.Messaging.MediatR` | Glue: puts MicroKit.MediatR domain events on the outbox as notifications |
 
@@ -193,6 +193,7 @@ where no retry can fix it. A service that does both calls both, in either order.
 
 You only need `Consumes<T>()` for a contract this application does not publish itself: `Publishes<T>()`
 already binds the name, so a modular monolith routes its own contracts with no second declaration.
+
 Declaring both is accepted as a no-op — a module must not have to know whether its producer happens
 to be in-process. What *is* rejected, at startup, is two different types claiming one contract name.
 
@@ -239,7 +240,71 @@ under load. Omitted, a consumer reads the relay's clock as the business time.
 
 **Nothing delivers these rows yet.** After the commit the event is durable and has been sent
 nowhere, which is the correct intermediate state: nothing is announced for a fact that did not
-happen, and the row survives a crash. The relay and the broker adapters are the transport work.
+happen, and the row survives a crash. The relay that picks them up is below; the broker adapter it
+hands them to is still to come.
+
+---
+
+## Sending to a broker
+
+An outbox row carries one of two natures, declared in its `MessageKind` column. A `Contract` row is
+handed to a transport; a `Notification` row is fanned out in process by `MicroKit.Messaging.MediatR`.
+`AddTransportDispatcher()` wires the dispatcher for the first of those — and a provider's own
+`Add{Provider}Transport()` calls it for you, so composing a broker is one line:
+
+```csharp
+services.AddMicroKitMessaging()
+        .AddEfCoreOutbox<AppDbContext>()
+        .AddRabbitMqTransport();      // wires the transport AND the dispatcher that feeds it
+```
+
+Call `AddTransportDispatcher()` yourself only when you register an `IMessageTransport` directly
+rather than through a provider package. It is `TryAdd`, so calling it as well is a no-op rather than
+a duplicate.
+
+**No `IMessageTransport` implementation ships in MicroKit.** A provider package supplies one. That
+is not an oversight: with no receiving seam built yet, an in-process transport could only either
+return successfully for messages it never delivered — marking rows `Published` that are gone — or
+exist purely to throw.
+
+### What `SendAsync` returning means
+
+> **The destination has acknowledged the message.** Not that it was enqueued for background
+> delivery, not that it was buffered locally.
+
+`OutboxProcessor` marks the row `Published` on that return, and `Published` is terminal. A transport
+that hands off asynchronously makes the mark a lie in exactly the way an outbox exists to prevent.
+Writing a transport? Return after the publisher confirm (RabbitMQ), after `SendMessagesAsync`
+(Azure Service Bus), after the delivery report (Kafka) — and see the conformance obligation in
+`IMessageTransport`'s docs.
+
+Failures are classified by exception type, and the type is a statement about scope:
+
+| Thrown | Meaning | Effect |
+|---|---|---|
+| `OutboxTransportUnavailableException` | the broker is unreachable, so the next message will fail too | batch released, **no retry consumed**, worker backs off |
+| *anything untyped* | this one message failed while the transport is healthy | retried with jittered back-off |
+| `OutboxPayloadException` | the destination rejects this content permanently | dead-lettered on first sight |
+
+The first row is what stops an hour-long outage from dead-lettering the whole queue.
+
+### With no transport registered
+
+A `Contract` row then fails **loudly and reversibly**: the batch is released untouched, no retry
+budget is consumed, the rows stay `Pending`, and the worker stops so the missing registration is
+visible. Deploy the provider, restart, they drain.
+
+This is not checked at startup, deliberately — whether a transport is needed depends on whether any
+contract row exists, which is data rather than composition. An application that publishes only
+domain-event notifications composes legitimately without one.
+
+### One thing worth knowing before an incident
+
+The transport dispatcher never deserializes the payload — it travels opaque, which is what lets a
+consumer holding a different CLR type read it. The consequence is that a **corrupt payload is not
+detected on the way out**. It travels, and dead-letters at the consumer, in the consumer's inbox.
+That is the right place for it to fail, but it means a producer-side operator can see a perfectly
+healthy queue while a consumer is dead-lettering.
 
 ---
 
