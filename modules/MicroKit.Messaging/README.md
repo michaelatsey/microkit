@@ -162,6 +162,40 @@ services.AddMicroKitMessaging()
         .AddEfCoreIntegrationEvents<AppDbContext>();
 ```
 
+### Consuming a contract you do not publish
+
+A module that *understands* a contract declares it separately, and the declaration looks almost the
+same — the same attribute, carrying the same wire name, on **its own** local type. The producer's
+type does not travel and would be useless if it did.
+
+```csharp
+// The shipping module's own type for a contract the orders module emits. Same name, different
+// assembly, different CLR type — that is the whole point of a wire name.
+[IntegrationEvent("shop.orders.order-placed.v1")]
+public sealed record OrderPlaced(Guid OrderId, Guid CustomerId) : IIntegrationEvent;
+
+services.AddIntegrationEventSubscriptions(events =>
+{
+    events.Consumes<OrderPlaced>();
+});
+
+services.AddMicroKitMessaging()
+        .AddIntegrationEventConsumption();
+```
+
+`AddIntegrationEventSubscriptions` takes **no `source`**. A source names the module that *emitted*
+an event; a consumer emitted nothing, so it has nothing truthful to put there.
+
+`AddIntegrationEventConsumption()` wires the registry and its startup validator, and nothing else —
+a service that only consumes gets the same boot-time check on duplicated contract names that a
+publishing one gets, instead of discovering the collision inside a handler, inside a transaction,
+where no retry can fix it. A service that does both calls both, in either order.
+
+You only need `Consumes<T>()` for a contract this application does not publish itself: `Publishes<T>()`
+already binds the name, so a modular monolith routes its own contracts with no second declaration.
+Declaring both is accepted as a no-op — a module must not have to know whether its producer happens
+to be in-process. What *is* rejected, at startup, is two different types claiming one contract name.
+
 The call site is a notification handler — the point where a domain fact becomes a published
 contract:
 

@@ -62,6 +62,13 @@ public sealed class OutboxMessage
     /// <c>IntegrationEventMessage.ContractName</c> carries the same notion on its own table, which
     /// is the model this one supersedes. Both are live until the publisher moves onto outbox rows.
     /// </para>
+    /// <para>
+    /// <b>Not yet a deserialization key.</b> Resolving this name to a local CLR type is what
+    /// <c>IntegrationEventRegistry.TryResolveLocalType</c> exists for, and it becomes the key on
+    /// the paths that cross a process boundary — a transport dispatcher and the receiving side.
+    /// Until those exist, every dispatch path in this module is in-process and resolves by
+    /// <see cref="EventType"/>. See that property for where the boundary falls.
+    /// </para>
     /// </remarks>
     public string? ContractName { get; set; }
 
@@ -119,6 +126,15 @@ public sealed class OutboxMessage
     /// <c>Type.GetType</c> fails there; it works in process by accident. The identity a consumer
     /// addresses is <see cref="ContractName"/>, and the nature of the row is declared by
     /// <see cref="MessageKind"/> rather than recovered from the type named here.
+    /// </para>
+    /// <para>
+    /// <b>Where the boundary falls, exactly.</b> This property remains the deserialization key on
+    /// every path that stays in one process, and that is not a transitional state: a
+    /// <see cref="MessageKind.Notification"/> row has no <see cref="ContractName"/> at all, so it
+    /// can only ever be resolved from here. A <see cref="MessageKind.Contract"/> row handed to a
+    /// transport resolves by <see cref="ContractName"/> instead, through
+    /// <c>IntegrationEventRegistry</c>, because that is the only identity the receiving process can
+    /// act on. The two keys are therefore not rivals — they serve disjoint sets of rows.
     /// </para>
     /// </remarks>
     public string EventType { get; set; } = null!;

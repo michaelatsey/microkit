@@ -137,6 +137,11 @@ IntegrationEventAttribute          // [IntegrationEvent("name.v1")] — mandator
 IIntegrationEventPublisher         // PublishAsync<T>(evt, occurredOnUtc, ct) → ValueTask<MessageId>
                                    //   stages into the CALLER's open transaction; never commits
 IIntegrationEventWriter            // AddAsync + HasOpenTransaction — staging port, EFCore implements
+IntegrationEventRegistry           // BIDIRECTIONAL — ResolveContract(Type) → contract; ResolveLocalType(name)
+                                   //   → local CLR type. The reverse direction is the precondition
+                                   //   for any transport: a consumer lacks the producer's assembly,
+                                   //   so Type.GetType(AQN) cannot resolve across a process
+IntegrationEventSubscription       // sealed record (Type, ContractName) — no Source, deliberately
 IntegrationEventMessage            // sealed class — its own table, NOT a slice of the outbox
 MessageId                          // sealed record — strongly-typed message identifier
 CorrelationId                      // sealed record — correlation chain identifier
