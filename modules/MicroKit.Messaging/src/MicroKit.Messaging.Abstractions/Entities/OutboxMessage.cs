@@ -30,6 +30,70 @@ public sealed class OutboxMessage
     public string? TenantId { get; set; }
 
     /// <summary>
+    /// Gets or sets the nature of this message — what the dispatcher routes it to.
+    /// </summary>
+    /// <remarks>
+    /// The outbox is reentrant: one table, two natures, and a message may pass through the queue
+    /// twice. Declared here rather than inferred from the payload's CLR type so that the routing
+    /// decision is visible to SQL and does not require the payload-agnostic core to recognise a
+    /// notification. Defaults to <see cref="MessageKind.Notification"/>, which is the zero value —
+    /// see that type for why the declaration order matters.
+    /// </remarks>
+    public MessageKind MessageKind { get; set; }
+
+    /// <summary>
+    /// Gets or sets the stable wire identity of this message, e.g.
+    /// <c>saasbtp.safety.constat-recorded.v1</c>. <see langword="null"/> for a
+    /// <see cref="MessageKind.Notification"/>, which has no wire identity.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// The name a consumer knows this message by, and the one thing about it that must survive a
+    /// CLR rename, an assembly split or a module extraction. <see cref="EventType"/> cannot serve:
+    /// it is an assembly-qualified name the receiving process cannot resolve.
+    /// </para>
+    /// <para>
+    /// Half of the replay natural key, with <see cref="SourceMessageId"/>. The pairing with
+    /// <see cref="MessageKind"/> is <b>not</b> enforced by this type: it is an EF Core entity with
+    /// no constructor to enforce it in, and a guard in a setter would throw part-way through
+    /// materialization. Enforcement belongs to whoever builds the row.
+    /// </para>
+    /// <para>
+    /// <c>IntegrationEventMessage.ContractName</c> carries the same notion on its own table, which
+    /// is the model this one supersedes. Both are live until the publisher moves onto outbox rows.
+    /// </para>
+    /// </remarks>
+    public string? ContractName { get; set; }
+
+    /// <summary>
+    /// Gets or sets the <see cref="Id"/> of the outbox row whose dispatch produced this one.
+    /// <see langword="null"/> for a row that was not produced by a dispatch.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <b>Structural, not tracing — and that is why it is not called a causation.</b>
+    /// <see cref="CorrelationId"/> and <see cref="CausationId"/> are diagnostic values rebuilt from
+    /// strings, and both degrade to <see langword="null"/> when the string does not parse: losing a
+    /// trace link is preferable to losing a message. This one cannot degrade. It is half of the
+    /// unique key on (<see cref="SourceMessageId"/>, <see cref="ContractName"/>), so a silent null
+    /// here silently switches deduplication off rather than merely blurring a trace.
+    /// </para>
+    /// <para>
+    /// <b>What it buys.</b> A redelivered dispatch re-runs its handlers, which publish the same
+    /// contract again with the same source row — so the second write collides on the unique index
+    /// instead of producing a duplicate integration message. This closes the window a per-message
+    /// settlement leaves open, because it also covers a crash occurring <i>after</i> the commit,
+    /// which atomicity alone cannot.
+    /// </para>
+    /// <para>
+    /// It follows that two handlers of one notification must not publish the same contract: they
+    /// would collide on this key and the second would be absorbed as a duplicate. Forbidden by
+    /// convention rather than detected.
+    /// </para>
+    /// </remarks>
+    public MessageId? SourceMessageId { get; set; }
+
+    /// <summary>
     /// Gets or sets the assembly-qualified CLR type name of the serialized
     /// <see cref="Payload"/> — always its runtime type, never a declared or generic one.
     /// </summary>
@@ -50,8 +114,11 @@ public sealed class OutboxMessage
     /// <c>InProcessIntegrationDispatcher</c> dead-letters a payload that is not an
     /// <see cref="IIntegrationEvent"/>.
     /// <para>
-    /// The name is narrower than the contract. Widening it is a breaking change and is
-    /// deferred to the integration-event work.
+    /// <b>A local deserialization detail, not a contract.</b> An assembly-qualified name does not
+    /// cross a service boundary — the consumer does not have the producer's assembly, so
+    /// <c>Type.GetType</c> fails there; it works in process by accident. The identity a consumer
+    /// addresses is <see cref="ContractName"/>, and the nature of the row is declared by
+    /// <see cref="MessageKind"/> rather than recovered from the type named here.
     /// </para>
     /// </remarks>
     public string EventType { get; set; } = null!;

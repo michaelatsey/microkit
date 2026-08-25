@@ -38,12 +38,18 @@ public sealed class EfOutboxStoreTests
         string? tenantId = "tenant-a",
         DateTimeOffset? occurredOnUtc = null,
         DateTimeOffset? processedAtUtc = null,
-        Guid? claimToken = null)
+        Guid? claimToken = null,
+        MessageKind messageKind = MessageKind.Notification,
+        string? contractName = null,
+        MessageId? sourceMessageId = null)
     {
         return new OutboxMessage
         {
             Id = MessageId.New(),
             TenantId = tenantId,
+            MessageKind = messageKind,
+            ContractName = contractName,
+            SourceMessageId = sourceMessageId,
             EventType = "MicroKit.Test.TestEvent, MicroKit.Test",
             Payload = "{}",
             Status = status,
@@ -716,4 +722,216 @@ public sealed class EfOutboxStoreTests
                 .GetMaxLength()!.Value,
             "the inbox carries the same coupling");
     }
+
+    // ---------------------------------------------------------------------------
+    // Message kind, contract name, and the replay natural key
+    // ---------------------------------------------------------------------------
+
+    private static Microsoft.EntityFrameworkCore.Metadata.IReadOnlyProperty Property(
+        TestMessagingDbContext ctx, string name)
+        => ctx.Model.FindEntityType(typeof(OutboxMessage))!.FindProperty(name)!;
+
+    /// <summary>
+    /// The column exists to be queried — session 023 calls it "routing, queryable in SQL". An int
+    /// discriminator is unreadable in psql or the Supabase dashboard, which would defeat the only
+    /// reason the column is there rather than inferred from the payload's CLR type.
+    /// </summary>
+    [Fact]
+    public void MessageKind_IsMappedAsARequiredConstrainedString()
+    {
+        var (conn, ctx) = CreateIsolatedDb();
+        using var _ = conn;
+        using var __ = ctx;
+
+        var kind = Property(ctx, nameof(OutboxMessage.MessageKind));
+
+        kind.GetProviderClrType().ShouldBe(
+            typeof(string), "an int discriminator is unreadable in a SQL console");
+        kind.GetMaxLength().ShouldBe(
+            32, "the width every other status column in this module uses");
+        kind.IsNullable.ShouldBeFalse("every row has a nature");
+    }
+
+    /// <summary>
+    /// Both are meaningful only for a contract row, so both are optional — and the pairing with
+    /// <c>MessageKind</c> is deliberately not enforced here: the entity has no constructor to
+    /// enforce it in, and a guard in a setter would throw part-way through materialization.
+    /// </summary>
+    [Fact]
+    public void ContractNameAndSourceMessageId_AreOptional()
+    {
+        var (conn, ctx) = CreateIsolatedDb();
+        using var _ = conn;
+        using var __ = ctx;
+
+        var contractName = Property(ctx, nameof(OutboxMessage.ContractName));
+        contractName.IsNullable.ShouldBeTrue("a notification has no wire identity");
+        contractName.GetMaxLength().ShouldBe(
+            256, "must match IntegrationEventMessage.ContractName — the same notion");
+
+        var source = Property(ctx, nameof(OutboxMessage.SourceMessageId));
+        source.IsNullable.ShouldBeTrue("a row not produced by a dispatch has no source");
+        source.GetValueConverter().ShouldNotBeNull("MessageId? is not a storable type on its own");
+    }
+
+    /// <summary>
+    /// The index name is pinned because a consumer hand-writes their own DDL against it — the EF
+    /// configuration is the schema's only definition, so the name is part of the contract.
+    /// </summary>
+    [Fact]
+    public void TheReplayNaturalKey_IsAUniqueIndexOverSourceThenContract()
+    {
+        var (conn, ctx) = CreateIsolatedDb();
+        using var _ = conn;
+        using var __ = ctx;
+
+        var index = ctx.Model
+            .FindEntityType(typeof(OutboxMessage))!
+            .GetIndexes()
+            .SingleOrDefault(i =>
+                i.GetDatabaseName() == "UX_OutboxMessages_Source_ContractName");
+
+        index.ShouldNotBeNull("the replay natural key is the whole point of the two columns");
+        index.IsUnique.ShouldBeTrue("without uniqueness a replay writes a duplicate silently");
+        index.Properties.Select(p => p.Name).ShouldBe(
+            [nameof(OutboxMessage.SourceMessageId), nameof(OutboxMessage.ContractName)]);
+    }
+
+    /// <summary>
+    /// A converter that maps but does not round-trip passes every metadata assertion above.
+    /// </summary>
+    [Fact]
+    public Task BothKinds_RoundTripThroughTheDatabase()
+        => Task.Run(async () =>
+        {
+            var (conn, ctx) = CreateIsolatedDb();
+            await using var _ = conn;
+            await using var __ = ctx;
+
+            var source = MessageId.New();
+
+            ctx.OutboxMessages.Add(BuildOutboxMessage());
+            ctx.OutboxMessages.Add(BuildOutboxMessage(
+                messageKind: MessageKind.Contract,
+                contractName: "saasbtp.safety.constat-recorded.v1",
+                sourceMessageId: source));
+            await ctx.SaveChangesAsync();
+
+            await using var probe = SecondContext(conn);
+            var rows = await probe.OutboxMessages.AsNoTracking()
+                .OrderBy(m => m.MessageKind)
+                .ToListAsync();
+
+            var notification = rows.Single(m => m.MessageKind == MessageKind.Notification);
+            notification.ContractName.ShouldBeNull();
+            notification.SourceMessageId.ShouldBeNull();
+
+            var contract = rows.Single(m => m.MessageKind == MessageKind.Contract);
+            contract.ContractName.ShouldBe("saasbtp.safety.constat-recorded.v1");
+            contract.SourceMessageId.ShouldBe(source);
+        });
+
+    /// <summary>
+    /// Every notification row carries (null, null). If nulls ever compared equal in this index the
+    /// SECOND notification the system ever wrote would be rejected — which is precisely why SQL
+    /// Server is declared unsupported for this constraint. This is the assertion that fails the day
+    /// someone "improves" the index with NULLS NOT DISTINCT.
+    /// </summary>
+    [Fact]
+    public Task Many_notification_rows_with_no_contract_key_coexist()
+        => Task.Run(async () =>
+        {
+            var (conn, ctx) = CreateIsolatedDb();
+            await using var _ = conn;
+            await using var __ = ctx;
+
+            for (var i = 0; i < 5; i++)
+            {
+                ctx.OutboxMessages.Add(BuildOutboxMessage());
+            }
+
+            await ctx.SaveChangesAsync();
+
+            await using var probe = SecondContext(conn);
+            (await probe.OutboxMessages.CountAsync()).ShouldBe(5);
+        });
+
+    /// <summary>The natural key doing its job: a replayed publish collides instead of duplicating.</summary>
+    [Fact]
+    public Task A_second_row_with_the_same_source_and_contract_is_rejected()
+        => Task.Run(async () =>
+        {
+            var (conn, ctx) = CreateIsolatedDb();
+            await using var _ = conn;
+            await using var __ = ctx;
+
+            var source = MessageId.New();
+
+            ctx.OutboxMessages.Add(BuildOutboxMessage(
+                messageKind: MessageKind.Contract,
+                contractName: "saasbtp.safety.constat-recorded.v1",
+                sourceMessageId: source));
+            await ctx.SaveChangesAsync();
+
+            ctx.OutboxMessages.Add(BuildOutboxMessage(
+                messageKind: MessageKind.Contract,
+                contractName: "saasbtp.safety.constat-recorded.v1",
+                sourceMessageId: source));
+
+            await Should.ThrowAsync<DbUpdateException>(() => ctx.SaveChangesAsync());
+        });
+
+    /// <summary>
+    /// The key is (source, contract), not contract alone: one contract published from many
+    /// different source rows is the nominal case, not a duplicate.
+    /// </summary>
+    [Fact]
+    public Task The_same_contract_from_two_different_sources_is_accepted()
+        => Task.Run(async () =>
+        {
+            var (conn, ctx) = CreateIsolatedDb();
+            await using var _ = conn;
+            await using var __ = ctx;
+
+            ctx.OutboxMessages.Add(BuildOutboxMessage(
+                messageKind: MessageKind.Contract,
+                contractName: "saasbtp.safety.constat-recorded.v1",
+                sourceMessageId: MessageId.New()));
+            ctx.OutboxMessages.Add(BuildOutboxMessage(
+                messageKind: MessageKind.Contract,
+                contractName: "saasbtp.safety.constat-recorded.v1",
+                sourceMessageId: MessageId.New()));
+
+            await ctx.SaveChangesAsync();
+
+            await using var probe = SecondContext(conn);
+            (await probe.OutboxMessages.CountAsync()).ShouldBe(2);
+        });
+
+    /// <summary>
+    /// The scope of the guarantee, pinned so it is not later read as unconditional. A contract
+    /// staged outside a dispatch has no source row, the tuple contains a null, and nulls are
+    /// distinct — so it does not deduplicate. That is intended: the key guards the REPLAY path,
+    /// where a source row always exists.
+    /// </summary>
+    [Fact]
+    public Task A_contract_row_with_no_source_does_not_deduplicate()
+        => Task.Run(async () =>
+        {
+            var (conn, ctx) = CreateIsolatedDb();
+            await using var _ = conn;
+            await using var __ = ctx;
+
+            ctx.OutboxMessages.Add(BuildOutboxMessage(
+                messageKind: MessageKind.Contract,
+                contractName: "saasbtp.safety.constat-recorded.v1"));
+            ctx.OutboxMessages.Add(BuildOutboxMessage(
+                messageKind: MessageKind.Contract,
+                contractName: "saasbtp.safety.constat-recorded.v1"));
+
+            await ctx.SaveChangesAsync();
+
+            await using var probe = SecondContext(conn);
+            (await probe.OutboxMessages.CountAsync()).ShouldBe(2);
+        });
 }

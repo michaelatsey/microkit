@@ -25,6 +25,24 @@ public sealed class OutboxMessageConfiguration : IEntityTypeConfiguration<Outbox
         // TenantId is intentionally optional (no IsRequired) — Messaging must operate
         // without Multitenancy per ADR-EXEC-001; host enforces TenantId when needed.
 
+        // Stored as a string, like every other enum in this module: the column exists to be
+        // queried, and an int discriminator is unreadable in psql or the Supabase dashboard.
+        // It also means inserting an enum member cannot silently remap existing rows.
+        builder.Property(m => m.MessageKind)
+            .IsRequired()
+            .HasConversion<string>()
+            .HasMaxLength(32);
+
+        // 256 matches IntegrationEventMessageConfiguration.ContractName — the same notion, and the
+        // two must not disagree while both are live.
+        builder.Property(m => m.ContractName)
+            .HasMaxLength(256);
+
+        builder.Property(m => m.SourceMessageId)
+            .HasConversion(new ValueConverter<MessageId?, Guid?>(
+                v => v == null ? null : v.Value,
+                v => v == null ? null : new MessageId(v.Value)));
+
         builder.Property(m => m.EventType)
             .IsRequired()
             .HasMaxLength(512);
@@ -76,6 +94,32 @@ public sealed class OutboxMessageConfiguration : IEntityTypeConfiguration<Outbox
         // by ad-hoc operator queries.
         builder.HasIndex(m => new { m.Status, m.NextRetryAtUtc, m.LockedUntilUtc })
             .HasDatabaseName("IX_OutboxMessages_Status_NextRetryAt_LockedUntil");
+
+        // The replay natural key. A redelivered dispatch re-runs its handlers, which publish the
+        // same contract from the same source row — so the second write collides here instead of
+        // producing a duplicate integration message.
+        //
+        // UNFILTERED, and that is a support declaration rather than an oversight. A notification
+        // row has both columns null, and unlimited such rows must coexist:
+        //
+        //   PostgreSQL  nulls are DISTINCT in a unique index (NULLS NOT DISTINCT is opt-in,
+        //               PG15+, and is not used here)              -> supported
+        //   SQLite      same rule, explicitly documented           -> supported
+        //   SQL Server  nulls compare EQUAL, so the SECOND notification row ever written is
+        //               rejected                                   -> NOT SUPPORTED
+        //
+        // SQL Server is not supported for this constraint. The remedy there is a filtered index
+        // (WHERE both columns IS NOT NULL), which cannot live here: HasFilter takes provider-
+        // specific SQL and this is the provider-neutral package. Unlike the size-oriented partial
+        // indexes noted above, this one carries a model invariant, so it is declared rather than
+        // left to a consumer to reconstruct. See the README and CHANGELOG.
+        //
+        // Note what the null semantics also mean: a NULL on either side is DISTINCT, so a contract
+        // row staged outside a dispatch (no source row) does not deduplicate. That is the intended
+        // scope — the key guards the replay path, where a source row always exists.
+        builder.HasIndex(m => new { m.SourceMessageId, m.ContractName })
+            .IsUnique()
+            .HasDatabaseName("UX_OutboxMessages_Source_ContractName");
 
         // Cleanup index: DeleteProcessedAsync filter on (TenantId, ProcessedAtUtc).
         builder.HasIndex(m => new { m.TenantId, m.ProcessedAtUtc })
