@@ -76,7 +76,7 @@ internal sealed class IntegrationEventPublisher : IIntegrationEventPublisher
 
         // GetType(), not typeof(TEvent): a caller holding the interface would otherwise resolve the
         // contract of IIntegrationEvent itself, which is registered nowhere.
-        var registration = _registry.Resolve(integrationEvent.GetType());
+        var registration = _registry.ResolveContract(integrationEvent.GetType());
 
         var message = new IntegrationEventMessage
         {

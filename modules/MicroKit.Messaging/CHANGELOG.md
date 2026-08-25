@@ -84,6 +84,71 @@ zero value of the enum, so a row predating the column and a fixture omitting the
 > is not shipped — `HasFilter` takes provider-specific SQL and this is the provider-neutral EF Core
 > package — and it is a workaround you own, not a supported configuration.
 
+### Added — the contract registry gains the `ContractName` → `Type` direction
+
+`IntegrationEventRegistry` was publish-only: it answered `Type` → contract and nothing else. It now
+answers both directions, which is the precondition for a transport to exist at all.
+
+**Why the reverse direction is not optional.** A consumer receives a payload and a name. It does not
+hold the producer's assembly, so `Type.GetType(assemblyQualifiedName)` cannot give it anything to
+deserialize into — that works in process purely by accident. The map it needs is
+`name → its own local type`: the local end of a binding whose other end is a string. Without it a
+receiving process can only dead-letter everything it is sent.
+
+- **`IntegrationEventRegistry.TryResolveLocalType(name, out type)` / `ResolveLocalType(name)`** — the
+  reverse direction. Matching is **ordinal**: a contract name is a wire identity, not display text,
+  and a culture-sensitive comparer silently resolves two distinct contracts to one local type.
+  `ResolveLocalType` throws because an unbound name is *permanent* — it cannot become bound without
+  a redeploy, so a drain path should dead-letter on first sight rather than spend a retry budget
+  re-reaching a verdict it already reached.
+- **`IntegrationEventRegistry.SubscribedContractNames`** — snapshot-testable, like `ContractNames`,
+  and it matters more: in a service that only consumes, a renamed `[IntegrationEvent]` on a local
+  type binds nothing, the old name simply stops arriving, and no publish-side snapshot notices.
+- **`IntegrationEventSubscription`, `IntegrationEventSubscriptions`, `IntegrationEventSubscriptionBuilder`**
+  — the consuming half of the composition, mirroring the publishing half.
+- **`AddIntegrationEventSubscriptions(configure)`** — once per module, declaring the contracts that
+  module *understands*. It takes **no `source`**, and that is structural rather than an oversight: a
+  source names the module that *emitted* an event and is written onto the staged row as the emitter's
+  identity. A consumer emitted nothing, so any value it supplied would be false data in the one
+  column that must survive a module's extraction into its own service.
+- **`AddIntegrationEventConsumption()`** — once per application. The registry and its startup
+  validator and nothing else: a service that only consumes must not be handed a publisher it cannot
+  legitimately use. It exists so that service still gets boot-time validation — otherwise its
+  registry composes lazily on first resolve, which on a drain path is inside a handler, inside a
+  transaction, where a duplicated contract name is misclassified as transient and retried forever
+  against something no retry can fix. Safe alongside `AddIntegrationEventPublishing()` in either
+  order: one `TryAdd`ed registry, one `TryAddEnumerable`d validator.
+
+**Publishing a contract also binds its name.** `Publishes<T>()` makes that name resolvable to `T`
+with no second declaration, so a modular monolith routes its own contracts for free. `Consumes<T>()`
+is for a contract a module does not publish itself, and declaring both is a **no-op rather than a
+conflict** — a module must not have to know whether its dependency happens to be in-process.
+
+**One local type per contract name, per process.** Two *different* types claiming one name is a boot
+failure, whichever side they come from. It has to be: a message is deserialized once, before any
+fan-out, so a second claimant could only be honoured by picking arbitrarily — and structurally
+compatible JSON yields a plausible wrong object rather than an error. Modules sharing a contract
+share the type; per-consumer mirror types are not expressible.
+
+**Not a breaking change.** `IntegrationEventRegistry`'s constructor gained a second parameter with no
+compatibility overload — a default of `[]` would build a registry that resolves nothing by name and
+dead-letters everything, which is the silent-success class this module refuses. It breaks nobody:
+the type is absent from `1.0.0-preview.4` and has never shipped. The same applies to
+`Resolve(Type)` → **`ResolveContract(Type)`**, renamed now that the registry answers in two
+directions and `Resolve` alone no longer says which one is meant.
+
+### Changed — `[IntegrationEvent]` rejects a blank contract name
+
+`IntegrationEventAttribute` now calls `ArgumentException.ThrowIfNullOrWhiteSpace(contractName)`.
+The guard sits on the attribute rather than in either builder, so one check covers publication and
+consumption alike, and it fires inside the registration call that names the offending type.
+
+The empty name is the case this is for, more than the null one. Null fails somewhere regardless; an
+empty string is a perfectly usable dictionary key. Unguarded it bound, resolved, and travelled — an
+event published under no wire identity at all, which a consumer could match only by having made the
+same mistake. Note the value guarded here is the more consequential of the two on that call: `source`
+was already validated this way.
+
 ### Fixed
 - **Lost update under lease expiry.** `MarkPublishedAsync` / `MarkFailedAsync` / `DeadLetterAsync`
   filtered on `m.Id` alone, so a processor whose lease expired mid-dispatch silently overwrote the
