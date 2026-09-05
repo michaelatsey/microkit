@@ -56,7 +56,7 @@ internal sealed class OutboxDomainEventSink(
             var notification = notificationFactory.Create(domainEvent);
             if (notification is null) continue;
 
-            outboxMessages.Add(outboxFactory.Create(
+            outboxMessages.Add(outboxFactory.CreateNotification(
                 notification,
                 domainEvent.EventId,    // IDomainEvent.EventId (Guid) — stable end-to-end id
                 domainEvent.OccurredAt, // IDomainEvent.OccurredAt (DateTimeOffset)

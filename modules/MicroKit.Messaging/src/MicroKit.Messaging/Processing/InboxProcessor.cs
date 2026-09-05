@@ -252,7 +252,17 @@ internal sealed class InboxProcessor : IInboxProcessor
         {
             TenantId = message.TenantId,
             CorrelationId = message.CorrelationId?.Value.ToString(),
-            CausationId = message.CausationId?.Value.ToString(),
+
+            // DERIVED from this row, not copied off it — the outbox does the same and for the same
+            // reason: everything the handler stages was caused by delivering THIS message, so the
+            // cause is its identity. message.CausationId names what caused the row being handled,
+            // which is one hop too far up.
+            //
+            // MessageId, never RowId. RowId is the local surrogate primary key ADR-MSG-017
+            // introduced so the claim filters on a single column; it is meaningless outside this
+            // table and to every other process. MessageId is the end-to-end identity the producer
+            // assigned, and is the only one that answers "which message caused this" downstream.
+            CausationId = message.MessageId.Value.ToString(),
         };
 
         await using var scope = await _executionScopeFactory

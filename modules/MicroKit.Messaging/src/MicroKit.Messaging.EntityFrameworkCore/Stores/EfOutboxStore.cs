@@ -80,8 +80,12 @@ internal sealed class EfOutboxStore<TContext>(TContext context, TimeProvider tim
         //    Full rows, not ids alone. That is what lets step 3 be skipped outright when
         //    nothing was contended — the normal case. The cost is paid only under contention,
         //    where the payloads of the rows we lose are transferred once for nothing.
+        //    Ordered on CreatedAtUtc, NOT OccurredOnUtc: queue position must not depend on a
+        //    business timestamp the caller supplies, or a backdated event jumps every row ahead of
+        //    it. This clause and the contended read-back below must always agree — two different
+        //    sorts would make the claim's contents depend on whether it was contended.
         var candidates = await Dispatchable(now)
-            .OrderBy(m => m.OccurredOnUtc)
+            .OrderBy(m => m.CreatedAtUtc)
             .Take(batchSize)
             .ToListAsync(ct)
             .ConfigureAwait(false);
@@ -139,7 +143,8 @@ internal sealed class EfOutboxStore<TContext>(TContext context, TimeProvider tim
         var claimed = await context.Set<OutboxMessage>()
             .AsNoTracking()
             .Where(m => m.ClaimToken == token)
-            .OrderBy(m => m.OccurredOnUtc)
+            // Must match the candidate query's sort above, for the reason stated there.
+            .OrderBy(m => m.CreatedAtUtc)
             .ToListAsync(ct)
             .ConfigureAwait(false);
 
@@ -257,6 +262,9 @@ internal sealed class EfOutboxStore<TContext>(TContext context, TimeProvider tim
             .AsNoTracking()
             .Where(m => m.DeadLettered)
             .Where(m => tenantId == null || m.TenantId == tenantId)
+            // Deliberately OccurredOnUtc, unlike the claim: an operator triaging a dead-letter
+            // queue is asking when the business fact happened, not where the row sat in a queue
+            // that is no longer running. Harmonising the two would break one of the two purposes.
             .OrderBy(m => m.OccurredOnUtc)
             .Take(batchSize)
             .ToListAsync(ct)
@@ -290,9 +298,31 @@ internal sealed class EfOutboxStore<TContext>(TContext context, TimeProvider tim
     public async ValueTask<int> DeleteProcessedAsync(
         DateTimeOffset olderThan, string? tenantId = null, CancellationToken ct = default)
     {
-        return await context.Set<OutboxMessage>()
+        var rows = context.Set<OutboxMessage>();
+
+        return await rows
             .Where(m => m.Status == OutboxMessageStatus.Published && m.ProcessedAtUtc < olderThan)
             .Where(m => tenantId == null || m.TenantId == tenantId)
+
+            // The replay guard, and the reason this delete is not a plain age filter. A Contract
+            // row is the only thing that can reject a duplicate publication of itself, and it can
+            // only do so while it is still in the table — so it must outlive every chance its
+            // origin row has of being dispatched again.
+            //
+            // That window is a STATE, not a duration. Automatic replay is bounded by
+            // MaxRetries x MaxRetryBackoff, both configurable, so no fixed retention covers it by
+            // construction; and an operator requeue of a dead-lettered origin is unbounded, so no
+            // duration covers it at all. Once the origin is Published nothing can re-dispatch it,
+            // and once the origin has itself been purged there is nothing left to requeue — in both
+            // cases the NOT EXISTS below is satisfied and the contract row is free.
+            //
+            // What it prevents: a republished contract is a NEW row with a NEW MessageId, because
+            // the primary key forbids reusing the origin's. A consumer deduplicates on that id, so
+            // it would see a message it has never seen and run the handler a second time with full
+            // business side effects. Nothing anywhere could recognise it as a duplicate.
+            .Where(m => m.MessageKind != MessageKind.Contract
+                        || !rows.Any(origin => origin.Id == m.OriginMessageId
+                                               && origin.Status != OutboxMessageStatus.Published))
             .ExecuteDeleteAsync(ct)
             .ConfigureAwait(false);
     }

@@ -33,8 +33,10 @@ namespace MicroKit.Messaging;
 /// </para>
 /// <para>
 /// <b><see cref="Notification"/> is the zero value, and that is load-bearing.</b> It is what a
-/// writer that omits the property gets — which today is every writer, <c>OutboxMessageFactory</c>
-/// included. The default is factually correct rather than convenient: a row written without stating
+/// writer that omits the property gets. No writer shipped here omits it — <c>OutboxMessageFactory</c>
+/// sets it explicitly on both paths, so the zero value is a safety net rather than the mechanism —
+/// but it still governs any row written by a consumer's own code or carried over by a migration.
+/// The default is factually correct rather than convenient: a row written without stating
 /// a kind came through the domain-event path and carries a notification payload. The members carry
 /// explicit values so that this survives a reordering of the declarations instead of depending on
 /// one.

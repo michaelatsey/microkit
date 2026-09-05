@@ -49,15 +49,16 @@ public sealed class OutboxMessageConfiguration : IEntityTypeConfiguration<Outbox
             .HasConversion<string>()
             .HasMaxLength(32);
 
-        // 256 matches IntegrationEventMessageConfiguration.ContractName — the same notion, and the
-        // two must not disagree while both are live.
+        // 256 is the wire contract name's own bound: a name that must survive a CLR rename, an
+        // assembly split and a module extraction is written by hand and read by strangers, so it
+        // is short by construction. Pinned by a test, because a consumer's contract names are data
+        // this column silently truncates on a provider that does not enforce width.
         builder.Property(m => m.ContractName)
             .HasMaxLength(256);
 
-        // Same width and the same notion as IntegrationEventMessageConfiguration.Source — the two
-        // must not disagree while both tables are live. Not IsRequired: null on a Notification row,
-        // which never leaves the process and so has no emitter to declare. TransportOutboxDispatcher
-        // enforces non-null on the Contract path, where the entity cannot.
+        // Not IsRequired: null on a Notification row, which never leaves the process and so has no
+        // emitter to declare. TransportOutboxDispatcher enforces non-null on the Contract path,
+        // where the entity cannot.
         builder.Property(m => m.Source)
             .HasMaxLength(256);
 
@@ -81,6 +82,11 @@ public sealed class OutboxMessageConfiguration : IEntityTypeConfiguration<Outbox
         builder.Property(m => m.ErrorMessage)
             .HasMaxLength(2048);
 
+        // A W3C traceparent is 55 characters in the current version; 64 leaves room for the next
+        // one without inviting anything else into the column. Null on every Notification row.
+        builder.Property(m => m.TraceParent)
+            .HasMaxLength(64);
+
         builder.Property(m => m.CorrelationId)
             .IsRequired()
             .HasConversion(new ValueConverter<CorrelationId, Guid>(
@@ -96,26 +102,30 @@ public sealed class OutboxMessageConfiguration : IEntityTypeConfiguration<Outbox
         // cleared by every terminal write.
         builder.Property(m => m.ClaimToken);
 
-        // Mapped explicitly rather than by convention, because it is about to carry weight. The
-        // value is the WRITER's responsibility — nothing defaults it — and a row written straight
-        // through IOutboxWriter with the property omitted persists 0001-01-01. That is true of any
-        // unset DateTimeOffset and is not new, but step 5 promotes this column to the claim's sort
-        // key, at which point such a row heads the queue permanently rather than merely carrying a
-        // wrong timestamp. Declared here so the promotion lands on a column with a stated shape.
+        // Mapped explicitly rather than by convention, because it carries weight: this is the
+        // claim's sort key. The value is the WRITER's responsibility — nothing defaults it — and a
+        // row written straight through IOutboxWriter with the property omitted persists
+        // 0001-01-01, which now heads the queue permanently rather than merely carrying a wrong
+        // timestamp. OutboxMessageFactory stamps it from TimeProvider on both paths.
         builder.Property(m => m.CreatedAtUtc)
             .IsRequired();
 
         // No HasQueryFilter — infrastructure table, read cross-tenant by processors (ADR-MSG-002).
 
-        // Claim index: ClaimBatchAsync candidate filter + OrderBy(OccurredOnUtc). Column order
+        // Claim index: ClaimBatchAsync candidate filter + OrderBy(CreatedAtUtc). Column order
         // follows the predicate — DeadLettered and Status are equality-ish, NextRetryAtUtc is a
-        // range, OccurredOnUtc supplies the sort.
+        // range, CreatedAtUtc supplies the sort.
+        //
+        // The sort column is CreatedAtUtc and not OccurredOnUtc, and the two must stay in step with
+        // EfOutboxStore's OrderBy clauses: ordering the queue on a caller-supplied business
+        // timestamp lets a backdated event jump every row ahead of it, and on the contract path
+        // that timestamp is an optional parameter of a public method.
         //
         // Deliberately NOT a filtered index. A partial index (`WHERE dead_lettered = false`)
         // would keep it small as published rows accumulate, but HasFilter takes provider-specific
         // SQL and this is the provider-neutral EF Core package. Consumers who own their DDL can
         // add the filtered variant — see the README.
-        builder.HasIndex(m => new { m.DeadLettered, m.Status, m.NextRetryAtUtc, m.OccurredOnUtc })
+        builder.HasIndex(m => new { m.DeadLettered, m.Status, m.NextRetryAtUtc, m.CreatedAtUtc })
             .HasDatabaseName("IX_OutboxMessages_Dispatchable");
 
         // Read-back index: the contended branch of ClaimBatchAsync selects by token alone.
@@ -150,14 +160,14 @@ public sealed class OutboxMessageConfiguration : IEntityTypeConfiguration<Outbox
         // row staged outside a dispatch (no origin row) does not deduplicate. That is the intended
         // scope — the key guards the replay path, where an origin row always exists.
         //
-        // FORWARD NOTE for the step-5 publisher, which is what will absorb a collision here:
-        // this INSERT happens inside the caller's business transaction, and on PostgreSQL a unique
-        // violation aborts the whole transaction, not just the statement. Catching DbUpdateException
-        // and carrying on is therefore not enough — the pattern that works is already in this
-        // package at EfInboxStore.AddAsync: take a savepoint before the insert, detach the entry and
-        // roll back to it on violation, then verify post-hoc rather than decoding a provider error
-        // code. Note the 24-character savepoint-name cap documented there; it exists for a provider
-        // this index no longer supports, but the cap is cheap to keep and expensive to rediscover.
+        // The collision is absorbed by EfIntegrationEventWriter.AddAsync, which owns the INSERT for
+        // exactly this reason: the answer has to reach IIntegrationEventPublisher before it returns,
+        // or the violation surfaces out of the caller's own CommitAsync where nothing can absorb it.
+        // It takes a savepoint first — on PostgreSQL a unique violation aborts the whole
+        // transaction, not just the statement, so a bare catch would leave the caller's transaction
+        // dead, including the verification query inside the catch block itself. The 24-character
+        // savepoint-name cap is kept there although SQL Server, the provider it exists for, is not
+        // supported by this index.
         builder.HasIndex(m => new { m.OriginMessageId, m.ContractName })
             .IsUnique()
             .HasDatabaseName("UX_OutboxMessages_Origin_ContractName");

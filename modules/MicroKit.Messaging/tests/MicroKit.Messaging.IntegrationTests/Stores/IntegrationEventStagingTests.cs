@@ -21,41 +21,52 @@ public sealed class IntegrationEventStagingTests
     private static readonly DateTimeOffset Now = new(2026, 8, 24, 9, 14, 22, TimeSpan.Zero);
 
     /// <summary>
-    /// <b>The single most important test on this path.</b> If the writer ever gains a
-    /// <c>SaveChangesAsync</c> — added one day "so the row is definitely written" — this is what
-    /// fails, and nothing else would.
+    /// <b>The single most important test on this path.</b> It asserts both halves of "writes but
+    /// never commits", and each half would pass on its own while the other was broken.
     /// </summary>
     /// <remarks>
-    /// It asserts the change-tracker state rather than a row count after a rollback. A rollback
-    /// test passes either way: if the writer had committed inside the ambient transaction, the
-    /// rollback would undo that too, and the assertion would be vacuous. An entry still in
-    /// <see cref="EntityState.Added"/> is positive evidence that nothing was written — EF resets it
-    /// to <c>Unchanged</c> the moment a save succeeds. Same reasoning
-    /// <c>IInboxSettlementStore.IsMarkUncommitted</c> uses.
+    /// <para>
+    /// The writer flushes deliberately — the replay key can only be consulted by attempting the
+    /// insert — so the old assertion, an entry still in <see cref="EntityState.Added"/>, is now
+    /// exactly backwards. Its replacement is stronger: EF resets an entry to
+    /// <c>Unchanged</c> only when a save has succeeded, so that state is positive evidence the row
+    /// reached the database.
+    /// </para>
+    /// <para>
+    /// A rollback test alone would not do. It passes whether the writer flushed inside the
+    /// transaction or never wrote at all, because the rollback erases both — which is precisely
+    /// why the two assertions are here together.
+    /// </para>
     /// </remarks>
     [Fact]
-    public Task PublishAsync_StagesTheRow_WithoutWritingIt()
+    public Task PublishAsync_WritesTheRowInsideTheTransaction_AndARollbackErasesIt()
         => Task.Run(async () =>
         {
             await using var fixture = await ComposedFixture.CreateAsync();
-            await using var scope = fixture.Provider.CreateAsyncScope();
 
-            var context = scope.ServiceProvider.GetRequiredService<TestMessagingDbContext>();
-            var publisher = scope.ServiceProvider.GetRequiredService<IIntegrationEventPublisher>();
+            await using (var scope = fixture.Provider.CreateAsyncScope())
+            {
+                var context = scope.ServiceProvider.GetRequiredService<TestMessagingDbContext>();
+                var publisher = scope.ServiceProvider.GetRequiredService<IIntegrationEventPublisher>();
 
-            await using var transaction = await context.Database.BeginTransactionAsync();
+                await using var transaction = await context.Database.BeginTransactionAsync();
 
-            await publisher.PublishAsync(new StagingTestEvent(Guid.NewGuid()));
+                await publisher.PublishAsync(new StagingTestEvent(Guid.NewGuid()));
 
-            var entry = context.ChangeTracker
-                .Entries<IntegrationEventMessage>()
-                .ShouldHaveSingleItem();
+                var entry = context.ChangeTracker
+                    .Entries<OutboxMessage>()
+                    .ShouldHaveSingleItem();
 
-            entry.State.ShouldBe(
-                EntityState.Added,
-                "the publisher stages; the caller's unit of work owns the commit");
+                entry.State.ShouldBe(
+                    EntityState.Unchanged,
+                    "the writer flushes so it can consult the replay key; EF resets an entry to " +
+                    "Unchanged only after a save has actually succeeded");
 
-            await transaction.RollbackAsync();
+                await transaction.RollbackAsync();
+            }
+
+            (await fixture.ReadAllAsync()).ShouldBeEmpty(
+                "the flush is inside the caller's transaction, so a rollback still un-publishes");
         });
 
     /// <summary>
@@ -68,7 +79,7 @@ public sealed class IntegrationEventStagingTests
     /// asserts the end-to-end property rather than the writer's internal restraint.
     /// </remarks>
     [Fact]
-    public Task PublishAsync_WhenTheTransactionRollsBack_LeavesNoIntegrationEvent()
+    public Task PublishAsync_WhenTheTransactionRollsBack_LeavesNoContractRow()
         => Task.Run(async () =>
         {
             await using var fixture = await ComposedFixture.CreateAsync();
@@ -90,7 +101,7 @@ public sealed class IntegrationEventStagingTests
         });
 
     [Fact]
-    public Task PublishAsync_WhenTheTransactionCommits_PersistsTheRow()
+    public Task PublishAsync_WhenTheTransactionCommits_PersistsTheContractRow()
         => Task.Run(async () =>
         {
             await using var fixture = await ComposedFixture.CreateAsync();
@@ -113,14 +124,16 @@ public sealed class IntegrationEventStagingTests
             var row = (await fixture.ReadAllAsync()).ShouldHaveSingleItem();
 
             row.Id.ShouldBe(id);
+            row.MessageKind.ShouldBe(
+                MessageKind.Contract, "the column both dispatchers route on");
             row.ContractName.ShouldBe(StagingTestEvent.ContractName);
             row.Source.ShouldBe(ComposedFixture.Source);
-            row.Status.ShouldBe(IntegrationEventStatus.Pending);
+            row.Status.ShouldBe(OutboxMessageStatus.Pending);
             row.DeadLettered.ShouldBeFalse();
             row.RetryCount.ShouldBe(0);
             row.CreatedAtUtc.ShouldBe(Now);
             row.OccurredOnUtc.ShouldBe(occurredOn);
-            row.Data.ShouldContain(constatId.ToString());
+            row.Payload.ShouldContain(constatId.ToString());
         });
 
     /// <summary>
@@ -156,17 +169,25 @@ public sealed class IntegrationEventStagingTests
             writer.HasOpenTransaction.ShouldBeTrue(
                 "the writer must observe a transaction opened on the caller's context");
 
-            await writer.AddAsync(new IntegrationEventMessage
+            var result = await writer.AddAsync(new OutboxMessage
             {
                 Id = MessageId.New(),
+                MessageKind = MessageKind.Contract,
                 ContractName = StagingTestEvent.ContractName,
                 Source = ComposedFixture.Source,
-                Data = "{}",
+                EventType = typeof(StagingTestEvent).AssemblyQualifiedName!,
+                Payload = "{}",
+                CorrelationId = CorrelationId.New(),
                 CreatedAtUtc = Now,
-                Status = IntegrationEventStatus.Pending,
+                OccurredOnUtc = Now,
+                Status = OutboxMessageStatus.Pending,
             });
 
-            context.ChangeTracker.Entries<IntegrationEventMessage>().ShouldHaveSingleItem();
+            result.AlreadyPublished.ShouldBeFalse();
+
+            // The row went through the writer's context and is visible on the caller's — which is
+            // only true if they are one instance, and is what the guard above depends on.
+            (await context.Set<OutboxMessage>().AsNoTracking().CountAsync()).ShouldBe(1);
 
             await transaction.RollbackAsync();
         });
@@ -223,35 +244,6 @@ public sealed class IntegrationEventStagingTests
             row.CorrelationId!.Value.ShouldBe(correlationId);
         });
 
-    /// <summary>
-    /// <c>ClaimToken</c> must be mapped as an EF concurrency token.
-    /// </summary>
-    /// <remarks>
-    /// The relay that consumes it is a later lot, so nothing exercises the mechanism yet — which is
-    /// exactly why this assertion exists now. Without the mapping, the <c>UPDATE</c> a settlement
-    /// emits carries only the primary key, and a relay whose lease expired mid-delivery overwrites
-    /// the relay that legitimately took the message over. Removing the mapping breaks no test that
-    /// exercises concurrency, because there is no such test to break: this one reads the model
-    /// instead.
-    /// </remarks>
-    [Fact]
-    public Task TheClaimTokenIsMappedAsAConcurrencyToken()
-        => Task.Run(async () =>
-        {
-            await using var fixture = await ComposedFixture.CreateAsync();
-            await using var scope = fixture.Provider.CreateAsyncScope();
-
-            var context = scope.ServiceProvider.GetRequiredService<TestMessagingDbContext>();
-
-            context.Model
-                .FindEntityType(typeof(IntegrationEventMessage))
-                .ShouldNotBeNull()
-                .FindProperty(nameof(IntegrationEventMessage.ClaimToken))
-                .ShouldNotBeNull()
-                .IsConcurrencyToken
-                .ShouldBeTrue();
-        });
-
     /// <summary>One composed container over one isolated SQLite connection.</summary>
     private sealed class ComposedFixture : IAsyncDisposable
     {
@@ -306,13 +298,13 @@ public sealed class IntegrationEventStagingTests
                 });
 
         /// <summary>Reads through a fresh context so no tracked state can colour the result.</summary>
-        public async Task<List<IntegrationEventMessage>> ReadAllAsync()
+        public async Task<List<OutboxMessage>> ReadAllAsync()
         {
             await using var probe = new TestMessagingDbContext(
                 new DbContextOptionsBuilder<TestMessagingDbContext>()
                     .UseSqlite(_connection).Options);
 
-            return await probe.Set<IntegrationEventMessage>().AsNoTracking().ToListAsync();
+            return await probe.Set<OutboxMessage>().AsNoTracking().ToListAsync();
         }
 
         public async ValueTask DisposeAsync()

@@ -116,9 +116,11 @@ namespace MicroKit.Messaging;
 ///         its outbox. A consumer deduplicates on <see cref="MessageId"/>; exposing the producer's
 ///         reentrancy model on the wire would freeze it there.</item>
 ///   <item>A trace parent — the right thing to propagate, and
-///         <c>IntegrationEventMessage.TraceParent</c> already captures one, but
-///         <see cref="OutboxMessage"/> carries no such column yet. A member that could only ever be
-///         null is worse than an absent one, because a consumer builds on it. Additive later.</item>
+///         <see cref="OutboxMessage.TraceParent"/> now captures one on contract rows, but no member
+///         here carries it yet. A member that could only ever be null is worse than an absent one,
+///         because a consumer builds on it; adding it is additive, and the forward note sits on the
+///         envelope construction in <c>TransportOutboxDispatcher</c> (deferred by design, not
+///         overlooked).</item>
 ///   <item>Delivery bookkeeping — retry count, status, claim token, lease expiry. The producer's
 ///         business, never the consumer's.</item>
 ///   <item>An envelope version. A version member is only useful behind a versioning policy, and

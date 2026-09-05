@@ -77,10 +77,6 @@ public sealed class OutboxMessage
     /// the column at least fails at compile time where the constraint fails at run time.
     /// </para>
     /// <para>
-    /// <c>IntegrationEventMessage.ContractName</c> carries the same notion on its own table, which
-    /// is the model this one supersedes. Both are live until the publisher moves onto outbox rows.
-    /// </para>
-    /// <para>
     /// <b>The addressing key once a message leaves the process.</b> A
     /// <see cref="MessageKind.Contract"/> row is handed to <c>IMessageTransport</c> addressed by
     /// this name, and the receiving process resolves it to its <i>own</i> local CLR type through
@@ -118,11 +114,6 @@ public sealed class OutboxMessage
     /// That is the defect ADR-MSG-018 removed by sourcing every field from the row, and it must not
     /// be reintroduced as a simplification.
     /// </para>
-    /// <para>
-    /// <c>IntegrationEventMessage.Source</c> carries the same notion on its own table, with the
-    /// same column width. Both are live until the publisher moves onto outbox rows; they must not
-    /// be allowed to disagree.
-    /// </para>
     /// </remarks>
     public string? Source { get; set; }
 
@@ -141,11 +132,10 @@ public sealed class OutboxMessage
     /// </para>
     /// <para>
     /// <b>Not <c>Source</c> either</b>, and that is not a matter of taste: <c>Source</c> already
-    /// means <i>the emitting module</i> in this package — see <see cref="Source"/>,
-    /// <c>IntegrationEventMessage.Source</c> and <c>IntegrationEventRegistration.Source</c>, and the
-    /// log line that reads "as '{ContractName}' from '{Source}'". Both notions land on this entity
-    /// once the dedicated integration-event table is retired, so one of them had to take another
-    /// word before the first production row made the choice a migration.
+    /// means <i>the emitting module</i> in this package — see <see cref="Source"/> and
+    /// <c>IntegrationEventRegistration.Source</c>, and the log line that reads "as
+    /// '{ContractName}' from '{Source}'". Both notions now live on this entity, which is why one
+    /// of them had to take another word.
     /// </para>
     /// <para>
     /// <b>What it buys.</b> A redelivered dispatch re-runs its handlers, which publish the same
@@ -160,15 +150,25 @@ public sealed class OutboxMessage
     /// convention rather than detected.
     /// </para>
     /// <para>
-    /// <b>The guarantee is bounded by retention.</b> This key can only reject a duplicate while the
-    /// row it produced is still in the table, and <c>OutboxRetentionWorker</c> deletes
-    /// <c>Published</c> rows after <c>OutboxProcessorOptions.RetentionDays</c> (default 7). A
-    /// dead-lettered origin row is never deleted, so an operator requeue long after the contract row
-    /// it produced was purged writes a duplicate with nothing left to collide with — and nothing
-    /// downstream can recognise it as one. Narrow, and deliberately left open for now, but note the
-    /// inbox already reasons this way: its retention defaults to 30 precisely because a table only
-    /// deduplicates what it still holds. Worth settling when the publisher that depends on this key
-    /// is built.
+    /// <b>Retention cannot outrun it, and that is enforced rather than assumed.</b> This key only
+    /// rejects a duplicate while the row it produced is still in the table, so a
+    /// <see cref="MessageKind.Contract"/> row must outlive every chance its origin has of being
+    /// dispatched again. <c>IOutboxRetentionStore.DeleteProcessedAsync</c> therefore refuses to
+    /// purge one while the row named here still exists and is not
+    /// <see cref="OutboxMessageStatus.Published"/>.
+    /// </para>
+    /// <para>
+    /// The window is a <i>state</i> and not a duration, which is why no retention default is the
+    /// answer: automatic replay is bounded by <c>MaxRetries × MaxRetryBackoff</c>, both
+    /// configurable, and an operator requeue of a dead-lettered origin is unbounded. Once the
+    /// origin is <c>Published</c> nothing can re-dispatch it; once the origin has itself been
+    /// purged there is nothing left to requeue.
+    /// </para>
+    /// <para>
+    /// What that prevents is a duplicate <b>nothing downstream could recognise</b>: a republished
+    /// contract is a new row with a new <see cref="Id"/> — the primary key forbids reusing the
+    /// origin's — and a consumer deduplicates on that id, so it would run the handler a second time
+    /// with full business side effects.
     /// </para>
     /// </remarks>
     public MessageId? OriginMessageId { get; set; }
@@ -179,8 +179,9 @@ public sealed class OutboxMessage
     /// </summary>
     /// <remarks>
     /// <b>This is not necessarily an integration event, and on the domain-event path it is
-    /// not one at all.</b> The outbox is payload-agnostic: <c>OutboxMessageFactory.Create</c>
-    /// accepts <see cref="object"/> and stamps <c>payload.GetType().AssemblyQualifiedName</c>.
+    /// not one at all.</b> The outbox is payload-agnostic: <c>OutboxMessageFactory.CreateNotification</c>
+    /// and <c>CreateContract</c> both accept <see cref="object"/> and stamp
+    /// <c>payload.GetType().AssemblyQualifiedName</c>.
     /// What ends up here depends on who wrote the row:
     /// <list type="bullet">
     ///   <item>via <c>MicroKit.Messaging.MediatR</c> — a
@@ -234,14 +235,72 @@ public sealed class OutboxMessage
     /// caller from the event's own timestamp rather than generated at write time.
     /// </summary>
     /// <remarks>
-    /// Intrinsic to the event, not to the row (ADR-MSG-008 §4) — unlike
-    /// <see cref="CreatedAtUtc"/>. The claim orders on it, so it is also the outbox's dispatch
-    /// order.
+    /// <para>
+    /// Intrinsic to the event, not to the row (ADR-MSG-008 §4) — unlike <see cref="CreatedAtUtc"/>.
+    /// It is what a consumer orders and windows on, and it is the only timestamp that travels:
+    /// <see cref="MessageEnvelope.OccurredOnUtc"/> carries this value.
+    /// </para>
+    /// <para>
+    /// <b>The claim no longer orders on it, and operator tooling still does.</b> Dispatch order is
+    /// <see cref="CreatedAtUtc"/>; <c>GetDeadLetteredAsync</c> keeps this one, because triage wants
+    /// the business fact rather than the queue position. The two are deliberately different and
+    /// harmonising them would break one of the two purposes.
+    /// </para>
+    /// <para>
+    /// Non-nullable, so "the caller did not say" cannot be represented here. The integration-event
+    /// publisher resolves an unstated occurrence time to <see cref="CreatedAtUtc"/> at staging and
+    /// logs that it did — an honest approximation rather than a silent one.
+    /// </para>
     /// </remarks>
     public DateTimeOffset OccurredOnUtc { get; set; }
 
     /// <summary>Gets or sets the UTC time at which this outbox row was created.</summary>
+    /// <remarks>
+    /// <para>
+    /// <b>The claim orders on this, and that is the outbox's dispatch order.</b> Ordering on
+    /// <see cref="OccurredOnUtc"/> would let a backdated event jump the whole queue, and would make
+    /// queue position depend on a value the caller supplies — which on the contract path is an
+    /// optional parameter of a public method.
+    /// </para>
+    /// <para>
+    /// Always set, and the writer's responsibility: nothing defaults it, so a row written straight
+    /// through <see cref="IOutboxWriter"/> with the property omitted persists <c>0001-01-01</c> and
+    /// then heads the queue permanently. <c>OutboxMessageFactory</c> stamps it from the injected
+    /// <c>TimeProvider</c> on both paths.
+    /// </para>
+    /// </remarks>
     public DateTimeOffset CreatedAtUtc { get; set; }
+
+    /// <summary>
+    /// Gets or sets the W3C <c>traceparent</c> current when this row was staged.
+    /// <see langword="null"/> when there was no active activity, and on every
+    /// <see cref="MessageKind.Notification"/> row.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Captured at staging because that is the last moment the producing trace is current: the
+    /// relay runs later, on another thread, under another activity, so nothing downstream can
+    /// reconstruct it. Without it a consumer's work appears as an unrelated trace, and the chain
+    /// breaks exactly where crossing an asynchronous boundary makes it most valuable.
+    /// </para>
+    /// <para>
+    /// <b>It does not travel yet.</b> <see cref="MessageEnvelope"/> declares no such member, and
+    /// adding one is additive when a transport needs it — a member that could only ever be null is
+    /// worse than an absent one, because a consumer builds on it. The column exists first because
+    /// the value cannot be recovered later; the member cannot exist first, because there would be
+    /// nothing to put in it.
+    /// </para>
+    /// <para>
+    /// <b>And it is not yet restored on the reentrant hop either.</b> <c>OutboxProcessor</c> starts
+    /// no <c>Activity</c> from this column before dispatching, so a contract published by a
+    /// notification handler captures the worker's ambient activity — usually none — rather than the
+    /// trace that produced the row it came from. The correlation chain survives that hop in a
+    /// column and the W3C trace does not. Both halves belong to the same piece of work; the forward
+    /// note sits on the envelope construction in <c>TransportOutboxDispatcher</c>, which is the line
+    /// the first half lands on.
+    /// </para>
+    /// </remarks>
+    public string? TraceParent { get; set; }
 
     /// <summary>
     /// Gets or sets the UTC time at which this message was successfully dispatched
@@ -314,5 +373,27 @@ public sealed class OutboxMessage
     /// Gets or sets the causation identifier recording which message triggered this one.
     /// <see langword="null"/> for root events that have no causal parent.
     /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <b>Where it comes from.</b> <c>OutboxProcessor</c> puts the <see cref="Id"/> of the row it is
+    /// dispatching into the per-message <c>IExecutionContext</c>, and every row staged inside that
+    /// scope — a contract published by a notification handler, a cascade notification — is built
+    /// from it by <c>OutboxMessageFactory</c>. So the value here is the <b>parent's
+    /// <see cref="Id"/></b>, one hop up, not a chain identifier shared down a branch: that is
+    /// <see cref="CorrelationId"/>, which is copied through unchanged.
+    /// </para>
+    /// <para>
+    /// <b>Null means root, and it is the common case.</b> A row staged from an HTTP request, a
+    /// command handler or a job has no message above it. Only rows produced <i>by dispatching
+    /// another row</i> carry a value.
+    /// </para>
+    /// <para>
+    /// Diagnostic, never load-bearing: nothing keys, indexes, filters or orders on it, and it
+    /// degrades to <see langword="null"/> rather than failing when it cannot be parsed
+    /// (<c>OutboxMessageFactory.ResolveCausation</c>). Do not confuse it with
+    /// <see cref="OriginMessageId"/>, which records the same identity on a contract row for the
+    /// opposite kind of reason — that one is half of a unique key and may never degrade.
+    /// </para>
+    /// </remarks>
     public CausationId? CausationId { get; set; }
 }

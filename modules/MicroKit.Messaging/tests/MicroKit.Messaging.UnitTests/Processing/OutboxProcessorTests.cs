@@ -1,4 +1,5 @@
 using Microsoft.Extensions.Time.Testing;
+using MicroKit.Messaging.Outbox;
 
 namespace MicroKit.Messaging.UnitTests.Processing;
 
@@ -380,6 +381,178 @@ public sealed class OutboxProcessorTests
         return (store, captured);
     }
 
+    // ---------------------------------------------------------------------------
+    // The origin stamp — what lets a published contract name the dispatch that produced it
+    // ---------------------------------------------------------------------------
+
+    /// <summary>
+    /// The row being dispatched is stamped on the scope, where <c>IIntegrationEventPublisher</c>
+    /// reads it to fill <see cref="OutboxMessage.OriginMessageId"/>.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Asserted through <b>constructor injection</b>, deliberately. That is the path the publisher
+    /// uses and the one that failed silently before the scoped-holder indirection existed (L0 #21):
+    /// Microsoft DI activates constructor dependencies from its own scope, so a value exposed only
+    /// through a wrapped <c>IServiceProvider</c> reaches a direct <c>GetService</c> call and nothing
+    /// else. A test that resolved the holder itself would pass under exactly that defect.
+    /// </para>
+    /// <para>
+    /// Failure here is silent by nature — a missing origin does not throw, it leaves the replay key
+    /// null, and nulls are distinct in the unique index — so nothing else in the suite would notice.
+    /// </para>
+    /// </remarks>
+    [Fact]
+    public async Task ProcessBatch_StampsTheDispatchedRowOnTheScopesOriginHolder()
+    {
+        var message = OutboxFixtures.Message();
+        var (store, _) = StoreReturning(OutboxFixtures.Claim(message));
+
+        var observed = new List<MessageId?>();
+
+        var services = new ServiceCollection();
+        services.AddLogging();
+        services.AddSingleton(observed);
+        services.AddScoped<IOutboxDispatcher, OriginRecordingDispatcher>();
+
+        var sut = BuildCore(store, services, options: null, random: null);
+
+        await sut.ProcessBatchAsync(10, CancellationToken.None);
+
+        observed.ShouldHaveSingleItem().ShouldBe(message.Id);
+    }
+
+    /// <summary>Reads the holder the way the publisher does — as a constructor dependency.</summary>
+    private sealed class OriginRecordingDispatcher(
+        OriginMessageHolder holder, List<MessageId?> observed) : IOutboxDispatcher
+    {
+        public ValueTask DispatchAsync(OutboxMessage message, CancellationToken ct = default)
+        {
+            observed.Add(holder.OriginMessageId);
+            return ValueTask.CompletedTask;
+        }
+    }
+
+    /// <summary>
+    /// A scope whose container cannot supply <c>OriginMessageHolder</c> is a composition fault, not
+    /// a transient one: the batch is settled and released, then the fault is rethrown so the worker
+    /// stops.
+    /// </summary>
+    /// <remarks>
+    /// This pins the conversion in <c>StampOrigin</c>'s <c>catch</c>. Every other test in this file
+    /// registers the holder, so nothing else enters that branch — and what it guards is silent by
+    /// nature: without the conversion, a foreign container yields a raw
+    /// <see cref="InvalidOperationException"/>, which the processor classifies as transient and
+    /// retries until the whole queue is dead-lettered.
+    /// </remarks>
+    [Fact]
+    public async Task ProcessBatch_WhenTheScopeCannotSupplyTheOriginHolder_SettlesBatchThenRethrows()
+    {
+        var messages = Enumerable.Range(0, 3).Select(_ => OutboxFixtures.Message()).ToArray();
+        var (store, captured) = StoreReturning(OutboxFixtures.Claim(messages));
+
+        var sut = BuildWithoutOriginHolder(store);
+
+        var ex = await Should.ThrowAsync<OutboxConfigurationException>(
+            async () => await sut.ProcessBatchAsync(10, CancellationToken.None));
+
+        ex.Message.ShouldContain(
+            nameof(OriginMessageHolder),
+            customMessage: "the fault must name the holder, not the dispatcher — a registered " +
+                           "dispatcher would send the operator to the wrong line");
+
+        captured.Count.ShouldBe(3, "the batch is settled BEFORE the rethrow, or leases are stranded");
+        captured.ShouldAllBe(o => o.Kind == OutboxOutcomeKind.Released);
+    }
+
+    [Fact]
+    public async Task ProcessBatch_WhenTheScopeCannotSupplyTheOriginHolder_ConsumesNoRetryBudget()
+    {
+        var message = OutboxFixtures.Message(retryCount: 0);
+        var (store, captured) = StoreReturning(OutboxFixtures.Claim(message));
+        var sut = BuildWithoutOriginHolder(store);
+
+        await Should.ThrowAsync<OutboxConfigurationException>(
+            async () => await sut.ProcessBatchAsync(10, CancellationToken.None));
+
+        captured.Single().RetryCount.ShouldBe(
+            0, "a container defect must not spend the retry budget of every queued message");
+    }
+
+    // ---------------------------------------------------------------------------
+    // The causation link — what makes the dispatched row the cause of its scope's work
+    // ---------------------------------------------------------------------------
+
+    /// <summary>
+    /// Everything staged inside a dispatch scope names the dispatched row as its cause, so
+    /// <c>CausationId</c> is derived from <c>message.Id</c> — never copied from the row's own
+    /// <c>CausationId</c>.
+    /// </summary>
+    /// <remarks>
+    /// The distinction is the whole finding: copying made every descendant inherit one ancestor's
+    /// causation, and since nothing assigns a causation at the root, that value was null on every
+    /// row of every path. Seeding the row with a DIFFERENT causation is what separates the two
+    /// implementations — under the copy-through version this test reads back
+    /// <c>ancestorCause</c> instead of the row's id.
+    /// </remarks>
+    [Fact]
+    public async Task ProcessBatch_NamesTheDispatchedRowAsTheCauseOfWorkInItsScope()
+    {
+        var ancestorCause = CausationId.New();
+        var message = OutboxFixtures.Message();
+        message.CausationId = ancestorCause;
+
+        var (store, _) = StoreReturning(OutboxFixtures.Claim(message));
+        var sut = BuildRecordingScopes(store, out var scopes);
+
+        await sut.ProcessBatchAsync(10, CancellationToken.None);
+
+        var ctx = scopes.Contexts.ShouldHaveSingleItem();
+
+        ctx.CausationId.ShouldBe(
+            message.Id.Value.ToString(),
+            "the cause of work in this scope is the row being dispatched");
+
+        ctx.CausationId.ShouldNotBe(
+            ancestorCause.Value.ToString(),
+            "copying the row's own causation names the grandparent, one hop too far up");
+    }
+
+    /// <summary>
+    /// A root row — no causation of its own — still causes its scope's work. This is the case the
+    /// copy-through implementation got wrong in production: null in, null out, forever.
+    /// </summary>
+    [Fact]
+    public async Task ProcessBatch_WhenTheDispatchedRowIsARoot_StillNamesItAsTheCause()
+    {
+        var message = OutboxFixtures.Message();
+        message.CausationId = null;
+
+        var (store, _) = StoreReturning(OutboxFixtures.Claim(message));
+        var sut = BuildRecordingScopes(store, out var scopes);
+
+        await sut.ProcessBatchAsync(10, CancellationToken.None);
+
+        scopes.Contexts.ShouldHaveSingleItem()
+            .CausationId.ShouldBe(message.Id.Value.ToString());
+    }
+
+    /// <summary>The correlation is copied through unchanged — it identifies the chain, not a hop.</summary>
+    [Fact]
+    public async Task ProcessBatch_PropagatesCorrelationUnchangedWhileDerivingCausation()
+    {
+        var message = OutboxFixtures.Message();
+        var (store, _) = StoreReturning(OutboxFixtures.Claim(message));
+        var sut = BuildRecordingScopes(store, out var scopes);
+
+        await sut.ProcessBatchAsync(10, CancellationToken.None);
+
+        var ctx = scopes.Contexts.ShouldHaveSingleItem();
+
+        ctx.CorrelationId.ShouldBe(message.CorrelationId.Value.ToString());
+        ctx.TenantId.ShouldBe(message.TenantId);
+    }
+
     private static OutboxProcessor Build(
         IOutboxProcessorStore store,
         ScriptedDispatcher dispatcher,
@@ -401,12 +574,40 @@ public sealed class OutboxProcessorTests
         return BuildCore(store, services, options: null, random: null);
     }
 
+    /// <summary>
+    /// A processor over a container that cannot supply <c>OriginMessageHolder</c> — the shape a
+    /// custom <c>IExecutionScopeFactory</c> produces when it builds scopes from a container of its
+    /// own instead of the application's.
+    /// </summary>
+    /// <remarks>
+    /// A working dispatcher IS registered, so the fault under test can only be the holder. Without
+    /// that, the test would pass identically against
+    /// <c>ProcessBatch_WhenDispatcherUnregistered_*</c> and prove nothing about this path.
+    /// </remarks>
+    private static OutboxProcessor BuildWithoutOriginHolder(IOutboxProcessorStore store)
+    {
+        var services = new ServiceCollection();
+        services.AddLogging();
+        services.AddSingleton<IOutboxDispatcher>(new ScriptedDispatcher());
+
+        return BuildCore(store, services, options: null, random: null, registerOriginHolder: false);
+    }
+
     private static OutboxProcessor BuildCore(
         IOutboxProcessorStore store,
         ServiceCollection services,
         OutboxProcessorOptions? options,
-        Random? random)
+        Random? random,
+        bool registerOriginHolder = true)
     {
+        // Registered by AddMicroKitMessaging() in production. The processor stamps the row being
+        // dispatched onto it, and treats a scope that cannot supply it as a composition fault
+        // rather than a transient one — so a container without it fails every test here loudly.
+        if (registerOriginHolder)
+        {
+            services.AddScoped<OriginMessageHolder>();
+        }
+
         var provider = services.BuildServiceProvider();
 
         return new OutboxProcessor(
@@ -415,6 +616,31 @@ public sealed class OutboxProcessorTests
             options ?? DefaultOptions,
             new FakeTimeProvider(Now),
             random ?? FixedRandom.NoJitter,
+            NullLogger<OutboxProcessor>.Instance);
+    }
+
+    /// <summary>
+    /// Same processor, with the scope factory handed back so a test can read the
+    /// <see cref="IExecutionContext"/> the processor built for each message.
+    /// </summary>
+    private static OutboxProcessor BuildRecordingScopes(
+        IOutboxProcessorStore store,
+        out TestExecutionScopeFactory scopes)
+    {
+        var services = new ServiceCollection();
+        services.AddLogging();
+        services.AddSingleton<IOutboxDispatcher>(new ScriptedDispatcher());
+        services.AddScoped<OriginMessageHolder>();
+
+        var provider = services.BuildServiceProvider();
+        scopes = new TestExecutionScopeFactory(provider.GetRequiredService<IServiceScopeFactory>());
+
+        return new OutboxProcessor(
+            store,
+            scopes,
+            DefaultOptions,
+            new FakeTimeProvider(Now),
+            FixedRandom.NoJitter,
             NullLogger<OutboxProcessor>.Instance);
     }
 }

@@ -6,7 +6,7 @@ namespace MicroKit.Messaging.Publishing;
 /// <remarks>
 /// <para>
 /// <b>It carries no <c>Source</c>, and the absence is the point.</b> A source names the module that
-/// <i>emitted</i> an event; it is written to <c>IntegrationEventMessage.Source</c> at staging and
+/// <i>emitted</i> an event; it is written to <c>OutboxMessage.Source</c> at staging and
 /// travels as the emitter's identity. A consumer did not emit anything, so it has nothing truthful
 /// to put there — and a subscription that structurally cannot carry one cannot put a false value in
 /// that column. That is why this is a distinct type rather than an

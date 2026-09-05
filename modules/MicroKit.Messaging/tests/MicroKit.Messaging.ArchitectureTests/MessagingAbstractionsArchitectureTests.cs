@@ -110,6 +110,46 @@ public sealed class MessagingAbstractionsArchitectureTests
     }
 
     [Fact]
+    public void NoAssemblyStillCarriesTheDedicatedIntegrationEventTable()
+    {
+        // IntegrationEventMessage, IntegrationEventStatus and IntegrationEventMessageConfiguration
+        // were retired when the publisher moved onto MessageKind.Contract outbox rows. The argument
+        // that justified a separate table — that a discriminator INFERRED from the payload's CLR
+        // type could feed integration events into the MediatR fan-out — no longer applies: the
+        // nature of a row is DECLARED by its writer in a column, and both dispatchers switch on
+        // that column rather than testing a type.
+        //
+        // Re-introducing any of them would restore two models for one notion, which is the state
+        // this step existed to end. Named types rather than a suffix match, because the suffix
+        // "Message" is legitimately carried by OutboxMessage and InboxMessage.
+        //
+        // One name per call, deliberately. NetArchTest's HaveName(params string[]) is a
+        // CONJUNCTION — it selects types having ALL the given names, which is nothing, always. A
+        // single call listing all three is therefore vacuously green whatever the assemblies
+        // contain. Verified by mutation: adding "OutboxMessage" to such a list did not fail.
+        string[] retired =
+        [
+            "IntegrationEventMessage",
+            "IntegrationEventStatus",
+            "IntegrationEventMessageConfiguration",
+        ];
+
+        foreach (var assembly in new[] { AbstractionsAssembly, CoreAssembly, EfCoreAssembly })
+        {
+            foreach (var name in retired)
+            {
+                Types.InAssembly(assembly)
+                    .That()
+                    .HaveName(name)
+                    .GetTypes()
+                    .ShouldBeEmpty(
+                        $"{assembly.GetName().Name} must not reinstate {name}; the dedicated " +
+                        "integration-event table was retired onto MessageKind.Contract rows");
+            }
+        }
+    }
+
+    [Fact]
     public void Core_DoesNotContainTypeNamedInProcessIntegrationDispatcher()
     {
         // The in-process fan-out was withdrawn by ADR-MSG-019: a Contract row now travels to a

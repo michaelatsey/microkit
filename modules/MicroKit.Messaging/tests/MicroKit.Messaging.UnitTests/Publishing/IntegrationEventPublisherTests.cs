@@ -1,26 +1,31 @@
+using System.Diagnostics;
+
 using Microsoft.Extensions.Time.Testing;
 
 namespace MicroKit.Messaging.UnitTests.Publishing;
 
+using MicroKit.Messaging.Outbox;
 using MicroKit.Messaging.Publishing;
 using MicroKit.Messaging.Serialization;
 
 /// <summary>
-/// Unit tests for the publisher. No database: it stages through a port, which is why splitting it
+/// Unit tests for the publisher. No database: it writes through a port, which is why splitting it
 /// from the writer was worth doing.
 /// </summary>
 public sealed class IntegrationEventPublisherTests
 {
     private static readonly DateTimeOffset Now = new(2026, 8, 24, 9, 14, 22, TimeSpan.Zero);
 
+    private const string Contract = "saasbtp.safety.constat-recorded.v1";
+
     /// <summary>
     /// The guard runs before any other work, and this asserts both halves of that.
     /// </summary>
     /// <remarks>
-    /// "It threw" is not the property. A guard placed after staging would also throw, while
-    /// leaving the row for whatever transaction the caller happened to have — the event would then
-    /// be published by an unrelated commit. Asserting that nothing was staged is what rules that
-    /// out.
+    /// "It threw" is not the property. A guard placed after the write would also throw, while
+    /// leaving the row committed by the provider's implicit transaction — an integration event
+    /// announced permanently for a fact the caller may still roll back. Asserting that nothing
+    /// reached the writer is what rules that out.
     /// </remarks>
     [Fact]
     public async Task PublishAsync_WithNoOpenTransaction_ThrowsAndStagesNothing()
@@ -31,7 +36,7 @@ public sealed class IntegrationEventPublisherTests
         await Should.ThrowAsync<IntegrationEventPublishException>(
             async () => await publisher.PublishAsync(new ConstatRecorded(Guid.NewGuid())));
 
-        writer.Staged.ShouldBeEmpty();
+        writer.Written.ShouldBeEmpty();
     }
 
     [Fact]
@@ -60,48 +65,107 @@ public sealed class IntegrationEventPublisherTests
         exception.Message.ShouldContain(nameof(NeverRegistered));
     }
 
+    /// <summary>
+    /// The whole shape of a contract row in one assertion, origin included — the kind is what both
+    /// dispatchers route on, and the origin is half the replay key.
+    /// </summary>
     [Fact]
-    public async Task PublishAsync_StagesTheContractTheSourceAndTheExecutionContext()
+    public async Task PublishAsync_StagesAContractRow_WithKindContractNameSourceAndOrigin()
     {
         var writer = new RecordingWriter();
+        var origin = MessageId.New();
         var correlationId = Guid.NewGuid();
         var causationId = Guid.NewGuid();
 
         var publisher = Build(
             writer,
             context: new StubExecutionContext(
-                "org_7f3a", correlationId.ToString(), causationId.ToString()));
+                "org_7f3a", correlationId.ToString(), causationId.ToString()),
+            origin: origin);
 
         var id = await publisher.PublishAsync(new ConstatRecorded(Guid.NewGuid()));
 
-        var row = writer.Staged.ShouldHaveSingleItem();
+        var row = writer.Written.ShouldHaveSingleItem();
 
         row.Id.ShouldBe(id);
-        row.ContractName.ShouldBe("saasbtp.safety.constat-recorded.v1");
+        row.MessageKind.ShouldBe(MessageKind.Contract);
+        row.ContractName.ShouldBe(Contract);
         row.Source.ShouldBe("/saasbtp/safety");
+        row.OriginMessageId.ShouldBe(origin);
         row.TenantId.ShouldBe("org_7f3a");
-        row.CorrelationId!.Value.ShouldBe(correlationId);
+        row.CorrelationId.Value.ShouldBe(correlationId);
         row.CausationId!.Value.ShouldBe(causationId);
-        row.Status.ShouldBe(IntegrationEventStatus.Pending);
+        row.Status.ShouldBe(OutboxMessageStatus.Pending);
         row.DeadLettered.ShouldBeFalse();
         row.RetryCount.ShouldBe(0);
+
+        // Not the origin's id: both rows live in one table and share a primary key column.
+        row.Id.ShouldNotBe(origin);
+    }
+
+    /// <summary>
+    /// Publishing from a command handler or a scheduled job happens outside any dispatch, so there
+    /// is no origin to record.
+    /// </summary>
+    /// <remarks>
+    /// Such a row does not deduplicate — nulls are distinct in the unique index — and for those
+    /// callers that is correct: an HTTP request is not replayed. Deliberately not extended to an
+    /// inbox handler, whose replay is real; see <c>OriginMessageHolder</c>.
+    /// </remarks>
+    [Fact]
+    public async Task PublishAsync_OutsideADispatch_StagesANullOrigin()
+    {
+        var writer = new RecordingWriter();
+        var publisher = Build(writer);
+
+        await publisher.PublishAsync(new ConstatRecorded(Guid.NewGuid()));
+
+        writer.Written.ShouldHaveSingleItem().OriginMessageId.ShouldBeNull();
+    }
+
+    /// <summary>
+    /// A replayed dispatch republishes; the writer reports it and the caller sees a normal return.
+    /// </summary>
+    /// <remarks>
+    /// The identifier returned is the EXISTING row's. Returning the one this call built would name
+    /// a row that was never written, so a handler logging its publication would log a value nothing
+    /// downstream has ever seen.
+    /// </remarks>
+    [Fact]
+    public async Task PublishAsync_WhenTheWriterReportsAlreadyPublished_ReturnsTheExistingId()
+    {
+        var existing = MessageId.New();
+        var writer = new RecordingWriter { AlreadyPublishedAs = existing };
+        var publisher = Build(writer, origin: MessageId.New());
+
+        var id = await publisher.PublishAsync(new ConstatRecorded(Guid.NewGuid()));
+
+        id.ShouldBe(existing);
+        writer.Written.ShouldHaveSingleItem()
+            .Id.ShouldNotBe(existing, "the row it built was rejected; only the id it returns changes");
     }
 
     /// <summary>
     /// A malformed correlation id is a tracing defect. Losing an integration event over one would
-    /// be the wrong trade, so it degrades to null rather than throwing.
+    /// be the wrong trade.
     /// </summary>
+    /// <remarks>
+    /// It no longer degrades to null: <see cref="OutboxMessage.CorrelationId"/> is non-nullable and
+    /// mapped <c>IsRequired</c>, so null is not a value the row can carry. A fresh correlation is
+    /// the honest substitute — the chain is broken either way, and this way the message survives.
+    /// </remarks>
     [Fact]
-    public async Task PublishAsync_WhenCorrelationIdIsUnparseable_DegradesToNullRatherThanFailing()
+    public async Task PublishAsync_WhenCorrelationIdIsUnparseable_SubstitutesAFreshOne()
     {
         var writer = new RecordingWriter();
         var publisher = Build(writer, context: new StubExecutionContext("t", "not-a-guid", null));
 
         await publisher.PublishAsync(new ConstatRecorded(Guid.NewGuid()));
 
-        var row = writer.Staged.ShouldHaveSingleItem();
+        var row = writer.Written.ShouldHaveSingleItem();
 
-        row.CorrelationId.ShouldBeNull();
+        row.CorrelationId.ShouldNotBeNull();
+        row.CorrelationId.Value.ShouldNotBe(Guid.Empty);
         row.TenantId.ShouldBe("t", "the publication itself must still succeed");
     }
 
@@ -118,26 +182,49 @@ public sealed class IntegrationEventPublisherTests
 
         await publisher.PublishAsync(new ConstatRecorded(Guid.NewGuid()), occurredOn);
 
-        var row = writer.Staged.ShouldHaveSingleItem();
+        var row = writer.Written.ShouldHaveSingleItem();
 
         row.OccurredOnUtc.ShouldBe(occurredOn);
         row.CreatedAtUtc.ShouldBe(Now);
     }
 
+    /// <summary>
+    /// Unstated occurrence resolves to the staging time here rather than at the transport.
+    /// </summary>
+    /// <remarks>
+    /// <see cref="OutboxMessage.OccurredOnUtc"/> and <see cref="MessageEnvelope.OccurredOnUtc"/>
+    /// are both non-nullable, so "not stated" cannot reach the row. The fallback is the same value
+    /// the transport would have used; only the log line records that it was an approximation.
+    /// </remarks>
     [Fact]
-    public async Task PublishAsync_WhenOccurrenceTimeNotSupplied_LeavesItNull()
+    public async Task PublishAsync_WhenOccurrenceTimeNotSupplied_FallsBackToTheStagingTime()
     {
         var writer = new RecordingWriter();
         var publisher = Build(writer);
 
         await publisher.PublishAsync(new ConstatRecorded(Guid.NewGuid()));
 
-        var row = writer.Staged.ShouldHaveSingleItem();
+        var row = writer.Written.ShouldHaveSingleItem();
 
-        // Null means "not stated" and the transport falls back to the staging time. Defaulting it
-        // here would make an approximation indistinguishable from a fact.
-        row.OccurredOnUtc.ShouldBeNull();
+        row.OccurredOnUtc.ShouldBe(Now);
         row.CreatedAtUtc.ShouldBe(Now);
+    }
+
+    /// <summary>
+    /// The producing trace is current only here: the relay runs later, on another thread, under
+    /// another activity, so nothing downstream can reconstruct it.
+    /// </summary>
+    [Fact]
+    public async Task PublishAsync_CapturesTheTraceParent()
+    {
+        var writer = new RecordingWriter();
+        var publisher = Build(writer);
+
+        using var activity = new Activity("publish").Start();
+
+        await publisher.PublishAsync(new ConstatRecorded(Guid.NewGuid()));
+
+        writer.Written.ShouldHaveSingleItem().TraceParent.ShouldBe(activity.Id);
     }
 
     /// <summary>
@@ -153,12 +240,11 @@ public sealed class IntegrationEventPublisherTests
 
         await publisher.PublishAsync(asInterface);
 
-        writer.Staged.ShouldHaveSingleItem()
-            .ContractName.ShouldBe("saasbtp.safety.constat-recorded.v1");
+        writer.Written.ShouldHaveSingleItem().ContractName.ShouldBe(Contract);
     }
 
     [Fact]
-    public async Task PublishAsync_SerializesTheEventIntoData()
+    public async Task PublishAsync_SerializesTheEventIntoThePayload()
     {
         var writer = new RecordingWriter();
         var publisher = Build(writer);
@@ -166,19 +252,21 @@ public sealed class IntegrationEventPublisherTests
 
         await publisher.PublishAsync(new ConstatRecorded(constatId));
 
-        writer.Staged.ShouldHaveSingleItem().Data.ShouldContain(constatId.ToString());
+        writer.Written.ShouldHaveSingleItem().Payload.ShouldContain(constatId.ToString());
     }
 
     private static IIntegrationEventPublisher Build(
         RecordingWriter writer,
-        StubExecutionContext? context = null)
+        StubExecutionContext? context = null,
+        MessageId? origin = null)
         => new IntegrationEventPublisher(
             writer,
             IntegrationEventContractFixtures.Registry(
                 ("/saasbtp/safety", e => e.Publishes<ConstatRecorded>())),
-            new SystemTextJsonMessageSerializer(),
+            new OutboxMessageFactory(
+                new SystemTextJsonMessageSerializer(), new FakeTimeProvider(Now)),
+            new OriginMessageHolder { OriginMessageId = origin },
             context ?? new StubExecutionContext(null, null, null),
-            new FakeTimeProvider(Now),
             NullLogger<IntegrationEventPublisher>.Instance);
 
     /// <summary>
@@ -189,14 +277,22 @@ public sealed class IntegrationEventPublisherTests
     /// </summary>
     private sealed class RecordingWriter : IIntegrationEventWriter
     {
-        public List<IntegrationEventMessage> Staged { get; } = [];
+        public List<OutboxMessage> Written { get; } = [];
 
         public bool HasOpenTransaction { get; init; } = true;
 
-        public ValueTask AddAsync(IntegrationEventMessage message, CancellationToken ct = default)
+        /// <summary>When set, every write is reported as already published under this id.</summary>
+        public MessageId? AlreadyPublishedAs { get; init; }
+
+        public ValueTask<IntegrationEventWriteResult> AddAsync(
+            OutboxMessage message, CancellationToken ct = default)
         {
-            Staged.Add(message);
-            return ValueTask.CompletedTask;
+            Written.Add(message);
+
+            return ValueTask.FromResult(
+                AlreadyPublishedAs is null
+                    ? IntegrationEventWriteResult.Staged(message.Id)
+                    : IntegrationEventWriteResult.AlreadyPublishedAs(AlreadyPublishedAs));
         }
     }
 

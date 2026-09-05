@@ -8,10 +8,24 @@ namespace MicroKit.Messaging.UnitTests;
 /// </summary>
 internal sealed class TestExecutionScopeFactory(IServiceScopeFactory scopeFactory) : IExecutionScopeFactory
 {
+    /// <summary>Every context handed to <see cref="CreateScopeAsync"/>, in order.</summary>
+    /// <remarks>
+    /// A recording fake, not a substitute. The assertions this exists for are about what a processor
+    /// PUTS into the context — <c>TenantId</c>, <c>CorrelationId</c>, and now a derived
+    /// <c>CausationId</c>. A mock's argument matcher stays green whenever it names a property the
+    /// subject does not set, which is exactly the defect that let the causation chain be null on
+    /// every row without a single red test.
+    /// </remarks>
+    public List<IExecutionContext> Contexts { get; } = [];
+
     public ValueTask<IExecutionScope> CreateScopeAsync(
         IExecutionContext context, CancellationToken ct = default)
-        => ValueTask.FromResult<IExecutionScope>(
+    {
+        Contexts.Add(context);
+
+        return ValueTask.FromResult<IExecutionScope>(
             new TestExecutionScope(scopeFactory.CreateAsyncScope()));
+    }
 }
 
 internal sealed class TestExecutionScope(AsyncServiceScope scope) : IExecutionScope
@@ -171,7 +185,8 @@ internal static class InboxFixtures
         int retryCount = 0,
         string eventType = DefaultEventType,
         string payload = "{}",
-        string? tenantId = "tenant-a")
+        string? tenantId = "tenant-a",
+        CorrelationId? correlationId = null)
         => new()
         {
             RowId = Guid.NewGuid(),
@@ -183,6 +198,11 @@ internal static class InboxFixtures
             Status = InboxMessageStatus.Processing,
             RetryCount = retryCount,
             ReceivedAtUtc = DateTimeOffset.UnixEpoch,
+
+            // Null by default, which is legitimate: an inbound message from an external system may
+            // carry no correlation context (ADR-MSG-017, and the deliberate nullability asymmetry
+            // with OutboxMessage.CorrelationId). A test that asserts the copy must pass one.
+            CorrelationId = correlationId,
         };
 
     internal static InboxClaim Claim(params InboxMessage[] messages)

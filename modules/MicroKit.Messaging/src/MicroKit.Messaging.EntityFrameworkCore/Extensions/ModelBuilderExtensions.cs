@@ -6,9 +6,9 @@ namespace MicroKit.Messaging.EntityFrameworkCore;
 public static class ModelBuilderExtensions
 {
     /// <summary>
-    /// Applies <see cref="OutboxMessageConfiguration"/>, <see cref="InboxMessageConfiguration"/>
-    /// and <see cref="IntegrationEventMessageConfiguration"/> to the model. Call this from
-    /// <c>OnModelCreating</c> in the application's <see cref="DbContext"/>.
+    /// Applies <see cref="OutboxMessageConfiguration"/> and <see cref="InboxMessageConfiguration"/>
+    /// to the model. Call this from <c>OnModelCreating</c> in the application's
+    /// <see cref="DbContext"/>.
     /// </summary>
     /// <remarks>
     /// <para>
@@ -41,7 +41,6 @@ public static class ModelBuilderExtensions
     {
         builder.ApplyConfiguration(new OutboxMessageConfiguration());
         builder.ApplyConfiguration(new InboxMessageConfiguration());
-        builder.ApplyConfiguration(new IntegrationEventMessageConfiguration());
         return builder;
     }
 }
