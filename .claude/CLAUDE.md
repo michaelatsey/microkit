@@ -53,7 +53,7 @@ Release state, versions and work in progress: see the latest session trace.
 |------|-----------|-------|
 | **Implementing anything new** | `.claude/CLAUDE.md` + module `.claude/CLAUDE.md` + relevant rule | `microkit-[module]-implementer` — plan before code |
 | Architecture / contract decision | `.claude/CLAUDE.md` + module `.claude-context/context/*-architectural-decisions.md` | `microkit-[module]-architect` |
-| Cross-module ADR | `.claude/CLAUDE.md` + `.claude-context/context/microkit-architectural-decisions.md` | `microkit-[module]-architect` |
+| Cross-module ADR | `.claude/CLAUDE.md` + `.claude-context/context/architecture/decisions/` | `microkit-[module]-architect` |
 | Public API change | module `rules/*-naming.md` + module `rules/*-architecture.md` | `microkit-[module]-api-reviewer` — required before merge |
 | Dependency / `.csproj` change | `.claude/rules/cross-module-references.md` + module dependency graph | `microkit-[module]-dependency-guardian` |
 | New module bootstrap | `.claude/skills/new-module-bootstrap.md` | — |
@@ -97,8 +97,12 @@ MicroKit/
 ├── .claude-context/
 │   ├── sessions/                     ← session traces — AUTHORITY ON CURRENT STATE
 │   └── context/
-│       ├── microkit-architectural-decisions.md  ← cross-module ADRs
-│       └── session-handoff.md                   ← web ↔ Claude Code passing method
+│       ├── architecture/
+│       │   └── decisions/            ← cross-module ADRs, one file per decision
+│       │       ├── README.md         ← the immutability rule
+│       │       ├── ADR-GLOBAL-001.md
+│       │       └── ADR-GLOBAL-002.md
+│       └── session-handoff.md        ← web ↔ Claude Code passing method
 │
 ├── .github/
 │   ├── workflows/

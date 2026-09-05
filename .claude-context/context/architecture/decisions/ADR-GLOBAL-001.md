@@ -1,10 +1,3 @@
-# MicroKit — Architectural Decisions
-
-This document records significant architectural decisions made for MicroKit modules.
-Each ADR is immutable once merged; superseded decisions reference the ADR that replaces them.
-
----
-
 ## ADR-GLOBAL-001: ICurrentUserAccessor temporary duplication — MicroKit.MediatR.Abstractions vs MicroKit.Auth.Abstractions
 
 **Date:** 2026-06-07
