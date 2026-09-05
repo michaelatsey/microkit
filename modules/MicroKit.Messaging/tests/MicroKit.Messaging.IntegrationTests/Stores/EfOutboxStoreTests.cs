@@ -37,6 +37,7 @@ public sealed class EfOutboxStoreTests
         bool deadLettered = false,
         string? tenantId = "tenant-a",
         DateTimeOffset? occurredOnUtc = null,
+        DateTimeOffset? createdAtUtc = null,
         DateTimeOffset? processedAtUtc = null,
         Guid? claimToken = null,
         MessageKind messageKind = MessageKind.Notification,
@@ -56,7 +57,7 @@ public sealed class EfOutboxStoreTests
             Payload = "{}",
             Status = status,
             OccurredOnUtc = occurredOnUtc ?? Now,
-            CreatedAtUtc = Now,
+            CreatedAtUtc = createdAtUtc ?? Now,
             CorrelationId = CorrelationId.New(),
             LockedUntilUtc = lockedUntilUtc,
             NextRetryAtUtc = nextRetryAtUtc,
@@ -306,24 +307,81 @@ public sealed class EfOutboxStoreTests
             claim.Messages.ShouldAllBe(m => m.LockedUntilUtc == Now.Add(Lease));
         });
 
+    /// <summary>
+    /// The claim takes the oldest rows by <see cref="OutboxMessage.CreatedAtUtc"/> — the staging
+    /// time — and never by <see cref="OutboxMessage.OccurredOnUtc"/>.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// The two orders are seeded <b>opposite</b> to each other on purpose. Varying only one leaves
+    /// the other constant, and a constant sort key yields whatever order the database happens to
+    /// return — so the test would pass under both implementations and prove nothing. Reversed, it
+    /// fails outright if the claim ever goes back to the business timestamp.
+    /// </para>
+    /// <para>
+    /// Why it matters: <c>OccurredOnUtc</c> is caller-supplied — on the contract path it is an
+    /// optional parameter of a public method — so ordering on it lets a backdated event jump every
+    /// row ahead of it, indefinitely.
+    /// </para>
+    /// </remarks>
     [Fact]
-    public Task ClaimBatchAsync_RespectsBatchSize_AndClaimsOldestFirst()
+    public Task ClaimBatchAsync_RespectsBatchSize_AndClaimsOldestByCreatedAtUtc()
         => Task.Run(async () =>
         {
             var (conn, ctx) = CreateIsolatedDb();
             await using var _ = conn;
             await using var __ = ctx;
 
-            var oldest = BuildOutboxMessage(occurredOnUtc: Now.AddMinutes(-30));
-            var middle = BuildOutboxMessage(occurredOnUtc: Now.AddMinutes(-20));
-            var newest = BuildOutboxMessage(occurredOnUtc: Now.AddMinutes(-10));
-            ctx.OutboxMessages.AddRange(newest, oldest, middle);
+            var stagedFirst = BuildOutboxMessage(
+                createdAtUtc: Now.AddMinutes(-30), occurredOnUtc: Now.AddMinutes(-10));
+            var stagedSecond = BuildOutboxMessage(
+                createdAtUtc: Now.AddMinutes(-20), occurredOnUtc: Now.AddMinutes(-20));
+            var stagedThird = BuildOutboxMessage(
+                createdAtUtc: Now.AddMinutes(-10), occurredOnUtc: Now.AddMinutes(-30));
+
+            ctx.OutboxMessages.AddRange(stagedThird, stagedFirst, stagedSecond);
             await ctx.SaveChangesAsync();
 
             var claim = await Store(ctx).ClaimBatchAsync(2, Lease);
 
             claim.Count.ShouldBe(2);
-            claim.Messages.Select(m => m.Id).ShouldBe([oldest.Id, middle.Id]);
+            claim.Messages.Select(m => m.Id).ShouldBe(
+                [stagedFirst.Id, stagedSecond.Id],
+                "ordered on CreatedAtUtc; on OccurredOnUtc this would be the exact reverse");
+        });
+
+    /// <summary>
+    /// Operator triage keeps the business timestamp, and the asymmetry with the claim is
+    /// deliberate.
+    /// </summary>
+    /// <remarks>
+    /// A dead-letter queue is read by someone asking when the fact happened, not where the row sat
+    /// in a queue that is no longer running. Harmonising the two orders would break one purpose to
+    /// serve the other.
+    /// </remarks>
+    [Fact]
+    public Task GetDeadLetteredAsync_StillOrdersOnOccurredOnUtc()
+        => Task.Run(async () =>
+        {
+            var (conn, ctx) = CreateIsolatedDb();
+            await using var _ = conn;
+            await using var __ = ctx;
+
+            var earlierFact = BuildOutboxMessage(
+                deadLettered: true, status: OutboxMessageStatus.Failed,
+                createdAtUtc: Now.AddMinutes(-10), occurredOnUtc: Now.AddMinutes(-30));
+            var laterFact = BuildOutboxMessage(
+                deadLettered: true, status: OutboxMessageStatus.Failed,
+                createdAtUtc: Now.AddMinutes(-30), occurredOnUtc: Now.AddMinutes(-10));
+
+            ctx.OutboxMessages.AddRange(laterFact, earlierFact);
+            await ctx.SaveChangesAsync();
+
+            var rows = await Store(ctx).GetDeadLetteredAsync(10);
+
+            rows.Select(m => m.Id).ShouldBe(
+                [earlierFact.Id, laterFact.Id],
+                "ordered on OccurredOnUtc; on CreatedAtUtc this would be the exact reverse");
         });
 
     [Fact]
@@ -743,6 +801,103 @@ public sealed class EfOutboxStoreTests
             (await probe.OutboxMessages.CountAsync()).ShouldBe(2);
         });
 
+    /// <summary>
+    /// A contract row is not purged while the row that produced it can still be dispatched again.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// The replay key only rejects a duplicate while the row it produced is still in the table, so
+    /// a contract row has to outlive every chance its origin has of being re-dispatched. That
+    /// window is a <b>state</b>, not a duration: automatic replay is bounded by
+    /// <c>MaxRetries × MaxRetryBackoff</c>, both configurable, and an operator requeue of a
+    /// dead-lettered origin is unbounded — so no retention default covers it.
+    /// </para>
+    /// <para>
+    /// What it prevents is the one duplicate nothing downstream can recognise: a republished
+    /// contract is a new row with a new <c>MessageId</c>, and a consumer deduplicates on that id.
+    /// </para>
+    /// </remarks>
+    [Fact]
+    public Task DeleteProcessedAsync_KeepsAContractWhoseOriginCanStillBeDispatched()
+        => Task.Run(async () =>
+        {
+            var (conn, ctx) = CreateIsolatedDb();
+            await using var _ = conn;
+            await using var __ = ctx;
+
+            // A dead-lettered origin is never purged and can be requeued at any time.
+            var deadLetteredOrigin = BuildOutboxMessage(
+                status: OutboxMessageStatus.Failed, deadLettered: true);
+
+            var contract = BuildOutboxMessage(
+                status: OutboxMessageStatus.Published,
+                processedAtUtc: Now.AddDays(-30),
+                messageKind: MessageKind.Contract,
+                contractName: "saasbtp.safety.constat-recorded.v1",
+                source: "/saasbtp/safety",
+                originMessageId: deadLetteredOrigin.Id);
+
+            ctx.OutboxMessages.AddRange(deadLetteredOrigin, contract);
+            await ctx.SaveChangesAsync();
+
+            var deleted = await Store(ctx).DeleteProcessedAsync(Now.AddDays(-7));
+
+            deleted.ShouldBe(0, "purging it would leave a later requeue nothing to collide with");
+            (await ctx.OutboxMessages.AsNoTracking().CountAsync(m => m.Id == contract.Id))
+                .ShouldBe(1);
+        });
+
+    /// <summary>
+    /// Once the origin is <c>Published</c> nothing can re-dispatch it, so the contract row is free.
+    /// </summary>
+    [Fact]
+    public Task DeleteProcessedAsync_PurgesAContractWhoseOriginIsTerminal()
+        => Task.Run(async () =>
+        {
+            var (conn, ctx) = CreateIsolatedDb();
+            await using var _ = conn;
+            await using var __ = ctx;
+
+            var origin = BuildOutboxMessage(
+                status: OutboxMessageStatus.Published, processedAtUtc: Now.AddDays(-30));
+
+            var contract = BuildOutboxMessage(
+                status: OutboxMessageStatus.Published,
+                processedAtUtc: Now.AddDays(-30),
+                messageKind: MessageKind.Contract,
+                contractName: "saasbtp.safety.constat-recorded.v1",
+                source: "/saasbtp/safety",
+                originMessageId: origin.Id);
+
+            ctx.OutboxMessages.AddRange(origin, contract);
+            await ctx.SaveChangesAsync();
+
+            (await Store(ctx).DeleteProcessedAsync(Now.AddDays(-7))).ShouldBe(2);
+            (await ctx.OutboxMessages.AsNoTracking().CountAsync()).ShouldBe(0);
+        });
+
+    /// <summary>
+    /// A contract published outside a dispatch has no origin, so nothing holds it back.
+    /// </summary>
+    [Fact]
+    public Task DeleteProcessedAsync_PurgesAContractWithNoOrigin()
+        => Task.Run(async () =>
+        {
+            var (conn, ctx) = CreateIsolatedDb();
+            await using var _ = conn;
+            await using var __ = ctx;
+
+            ctx.OutboxMessages.Add(BuildOutboxMessage(
+                status: OutboxMessageStatus.Published,
+                processedAtUtc: Now.AddDays(-30),
+                messageKind: MessageKind.Contract,
+                contractName: "saasbtp.safety.constat-recorded.v1",
+                source: "/saasbtp/safety"));
+            await ctx.SaveChangesAsync();
+
+            (await Store(ctx).DeleteProcessedAsync(Now.AddDays(-7))).ShouldBe(1);
+        });
+
     [Fact]
     public Task DeleteProcessedAsync_NeverDeletesUnpublishedRows()
         => Task.Run(async () =>
@@ -837,11 +992,46 @@ public sealed class EfOutboxStoreTests
         var contractName = Property(ctx, nameof(OutboxMessage.ContractName));
         contractName.IsNullable.ShouldBeTrue("a notification has no wire identity");
         contractName.GetMaxLength().ShouldBe(
-            256, "must match IntegrationEventMessage.ContractName — the same notion");
+            256,
+            "a consumer's contract names are data this column truncates silently on a provider " +
+            "that does not enforce width, so the bound is pinned rather than left to a comment");
 
         var origin = Property(ctx, nameof(OutboxMessage.OriginMessageId));
         origin.IsNullable.ShouldBeTrue("a row not produced by a dispatch has no origin");
         origin.GetValueConverter().ShouldNotBeNull("MessageId? is not a storable type on its own");
+    }
+
+    /// <summary>
+    /// The claim index sorts on <see cref="OutboxMessage.CreatedAtUtc"/>, matching the store's
+    /// <c>OrderBy</c>.
+    /// </summary>
+    /// <remarks>
+    /// A mismatch between the two costs no correctness and no test — the claim would still return
+    /// the right rows — but every poll would sort them without an index. Nothing else in the suite
+    /// would notice, which is why this reads the model rather than the behaviour.
+    /// </remarks>
+    [Fact]
+    public void TheDispatchableIndex_SortsOnCreatedAtUtc()
+    {
+        var (conn, ctx) = CreateIsolatedDb();
+        using var _ = conn;
+        using var __ = ctx;
+
+        var index = ctx.Model
+            .FindEntityType(typeof(OutboxMessage))!
+            .GetIndexes()
+            .SingleOrDefault(i => i.GetDatabaseName() == "IX_OutboxMessages_Dispatchable");
+
+        index.ShouldNotBeNull();
+        index.Properties.Select(p => p.Name).ShouldBe(
+            [
+                nameof(OutboxMessage.DeadLettered),
+                nameof(OutboxMessage.Status),
+                nameof(OutboxMessage.NextRetryAtUtc),
+                nameof(OutboxMessage.CreatedAtUtc),
+            ],
+            "the trailing column must be the claim's sort key, and the claim orders on the " +
+            "staging time so a backdated event cannot jump the queue");
     }
 
     /// <summary>

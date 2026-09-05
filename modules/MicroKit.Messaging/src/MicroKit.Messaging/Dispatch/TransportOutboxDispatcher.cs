@@ -151,6 +151,23 @@ internal sealed class TransportOutboxDispatcher(
             CausationId: message.CausationId?.Value,
             OccurredOnUtc: message.OccurredOnUtc);
 
+        // FORWARD NOTE — the trace link, for whoever adds a member to MessageEnvelope.
+        //
+        // message.TraceParent is NOT copied here, because MessageEnvelope declares no member for
+        // it: a member that could only ever be null is worse than an absent one, since a consumer
+        // builds on it (see OutboxMessage.TraceParent). Adding one is additive and this is the
+        // line it lands on.
+        //
+        // There is a second, smaller gap to close at the same time, and it is upstream of this
+        // class: OutboxProcessor starts no Activity from message.TraceParent before dispatching, so
+        // a contract published by a notification handler captures the WORKER's ambient activity —
+        // usually none — rather than the trace that produced the row it came from. The correlation
+        // chain survives that hop in a column; the W3C trace does not. Both halves are needed for
+        // an end-to-end trace, and doing only this one produces an envelope carrying a traceparent
+        // that names the relay instead of the producer, which is worse than carrying none.
+        //
+        // Deliberately deferred, not overlooked. Reviewed and recorded 2026-08-28.
+
         // Unguarded on purpose: the transport's exception type is its failure classification, and
         // the processor routes on it. See the class remarks.
         await transport.SendAsync(envelope, ct).ConfigureAwait(false);

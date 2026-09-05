@@ -3,34 +3,49 @@
 ## 🎯 Vision
 
 MicroKit is an ecosystem of modular, opinionated, production-ready .NET 10+ libraries.
-Each module is autonomous, independently versioned, published to NuGet, and designed to
-compose without friction in a hexagonal / DDD / CQRS / microservices architecture.
+Each module is autonomous, published to NuGet, and designed to compose without friction
+in a hexagonal / DDD / CQRS / microservices architecture.
 
 > **Core principle:** each module must stand alone. Integration is a bonus, not a prerequisite.
 
 ---
 
+## ⚠️ What this file is not
+
+This file holds **durable rules**. It holds no state.
+
+Module status, published versions, what is merged, what is in progress: none of it lives
+here. It lives in the most recent file in `.claude-context/sessions/`, which is produced
+at the end of every lot and is therefore the only description of the system that is
+current by construction.
+
+If this file and a session trace disagree on a fact, **the trace is right**.
+
+---
+
 ## 🗺️ Navigation — Where to find context
 
-Always load the relevant module's `.claude/CLAUDE.md` first when working on a specific module.
-This root file provides the global vision and cross-cutting conventions.
+Always load the relevant module's `.claude/CLAUDE.md` first when working on a specific
+module. This root file provides the global vision and cross-cutting conventions.
 
 ### Module map
 
-| Module | Path | .claude/ | Status |
-|--------|------|----------|--------|
-| **MicroKit.Result** | `modules/MicroKit.Result/` | `modules/MicroKit.Result/.claude/` | ✅ Released 1.0.0-preview.2 |
-| **MicroKit.Domain** | `modules/MicroKit.Domain/` | `modules/MicroKit.Domain/.claude/` | ✅ Released 1.0.0-preview.5 |
-| **MicroKit.Logging** | `modules/MicroKit.Logging/` | `modules/MicroKit.Logging/.claude/` | ✅ Released 1.0.0-preview.2 |
-| **MicroKit.MediatR** | `modules/MicroKit.MediatR/` | `modules/MicroKit.MediatR/.claude/` | ✅ Released 1.0.0-preview.2 |
-| **MicroKit.Persistence** | `modules/MicroKit.Persistence/` | `modules/MicroKit.Persistence/.claude/` | ✅ Released 1.0.0-preview.3 |
-| **MicroKit.Tenancy** | `modules/MicroKit.Tenancy/` | `modules/MicroKit.Tenancy/.claude/` | ✅ Released 1.0.0-preview.1 |
-| **MicroKit.Auth** | `modules/MicroKit.Auth/` | `modules/MicroKit.Auth/.claude/` | ✅ Released 1.0.0-preview.3 |
-| **MicroKit.Execution.Abstractions** | `modules/MicroKit.Execution.Abstractions/` | — | ✅ Released 1.0.0-preview.1 |
-| **MicroKit.Messaging** | `modules/MicroKit.Messaging/` | `modules/MicroKit.Messaging/.claude/` | ✅ Released 1.0.0-preview.4 |
-| **MicroKit.Caching** | `modules/MicroKit.Caching/` | `modules/MicroKit.Caching/.claude/` | 📋 Planned |
-| **MicroKit.Http** | `modules/MicroKit.Http/` | `modules/MicroKit.Http/.claude/` | 📋 Planned |
-| **MicroKit.Observability** | `modules/MicroKit.Observability/` | `modules/MicroKit.Observability/.claude/` | 📋 Planned |
+| Module | Path | `.claude/` |
+|--------|------|-----------|
+| **MicroKit.Result** | `modules/MicroKit.Result/` | yes |
+| **MicroKit.Domain** | `modules/MicroKit.Domain/` | yes |
+| **MicroKit.Logging** | `modules/MicroKit.Logging/` | yes |
+| **MicroKit.MediatR** | `modules/MicroKit.MediatR/` | yes |
+| **MicroKit.Persistence** | `modules/MicroKit.Persistence/` | yes |
+| **MicroKit.Tenancy** | `modules/MicroKit.Tenancy/` | yes |
+| **MicroKit.Auth** | `modules/MicroKit.Auth/` | yes |
+| **MicroKit.Execution.Abstractions** | `modules/MicroKit.Execution.Abstractions/` | — |
+| **MicroKit.Messaging** | `modules/MicroKit.Messaging/` | yes |
+| **MicroKit.Caching** | `modules/MicroKit.Caching/` | not bootstrapped |
+| **MicroKit.Http** | `modules/MicroKit.Http/` | not bootstrapped |
+| **MicroKit.Observability** | `modules/MicroKit.Observability/` | not bootstrapped |
+
+Release state, versions and work in progress: see the latest session trace.
 
 ### Navigation rules for Claude Code
 
@@ -45,6 +60,23 @@ This root file provides the global vision and cross-cutting conventions.
 | Writing tests | `.claude/rules/testing-libraries.md` (Shouldly mandatory) | — |
 | Release | module `workflows/*-releasing.md` + `/[module]-release` command | `microkit-[module]-release-manager` |
 | Transversal build / CI | `.claude/CLAUDE.md` + `.claude/rules/monorepo-conventions.md` | — |
+| **Resuming work / starting a lot** | `.claude-context/context/session-handoff.md` + latest session trace | — |
+
+### Agents
+
+Module-scoped: an agent loads only when Claude Code is launched from its module
+directory. Naming: `microkit-[module]-[role]`.
+
+| Module | Available roles |
+|---|---|
+| MicroKit.Messaging | implementer · architect · api-reviewer · dependency-guardian · distributed-context-specialist · release-manager |
+| MicroKit.Auth | implementer · architect · api-reviewer · dependency-guardian · release-manager |
+| MicroKit.Tenancy | prefix `microkit-tenancy-` — roles not yet inventoried |
+
+Prompt conventions:
+- List the files to read first, as an explicit ordered list
+- Include the agent file itself in that list
+- Claude Code has no direct custom-agent invocation — the agent file is loaded as context
 
 ---
 
@@ -63,29 +95,22 @@ MicroKit/
 │   └── skills/                       ← global skills (build, versioning, CI)
 │
 ├── .claude-context/
-│   ├── sessions/                     ← session summaries (read the most recent)
+│   ├── sessions/                     ← session traces — AUTHORITY ON CURRENT STATE
 │   └── context/
-│       └── microkit-architectural-decisions.md  ← cross-module ADRs
+│       ├── microkit-architectural-decisions.md  ← cross-module ADRs
+│       └── session-handoff.md                   ← web ↔ Claude Code passing method
 │
 ├── .github/
 │   ├── workflows/
 │   │   ├── ci-*.yml                  ← per-module CI
-│   │   └── release-*.yml            ← per-module release
+│   │   └── release-*.yml             ← per-module release (see Versioning)
 │   ├── CODEOWNERS
 │   └── pull_request_template.md
 │
 ├── modules/
-│   ├── MicroKit.Result/
-│   ├── MicroKit.Domain/
-│   ├── MicroKit.Logging/
-│   ├── MicroKit.MediatR/
-│   ├── MicroKit.Persistence/
-│   ├── MicroKit.Tenancy/
-│   ├── MicroKit.Auth/
-│   ├── MicroKit.Execution.Abstractions/
-│   ├── MicroKit.Messaging/
-│   └── ...
+│   └── MicroKit.*/                   ← one directory per module
 │
+├── LOT.md                            ← current passing order (gitignored, ephemeral)
 ├── Directory.Build.props             ← shared props for all projects
 ├── Directory.Build.targets           ← shared targets
 ├── Directory.Packages.props          ← NuGet Central Package Management
@@ -150,20 +175,8 @@ MicroKit.Messaging                 ← may depend on Result, Persistence (outbox
                                      package allowed to reference MediatR/MediatR.Contracts
 MicroKit.Http                      ← may depend on Result, Observability
 MicroKit.MediatR                   ← may depend on Result, Domain, Logging.Abstractions,
-                                     Persistence.Abstractions (ADR-MEDIATR-011 — TransactionBehavior requires ITransactionalContext)
-                                     ADR-MEDIATR-009: two disjoint pipelines —
-                                     IDomainEventHandler<TEvent> (sync, in-transaction, DI direct) and
-                                     INotificationHandler<TNotification> (async, via outbox, at-least-once)
-                                     IDomainEventHandler<TEvent> constrained to where TEvent : IDomainEvent
-                                     ADR-MEDIATR-014 (implemented): dispatch composes by
-                                     contribution — ONE IDomainEventsDispatcher (core)
-                                     + N IDomainEventsSink. Messaging.MediatR contributes a sink;
-                                     it does not register a rival dispatcher. Supersedes
-                                     ADR-MEDIATR-013 (registration precedence).
-                                     ADR-MEDIATR-015 (implemented): a notification with no sink
-                                     throws; AddMediatRTransport renamed AddMediatRDomainEvents;
-                                     AddInProcessTransport TryAdds so the IOutboxDispatcher
-                                     decoration cannot be silently displaced.
+                                     Persistence.Abstractions (ADR-MEDIATR-011 — TransactionBehavior
+                                     requires ITransactionalContext)
 MicroKit.Tenancy                   ← may depend on Result, Auth, Persistence,
                                      Execution.Abstractions (tenant-aware IExecutionScopeFactory impl)
 ```
@@ -174,7 +187,13 @@ MicroKit.Tenancy                   ← may depend on Result, Auth, Persistence,
 > Circular dependencies between modules are **forbidden**.
 > Any new inter-module dependency requires an update to this graph.
 
-### Cross-module pattern for NuGet publish (CIReleaseBuild)
+### Cross-module reference pattern — CIReleaseBuild
+
+> **⚠️ Condemned pattern.** This mechanism is superseded by the unified versioning
+> migration (see below). It is documented because the eight existing `release-*.yml`
+> workflows still depend on it, and because it is **currently broken**: `CIReleaseBuild=true`
+> swaps cross-module `ProjectReference` for `PackageReference`, and the CPM pin trails the
+> published version. Do not extend it to new modules. Do not repair it — it is being removed.
 
 ```xml
 <!-- Local dev: source ProjectReferences -->
@@ -188,63 +207,53 @@ MicroKit.Tenancy                   ← may depend on Result, Auth, Persistence,
 </ItemGroup>
 ```
 
-> Intra-module references (same module, co-versioned) MUST be unconditional ProjectReferences.
-> The CIReleaseBuild pattern applies ONLY to cross-module dependencies.
+> Intra-module references (same module, co-versioned) MUST be unconditional
+> `ProjectReference`. The CIReleaseBuild pattern applies ONLY to cross-module dependencies.
 
-See `.claude/rules/cross-module-references.md` for the full mandatory pattern.
+See `.claude/rules/cross-module-references.md` for the full pattern.
 
 ---
 
-## 🔢 Versioning — Nerdbank.GitVersioning
+## 🔢 Versioning — migration decided, not yet executed
 
-Each module is versioned **independently** via `version.json` in its directory.
+**Current mechanism (in force, condemned):** each module is versioned independently via
+`version.json` (Nerdbank.GitVersioning), released on a tag `[module-kebab]-v[semver]`, by
+its own `release-*.yml`.
 
-### Git tag convention for releases
+**Decided target:** unified Microsoft-style versioning — one version for the whole
+ecosystem, unconditional `ProjectReference`, `CIReleaseBuild` removed, one release
+workflow. It absorbs three defects at once rather than patching eight workflows that
+would then be replaced.
 
-```txt
-result-v1.0.0-preview.1                → MicroKit.Result release
-domain-v1.0.0-preview.1               → MicroKit.Domain release
-logging-v1.0.0-preview.1              → MicroKit.Logging release
-mediatr-v1.0.0-preview.1              → MicroKit.MediatR release
-persistence-v1.0.0-preview.1          → MicroKit.Persistence release
-tenancy-v1.0.0-preview.1              → MicroKit.Tenancy release
-auth-v1.0.0-preview.1                 → MicroKit.Auth release
-execution-abstractions-v1.0.0-...     → MicroKit.Execution.Abstractions release
-messaging-v1.0.0-preview.1            → MicroKit.Messaging release
-result-v1.0.0-preview.1                → MicroKit.Result release
-domain-v1.0.0-preview.1               → MicroKit.Domain release
-logging-v1.0.0-preview.1              → MicroKit.Logging release
-mediatr-v1.0.0-preview.1              → MicroKit.MediatR release
-persistence-v1.0.0-preview.1          → MicroKit.Persistence release
-tenancy-v1.0.0-preview.1              → MicroKit.Tenancy release
-auth-v1.0.0-preview.1                 → MicroKit.Auth release
-execution-abstractions-v1.0.0-...     → MicroKit.Execution.Abstractions release
-messaging-v1.0.0-preview.1            → MicroKit.Messaging release
-```
+**Standing prohibition until the migration lands: tag nothing.** Not Messaging, not any
+module. A module `.slnx` contains sibling-module projects needed for restore, so `pack`
+emits them and `push` publishes them under the module's tag version, silently — foreign
+packages have already shipped this way, masked by `--skip-duplicate`.
+
+The reasoning, the evidence and the migration state live in the session traces.
 
 ### Branches
 
 ```txt
 main              ← always stable, protected
 dev               ← continuous integration
-feature/*         ← features (scope: result/fix-map, mediatr/add-streaming)
+feature/*         ← features (feature/result/fix-map, feature/mediatr/add-streaming)
 release/*         ← release preparation (release/result-1.2)
-fix/*             ← bugfixes (fix/multitenancy/parallel-sqlite-flaky-test)
-fix/*             ← bugfixes (fix/multitenancy/parallel-sqlite-flaky-test)
+fix/*             ← bugfixes (fix/tenancy/parallel-sqlite-flaky-test)
 ```
 
 ---
 
 ## 🏗️ Shared build — Directory.Build.props / Directory.Packages.props
 
-```xml
+```txt
 Nullable: enable
 ImplicitUsings: enable
 LangVersion: latest
 TreatWarningsAsErrors: true (Release only)
 AnalysisLevel: latest-recommended
 NuGet: Central Package Management via Directory.Packages.props
-CentralPackageTransitivePinningEnabled: true (mandatory — prevents transitive version drift)
+CentralPackageTransitivePinningEnabled: true
 ```
 
 ### Directory.Packages.props structure
@@ -262,42 +271,49 @@ ItemGroup Label="Analyzers"   ← Roslyn analyzers
 ItemGroup Label="Auth"        ← Microsoft.IdentityModel.*, JWT
 ```
 
-> CPM rule: after every module release, bump its version in ItemGroup MicroKit on dev via a dedicated chore/cpm-* branch before starting the next release.
-CentralPackageTransitivePinningEnabled: true (mandatory — prevents transitive version drift)
+> CPM rule: after every module release, bump its version in `ItemGroup MicroKit` on `dev`
+> via a dedicated `chore/cpm-*` branch before starting the next release.
 
 ---
 
 ## ✅ Global conventions (all modules)
 
-### Non-negotiable rules
+### Code
 
 - `sealed record` for errors/VOs/events/options | `sealed class` for handlers/behaviors/processors
 - `ValueTask<T>` async | `ConfigureAwait(false)` in libraries
 - `CancellationToken ct = default` always last
 - `Console.WriteLine` forbidden → `ILogger<T>`
+- XML docs mandatory on all public APIs (`src/` only)
 - Zero circular dependencies | `.Abstractions` → only other `.Abstractions`
-- Tests: `GenerateDocumentationFile=false` + `NoWarn CS1591;CA1707`
+
+### Build & packaging
+
 - CPM: all versions in root `Directory.Packages.props`
+- `CentralPackageTransitivePinningEnabled=true` — mandatory, prevents transitive version drift
+- **Intra-module references**: unconditional `ProjectReference` — NEVER inside `CIReleaseBuild` blocks
+- **Cross-module references**: the two-ItemGroup pattern above, condemned — do not extend
+- CPM bump after every release: dedicated `chore/cpm-*` branch, PR to `dev` only
+
+### Testing
+
 - **`Shouldly` (MIT) mandatory** — FluentAssertions FORBIDDEN (Xceed commercial license v8+)
-- **`NSubstitute`** for mocks
-- **`NetArchTest`** for architecture tests
-- `.claude/` complete BEFORE any implementation
-- **Cross-module references**: canonical two-ItemGroup CIReleaseBuild pattern mandatory
-- **Intra-module references**: unconditional ProjectReference — NEVER inside CIReleaseBuild blocks
-- **CIReleaseBuild=true**: mandatory on Restore + Build + Pack steps in ALL release workflows
-- **CentralPackageTransitivePinningEnabled=true**: mandatory — prevents transitive version drift
-- **Intra-module references**: unconditional ProjectReference — NEVER inside CIReleaseBuild blocks
-- **CIReleaseBuild=true**: mandatory on Restore + Build + Pack steps in ALL release workflows
-- **CentralPackageTransitivePinningEnabled=true**: mandatory — prevents transitive version drift
+- **`NSubstitute`** for mocks | **`NetArchTest`** for architecture tests
+- Tests: `GenerateDocumentationFile=false` + `NoWarn CS1591;CA1707`
 - **ArchitectureTests mandatory** before any release (empty project = blocking)
-- **Integration tests SQLite**: each `Task.Run` must have its own isolated connection
-- **BackgroundService**: `IServiceScopeFactory` only in constructor — never scoped services directly
+- SQLite integration tests: each `Task.Run` must have its own isolated connection
+- Testcontainers PostgreSQL for anything touching uniqueness or concurrency
+
+### Runtime invariants
+
+- **BackgroundService**: `IServiceScopeFactory` only in the constructor — never scoped services directly
 - **Batch processing**: one `IAsyncServiceScope` per message — never shared across messages
 - **Publishers**: silent success FORBIDDEN — throw `InvalidOperationException` if no transport
-- **Post-code agents**: distributed-context-specialist → dependency-guardian → api-reviewer — mandatory before any merge, in separate Claude Code sessions, always include "Do not commit anything"
-- **IApplicationEvent**: REJECTED — YAGNI, no use case. Do not introduce until a real need exists.
-- **CPM bump**: after every release, bump sibling version in Directory.Packages.props on dev — dedicated chore/cpm-* branch, PR to dev only
-- **CPM bump**: after every release, bump sibling version in Directory.Packages.props on dev — dedicated chore/cpm-* branch, PR to dev only
+- **IApplicationEvent**: REJECTED — YAGNI. Do not introduce until a real need exists.
+
+### Bootstrap
+
+- `.claude/` complete BEFORE any implementation
 
 ### Event taxonomy (canonical)
 
@@ -327,20 +343,23 @@ Domain Event  (accumulated on the tracked aggregate)
           INotificationHandler<TNotification>   async · idempotent · technical/integration
 ```
 
-**Composition — ADR-MEDIATR-014 (implemented).** One `IDomainEventsDispatcher` implementation
-orchestrates the whole sequence (drain → handler pass → the barrier between them and everything
-downstream). Further in-transaction participants contribute through an ordered, possibly empty
-`IEnumerable<IDomainEventsSink>` resolved from DI: MicroKit.MediatR registers zero sinks,
-MicroKit.Messaging.MediatR contributes the outbox sink via `AddMediatRDomainEvents()`.
-Order-independent by construction — this supersedes the `TryAdd`/`Replace` precedence contract of
-ADR-MEDIATR-013. **PR #84's core-side `TryAdd` stays correct and must not be reverted** — it still
-protects a consumer's own dispatcher.
+**Composition — ADR-MEDIATR-014.** One `IDomainEventsDispatcher` implementation
+orchestrates the whole sequence. Further in-transaction participants contribute through an
+ordered, possibly empty `IEnumerable<IDomainEventsSink>` resolved from DI: MicroKit.MediatR
+registers zero sinks, MicroKit.Messaging.MediatR contributes the outbox sink via
+`AddMediatRDomainEvents()`. Order-independent by construction — supersedes the
+`TryAdd`/`Replace` precedence contract of ADR-MEDIATR-013. **PR #84's core-side `TryAdd`
+stays correct and must not be reverted** — it still protects a consumer's own dispatcher.
 
-**Loud failure — ADR-MEDIATR-015 (implemented).** A `DomainEventNotification<TEvent>` discovered by
-the scan with **no** `IDomainEventsSink` registered throws on the first dispatch of a mapped event,
-naming the event, the notification and the missing registration — it is no longer discarded in
-silence. Zero sinks with no notifications stays valid and free. Register a sink with
-`TryAddEnumerable` and an implementation type or instance; a factory lambda is rejected.
+**Loud failure — ADR-MEDIATR-015.** A `DomainEventNotification<TEvent>` discovered by the
+scan with **no** `IDomainEventsSink` registered throws on the first dispatch of a mapped
+event, naming the event, the notification and the missing registration. Zero sinks with no
+notifications stays valid and free. Register a sink with `TryAddEnumerable` and an
+implementation type or instance; a factory lambda is rejected.
+
+> The Messaging outbox model has been rebuilt since ADR-MEDIATR-015 (one reentrant table,
+> routing by `MessageKind`, `.MediatR` decorates the standard dispatcher). See ADR-MSG-019
+> and the latest session trace.
 
 ### Commit conventions
 
@@ -349,77 +368,16 @@ feat(result): add EnsureAsync overload
 fix(mediatr): correct pipeline order with custom behaviors
 chore(build): update Directory.Packages.props
 docs(domain): add aggregate root design guide
-test(multitenancy): implement ArchitectureTests
-test(multitenancy): implement ArchitectureTests
-```
-
-### Published NuGet package names
-
-```txt
-MicroKit.Result                                        ✅ 1.0.0-preview.2
-MicroKit.Result.AspNetCore                             ✅ 1.0.0-preview.2
-MicroKit.Domain                                        ✅ 1.0.0-preview.5
-MicroKit.Logging                                       ✅ 1.0.0-preview.1
-MicroKit.Logging.Abstractions                          ✅ 1.0.0-preview.2
-MicroKit.Logging.OpenTelemetry                         ✅ 1.0.0-preview.1
-MicroKit.Logging.AspNetCore                            ✅ 1.0.0-preview.1
-MicroKit.Logging.Diagnostics                           ✅ 1.0.0-preview.1
-MicroKit.Logging.Analyzers                             ✅ 1.0.0-preview.1
-MicroKit.Logging.Generators                            ✅ 1.0.0-preview.1
-MicroKit.MediatR                                       ✅ 1.0.0-preview.4
-MicroKit.MediatR.Abstractions                          ✅ 1.0.0-preview.4
-MicroKit.MediatR.Behaviors                             ✅ 1.0.0-preview.2
-MicroKit.MediatR.Testing                               ✅ 1.0.0-preview.2
-MicroKit.Persistence.Abstractions                      ✅ 1.0.0-preview.3
-MicroKit.Persistence                                   ✅ 1.0.0-preview.3
-MicroKit.Persistence.EntityFrameworkCore               ✅ 1.0.0-preview.3
-MicroKit.Persistence.EntityFrameworkCore.PostgreSql    ✅ 1.0.0-preview.3
-MicroKit.Persistence.EntityFrameworkCore.SqlServer     ✅ 1.0.0-preview.3
-MicroKit.Persistence.Specifications                    ✅ 1.0.0-preview.3
-MicroKit.Persistence.Testing                           ✅ 1.0.0-preview.3
-MicroKit.Persistence.Analyzers                         ✅ 1.0.0-preview.3
-MicroKit.Tenancy.Abstractions                          ✅ 1.0.0-preview.1
-MicroKit.Tenancy                                       ✅ 1.0.0-preview.1
-MicroKit.Tenancy.AspNetCore                            ✅ 1.0.0-preview.1
-MicroKit.Tenancy.EntityFrameworkCore                   ✅ 1.0.0-preview.1
-MicroKit.Tenancy.Analyzers                             ✅ 1.0.0-preview.1
-MicroKit.Auth.Abstractions                             ✅ 1.0.0-preview.3
-MicroKit.Auth                                          ✅ 1.0.0-preview.3
-MicroKit.Auth.AspNetCore                               ✅ 1.0.0-preview.3
-MicroKit.Auth.Permissions                              ✅ 1.0.0-preview.3
-MicroKit.Auth.Roles                                    ✅ 1.0.0-preview.3
-MicroKit.Auth.Jwt                                      ✅ 1.0.0-preview.3
-MicroKit.Auth.Supabase                                 ✅ 1.0.0-preview.3
-MicroKit.Auth.Multitenancy                             ✅ 1.0.0-preview.3
-MicroKit.Auth.Testing                                  ✅ 1.0.0-preview.3
-MicroKit.Execution.Abstractions                        ✅ 1.0.0-preview.1
-MicroKit.Messaging.Abstractions                        ✅ 1.0.0-preview.4
-MicroKit.Messaging                                     ✅ 1.0.0-preview.4
-MicroKit.Messaging.EntityFrameworkCore                 ✅ 1.0.0-preview.4
-MicroKit.Messaging.MediatR                             ✅ 1.0.0-preview.4
-MicroKit.Messaging.Testing                             📋 Implemented - not release
-MicroKit.Messaging.RabbitMQ                            ⏳ v2
-MicroKit.Messaging.AzureServiceBus                     ⏳ v2
-MicroKit.Messaging.Kafka                               ⏳ v2
+test(tenancy): implement ArchitectureTests
 ```
 
 ---
 
-## Sessions
+## 🔁 Working method
 
-Read the most recent file in `.claude-context/sessions/` before starting any work.
+The immutable agent flow, the git rules, the post-code agent protocol and the web ↔ Claude
+Code passing order are defined **once**, in `.claude-context/context/session-handoff.md`.
+They are not restated here.
 
----
-
-## MicroKit immutable flow (agents)
-
-```
-PRE-CODE  : implementer /plan → architect review → implementation
-POST-CODE : distributed-context-specialist (if AsyncLocal / propagation)
-            dependency-guardian (if .csproj modified)
-            api-reviewer (if public API changed)
-            → in separate Claude Code sessions
-            → "Do not commit anything" mandatory in all post-code prompts
-MERGE     : only after all relevant agents approved
-/compact  : after full package implementation, before new session
-```
+Before starting any work: read that file, then the most recent file in
+`.claude-context/sessions/`.

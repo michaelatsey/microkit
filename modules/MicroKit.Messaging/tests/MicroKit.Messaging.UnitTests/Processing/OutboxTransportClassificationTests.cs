@@ -3,6 +3,7 @@ using Microsoft.Extensions.Time.Testing;
 namespace MicroKit.Messaging.UnitTests.Processing;
 
 using MicroKit.Messaging.Dispatch;
+using MicroKit.Messaging.Outbox;
 
 /// <summary>
 /// The batch engine driven through the <b>real</b> <c>TransportOutboxDispatcher</c> over a
@@ -263,6 +264,11 @@ public sealed class OutboxTransportClassificationTests
 
     private static OutboxProcessor BuildCore(IOutboxProcessorStore store, ServiceCollection services)
     {
+        // Registered by AddMicroKitMessaging() in production. The processor stamps the row being
+        // dispatched onto it, and treats a scope that cannot supply it as a composition fault
+        // rather than a transient one — so a container without it fails every test here loudly.
+        services.AddScoped<OriginMessageHolder>();
+
         var provider = services.BuildServiceProvider();
 
         return new OutboxProcessor(

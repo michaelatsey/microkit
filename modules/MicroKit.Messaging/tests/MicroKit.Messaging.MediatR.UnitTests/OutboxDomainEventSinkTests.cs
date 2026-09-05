@@ -27,7 +27,7 @@ public sealed class OutboxDomainEventSinkTests
     {
         _serializer.Serialize(Arg.Any<object>()).Returns("{}");
         _sut = new OutboxDomainEventSink(
-            _factory, new OutboxMessageFactory(_serializer), _outboxWriter, _ctx);
+            _factory, new OutboxMessageFactory(_serializer, TimeProvider.System), _outboxWriter, _ctx);
     }
 
     [Fact]

@@ -25,6 +25,30 @@ namespace MicroKit.Messaging.Execution;
 /// The default value is a context carrying a fresh <c>CorrelationId</c> and nothing else, which is
 /// what a scope created outside the messaging pipeline (an HTTP request, a test) gets.
 /// </para>
+/// <para>
+/// <b>There is a second holder, and it is not a copy of this one.</b>
+/// <see cref="MicroKit.Messaging.Outbox.OriginMessageHolder"/> exists for the same structural
+/// reason — a value has to be resolvable as a service to reach constructor injection — and behaves
+/// differently in three ways a reader should not have to infer:
+/// <list type="bullet">
+///   <item><b>Different writer.</b> This one is written by
+///         <see cref="PassThroughExecutionScopeFactory"/>, before the scope is handed out. That one
+///         is written by <c>OutboxProcessor</c>, on the scope it received — deliberately not by the
+///         factory, so a host supplying its own cannot drop the value.</item>
+///   <item><b>Different override semantics.</b> This one is read <i>through</i>
+///         <see cref="IExecutionContext"/>, so a host that registers its own scoped
+///         <see cref="IExecutionContext"/> bypasses this holder entirely and takes hydration on
+///         itself. That one is read as its own concrete internal type and cannot be displaced by
+///         any host registration.</item>
+///   <item><b>Different default.</b> This one always holds a context. That one defaults to
+///         <see langword="null"/>, and null there is a valid, common and meaningful value.</item>
+/// </list>
+/// </para>
+/// <para>
+/// Neither is <c>AsyncLocal</c>, despite the collision between this type's name and
+/// <see cref="System.Threading.ExecutionContext"/>, which is. Both are ordinary scoped DI objects;
+/// nothing in this module reads an ambient value except <c>Activity.Current</c>.
+/// </para>
 /// </remarks>
 internal sealed class ExecutionContextHolder
 {

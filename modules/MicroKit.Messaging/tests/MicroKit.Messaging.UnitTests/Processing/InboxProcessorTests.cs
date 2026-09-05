@@ -527,6 +527,92 @@ public sealed class InboxProcessorTests
     }
 
     // -----------------------------------------------------------------------------------
+    // The causation link — what makes the delivered message the cause of the handler's work
+    // -----------------------------------------------------------------------------------
+
+    /// <summary>
+    /// Everything the handler stages names the delivered message as its cause, so
+    /// <c>CausationId</c> is derived from <c>message.MessageId</c> — never copied from the row's
+    /// own <c>CausationId</c>, and never taken from <c>RowId</c>.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <c>RowId</c> is the local surrogate primary key; it is meaningless outside this table and to
+    /// every other process. <c>MessageId</c> is the end-to-end identity the producer assigned, and
+    /// is what answers "which message caused this" downstream. The row is seeded so that all three
+    /// candidate values differ — otherwise the test passes under every implementation.
+    /// </para>
+    /// <para>
+    /// Reachability note: nothing produces inbox rows in this release (ADR-MSG-019) and
+    /// <c>InboxIngestionValidator</c> fails a host that registers a handler, so this path is
+    /// exercised only by driving the processor directly, as here. It is asserted anyway — the
+    /// receiving seam will arrive against this behaviour, not decide it afresh.
+    /// </para>
+    /// </remarks>
+    [Fact]
+    public async Task ProcessBatch_NamesTheDeliveredMessageAsTheCauseOfTheHandlersWork()
+    {
+        var ancestorCause = CausationId.New();
+        var message = InboxFixtures.Message(consumerType: ConsumerType, eventType: EventType);
+        message.CausationId = ancestorCause;
+
+        var store = StoreReturning(InboxFixtures.Claim(message));
+        var sut = BuildRecordingScopes(store, out var scopes);
+
+        await sut.ProcessBatchAsync(batchSize: 10, CancellationToken.None);
+
+        var ctx = scopes.Contexts.ShouldHaveSingleItem();
+
+        ctx.CausationId.ShouldBe(
+            message.MessageId.Value.ToString(),
+            "the cause of the handler's work is the message being delivered");
+
+        ctx.CausationId.ShouldNotBe(
+            ancestorCause.Value.ToString(),
+            "copying the row's own causation names the grandparent, one hop too far up");
+
+        ctx.CausationId.ShouldNotBe(
+            message.RowId.ToString(),
+            "RowId is a local surrogate — it names nothing any other process can resolve");
+    }
+
+    /// <summary>
+    /// The correlation is copied through unchanged — it identifies the chain, not a hop.
+    /// </summary>
+    /// <remarks>
+    /// The mirror of the outbox's <c>ProcessBatch_PropagatesCorrelationUnchangedWhileDerivingCausation</c>,
+    /// and the asymmetry is what let this go uncovered: correlation and causation are propagated by
+    /// adjacent lines and only a test that seeds the correlation distinctly can tell one from the
+    /// other. Every other test in this file leaves <c>CorrelationId</c> null, so nulling the copy
+    /// fails none of them.
+    /// </remarks>
+    [Fact]
+    public async Task ProcessBatch_PropagatesCorrelationUnchangedWhileDerivingCausation()
+    {
+        var correlation = CorrelationId.New();
+        var message = InboxFixtures.Message(
+            consumerType: ConsumerType, eventType: EventType, correlationId: correlation);
+
+        var store = StoreReturning(InboxFixtures.Claim(message));
+        var sut = BuildRecordingScopes(store, out var scopes);
+
+        await sut.ProcessBatchAsync(batchSize: 10, CancellationToken.None);
+
+        var ctx = scopes.Contexts.ShouldHaveSingleItem();
+
+        ctx.CorrelationId.ShouldBe(
+            correlation.Value.ToString(),
+            "correlation identifies the whole chain and never advances a hop");
+
+        ctx.CausationId.ShouldBe(
+            message.MessageId.Value.ToString(),
+            "causation advances while correlation does not — asserting one without the other " +
+            "passes while the two are confused for each other");
+
+        ctx.TenantId.ShouldBe(message.TenantId);
+    }
+
+    // -----------------------------------------------------------------------------------
     // Helpers
     // -----------------------------------------------------------------------------------
 
@@ -595,6 +681,36 @@ public sealed class InboxProcessorTests
             options ?? DefaultOptions,
             new FakeTimeProvider(Now),
             random ?? FixedRandom.NoJitter,
+            NullLogger<InboxProcessor>.Instance);
+    }
+
+    /// <summary>
+    /// Same processor, with the scope factory handed back so a test can read the
+    /// <see cref="IExecutionContext"/> the processor built for each message.
+    /// </summary>
+    private static InboxProcessor BuildRecordingScopes(
+        IInboxProcessorStore store,
+        out TestExecutionScopeFactory scopes)
+    {
+        var services = new ServiceCollection();
+        services.AddSingleton(new RecordingInboxHandler());
+        services.AddSingleton<IInboxSettlementStore>(new ScriptedInboxSettlementStore());
+        services.AddLogging();
+
+        var provider = services.BuildServiceProvider();
+        scopes = new TestExecutionScopeFactory(provider.GetRequiredService<IServiceScopeFactory>());
+
+        var registry = new MessageHandlerRegistry();
+        registry.Register(typeof(InboxTestEvent), ConsumerType, typeof(RecordingInboxHandler));
+
+        return new InboxProcessor(
+            store,
+            registry,
+            RoundTripSerializer(),
+            scopes,
+            DefaultOptions,
+            new FakeTimeProvider(Now),
+            FixedRandom.NoJitter,
             NullLogger<InboxProcessor>.Instance);
     }
 

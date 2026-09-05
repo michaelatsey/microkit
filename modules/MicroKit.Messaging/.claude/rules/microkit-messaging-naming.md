@@ -14,10 +14,10 @@
 
 | Pattern | Example |
 |---------|---------|
-| `IIntegrationEvent` | **bare marker** (ADR-MSG-018) — business payload only, `IEvent` base retained. Metadata lives on `IntegrationEventMessage`, assigned at staging |
+| `IIntegrationEvent` | **bare marker** (ADR-MSG-018) — business payload only, `IEvent` base retained. Metadata lives on the `MessageKind.Contract` **outbox row**, assigned at staging |
 | `IntegrationEventAttribute` | `[IntegrationEvent("name.v1")]` — mandatory wire contract name; the CLR type name cannot serve as one. Rejects null/empty/whitespace in its constructor, so one guard covers `Publishes<T>()` and `Consumes<T>()` alike — an empty name is a usable dictionary key and would bind, resolve and travel |
-| `IIntegrationEventPublisher` | `PublishAsync<T>` — stages into the caller's open transaction, never commits, never delivers |
-| `IIntegrationEventWriter` | `AddAsync` + `HasOpenTransaction` — staging port; stages only, never calls `SaveChangesAsync` |
+| `IIntegrationEventPublisher` | `PublishAsync<T>` — writes a `MessageKind.Contract` row into the caller's open transaction; never commits, never delivers. A replayed publication is absorbed and returns the **existing** row's id, so a notification handler cannot observe its own redelivery |
+| `IIntegrationEventWriter` | `AddAsync(OutboxMessage)` → `IntegrationEventWriteResult`, plus `HasOpenTransaction`. Writes a `Contract` row into the outbox. It **flushes and never commits** — the replay key on `(OriginMessageId, ContractName)` can only be consulted by attempting the insert, so the answer must reach the publisher before it returns. A replayed publication is reported, never thrown |
 | `IntegrationEventRegistry` | **bidirectional**. `ResolveContract(Type)` → the contract a type publishes under; `TryResolveLocalType(name)` / `ResolveLocalType(name)` → the local CLR type a wire name deserializes into. The reverse direction is what lets a consumer act on a payload without the producer's assembly — `Type.GetType(assemblyQualifiedName)` cannot cross a process. One local type per contract name per process; a second claimant is a boot failure. There is deliberately no `TryResolveContract`: a miss in the forward direction is a programming error, a miss in the reverse one is data off the wire |
 | `IntegrationEventSubscription` | `sealed record (Type EventType, string ContractName)` — one consumed contract. Carries **no `Source`**, structurally: a consumer has none to declare |
 | `IntegrationEventSubscriptionBuilder` | `Consumes<TEvent>()` — mirrors `Publishes<TEvent>()`, reads the same `[IntegrationEvent]` attribute, rejects its absence at registration |
@@ -47,7 +47,7 @@
 | `OutboxMessage` | outbox EF Core entity — `sealed class OutboxMessage` with `{ get; set; }` |
 | `InboxMessage` | inbox EF Core entity — `sealed class InboxMessage` with `{ get; set; }` |
 | `MessageEnvelope` | the **wire format** — `sealed record`, non-generic, carrying `MessageId` / `ContractName` / `Source` / opaque `Payload` / `TenantId` / correlation / causation / `OccurredOnUtc`. A **compatibility commitment**: adding a member is additive, removing or renaming one breaks every deployed consumer. Identifiers are bare `Guid`s, not the VO records — those serialize as `{"value":…}`, and a `JsonConverter` would make the wire shape depend on which serializer is registered. Replaced `MessageEnvelope<T>`, which was generic over a *deserialized* payload and carried no `ContractName` |
-| `IntegrationEventMessage` | integration event EF Core entity — `sealed class` with `{ get; set; }`, its own table |
+| `IntegrationEventWriteResult` | `sealed record` — `Staged(id)` / `AlreadyPublishedAs(existingId)`. Carries an id because the two paths yield different ones: on the absorbed path the row this call built does not exist, so the **existing** row's id is returned. ~~`IntegrationEventMessage`~~ and its own table are **deleted** — a contract is a `MessageKind.Contract` outbox row |
 | `{Name}Options` | configuration record — `MessagingOptions`, `OutboxProcessorOptions` |
 
 > `OutboxMessage` and `InboxMessage` are `sealed class` (not `sealed record`) because

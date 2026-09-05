@@ -99,7 +99,11 @@ ownership token; one settlement writes every disposition back. Round trips per b
 ```csharp
 // ✅ Step 1 — candidates. A separate query, NOT OrderBy/Take inside ExecuteUpdate.
 //    Full rows, not ids: that is what lets step 3 be skipped when nothing was contended.
-var candidates = await Dispatchable(now).OrderBy(m => m.OccurredOnUtc).Take(batchSize).ToListAsync(ct);
+var candidates = await Dispatchable(now).OrderBy(m => m.CreatedAtUtc).Take(batchSize).ToListAsync(ct);
+//                                                    ^^^^^^^^^^^^ the STAGING time, never the
+// business one: OccurredOnUtc is caller-supplied, so ordering on it lets a backdated event jump
+// the whole queue. GetDeadLetteredAsync still orders on OccurredOnUtc — operator triage wants the
+// business fact — and the two must not be harmonised.
 
 var candidateIds = candidates.ConvertAll(m => m.Id);
 candidateIds.Sort();   // deterministic lock order — two processors with intersecting candidate
@@ -606,6 +610,49 @@ would be a defect.** On the outbox, deleting early loses history; on the inbox i
 deduplication guarantee, because the table only deduplicates messages it still holds. The window
 must exceed the maximum plausible redelivery delay of every upstream transport.
 
+## The per-message context — correlation is copied, causation is DERIVED
+
+Both processors build an `IExecutionContext` for the message's own scope. The two trace values are
+not treated the same way, and conflating them is how the chain was dead for the module's whole life.
+
+```csharp
+// ✅ REQUIRED — the row being processed is the CAUSE of everything staged in its scope.
+var ctx = new ExecutionContext
+{
+    TenantId      = message.TenantId,                          // off the row, never ambient
+    CorrelationId = message.CorrelationId?.Value.ToString(),    // COPIED — identifies the chain
+    CausationId   = message.Id.Value.ToString(),                // DERIVED — advances one hop
+};
+
+// ❌ FORBIDDEN — copying the row's own causation names the GRANDPARENT, one hop too far up.
+CausationId = message.CausationId?.Value.ToString();
+```
+
+> **Why this was invisible.** Nothing in the module assigns a causation at the root, so copy-through
+> propagated null forever: `CausationId` was null on every row of every path, while the column, the
+> value object and `MessageEnvelope.CausationId` all documented a link that was never built. Every
+> causation test fed a value in through a stubbed `IExecutionContext` and asserted it survived
+> serialization — the plumbing, never the derivation. A test must seed a **different** ancestor
+> causation, or it passes under both implementations.
+
+| Processor | The cause is | Never |
+|---|---|---|
+| `OutboxProcessor` | `message.Id` | `message.CausationId` |
+| `InboxProcessor` | `message.MessageId` | `message.CausationId`, and never `message.RowId` |
+
+`RowId` is the surrogate primary key ADR-MSG-017 introduced so the inbox claim filters on a single
+column. It is meaningless outside its own table; `MessageId` is the end-to-end identity the producer
+assigned, and the only one that answers "which message caused this" downstream.
+
+**Do not merge this with `OriginMessageId`, although the outbox derives both from `message.Id`.**
+They coincide in value and differ in obligation: `OriginMessageId` is half of a unique key and may
+**never** degrade — a null switches deduplication off in silence — while `CausationId` is diagnostic
+and degrades to null rather than failing when it cannot be parsed
+(`OutboxMessageFactory.ResolveCausation`). One is carried by `OriginMessageHolder` and stamped by
+the processor; the other travels in the execution context.
+
+---
+
 ## Batch Processing Conventions
 
 ```csharp
@@ -640,12 +687,12 @@ A path that cannot deliver must say so. Returning as if it had is the failure mo
 treats as blocking, because nothing downstream can detect it.
 
 ```csharp
-// ❌ FORBIDDEN — a staged row with no transaction to commit it
+// ❌ FORBIDDEN — a row written with no transaction to govern it
 public async ValueTask<MessageId> PublishAsync<T>(T evt, ...)
 {
-    await _writer.AddAsync(message, ct);   // ← change tracker discarded, event never existed,
-    return message.Id;                     //   and no log, metric or trace records that it was
-}                                          //   meant to
+    await _writer.AddAsync(message, ct);   // ← the writer FLUSHES, so with no open transaction the
+    return message.Id;                     //   provider's implicit one commits it: an event
+}                                          //   announced permanently, for a fact that may roll back
 
 // ✅ REQUIRED — refuse loudly, BEFORE staging
 if (!_writer.HasOpenTransaction)
@@ -653,10 +700,16 @@ if (!_writer.HasOpenTransaction)
         $"'{typeof(T).Name}' was published with no open transaction. ...");
 ```
 
-> The guard runs **before** any other work, and the order is the contract: a guard placed after
-> staging would leave the row for whatever transaction the caller happened to have, and the event
-> would be published by an unrelated commit. `PublishAsync_WithNoOpenTransaction_ThrowsAndStagesNothing`
-> asserts both halves.
+> The guard runs **before** any other work, and the order is the contract: a guard placed after the
+> write would have nothing left to prevent — the row is already committed by then, irrevocably.
+> `PublishAsync_WithNoOpenTransaction_ThrowsAndStagesNothing` asserts both halves.
+
+> ⚠ **`IIntegrationEventWriter.AddAsync` flushes, and that is not a violation of "never commit".**
+> The replay key on `(OriginMessageId, ContractName)` can only be consulted by attempting the
+> insert, and the answer must reach the publisher before it returns, or a replayed dispatch fails
+> the caller's commit instead of being absorbed. The write is inside the caller's transaction and a
+> rollback still erases it. It also flushes the caller's other pending changes — EF has no
+> per-entity save — which changes when their own violations surface, not whether they commit.
 
 > ⚠ `IUnitOfWork.CommitAsync` is **not** an open transaction. It is a bare `SaveChangesAsync`
 > running under the provider's implicit per-call transaction, which never appears in

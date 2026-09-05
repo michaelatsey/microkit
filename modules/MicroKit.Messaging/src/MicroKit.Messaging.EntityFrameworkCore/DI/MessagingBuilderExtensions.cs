@@ -98,6 +98,15 @@ public static class MessagingBuilderExtensions
     /// registration over one scoped <c>DbContext</c> gives. Registering it with any other lifetime
     /// makes the guard pass while the row commits somewhere else.
     /// </para>
+    /// <para>
+    /// <b>The provider must support savepoints.</b> The writer flushes inside the caller's
+    /// transaction so a replayed publication is absorbed before <c>PublishAsync</c> returns, and it
+    /// takes a savepoint first because a rejected insert aborts the whole transaction on PostgreSQL
+    /// — without one, absorbing the replay would destroy the caller's own pending writes. A provider
+    /// that cannot take a savepoint is refused at publish time with
+    /// <c>IntegrationEventPublishException</c> rather than silently losing that protection. Both
+    /// supported providers, PostgreSQL and SQLite, qualify.
+    /// </para>
     /// </remarks>
     public static MessagingBuilder AddEfCoreIntegrationEvents<TContext>(this MessagingBuilder builder)
         where TContext : DbContext

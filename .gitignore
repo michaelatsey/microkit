@@ -22,3 +22,4 @@ artifacts/
 .gitignore
 .claude/SESSION-MICROKIT-LOGGING.md
 .claude-context/sessions/
+LOT.md

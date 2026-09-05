@@ -116,6 +116,14 @@ public static class ServiceCollectionExtensions
         services.TryAddScoped<IExecutionContext>(
             sp => sp.GetRequiredService<ExecutionContextHolder>().Context);
 
+        // Names the outbox row whose dispatch is running in this scope, so a notification handler
+        // that publishes an integration event stamps OriginMessageId on the contract row without
+        // the identity being threaded through IPublisher.Publish and a handler signature. Written
+        // by OutboxProcessor on the scope it received — never by the scope factory, because a host
+        // may supply its own and a dropped origin disables deduplication silently rather than
+        // throwing. See OriginMessageHolder.
+        services.TryAddScoped<OriginMessageHolder>();
+
         // The serializer default. It belongs HERE and not on an optional builder method, because
         // the two types that require it — InboxProcessor and OutboxMessageFactory — are registered
         // by this method unconditionally. It used to come from AddInProcessTransport(), and when

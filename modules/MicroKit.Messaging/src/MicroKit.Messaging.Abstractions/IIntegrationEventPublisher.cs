@@ -66,6 +66,17 @@ namespace MicroKit.Messaging;
 /// publish from elsewhere. The flow rule itself belongs to the application, as an architecture
 /// test.
 /// </para>
+/// <para>
+/// <b>A replayed publication is absorbed, and the handler is told nothing.</b> Dispatch is
+/// at-least-once, so the notification handler above re-runs whenever a lease expires mid-flight.
+/// The second publication does not stage a second row and does not throw: the replay key on
+/// <c>(OriginMessageId, ContractName)</c> rejects it, the writer absorbs the rejection, and
+/// <c>PublishAsync</c> returns <b>the identifier of the row the first attempt staged</b>. A caller
+/// that treats the returned id as "the row I just created" — writing it into its own table as a
+/// freshly-minted key, say — is wrong on that path, and wrong silently, because the id is a valid
+/// identifier of a real row. It is the right value to correlate on and the wrong value to treat as
+/// evidence of a write. Consumers are unaffected either way: one contract row means one delivery.
+/// </para>
 /// </remarks>
 public interface IIntegrationEventPublisher
 {
@@ -78,13 +89,17 @@ public interface IIntegrationEventPublisher
     /// When the underlying fact happened, if known. A notification handler has this on the domain
     /// event and should pass it: without it the only timestamp on the row is the staging time,
     /// which in this flow is one relay later than the fact — minutes under load, hours after an
-    /// incident. Omitted, the transport falls back to the staging time, which is an honest
-    /// approximation rather than a silent one.
+    /// incident. Omitted, it is resolved to the staging time <i>at staging</i>, on the row itself,
+    /// which is an honest approximation rather than a silent one. The row's column is not nullable,
+    /// so the substitution happens here and not one relay later — a caller reading the row back
+    /// cannot distinguish a supplied time from a substituted one, and the only trace is a log entry.
     /// </param>
     /// <param name="ct">A cancellation token.</param>
     /// <returns>
-    /// The identifier assigned to the staged message: the one value linking this business
+    /// The identifier of the row that carries this publication: the one value linking this business
     /// operation to what a consumer eventually receives, and what its inbox deduplicates on.
+    /// <b>Not necessarily the identifier of a row this call created</b> — on an absorbed replay it
+    /// is the identifier of the row an earlier attempt staged. See the remarks.
     /// </returns>
     /// <exception cref="IntegrationEventConfigurationException">
     /// The event type is not registered.

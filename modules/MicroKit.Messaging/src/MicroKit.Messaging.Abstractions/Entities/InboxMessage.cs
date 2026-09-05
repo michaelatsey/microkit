@@ -157,5 +157,18 @@ public sealed class InboxMessage
     /// Gets or sets the causation identifier recording which message triggered this one.
     /// <see langword="null"/> for root events.
     /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Assigned by the producing side and carried inbound; this row does not derive it. What
+    /// <c>InboxProcessor</c> derives is the causation of everything the <i>handler</i> stages — it
+    /// puts this row's <see cref="MessageId"/> (never <see cref="RowId"/>, which is a local
+    /// surrogate meaningless to any other process) into the per-message <c>IExecutionContext</c>,
+    /// so work caused by delivering this message names it as the cause.
+    /// </para>
+    /// <para>
+    /// Diagnostic, never load-bearing: nothing keys, indexes, filters or orders on it. The dedup
+    /// authority is the unique index on (<see cref="MessageId"/>, <see cref="ConsumerType"/>).
+    /// </para>
+    /// </remarks>
     public CausationId? CausationId { get; set; }
 }

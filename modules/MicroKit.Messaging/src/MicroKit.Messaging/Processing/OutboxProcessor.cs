@@ -1,5 +1,7 @@
 using System.Diagnostics;
 
+using MicroKit.Messaging.Outbox;
+
 using MessageCtx = MicroKit.Messaging.Execution.ExecutionContext;
 
 namespace MicroKit.Messaging.Processing;
@@ -221,7 +223,24 @@ internal sealed class OutboxProcessor : IOutboxProcessor
             // carry null. The factory already substitutes CorrelationId.New() when the execution
             // context has none, but the entity itself does not guarantee it.
             CorrelationId = message.CorrelationId?.Value.ToString(),
-            CausationId = message.CausationId?.Value.ToString(),
+
+            // DERIVED from this row, not copied off it. Everything staged inside this scope was
+            // caused by dispatching THIS message, so the cause is message.Id.
+            // message.CausationId names what caused the row being dispatched — one hop too far up.
+            //
+            // Copying it through made every descendant inherit one ancestor's causation, and since
+            // nothing in the module ever assigns a causation at the root, that ancestor's value is
+            // null: the chain was null on every row, on every path, while OutboxMessage.CausationId,
+            // the CausationId value object and MessageEnvelope.CausationId all documented a link
+            // that was never built. The reentrant hop is where that stopped being harmless — a
+            // contract published by a notification handler demonstrably has a cause, and it is the
+            // row this scope is dispatching.
+            //
+            // Same identity OriginMessageHolder carries two statements below, for a different
+            // purpose: the origin is a REPLAY KEY and must be exact, causation is a TRACE LINK and
+            // degrades to null when unparseable (OutboxMessageFactory.ResolveCausation). They are
+            // kept separate because one may never be allowed to fall back and the other must.
+            CausationId = message.Id.Value.ToString(),
         };
 
         // Scope creation sits inside the caller's try on purpose: a tenant-aware factory
@@ -232,9 +251,50 @@ internal sealed class OutboxProcessor : IOutboxProcessor
             .CreateScopeAsync(ctx, cancellationToken)
             .ConfigureAwait(false);
 
+        // Stamped on the scope this processor received, deliberately not passed to the factory.
+        // A host may supply its own IExecutionScopeFactory, and an implementation that forgot to
+        // carry the value would not throw — it would leave the origin null, which silently
+        // disables deduplication for every contract this dispatch publishes, because nulls are
+        // distinct in UX_OutboxMessages_Origin_ContractName. Doing it here removes the chance.
+        StampOrigin(scope.ServiceProvider, message.Id);
+
         var dispatcher = ResolveDispatcher(scope.ServiceProvider);
 
         await dispatcher.DispatchAsync(message, cancellationToken).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// Names the row being dispatched, so a notification handler that publishes an integration
+    /// event records which dispatch produced it.
+    /// </summary>
+    /// <remarks>
+    /// An activation failure is converted the same way <see cref="ResolveDispatcher"/> converts
+    /// one, and for the same reason: a scope whose provider cannot supply
+    /// <see cref="OriginMessageHolder"/> comes from a container this composition does not control,
+    /// which is a deployment defect rather than a transient fault. Classifying it as transient
+    /// would spend the retry budget of every queued message on it.
+    /// </remarks>
+    private static void StampOrigin(IServiceProvider serviceProvider, MessageId originId)
+    {
+        OriginMessageHolder holder;
+
+        try
+        {
+            holder = serviceProvider.GetRequiredService<OriginMessageHolder>();
+        }
+        catch (InvalidOperationException ex)
+        {
+            throw new OutboxConfigurationException(
+                $"{nameof(OriginMessageHolder)} could not be resolved from the execution scope. " +
+                "It is registered by AddMicroKitMessaging(), so the likeliest cause is an " +
+                "IExecutionScopeFactory returning a scope built from a different container. " +
+                "Without it a published integration event cannot record the dispatch that " +
+                "produced it, and the replay key that stops a redelivery duplicating it is " +
+                "silently inactive. Retrying will not help.",
+                ex);
+        }
+
+        holder.OriginMessageId = originId;
     }
 
     /// <summary>Resolves the dispatcher, converting an activation failure into a typed fault.</summary>

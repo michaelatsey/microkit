@@ -23,11 +23,24 @@ namespace MicroKit.Messaging.Execution;
 /// direct <c>GetService(typeof(IExecutionContext))</c> call resolves to the same context.
 /// </para>
 /// <para>
-/// <b>Contract for custom implementations:</b> bridge the <c>context</c> parameter into the
-/// scope you return, in a way constructor injection can observe — a scoped holder, an ambient
-/// value, or your own registration. Exposing it only through a wrapped
-/// <see cref="IServiceProvider"/> is not enough, and loses the end-to-end tracing chain for
-/// anything that reads the context inside a message scope.
+/// <b>Contract for custom implementations — two obligations, not one.</b>
+/// </para>
+/// <para>
+/// <b>First:</b> bridge the <c>context</c> parameter into the scope you return, in a way
+/// constructor injection can observe — a scoped holder, an ambient value, or your own
+/// registration. Exposing it only through a wrapped <see cref="IServiceProvider"/> is not enough,
+/// and loses the end-to-end tracing chain for anything that reads the context inside a message
+/// scope.
+/// </para>
+/// <para>
+/// <b>Second:</b> build the scope from the <i>application's own</i>
+/// <see cref="IServiceScopeFactory"/> — not from a private container of your own. The outbox
+/// processor stamps the row it is dispatching onto a scoped service it resolves from the scope you
+/// hand back (<c>OriginMessageHolder</c>, internal to this package, so you cannot register it
+/// yourself). A scope from a container that cannot supply it fails the dispatch with
+/// <c>OutboxConfigurationException</c>: the batch is released untouched, no retry budget is spent,
+/// and the worker stops. That is deliberate — it is a deployment defect, and the alternative to
+/// failing is a null origin, which switches the integration-event replay key off in silence.
 /// </para>
 /// <para>
 /// A host that registers its own <see cref="IExecutionContext"/> — a tenant-aware one, say —

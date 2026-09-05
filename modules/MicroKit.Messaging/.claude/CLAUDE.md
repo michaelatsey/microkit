@@ -143,14 +143,19 @@ IIntegrationEvent                  // BARE MARKER (ADR-MSG-018) — business pay
                                    //   assigned at staging from IExecutionContext
 IntegrationEventAttribute          // [IntegrationEvent("name.v1")] — mandatory wire contract name
 IIntegrationEventPublisher         // PublishAsync<T>(evt, occurredOnUtc, ct) → ValueTask<MessageId>
-                                   //   stages into the CALLER's open transaction; never commits
-IIntegrationEventWriter            // AddAsync + HasOpenTransaction — staging port, EFCore implements
+                                   //   writes a Contract row into the CALLER's open transaction;
+                                   //   never commits. A replayed publication returns the EXISTING
+                                   //   row's id and the handler is told nothing
+IIntegrationEventWriter            // AddAsync(OutboxMessage) -> IntegrationEventWriteResult +
+                                   //   HasOpenTransaction. Writes a Contract row into the OUTBOX;
+                                   //   it flushes (the replay key must be attempted) but never commits
 IntegrationEventRegistry           // BIDIRECTIONAL — ResolveContract(Type) → contract; ResolveLocalType(name)
                                    //   → local CLR type. The reverse direction is the precondition
                                    //   for any transport: a consumer lacks the producer's assembly,
                                    //   so Type.GetType(AQN) cannot resolve across a process
 IntegrationEventSubscription       // sealed record (Type, ContractName) — no Source, deliberately
-IntegrationEventMessage            // sealed class — its own table, NOT a slice of the outbox
+IntegrationEventWriteResult        // sealed record — Staged / AlreadyPublishedAs(existingId).
+                                   //   A replayed publication is REPORTED, never thrown
 MessageId                          // sealed record — strongly-typed message identifier
 CorrelationId                      // sealed record — correlation chain identifier
 CausationId                        // sealed record — causal parent identifier (nullable on root events)
@@ -229,8 +234,9 @@ MessageEnvelope                    // sealed record — the WIRE FORM. MessageId
 6. **No silent success** — a path that cannot deliver must throw, never return as if it had.
    A dispatcher throws `OutboxPayloadException` on a row it can never serve and
    `OutboxConfigurationException` on one this composition merely cannot serve yet;
-   `IIntegrationEventPublisher` throws `IntegrationEventPublishException` rather than stage a row
-   into a change tracker nobody will save; and `InboxIngestionValidator` fails the host when
+   `IIntegrationEventPublisher` throws `IntegrationEventPublishException` rather than let its
+   writer's flush be committed by the provider's implicit transaction — an event announced for
+   a fact that may still roll back; and `InboxIngestionValidator` fails the host when
    handlers are registered while nothing produces inbox rows (ADR-MSG-019) — the one gap in this
    release that nothing downstream could otherwise detect
 7. **Background processors never use `IHttpContextAccessor`** — `TenantId` read from `OutboxMessage`/`InboxMessage` only
@@ -370,7 +376,8 @@ All v1 packages share one version per release.
   Core writes and an unkeyed slot a decorator takes outright — so neither order can go wrong,
   rather than one of the two being made safe.
 - **ADR-MSG-015:** `IOutboxCoordinator.ExecuteAsync` and `IOutboxProcessor.ProcessBatchAsync` return `ValueTask<OutboxBatchResult>` — the batch now produces a result the worker needs to adapt its cadence, and ADR-MSG-014's `.AsTask()` rationale was factually wrong. The inbox asymmetry it recorded was closed by ADR-MSG-017.
-- **ADR-MSG-018:** integration events are a **marker** contract — `IIntegrationEvent` loses every member and keeps only the `IEvent` base; the wire name moves to `[IntegrationEvent]`; metadata is assigned at staging from `IExecutionContext` onto `IntegrationEventMessage`, which gets **its own table**. `IMessagePublisher`/`InProcessMessagePublisher` are **deleted** and ~~the in-process fan-out moves into `InProcessIntegrationDispatcher`~~, sourcing every field from the `OutboxMessage` row — which is what made the marker possible and closes a latent bug (the inbox dedup key was read off the event and survived redelivery only by accident). Publishing requires an open transaction the caller owns: `IUnitOfWork.CommitAsync` alone is **not** one. Also fixes L0 #21 — `IExecutionContext` now resolves through a scoped holder, so constructor injection finally sees the message row.
+- **Step 5 (implemented):** `IIntegrationEventPublisher` now writes a `MessageKind.Contract` row into the **outbox**; `IntegrationEventMessage`, `IntegrationEventStatus` and their EF configuration are **deleted**, and re-introduction is blocked by `NoAssemblyStillCarriesTheDedicatedIntegrationEventTable`. `IIntegrationEventWriter.AddAsync` takes an `OutboxMessage`, returns `IntegrationEventWriteResult`, and **flushes inside the caller's transaction** (savepoint + post-hoc verification, the `EfInboxStore.AddAsync` pattern) so a replayed publication is absorbed before `PublishAsync` returns. `OutboxMessageFactory.Create` is renamed **`CreateNotification`** and gains **`CreateContract`**; `OutboxMessage` gains `TraceParent`; the claim now orders on **`CreatedAtUtc`**; retention refuses to purge a `Contract` row while its origin can still be dispatched.
+- **ADR-MSG-018:** integration events are a **marker** contract — `IIntegrationEvent` loses every member and keeps only the `IEvent` base; the wire name moves to `[IntegrationEvent]`; metadata is assigned at staging from `IExecutionContext` onto ~~`IntegrationEventMessage`, which gets **its own table**~~ — **superseded by step 5: the dedicated table is retired and metadata lands on a `MessageKind.Contract` outbox row**. `IMessagePublisher`/`InProcessMessagePublisher` are **deleted** and ~~the in-process fan-out moves into `InProcessIntegrationDispatcher`~~, sourcing every field from the `OutboxMessage` row — which is what made the marker possible and closes a latent bug (the inbox dedup key was read off the event and survived redelivery only by accident). Publishing requires an open transaction the caller owns: `IUnitOfWork.CommitAsync` alone is **not** one. Also fixes L0 #21 — `IExecutionContext` now resolves through a scoped holder, so constructor injection finally sees the message row.
   **⚠ Superseded in part by ADR-MSG-019 — three points, no more.** The fan-out was *withdrawn*, not relocated: `InProcessIntegrationDispatcher` does not exist, and the row-is-the-source-of-metadata reasoning is now carried by `TransportOutboxDispatcher`. Also superseded: the claim that `AddInProcessTransport()` keeps its registrations, and the rejected alternative that cited `InboxRedeliveryTests` as blocking evidence. **Everything else above stands.**
 - **ADR-MSG-019:** the reentrant outbox. One table, two natures of row, **routed by `MessageKind`
   and never by a CLR type test**. `MicroKit.Messaging.MediatR` **decorates** rather than replaces:
