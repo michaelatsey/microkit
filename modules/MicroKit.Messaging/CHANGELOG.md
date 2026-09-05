@@ -15,12 +15,164 @@ failures and releases are batched.
 
 See ADR-MSG-015 (outbox) and ADR-MSG-017 (inbox).
 
+### Changed — integration events are outbox rows; the dedicated table is retired
+
+`IIntegrationEventPublisher.PublishAsync` now writes a `MessageKind.Contract` row into
+`OutboxMessages`, inside the caller's transaction. The chain is closed: a notification handler
+publishes, `TransportOutboxDispatcher` builds a `MessageEnvelope`, and the message leaves the
+process on the queue's second pass.
+
+The separate-table argument was aimed at a discriminator *inferred* from the payload's CLR type,
+where one misregistration could feed integration events into the MediatR fan-out. `MessageKind` is
+not that: the nature of a row is declared by whoever wrote it and read back from a column, both
+dispatchers switch on it, and it is visible to SQL. Two models for one notion had no remaining
+justification.
+
+**Removed.** `IntegrationEventMessage`, `IntegrationEventStatus`,
+`IntegrationEventMessageConfiguration`, and the `IntegrationEventMessages` table with its three
+indexes. Re-introduction is blocked by `NoAssemblyStillCarriesTheDedicatedIntegrationEventTable`.
+
+**`IIntegrationEventWriter.AddAsync` takes an `OutboxMessage`, returns `IntegrationEventWriteResult`,
+and writes rather than merely tracking — and the interface gains `HasOpenTransaction`.** The replay key on `(OriginMessageId, ContractName)` can
+only be consulted by attempting the insert, and the answer has to reach `PublishAsync` before it
+returns — otherwise the violation surfaces out of the caller's own `CommitAsync`, where nothing can
+absorb it and every notification handler would need a `try`/`catch` on a database exception to
+survive its own redelivery. It still **never commits**: the write is inside the caller's transaction
+and a rollback erases it.
+
+> ⚠ **The flush is not partial.** EF Core has no per-entity save, so anything else pending on the
+> caller's unit of work is written at the same moment — in the same transaction, with the same
+> rollback semantics. What changes is *when* a constraint violation in the caller's own change set
+> surfaces: at the publish rather than at the commit.
+
+**A replayed publication is absorbed silently** and `PublishAsync` returns the **existing** row's
+identifier, which is the one a consumer's inbox deduplicates on. Note EF Core logs the rejected
+`INSERT` at `Error` from its own category on every absorbed replay; that setting lives on your
+`DbContext`, so this library cannot silence it.
+
+**`OutboxMessageFactory.Create` is renamed `CreateNotification`**, with a new `CreateContract`
+sibling. `Create` + `CreateContract` would read as "the default and the special case"; the two kinds
+are peers. The factory also takes `TimeProvider` now.
+
+**The claim orders on `CreatedAtUtc`, not `OccurredOnUtc`.** Dispatch order must not depend on a
+business timestamp the caller supplies — on the contract path it is an optional parameter of a
+public method, so a backdated event could jump the whole queue indefinitely. `GetDeadLetteredAsync`
+keeps `OccurredOnUtc`: operator triage wants the business fact. `IX_OutboxMessages_Dispatchable`
+changes its trailing column to match.
+
+**Retention will not purge a `Contract` row while its origin can still be dispatched.** The replay
+key only rejects a duplicate while the row it produced is still in the table, and that window is a
+*state*, not a duration — automatic replay is bounded by `MaxRetries × MaxRetryBackoff`, both
+configurable, and an operator requeue of a dead-lettered origin is unbounded. `RetentionDays` keeps
+its default of 7 and its meaning. The duplicate this prevents is the one nothing downstream can
+recognise: a republished contract carries a *fresh* `MessageId`, so a consumer's inbox has never
+seen it and the handler runs a second time with full side effects.
+
+**Two behavioural changes on the row's shape.** `OutboxMessage.CorrelationId` is non-nullable, so an
+unparseable correlation id becomes a fresh one instead of null. `OccurredOnUtc` is non-nullable, so
+omitting it records the staging time at staging rather than deferring the fallback to the transport;
+the `OccurrenceTimeNotSupplied` log line is the only remaining trace of the difference.
+
+**Added.** `OutboxMessage.TraceParent` (nullable, 64) — captured at staging on contract rows only,
+because that is the last moment the producing trace is current. It does not travel yet:
+`MessageEnvelope` declares no such member, and adding one is additive when a transport needs it.
+
+**Migration.**
+
+```sql
+-- The dedicated table had no relay: nothing ever drained it, so every row it holds is
+-- undelivered by construction. Copy them first ONLY if you staged some and want them.
+INSERT INTO "OutboxMessages"
+    ("Id", "TenantId", "MessageKind", "ContractName", "Source", "OriginMessageId",
+     "EventType", "Payload", "Status", "RetryCount", "OccurredOnUtc", "CreatedAtUtc",
+     "ProcessedAtUtc", "LockedUntilUtc", "ClaimToken", "NextRetryAtUtc", "ErrorMessage",
+     "DeadLettered", "CorrelationId", "CausationId", "TraceParent")
+SELECT
+    "Id", "TenantId", 'Contract', "ContractName", "Source", NULL,
+    'unknown', "Data", 'Pending', "RetryCount",
+    COALESCE("OccurredOnUtc", "CreatedAtUtc"), "CreatedAtUtc",
+    "ProcessedAtUtc", "LockedUntilUtc", "ClaimToken", "NextRetryAtUtc", "ErrorMessage",
+    "DeadLettered", COALESCE("CorrelationId", gen_random_uuid()), "CausationId", "TraceParent"
+FROM "IntegrationEventMessages";
+
+DROP TABLE "IntegrationEventMessages";
+
+ALTER TABLE "OutboxMessages" ADD COLUMN "TraceParent" character varying(64) NULL;
+
+DROP INDEX "IX_OutboxMessages_Dispatchable";
+CREATE INDEX "IX_OutboxMessages_Dispatchable"
+    ON "OutboxMessages" ("DeadLettered", "Status", "NextRetryAtUtc", "CreatedAtUtc");
+```
+
+> `EventType` is required and the retired table had no such column, hence the `'unknown'`
+> placeholder: a copied row can still be addressed on the wire by its `ContractName`, which is the
+> only identity that crosses a process anyway.
+
+### Fixed — the causation chain was never built; it is now derived, not copied
+
+`CausationId` was **null on every row of every path**, in every composition, since the module
+shipped. `OutboxProcessor` and `InboxProcessor` each built the per-message `IExecutionContext` by
+*copying* the dispatched row's own `CausationId` into it, so every row staged inside that scope
+inherited one ancestor's causation — and since nothing in the module ever assigns a causation at the
+root, that ancestor's value is null. The column, the `CausationId` value object,
+`MessageEnvelope.CausationId` and `OutboxMessage.CausationId`'s own documentation ("recording which
+message triggered this one") all described a link nothing produced.
+
+**Both processors now derive it from the row being processed:**
+
+| Site | Was | Is |
+|---|---|---|
+| `OutboxProcessor.DispatchAsync` | `message.CausationId` | `message.Id` |
+| `InboxProcessor.HandleAsync` | `message.CausationId` | `message.MessageId` |
+
+Everything staged inside a dispatch scope was caused by dispatching *that row*, so the cause is its
+identity. The old value named the grandparent — one hop too far up. `CorrelationId` is unchanged and
+still copied through verbatim: it identifies the chain, and only causation advances per hop.
+
+On the inbox the cause is `MessageId`, **never `RowId`**. `RowId` is the local surrogate primary key
+ADR-MSG-017 introduced so the claim can filter on one column; it is meaningless outside its own
+table. `MessageId` is the end-to-end identity the producer assigned.
+
+**Why it went unnoticed, and why it surfaced now.** Every causation test in the suite fed a value in
+through a stubbed `IExecutionContext` and asserted it survived serialization — the plumbing, never
+the derivation. The reentrant outbox is the first place a message *demonstrably* has a causal parent:
+a contract published by a notification handler is caused by the notification row whose dispatch
+produced it, and `OriginMessageHolder` was already carrying exactly that identity one statement
+above. The two are kept separate on purpose: `OriginMessageId` is a **replay key** and may never
+degrade, `CausationId` is a **trace link** and degrades to null when unparseable.
+
+**Impact: additive.** `CausationId` is nullable on both entities and on `MessageEnvelope`, is in no
+index, no key and no query filter, and nothing in the module branches on it — the only reads are
+write-throughs into a new row or into an envelope. Rows already written keep their null. The one
+visible change is that the value now reaches persisted rows and the wire: a consumer that had
+inferred "`CausationId` is always null" will start seeing values on
+`MessageEnvelope.CausationId`. No migration.
+
+Covered end to end by `ReentrantOutboxTests` (the notification is asserted a root, the contract
+asserted to name it) and per-processor by
+`ProcessBatch_NamesTheDispatchedRowAsTheCauseOfWorkInItsScope` /
+`ProcessBatch_NamesTheDeliveredMessageAsTheCauseOfTheHandlersWork`. All three verified by mutation.
+
+### Fixed — a contract staged with deduplication off is now visible in the logs
+
+`IntegrationEventLogs.Staged` (event 1200) gains `{OriginMessageId}`. A null origin does not
+deduplicate, because nulls are distinct in `UX_OutboxMessages_Origin_ContractName`. Publishing
+outside a dispatch legitimately produces one and is the common case; publishing from a scope that is
+not the dispatch scope produces the same null and is a defect — and without this field the two were
+indistinguishable in every log a running system emits.
+
+`AlreadyPublished` (event 1202) takes `Guid?` rather than `Guid`, so the call no longer depends on an
+invariant belonging to another package: `EfIntegrationEventWriter` rethrows instead of verifying when
+the origin is null, but `IIntegrationEventWriter` is a port, and a second implementation would
+otherwise have thrown `NullReferenceException` from inside the logging of a success.
+
 ### Fixed — recovered the step-1 api-reviewer corrections, and renamed `SourceMessageId`
 
 **`OutboxMessage.SourceMessageId` is now `OutboxMessage.OriginMessageId`**, and
 `UX_OutboxMessages_Source_ContractName` is now `UX_OutboxMessages_Origin_ContractName`. `Source`
 already means *the emitting module* everywhere else in this package — `OutboxMessage.Source`,
-`IntegrationEventMessage.Source`, `IntegrationEventRegistration.Source`, and the log line reading
+`IntegrationEventMessage.Source` (as it then was; the type is deleted in this same release),
+`IntegrationEventRegistration.Source`, and the log line reading
 `as '{ContractName}' from '{Source}'`. Both notions land on the same entity once the dedicated
 integration-event table is retired, so one of them had to take another word. The column is still
 empty, which is the only reason this is a rename rather than a data migration.

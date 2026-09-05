@@ -1140,8 +1140,8 @@ producing the wrong type from structurally compatible JSON.
 3. **The rejected alternative that cited `InboxRedeliveryTests` as blocking evidence** — below.
 
 Everything else in ADR-MSG-018 stands: `IIntegrationEvent` as a bare marker; `[IntegrationEvent]` as
-the wire identity; metadata assigned at staging from `IExecutionContext`; `IntegrationEventMessage`
-on its own table; `IIntegrationEventPublisher` requiring an open transaction the caller owns;
+the wire identity; metadata assigned at staging from `IExecutionContext`; ~~`IntegrationEventMessage`
+on its own table~~ (**retired by step 5 — see the implementation note at the end of this ADR**); `IIntegrationEventPublisher` requiring an open transaction the caller owns;
 per-module registration carrying `source`; `IMessagePublisher` and `InProcessMessagePublisher`
 staying deleted; the two timestamps; `ClaimToken` as an EF concurrency token.
 
@@ -1250,3 +1250,70 @@ rebuilds it two steps later, and a direct test costs less than the round trip.
 
 **Leave the unfed inbox silent and document it.** Rejected: it is precisely the silent gap this
 module treats as blocking, and documentation is not a signal a running host can emit.
+
+---
+
+### Implementation note — step 5: the publisher writes Contract rows (2026-08-27)
+
+The last decision this ADR left open is closed. `IIntegrationEventPublisher` writes a
+`MessageKind.Contract` row into the outbox inside the caller's transaction;
+`IntegrationEventMessage`, `IntegrationEventStatus` and `IntegrationEventMessageConfiguration` are
+deleted, and `NoAssemblyStillCarriesTheDedicatedIntegrationEventTable` blocks their return.
+
+**Five things were decided while implementing it that the ADR did not anticipate.**
+
+1. **The staging writer had to start flushing, and the "never save" rule was an overstatement.**
+   `EfInboxStore.AddAsync` can absorb a unique violation because it owns its `SaveChangesAsync`;
+   `EfIntegrationEventWriter` did not, so the `INSERT` landed at the caller's `CommitAsync` — one
+   frame after `PublishAsync` returned, where nothing can absorb it. There, `EfUnitOfWork` wraps it
+   as `PersistenceException`, `OutboxProcessor` classifies it transient, and a handler that catches
+   `PersistenceException` defensively turns a rolled-back dispatch into a `Published` mark. The
+   invariant the rule protects — *never commit* — survives the flush intact: the write is inside the
+   caller's transaction and a rollback still erases it. What the flush does change is that the
+   caller's other pending changes are written at that point too. **Verified rather than argued**:
+   `AbsorbedDuplicate_LeavesTheCallersOwnWritesIntact` proves EF leaves them `Added` across the
+   savepoint rollback, in both `AutoSavepointsEnabled` configurations, because only the pair
+   distinguishes belt-and-braces from load-bearing.
+
+2. **`OriginMessageId` travels on a scoped `OriginMessageHolder` written by `OutboxProcessor`**, not
+   through `IExecutionContext.Properties`. A custom `IExecutionScopeFactory` that rebuilt the context
+   without copying the bag would leave the origin null — which does not throw, it silently disables
+   deduplication, because nulls are distinct in the index. The processor stamps the scope it received
+   so no factory can drop it.
+
+3. **Retention is a state guard, not a duration.** A contract row is never purged while the row its
+   `OriginMessageId` names still exists and is not `Published`. No default could work: automatic
+   replay is bounded by `MaxRetries × MaxRetryBackoff`, both configurable, and an operator requeue of
+   a dead-lettered origin is unbounded. The duplicate this prevents is the one nothing downstream can
+   recognise — a republished contract carries a *fresh* `MessageId`, so a consumer's inbox sees a
+   message it has never seen.
+
+4. **Two behavioural changes fall out of the row's shape.** `OutboxMessage.CorrelationId` is
+   non-nullable, so an unparseable correlation now becomes a fresh one rather than null; and
+   `OccurredOnUtc` is non-nullable, so an unstated occurrence time is resolved to the staging time at
+   staging rather than at the transport. Both are visible only in the logs.
+
+5. **The causation chain was never built, and closing it is a wire-visible change.** Both processors
+   copied the dispatched row's *own* `CausationId` into the scope they created, which names the
+   grandparent rather than the row being processed. Nothing assigns a causation at the root either,
+   so the copy propagated null forever: `CausationId` was null on every row of every path, while the
+   column, the value object and `MessageEnvelope.CausationId` all documented a link that did not
+   exist. Both processors now **derive** it — `OutboxProcessor` from `message.Id`, `InboxProcessor`
+   from `message.MessageId` and never `RowId`, which is a local surrogate that resolves in no other
+   process. Correlation is still copied unchanged; the two are propagated by adjacent lines and a
+   test asserting only one passes while the other is confused for it, which is how this survived.
+   **Not merely a column filling in.** The value reaches the wire through
+   `MessageEnvelope.CausationId`, so a consumer that inferred "always null" starts seeing values, and
+   `IExecutionContext.CausationId` populates inside message scopes. Nothing branches on it — no
+   index, no query, no routing test — so no behaviour regresses. Do not merge this with
+   `OriginMessageId`, although the outbox derives both from `message.Id`: they coincide in value and
+   differ in obligation, the origin being half of a unique key that may never degrade, the causation
+   diagnostic and degrading to null via `OutboxMessageFactory.ResolveCausation`. The full write-up
+   is in `CHANGELOG.md`.
+
+**The test ADR-MSG-019 recorded as owed is repaid.** `ReentrantOutboxTests.Redelivery_ProducesNoDuplicateContract`
+drives a command through the fan-out to a publication and a transport send, then forces the
+redelivery an expired lease produces, and asserts the properties `InboxRedeliveryTests` carried: one
+contract row, `RetryCount == 0`, no dead-letter, and nothing from MicroKit's own log categories at
+`Warning` or above. (EF Core logs the rejected `INSERT` at `Error` from its own category on every
+absorbed replay; that setting lives on the consumer's `DbContext`, so a library cannot silence it.)

@@ -34,7 +34,7 @@ transaction is durable, and nothing durable goes unpublished.
 
 | Package | Description |
 |---------|-------------|
-| `MicroKit.Messaging.Abstractions` | Contracts: `IIntegrationEvent`, `IIntegrationEventPublisher`, `IMessageHandler<T>`, `IOutboxWriter`, `IMessageTransport`, `MessageEnvelope`, the outbox/inbox stores, `OutboxMessage`, `InboxMessage`, `IntegrationEventMessage` |
+| `MicroKit.Messaging.Abstractions` | Contracts: `IIntegrationEvent`, `IIntegrationEventPublisher`, `IMessageHandler<T>`, `IOutboxWriter`, `IMessageTransport`, `MessageEnvelope`, the outbox/inbox stores, `OutboxMessage`, `InboxMessage`, `IntegrationEventWriteResult` |
 | `MicroKit.Messaging` | Outbox/inbox processors and workers, the transport dispatcher, integration-event publishing, `OutboxMessageFactory`, DI |
 | `MicroKit.Messaging.EntityFrameworkCore` | `EfOutboxStore`, `EfInboxStore`, entity configuration for your `DbContext` |
 | `MicroKit.Messaging.MediatR` | Glue: puts MicroKit.MediatR domain events on the outbox as notifications |
@@ -245,21 +245,41 @@ public sealed class PublishOrderPlacedHandler(
 }
 ```
 
-> ⚠ **`ExecuteAsync` is not decoration.** Publishing stages a row into the caller's transaction and
-> never commits, so without an open transaction the row goes to a change tracker nobody saves and
-> the event silently never existed. `IUnitOfWork.CommitAsync` **alone is not enough**: it is a bare
-> `SaveChangesAsync` under the provider's implicit per-call transaction, which never appears as an
-> open one. The publisher refuses rather than accept a publication it cannot honour, and
+> ⚠ **`ExecuteAsync` is not decoration.** Publishing writes a row into the caller's transaction and
+> never commits it — so without an open transaction the row would be committed on its own by the
+> provider's implicit per-statement transaction: an event announced permanently, for a business fact
+> the caller may still roll back. `IUnitOfWork.CommitAsync` **alone is not enough**: it is a bare
+> `SaveChangesAsync` under that same implicit transaction, and never appears as an open one. The
+> publisher refuses rather than accept a publication it cannot honour, and
 > `IntegrationEventPublishException` says exactly this.
+
+> **Why it writes rather than merely tracking the row.** The publication is guarded by a unique key
+> on `(OriginMessageId, ContractName)`, and a unique key can only be consulted by attempting the
+> insert. Doing that inside `PublishAsync` is what lets a replayed dispatch be absorbed silently —
+> the handler is told nothing, and gets back the identifier of the row that already exists. Deferring
+> the insert to the caller's commit would surface the collision one stack frame too late, where every
+> notification handler would need a `try`/`catch` on a database exception to survive its own
+> redelivery. One consequence worth knowing: the flush is not partial, so anything else you had
+> pending on the same unit of work is written at that point too — inside your transaction, with the
+> same rollback semantics as before.
 
 Pass `occurredOnUtc` when you have it. The row keeps two timestamps — when the fact happened and
 when it was staged — and they are not the same instant: staging happens one relay later, minutes
 under load. Omitted, a consumer reads the relay's clock as the business time.
 
-**Nothing delivers these rows yet.** After the commit the event is durable and has been sent
-nowhere, which is the correct intermediate state: nothing is announced for a fact that did not
-happen, and the row survives a crash. The relay that picks them up is below; the broker adapter it
-hands them to is still to come.
+**What happens next.** After the commit the event is durable and has been sent nowhere, which is
+the correct intermediate state: nothing is announced for a fact that did not happen, and the row
+survives a crash. The outbox processor then claims it on a later pass — the same claim, lease,
+back-off and dead-letter machinery the domain-event path uses — and hands it to `IMessageTransport`
+as a `MessageEnvelope`. That second pass is why the outbox is called **reentrant**: one table, two
+natures of row, the second produced by dispatching the first.
+
+**A redelivered dispatch does not duplicate.** If the processor crashes between dispatching a
+notification and recording it, the notification is redelivered and its handlers re-run — including
+the one that publishes. The republication collides on `(OriginMessageId, ContractName)` and is
+absorbed: `PublishAsync` returns the existing row's identifier and the handler never learns it
+happened. This is bounded by retention, and the bound is enforced rather than assumed — a contract
+row is never purged while the row that produced it can still be dispatched again.
 
 ---
 

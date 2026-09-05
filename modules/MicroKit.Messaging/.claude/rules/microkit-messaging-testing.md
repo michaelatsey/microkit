@@ -111,6 +111,11 @@ ProcessBatch_WhenTransportUnavailable_StillSettlesEveryClaimedMessage
 ProcessBatch_WhenCancelledMidBatch_ReleasesRemainderWithoutConsumingRetries
 ProcessBatch_WhenDispatcherUnregistered_SettlesBatchThenRethrows
 ProcessBatch_WhenDispatcherUnregistered_ConsumesNoRetryBudget
+ProcessBatch_WhenTheScopeCannotSupplyTheOriginHolder_SettlesBatchThenRethrows   ← a foreign container
+ProcessBatch_WhenTheScopeCannotSupplyTheOriginHolder_ConsumesNoRetryBudget
+ProcessBatch_NamesTheDispatchedRowAsTheCauseOfWorkInItsScope     ← seed a DIFFERENT ancestor cause,
+ProcessBatch_WhenTheDispatchedRowIsARoot_StillNamesItAsTheCause     or copy-through passes too
+ProcessBatch_PropagatesCorrelationUnchangedWhileDerivingCausation
 ProcessBatch_WhenSettlementThrows_DoesNotTakeTheWorkerDown
 ProcessBatch_WhenErrorMessageExceedsLimit_TruncatesIt
 ComputeBackoffCeiling_BelowCap_IsTwoToThePowerOfRetryCountSeconds  (exact values, FixedRandom)
@@ -143,6 +148,8 @@ ProcessBatch_WhenHandlerCommitsThenThrows_CountsItProcessedAndDoesNotRetry
 ProcessBatch_WhenDependencyUnavailable_ReleasesTheRemainderWithoutRetries
 ProcessBatch_WhenSettlementStoreMissing_SettlesReleasedThenRethrows
 ProcessBatch_WhenCancelled_ReleasesEveryUnattemptedRow
+ProcessBatch_NamesTheDeliveredMessageAsTheCauseOfTheHandlersWork  (MessageId, never RowId — seed all
+                                                                   three candidates differently)
 ComputeBackoffCeiling_FollowsTheExponentialCurve                (exact values, FixedRandom)
 ```
 
@@ -286,18 +293,27 @@ StartAsync_NamesTheRegisteredConsumersAndTheReason
 > stores these tests have no reason to wire. That is also why every other suite may still call
 > `AddMessageHandler` freely: `BuildServiceProvider()` starts no hosted service.
 
-### Integration event publishing (ADR-MSG-018)
+### Integration event publishing (ADR-MSG-018, completed by step 5)
 
-Two properties matter more than the rest and cannot be replaced by reading code:
+A contract is a `MessageKind.Contract` **outbox row**. `IntegrationEventMessage` and its table are
+deleted — do not write a test against either; their return is blocked by
+`NoAssemblyStillCarriesTheDedicatedIntegrationEventTable`.
+
+Three properties matter more than the rest and none can be replaced by reading code:
 
 ```
-PublishAsync_WithNoOpenTransaction_ThrowsAndStagesNothing   (unit — asserts the row never existed,
-                                                             not merely that it threw: a guard
-                                                             placed after staging also throws)
-PublishAsync_StagesTheRow_WithoutWritingIt                  (integration — asserts the ChangeTracker
-                                                             entry is still Added. A rollback test
-                                                             passes even if the writer committed
-                                                             internally; this one cannot)
+PublishAsync_WithNoOpenTransaction_ThrowsAndStagesNothing   (unit — asserts the row never reached
+                                                             the writer, not merely that it threw.
+                                                             The writer FLUSHES, so a guard placed
+                                                             after it would have nothing left to
+                                                             prevent: the row is already committed)
+PublishAsync_WritesTheRowInsideTheTransaction_AndARollbackErasesIt
+                                                            (integration — BOTH halves. An entry left
+                                                             Unchanged proves the write happened;
+                                                             the rollback proves it was not committed.
+                                                             Either alone passes while the other is
+                                                             broken)
+AbsorbedDuplicate_LeavesTheCallersOwnWritesIntact           (PostgreSQL, ×2 — see below)
 ```
 
 > Use a **recording fake** for `IIntegrationEventWriter`, never a mock. A negative assertion against
@@ -306,23 +322,89 @@ PublishAsync_StagesTheRow_WithoutWritingIt                  (integration — ass
 
 ```
 PublishAsync_WhenEventNotRegistered_ThrowsAndNamesTheType
-PublishAsync_StagesTheContractTheSourceAndTheExecutionContext
-PublishAsync_WhenCorrelationIdIsUnparseable_DegradesToNullRatherThanFailing
+PublishAsync_StagesAContractRow_WithKindContractNameSourceAndOrigin
+PublishAsync_OutsideADispatch_StagesANullOrigin              (null origin ⇒ no dedup, deliberately)
+PublishAsync_WhenTheWriterReportsAlreadyPublished_ReturnsTheExistingId
+PublishAsync_WhenCorrelationIdIsUnparseable_SubstitutesAFreshOne  (NOT null — the column is required)
+PublishAsync_WhenOccurrenceTimeNotSupplied_FallsBackToTheStagingTime
 PublishAsync_RecordsOccurrenceTimeSeparatelyFromStagingTime
 PublishAsync_ResolvesTheContractFromTheRuntimeType_NotTheGenericArgument
+PublishAsync_CapturesTheTraceParent
+ProcessBatch_StampsTheDispatchedRowOnTheScopesOriginHolder   (via CONSTRUCTOR injection — the path
+                                                              that failed silently as L0 #21)
+TheWriterAndTheCallersUnitOfWorkShareOneDbContext            (the guard reads the WRITER's context;
+                                                              if they diverge it passes while the row
+                                                              commits elsewhere)
+ThePublisherReadsTheMessageScopesExecutionContext
 Registry_KeepsEachModulesOwnSource
 Registry_WhenTwoModulesClaimOneContractName_IsRejected
-Registry_ContractSurface_MatchesTheSnapshot                 (a contract name is public API)
-RegistryValidator_OnStart_FailsOnADuplicatedContractName    (drive the hosted service directly —
-                                                             starting a host would start four
-                                                             messaging workers needing stores the
-                                                             test has no reason to wire)
-TheWriterAndTheCallersUnitOfWorkShareOneDbContext           (the guard reads the WRITER's context;
-                                                             if they diverge it passes while the row
-                                                             commits elsewhere)
-ThePublisherReadsTheMessageScopesExecutionContext           (pins the L0 #21 fix)
-TheClaimTokenIsMappedAsAConcurrencyToken                    (no relay exists to exercise it yet,
-                                                             so the model is asserted instead)
+Registry_ContractSurface_MatchesTheSnapshot                  (a contract name is public API)
+RegistryValidator_OnStart_FailsOnADuplicatedContractName
+```
+
+### The replay key — PostgreSQL only (`[DockerRequiredFact]`, `PostgreSqlSuite`)
+
+SQLite proves the constraint is declared. It does not reproduce what this suite exists for: on
+PostgreSQL a violation aborts the **whole transaction**, so a bare `catch (DbUpdateException)`
+passes on SQLite and destroys the caller's transaction here.
+
+```
+Replay_IsAbsorbedAndTheTransactionRemainsUsable              (the third write is the assertion)
+AbsorbedDuplicate_LeavesTheCallersOwnWritesIntact_WithAutoSavepoints
+AbsorbedDuplicate_LeavesTheCallersOwnWritesIntact_WithoutAutoSavepoints
+Publish_WithNoOrigin_DoesNotDeduplicate
+A_non_duplicate_write_failure_still_throws                   (NOT NULL, never absorbed)
+DeleteProcessedAsync_TranslatesTheOriginGuard_AndHonoursIt   (SQLite translating it proves nothing
+                                                              about the provider anyone deploys)
+```
+
+> **Keep BOTH auto-savepoint cases.** They cover different things and only running both
+> distinguishes them: with EF's automatic savepoints ON the writer's explicit savepoint is belt and
+> braces and the test passes without it, so a reader seeing only that case concludes it is dead code.
+> With them OFF — an ordinary consumer setting — it is load-bearing, and deleting
+> `RollbackToSavepointAsync` fails that case with PostgreSQL `25P02`. Verified by mutation.
+
+> These drive `EfIntegrationEventWriter` itself, never a copy of its body. A test that reimplements
+> the mechanism it verifies is green for the wrong reason — it keeps passing after the shipped
+> writer stops taking a savepoint at all.
+
+### The reentrant hop, end to end (`MicroKit.Messaging.MediatR.IntegrationTests`)
+
+```
+ANotificationHandlersPublication_BecomesAContractRow_AndReachesTheTransport
+Redelivery_ProducesNoDuplicateContract    (the test ADR-MSG-019 recorded as owed by this step)
+```
+
+> The first of the two also carries the **causal chain**: the notification row is asserted a root
+> (`CausationId` null — a command-scope publication has nothing above it) and the contract asserted
+> to name it, while `CorrelationId` is asserted **unchanged** across the hop. Both halves are
+> required. Causation advances one hop per dispatch and correlation never does; a test asserting
+> only one of them passes while the other is confused for it — which is precisely how
+> `CausationId` stayed null on every row of every path without a red test.
+
+> `Redelivery_ProducesNoDuplicateContract` asserts the handler **did** re-run. Without that, a
+> passing test proves only that nothing happened. It also scopes its "no `Warning`" assertion to
+> MicroKit's own log categories: EF Core logs the rejected `INSERT` at `Error` on every absorbed
+> replay, from a category a library cannot silence because the setting lives on the consumer's
+> `DbContext`.
+
+### Claim ordering
+
+```
+ClaimBatchAsync_RespectsBatchSize_AndClaimsOldestByCreatedAtUtc   (CreatedAtUtc and OccurredOnUtc
+                                                                   seeded in OPPOSITE orders, or the
+                                                                   test passes under both impls)
+GetDeadLetteredAsync_StillOrdersOnOccurredOnUtc                   (the deliberate asymmetry)
+TheDispatchableIndex_SortsOnCreatedAtUtc                          (a mismatch costs no correctness
+                                                                   and no test — only every poll)
+```
+
+### Retention — the replay key's real bound
+
+```
+DeleteProcessedAsync_KeepsAContractWhoseOriginCanStillBeDispatched
+DeleteProcessedAsync_PurgesAContractWhoseOriginIsTerminal
+DeleteProcessedAsync_PurgesAContractWithNoOrigin
 ```
 
 ---
