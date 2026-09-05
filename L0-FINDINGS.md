@@ -252,7 +252,7 @@ out of scope for this lot — so `configureInbox` remains a silent no-op today.
 
 **Severity: low** (process, not runtime), **but it invalidates an audit assumption.**
 
-`.claude-context/context/microkit-architectural-decisions.md:4` states:
+`.claude-context/context/architecture/decisions/README.md` states:
 
 > Each ADR is immutable once merged; superseded decisions reference the ADR that replaces them.
 

@@ -1,7 +1,7 @@
 # MicroKit Architectural Decisions - Execution Scope & Messaging Topology
 
-> To merge into `.claude-context/context/microkit-architectural-decisions.md`.
-> Reconcile ADR numbering against the existing file before committing.
+> To land as a new file in `.claude-context/context/architecture/decisions/`, one per decision.
+> Reconcile ADR numbering against the existing ADRs before committing.
 
 ---
 

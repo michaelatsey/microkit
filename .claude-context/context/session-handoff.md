@@ -20,7 +20,7 @@ already wrong.
 | Artifact | Owns | Rhythm |
 |---|---|---|
 | `CLAUDE.md` | Vision, architecture rules, dependency graph | Rare |
-| `microkit-architectural-decisions.md` / ADRs | Decisions, with their reasoning | On decision |
+| `architecture/decisions/ADR-*.md` | Decisions, with their reasoning — one file per decision | On decision |
 | `.claude-context/sessions/NNN-*.md` | **Current state.** What shipped, what is owed | Every lot |
 | `session-handoff.md` (this file) | The method | Once |
 | `LOT.md` | One lot's passing order, web → Claude Code | Every web session, overwritten |
