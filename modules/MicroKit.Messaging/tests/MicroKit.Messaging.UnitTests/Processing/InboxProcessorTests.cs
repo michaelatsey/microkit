@@ -429,6 +429,95 @@ public sealed class InboxProcessorTests
         (await CapturedOutcomes(store)).ShouldAllBe(o => o.Kind == InboxOutcomeKind.Released);
     }
 
+    /// <summary>
+    /// A settlement store that is registered but cannot be activated is NOT a configuration fault.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Mirrors <c>ReceiveAsync_WhenTheWriterCannotBeActivated_PropagatesRatherThanClassifying</c>,
+    /// and the consequence here is worse than at the ingestion seam.
+    /// <see cref="IInboxSettlementStore"/> resolves through a factory that activates
+    /// <c>EfInboxStore&lt;TContext&gt;</c> and, with it, the consumer's <c>DbContext</c>, so a
+    /// <c>catch (InvalidOperationException)</c> around the resolution spans that entire graph
+    /// while reading as a registration lookup. Under a tenant-aware
+    /// <see cref="IExecutionScopeFactory"/> an envelope naming an unknown tenant throws exactly
+    /// that from the per-tenant connection resolution — and because
+    /// <see cref="InboxConfigurationException"/> stops the drain worker, catching it would halt
+    /// the inbox for <b>every</b> tenant over one message's data, while reporting a registration
+    /// that is present as missing.
+    /// </para>
+    /// <para>
+    /// The exception type seeded below is <see cref="InvalidOperationException"/> on purpose: it is
+    /// the one a catch-based implementation would swallow, so any other type here would leave the
+    /// regression free to come back. THREE messages, because the discriminator is the batch's fate
+    /// rather than one row's — a catch-based implementation breaks the loop at index 0 and releases
+    /// all three, so <c>Retried == 3</c> and <c>Released == 0</c> is what says the halt is gone.
+    /// </para>
+    /// </remarks>
+    [Fact]
+    public async Task ProcessBatch_WhenSettlementStoreCannotBeActivated_PropagatesRatherThanClassifying()
+    {
+        var activationFailure = new InvalidOperationException(
+            "No connection string is configured for tenant 'tenant-a'.");
+
+        var messages = Enumerable.Range(0, 3)
+            .Select(_ => InboxFixtures.Message(consumerType: ConsumerType, eventType: EventType))
+            .ToArray();
+        var store = StoreReturning(InboxFixtures.Claim(messages));
+
+        var sut = Build(store, out _, out _, settlementActivationFailure: activationFailure);
+
+        var result = await sut.ProcessBatchAsync(batchSize: 10, CancellationToken.None);
+
+        result.AbortReason.ShouldBe(
+            InboxBatchAbortReason.None,
+            "a registered store that fails to activate is one message's fault — most likely a " +
+            "tenant whose connection cannot be resolved — and must not stop the drain worker");
+
+        result.Retried.ShouldBe(3, "each row is retried with back-off, on its own");
+        result.Released.ShouldBe(0, "nothing was abandoned unattempted");
+
+        var outcomes = await CapturedOutcomes(store);
+        outcomes.ShouldAllBe(o => o.Kind == InboxOutcomeKind.Retry);
+        // The real fault is what gets recorded, not a guess at it.
+        outcomes[0].ErrorMessage.ShouldNotBeNull().ShouldContain("tenant-a");
+    }
+
+    /// <summary>
+    /// A handler that is registered but cannot be activated is NOT a configuration fault.
+    /// </summary>
+    /// <remarks>
+    /// The sibling of the test above, on the other resolution in the same scope. A handler's own
+    /// constructor dependencies can fail for reasons that have nothing to do with whether the
+    /// handler is registered — a connection, a client, a per-tenant option — and every one of them
+    /// arrives as <see cref="InvalidOperationException"/> from the container.
+    /// </remarks>
+    [Fact]
+    public async Task ProcessBatch_WhenHandlerCannotBeActivated_PropagatesRatherThanClassifying()
+    {
+        var activationFailure = new InvalidOperationException(
+            "Unable to resolve IReportingClient while activating RecordingInboxHandler.");
+
+        var messages = Enumerable.Range(0, 3)
+            .Select(_ => InboxFixtures.Message(consumerType: ConsumerType, eventType: EventType))
+            .ToArray();
+        var store = StoreReturning(InboxFixtures.Claim(messages));
+
+        var sut = Build(store, out _, out _, handlerActivationFailure: activationFailure);
+
+        var result = await sut.ProcessBatchAsync(batchSize: 10, CancellationToken.None);
+
+        result.AbortReason.ShouldBe(
+            InboxBatchAbortReason.None,
+            "a registered handler that fails to activate is a transient fault for one row, not a " +
+            "composition defect that should stop the worker");
+
+        result.Retried.ShouldBe(3);
+        result.Released.ShouldBe(0);
+
+        (await CapturedOutcomes(store)).ShouldAllBe(o => o.Kind == InboxOutcomeKind.Retry);
+    }
+
     [Fact]
     public async Task ProcessBatch_WhenCancelled_ReleasesEveryUnattemptedRow()
     {
@@ -543,10 +632,10 @@ public sealed class InboxProcessorTests
     /// candidate values differ — otherwise the test passes under every implementation.
     /// </para>
     /// <para>
-    /// Reachability note: nothing produces inbox rows in this release (ADR-MSG-019) and
-    /// <c>InboxIngestionValidator</c> fails a host that registers a handler, so this path is
-    /// exercised only by driving the processor directly, as here. It is asserted anyway — the
-    /// receiving seam will arrive against this behaviour, not decide it afresh.
+    /// This is the unit-level half. <c>ReceivingSeamTests</c> asserts the same derivation end to
+    /// end, from a dispatched contract row through <c>IEnvelopeReceiver</c> to the handler's own
+    /// execution context — so nulling the derivation line turns <b>both</b> red, and only those
+    /// two.
     /// </para>
     /// </remarks>
     [Fact]
@@ -651,18 +740,32 @@ public sealed class InboxProcessorTests
         IMessageSerializer? serializer = null,
         Random? random = null,
         bool registerHandler = true,
-        bool registerSettlementStore = true)
+        bool registerSettlementStore = true,
+        Exception? handlerActivationFailure = null,
+        Exception? settlementActivationFailure = null)
     {
         handler = new RecordingInboxHandler();
         settlement = new ScriptedInboxSettlementStore();
 
         var services = new ServiceCollection();
-        if (registerHandler)
+
+        // REGISTERED but unactivatable — a factory that throws. Not the same as absent, and the
+        // difference is the whole subject of the two PropagatesRatherThanClassifying tests: only
+        // an absent descriptor makes GetService return null.
+        if (handlerActivationFailure is not null)
+        {
+            services.AddSingleton<RecordingInboxHandler>(_ => throw handlerActivationFailure);
+        }
+        else if (registerHandler)
         {
             services.AddSingleton(handler);
         }
 
-        if (registerSettlementStore)
+        if (settlementActivationFailure is not null)
+        {
+            services.AddSingleton<IInboxSettlementStore>(_ => throw settlementActivationFailure);
+        }
+        else if (registerSettlementStore)
         {
             services.AddSingleton<IInboxSettlementStore>(settlement);
         }

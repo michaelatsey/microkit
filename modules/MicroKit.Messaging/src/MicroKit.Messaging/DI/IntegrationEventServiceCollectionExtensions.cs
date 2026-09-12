@@ -1,5 +1,6 @@
 namespace MicroKit.Messaging;
 
+using MicroKit.Messaging.Processing;
 using MicroKit.Messaging.Publishing;
 using MicroKit.Messaging.Serialization;
 using Microsoft.Extensions.DependencyInjection.Extensions;
@@ -124,14 +125,15 @@ public static class IntegrationEventServiceCollectionExtensions
     /// </para>
     /// <para>
     /// A service that also consumes calls <see cref="AddIntegrationEventConsumption"/> as well;
-    /// the two share the registry and the validator and may be called in either order.
+    /// the two share the registry, the validator and the envelope receiver, and may be called in
+    /// either order.
     /// </para>
     /// </remarks>
     public static MessagingBuilder AddIntegrationEventPublishing(this MessagingBuilder builder)
     {
         ArgumentNullException.ThrowIfNull(builder);
 
-        AddRegistryAndValidator(builder.Services);
+        AddContractRegistry(builder.Services);
 
         // No IMessageSerializer TryAdd here. AddMicroKitMessaging() supplies the default, and this
         // method is an extension on the builder that method returns — so it cannot run without it
@@ -152,9 +154,10 @@ public static class IntegrationEventServiceCollectionExtensions
     /// <returns>The same <paramref name="builder"/> for chaining.</returns>
     /// <remarks>
     /// <para>
-    /// The registry and its startup validator, and <b>nothing else</b> — no publisher, no
-    /// serializer default. A service that only consumes publishes nothing and must not be given a
-    /// publisher it cannot legitimately use.
+    /// The registry, its startup validator and the <see cref="IEnvelopeReceiver"/> a transport
+    /// provider hands arriving envelopes to — and <b>nothing else</b>: no publisher, no serializer
+    /// default. A service that only consumes publishes nothing and must not be given a publisher it
+    /// cannot legitimately use.
     /// </para>
     /// <para>
     /// <b>Why this exists at all.</b> Without it, a consumer-only service would have no
@@ -166,32 +169,49 @@ public static class IntegrationEventServiceCollectionExtensions
     /// </para>
     /// <para>
     /// <b>Safe alongside <see cref="AddIntegrationEventPublishing"/>, in either order.</b> A
-    /// service that both publishes and consumes calls both and gets one registry and one validator:
-    /// the registry is registered with <c>TryAddSingleton</c>, which dedups on service type, and
-    /// the validator with <c>TryAddEnumerable</c>, which dedups on implementation type.
+    /// service that both publishes and consumes calls both and gets one registry, one validator and
+    /// one receiver: the registry and the receiver are registered with <c>TryAddSingleton</c>, which
+    /// dedups on service type, and the validator with <c>TryAddEnumerable</c>, which dedups on
+    /// implementation type.
     /// </para>
     /// </remarks>
     public static MessagingBuilder AddIntegrationEventConsumption(this MessagingBuilder builder)
     {
         ArgumentNullException.ThrowIfNull(builder);
 
-        AddRegistryAndValidator(builder.Services);
+        AddContractRegistry(builder.Services);
 
         return builder;
     }
 
     /// <summary>
-    /// The two registrations both application-level entry points need, in one place so they cannot
-    /// drift apart.
+    /// The three registrations both application-level entry points need, in one place so they
+    /// cannot drift apart.
     /// </summary>
     /// <remarks>
-    /// Both registrations must stay <c>TryAdd</c>. Under a plain <c>AddSingleton</c> the second
+    /// <para>
+    /// Every registration must stay <c>TryAdd</c>. Under a plain <c>AddSingleton</c> the second
     /// caller would append a second registry descriptor, Microsoft DI would resolve the last one,
     /// and a service that both publishes and consumes would get a different registry depending on
     /// the order the two calls happened to be written in — with the boot validation running against
     /// one of them.
+    /// </para>
+    /// <para>
+    /// <b><see cref="IEnvelopeReceiver"/> belongs here and nowhere else.</b> It is the one place
+    /// guaranteed to have composed the registry the receiver resolves a contract name through, and
+    /// it is reached by both entry points — so a service that only consumes and a service that also
+    /// publishes both end up able to receive, in either call order. Registering it in
+    /// <c>AddMicroKitMessaging()</c> instead would put a receiver in a host that declares no
+    /// contracts at all, where it could not be constructed.
+    /// </para>
+    /// <para>
+    /// It gets no builder method of its own. There is nothing to configure, and a method whose
+    /// omission is invisible until a provider fails to resolve the seam is worse than no method:
+    /// a broker package's <c>Add{Provider}Transport()</c> must be able to assume the receiver is
+    /// already there.
+    /// </para>
     /// </remarks>
-    private static void AddRegistryAndValidator(IServiceCollection services)
+    private static void AddContractRegistry(IServiceCollection services)
     {
         services.TryAddSingleton(sp => new IntegrationEventRegistry(
             sp.GetServices<IntegrationEventContracts>(),
@@ -199,5 +219,9 @@ public static class IntegrationEventServiceCollectionExtensions
 
         services.TryAddEnumerable(
             ServiceDescriptor.Singleton<IHostedService, IntegrationEventRegistryValidator>());
+
+        // Singleton: it creates its own execution scope per envelope, so a provider's consume loop
+        // may hold one for its lifetime and cannot share a DbContext across messages by accident.
+        services.TryAddSingleton<IEnvelopeReceiver, EnvelopeReceiver>();
     }
 }

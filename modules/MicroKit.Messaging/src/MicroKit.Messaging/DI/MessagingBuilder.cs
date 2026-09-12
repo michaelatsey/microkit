@@ -113,19 +113,31 @@ public sealed class MessagingBuilder
     /// </typeparam>
     /// <remarks>
     /// <para>
-    /// ⚠ <b>Nothing feeds these handlers in this release, and calling this method therefore fails at
-    /// startup.</b> In-process inbox ingestion was withdrawn together with the in-process fan-out
-    /// (ADR-MSG-019): the outbox now hands a <see cref="MessageKind.Contract"/> row to a transport
-    /// as a <see cref="MessageEnvelope"/>, and the receiving seam that turns an envelope back into
-    /// inbox rows has not shipped yet. Until it does, a registered handler is unreachable — rows
-    /// never appear, <c>InboxProcessor</c> never claims one, and nothing downstream can detect the
-    /// shortfall. <c>InboxIngestionValidator</c> converts that silence into a boot failure rather
-    /// than letting a host run believing it is consuming events.
+    /// <b>What has to be composed for a handler to be reached.</b> Rows arrive through
+    /// <see cref="IEnvelopeReceiver"/>, which a transport provider's consume loop calls, so a host
+    /// needs three things beyond this call: a broker provider supplying an
+    /// <see cref="IMessageTransport"/> and driving that loop,
+    /// <c>AddIntegrationEventConsumption()</c> (or <c>AddIntegrationEventPublishing()</c>) so the
+    /// contract name binds to <typeparamref name="TEvent"/>, and <c>AddEfCoreOutbox&lt;TContext&gt;()</c>
+    /// so there is somewhere to write. Miss the binding and the receiver refuses the message
+    /// permanently; miss this call and it logs at <c>Warning</c> and writes nothing.
     /// </para>
     /// <para>
-    /// The registry, <c>InboxProcessor</c> and the whole drain pipeline are unchanged and still
-    /// correct — they have no producer, which is not the same as being broken. A host that writes
-    /// inbox rows itself can still drive them.
+    /// ⚠ <b>No broker provider ships yet</b>, so in practice a handler is reached today only by a
+    /// host that drives the receiver itself. That is a missing provider, not a missing seam: the
+    /// registry, <see cref="IEnvelopeReceiver"/>, <c>InboxProcessor</c> and the whole drain pipeline
+    /// are complete and proven end to end.
+    /// </para>
+    /// <para>
+    /// <b>Calling it twice for the same <typeparamref name="THandler"/> registers one consumer,
+    /// not two.</b> The registry deduplicates on the consumer type, so the second call replaces
+    /// the first entry rather than appending. Worth relying on: a composition root assembled from
+    /// several module registrations doubles a handler easily, and without the dedup the receiver
+    /// would write two inbox rows per envelope for that consumer — the second absorbed by the
+    /// dedup index, so a <i>first</i> delivery would show up as a redelivery on
+    /// <c>microkit.inbox.messages.deduplicated</c> and a composition typo would read as a broker
+    /// fault. <c>AddTransient&lt;THandler&gt;()</c> underneath is not deduplicated, but a second
+    /// transient descriptor for one type changes nothing about resolution.
     /// </para>
     /// <para>
     /// Handlers are registered as <strong>transient</strong>. They are resolved from the

@@ -63,12 +63,6 @@ public static class ServiceCollectionExtensions
     /// serializer any more; both are extensions on the builder this method returns, so a
     /// <c>TryAdd</c> in either could never have been reached.
     /// </para>
-    /// <para>
-    /// <b>One check does run at startup here:</b> <c>InboxIngestionValidator</c> fails the host when
-    /// message handlers are registered while nothing in this release produces the inbox rows that
-    /// would reach them (ADR-MSG-019). It is contributed with <c>TryAddEnumerable</c>, so calling
-    /// this method twice yields one validator.
-    /// </para>
     /// </remarks>
     public static MessagingBuilder AddMicroKitMessaging(
         this IServiceCollection services,
@@ -149,18 +143,10 @@ public static class ServiceCollectionExtensions
         // reopens reprocessing rather than merely losing history.
         services.AddHostedService<InboxRetentionWorker>();
 
-        // Ingestion counters. Owns its Meter rather than taking IMeterFactory, so no host is
-        // obliged to call AddMetrics(); subscribe with AddMeter(InboxMetrics.MeterName).
-        // No producer records into them in this release — the counters belong to the ingestion
-        // seam that ADR-MSG-019 defers, and are left registered rather than churned out and back.
+        // Ingestion counters, recorded by EnvelopeReceiver. Owns its Meter rather than taking
+        // IMeterFactory, so no host is obliged to call AddMetrics(); subscribe with
+        // AddMeter(InboxMetrics.MeterName).
         services.TryAddSingleton<InboxMetrics>();
-
-        // Fails the host when handlers are registered but nothing writes the inbox rows that would
-        // reach them. TryAddEnumerable so a second AddMicroKitMessaging() contributes one validator
-        // rather than two; ServiceDescriptor rather than AddHostedService<T>() for the same reason,
-        // since AddHostedService is a plain Add and would stack.
-        services.TryAddEnumerable(
-            ServiceDescriptor.Singleton<IHostedService, InboxIngestionValidator>());
 
         return new MessagingBuilder(services, registry);
     }

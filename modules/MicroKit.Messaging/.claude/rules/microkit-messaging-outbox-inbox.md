@@ -237,7 +237,10 @@ public sealed class InboxMessage
     public string Payload { get; set; } = null!;
     public InboxMessageStatus Status { get; set; }
     public int RetryCount { get; set; }
-    public DateTimeOffset ReceivedAtUtc { get; set; }
+    public DateTimeOffset ReceivedAtUtc { get; set; }          // local receipt — the claim's SORT KEY
+    public DateTimeOffset OccurredOnUtc { get; set; }          // producer's business clock, carried
+                                                              //   from the envelope. NEVER indexed,
+                                                              //   claimed or ordered on
     public DateTimeOffset? ProcessedAtUtc { get; set; }
     public DateTimeOffset? LockedUntilUtc { get; set; }       // lease expiry for concurrent processors
     public Guid? ClaimToken { get; set; }                     // ownership proof — EF CONCURRENCY TOKEN
@@ -249,10 +252,23 @@ public sealed class InboxMessage
 }
 ```
 
+> **Two clocks, and they are not interchangeable.** `ReceivedAtUtc` is this process's relay clock
+> and the claim orders on it. `OccurredOnUtc` is the producer's business clock, carried verbatim
+> from `MessageEnvelope`, and it is read-only data: it enters no index, no claim and no ordering.
+> It is caller-supplied at the far end of a wire, so ordering on it lets a backdated event jump the
+> whole queue and keep jumping it — the defect the outbox claim left behind when it moved its sort
+> key to `CreatedAtUtc`. Without the column the business time would exist nowhere on the receiving
+> side, because `IIntegrationEvent` is a bare marker and a payload need carry no timestamp.
+
 > **Nullability asymmetry:** `OutboxMessage.CorrelationId` is non-nullable (`= null!`) because
 > outbound messages must always be traceable — set to `CorrelationId.New()` if no upstream context.
 > `InboxMessage.CorrelationId` is nullable because inbound messages arrive from external systems
 > that may not carry correlation context. Do NOT "fix" this asymmetry — it is intentional.
+>
+> Note the column stays nullable although **the shipped `EnvelopeReceiver` never writes null**: it
+> mints one when the envelope carries none (see the receiving-seam rule below). The nullability
+> describes what the schema permits — a row written by some other means, or one predating the
+> mint — not what ingestion produces.
 
 ---
 
@@ -293,7 +309,7 @@ catch (DbUpdateException)
 > unwinds to the wrong one silently. SQL Server also rejects savepoints inside a distributed
 > transaction.
 
-### The publisher side — one line carries the fix
+### The ingestion side — one line carries the fix
 
 ```csharp
 var result = await inboxWriter.AddAsync(message, ct);
@@ -306,10 +322,13 @@ if (result is InboxWriteResult.AlreadyPresent)
 }
 ```
 
-The `continue` is the repair. The publisher returns normally, so the outbox marks the message
-`Published` instead of retrying it to death — **and** consumers after a duplicated one still get
-their row. When the duplicate escaped as an exception it ended the whole publish, so a partial
-redelivery became permanent loss for consumers 3..N.
+The `continue` is the repair, and it lives in `EnvelopeReceiver` — the shape above is that method's
+loop, not a sketch. Consumers after a duplicated one still get their row; when the duplicate escaped
+as an exception it ended the whole fan-out, so a partial redelivery became permanent loss for
+consumers 3..N. Pinned by `ReceiveAsync_WhenOneConsumerIsADuplicate_StillWritesTheOthers` and, end
+to end, by `Redelivery_ThroughTheSeam_CostsNoConsumerItsRow`, which deletes the **second**
+consumer's row so the duplicate is met first — an early exit would then never reach the one that is
+missing.
 
 ```csharp
 // ❌ FORBIDDEN — reporting the nominal path as a failure
@@ -471,7 +490,7 @@ One class may implement all five; five interfaces so a publisher never sees `Cla
 the drain processor never sees `AddAsync`.
 
 ```csharp
-/// <summary>Ingestion. Publishers and broker adapters only.</summary>
+/// <summary>Ingestion. The receiving seam and broker adapters only.</summary>
 public interface IInboxWriter
 {
     ValueTask<bool> ExistsAsync(MessageId messageId, string consumerType, CancellationToken ct = default);
@@ -639,6 +658,13 @@ CausationId = message.CausationId?.Value.ToString();
 |---|---|---|
 | `OutboxProcessor` | `message.Id` | `message.CausationId` |
 | `InboxProcessor` | `message.MessageId` | `message.CausationId`, and never `message.RowId` |
+| `EnvelopeReceiver` | `envelope.MessageId` | `envelope.CausationId` — which the ROW copies, one hop behind |
+
+> **Correlation at the receiving seam is copied when the producer had one and MINTED ONCE when it
+> did not.** `EnvelopeReceiver` is the last point at which a single id still covers the whole
+> fan-out: downstream, `OutboxMessageFactory.ResolveCorrelation` substitutes a fresh id per staging
+> call, so leaving null here puts N consumers of one delivery on N unrelated chains, none reaching
+> back to the delivery that caused all of them. One id for the rows and the scope alike.
 
 `RowId` is the surrogate primary key ADR-MSG-017 introduced so the inbox claim filters on a single
 column. It is meaningless outside its own table; `MessageId` is the end-to-end identity the producer
@@ -716,6 +742,11 @@ if (!_writer.HasOpenTransaction)
 > `Database.CurrentTransaction`. Publishing belongs inside `ITransactionalContext.ExecuteAsync`.
 
 A missing **subscriber**, by contrast, is not an error: it is valid for a multi-service deployment
-where an event has no local consumer. That judgement now belongs to the receiving side — the
-in-process fan-out that used to log a warning and return was deleted with the in-process transport
-(ADR-MSG-019).
+where an event has no local consumer. That judgement belongs to the receiving side, and
+`EnvelopeReceiver` makes it: a contract name that resolves to a local type with no registered
+handler writes zero rows and throws nothing — but logs at `Warning` (event 2102) and counts
+`microkit.inbox.envelopes.unconsumed`. Correct behaviour is not the same as silent behaviour, and
+zero rows is otherwise indistinguishable from a healthy delivery. A contract name that resolves to
+**no** local type is the opposite verdict: permanent, `InboxPayloadException`, and a provider must
+dead-letter rather than nack — there is no row to dead-letter, so the verdict has nowhere to live
+but the broker.

@@ -43,6 +43,7 @@ public sealed class EfInboxStoreTests
         DateTimeOffset? lockedUntilUtc = null,
         DateTimeOffset? nextRetryAtUtc = null,
         DateTimeOffset? receivedAtUtc = null,
+        DateTimeOffset? occurredOnUtc = null,
         DateTimeOffset? processedAtUtc = null,
         bool deadLettered = false,
         Guid? claimToken = null,
@@ -58,6 +59,7 @@ public sealed class EfInboxStoreTests
             Payload = "{}",
             Status = status,
             ReceivedAtUtc = receivedAtUtc ?? Now,
+            OccurredOnUtc = occurredOnUtc ?? Now,
             ProcessedAtUtc = processedAtUtc,
             LockedUntilUtc = lockedUntilUtc,
             NextRetryAtUtc = nextRetryAtUtc,
@@ -554,4 +556,102 @@ public sealed class EfInboxStoreTests
             (await Store(ctx).DeleteProcessedAsync(Now)).ShouldBe(0);
             (await SecondContext(conn).InboxMessages.AsNoTracking().CountAsync()).ShouldBe(2);
         });
+
+    // ---------------------------------------------------------------------------
+    // The two clocks
+    // ---------------------------------------------------------------------------
+
+    /// <summary>
+    /// The claim orders on <see cref="InboxMessage.ReceivedAtUtc"/> and never on
+    /// <see cref="InboxMessage.OccurredOnUtc"/>.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// The two are seeded in <b>opposite</b> directions, which is the whole design of the test: with
+    /// both ascending together, an implementation ordering on either column passes and the test
+    /// proves nothing. <c>OccurredOnUtc</c> is caller-supplied at the far end of a wire — an
+    /// optional parameter of a public publish method — so ordering on it lets a backdated event
+    /// jump the whole queue and keep jumping it. That is the defect the outbox claim left behind
+    /// when it moved its sort key to <c>CreatedAtUtc</c>; the inbox must not reintroduce it now
+    /// that it carries a business clock of its own.
+    /// </para>
+    /// </remarks>
+    [Fact]
+    public Task ClaimBatchAsync_OrdersOnReceivedAtUtc_NotOnOccurredOnUtc()
+        => Task.Run(async () =>
+        {
+            var (conn, ctx) = CreateIsolatedDb();
+            await using var _ = conn;
+            await using var __ = ctx;
+
+            ctx.InboxMessages.AddRange(
+                BuildInboxMessage(
+                    consumerType: "received-first",
+                    receivedAtUtc: Now.AddMinutes(-30),
+                    occurredOnUtc: Now.AddDays(-1)),      // ...and occurred LAST
+                BuildInboxMessage(
+                    consumerType: "received-second",
+                    receivedAtUtc: Now.AddMinutes(-20),
+                    occurredOnUtc: Now.AddDays(-2)),
+                BuildInboxMessage(
+                    consumerType: "received-third",
+                    receivedAtUtc: Now.AddMinutes(-10),
+                    occurredOnUtc: Now.AddDays(-3)));     // ...and occurred FIRST
+            await ctx.SaveChangesAsync();
+
+            var claim = await Store(ctx).ClaimBatchAsync(batchSize: 2, Lease);
+
+            claim.Messages.Select(m => m.ConsumerType).ShouldBe(
+                ["received-first", "received-second"],
+                "the claim takes the two received earliest, in receipt order");
+
+            claim.Messages.ShouldNotContain(
+                m => m.ConsumerType == "received-third",
+                "that row occurred earliest of the three — claiming it means the sort key is the " +
+                "business clock, and a backdated message can starve the queue");
+        });
+
+    /// <summary>
+    /// No index touches <see cref="InboxMessage.OccurredOnUtc"/>, and the claim index still sorts
+    /// on <see cref="InboxMessage.ReceivedAtUtc"/>.
+    /// </summary>
+    /// <remarks>
+    /// The behavioural test above pins the <c>OrderBy</c>; this pins the schema, because the two
+    /// fail differently. Adding the business clock to <c>IX_InboxMessages_Processable</c> costs no
+    /// correctness and breaks no test — it just makes the column look like a legitimate sort key to
+    /// whoever reads the schema next, which is how the outbox acquired the defect in the first
+    /// place.
+    /// </remarks>
+    [Fact]
+    public void NoIndexTouchesOccurredOnUtc_AndTheClaimIndexSortsOnReceivedAtUtc()
+    {
+        var (conn, ctx) = CreateIsolatedDb();
+        using var _ = conn;
+        using var __ = ctx;
+
+        var entity = ctx.Model.FindEntityType(typeof(InboxMessage))!;
+
+        entity.FindProperty(nameof(InboxMessage.OccurredOnUtc)).ShouldNotBeNull(
+            "control assertion: a misspelled name would make the emptiness assertion below vacuous");
+
+        entity.GetIndexes()
+            .Where(i => i.Properties.Any(pr => pr.Name == nameof(InboxMessage.OccurredOnUtc)))
+            .ShouldBeEmpty(
+                "OccurredOnUtc is caller-supplied business time and read-only here — indexing it " +
+                "is the first step toward ordering on it");
+
+        var processable = entity.GetIndexes()
+            .SingleOrDefault(i => i.GetDatabaseName() == "IX_InboxMessages_Processable");
+
+        processable.ShouldNotBeNull();
+        processable.Properties.Select(pr => pr.Name).ShouldBe(
+            [
+                nameof(InboxMessage.DeadLettered),
+                nameof(InboxMessage.Status),
+                nameof(InboxMessage.NextRetryAtUtc),
+                nameof(InboxMessage.ReceivedAtUtc),
+            ],
+            "the trailing column must be the claim's sort key — the receipt clock, not the " +
+            "business one");
+    }
 }

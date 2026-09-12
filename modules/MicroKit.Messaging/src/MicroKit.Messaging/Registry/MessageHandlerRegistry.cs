@@ -17,12 +17,11 @@ using System.Reflection;
 /// </description></item>
 /// <item><description>
 /// <strong>By event type</strong> (<see cref="GetHandlers"/>) — discovers which consumers should
-/// receive a message. Its only caller was the in-process fan-out, deleted with the in-process
-/// transport (ADR-MSG-019), so it currently has <b>none</b>. It is kept rather than deleted
-/// because it is the seam the receiving side needs once an envelope can be turned back into inbox
-/// rows: a wire name resolves to a local type through <c>IntegrationEventRegistry</c>, and that
-/// type resolves to its consumers here. Covered directly by <c>MessageHandlerRegistryTests</c>,
-/// so it is an uncalled seam rather than untested code.
+/// receive a message. Used by <c>EnvelopeReceiver</c> to fan one arriving
+/// <c>MessageEnvelope</c> out into one inbox row per consumer. ADR-MSG-019 kept this direction
+/// alive through the step that had no caller for it, on the argument that the receiving side
+/// would need it; it does, and this is it. A wire name resolves to a local type through
+/// <c>IntegrationEventRegistry</c>, and that type resolves to its consumers here.
 /// </description></item>
 /// </list>
 /// </para>
@@ -50,8 +49,16 @@ public sealed class MessageHandlerRegistry
     /// compile time. Called by <c>MessagingBuilder.AddMessageHandler&lt;THandler, TEvent&gt;()</c>.
     /// </summary>
     /// <remarks>
+    /// <para>
     /// Preferred over <see cref="Register"/>: the cast to <c>IMessageHandler&lt;TEvent&gt;</c> is
     /// resolved by the compiler rather than through reflection at registration time.
+    /// </para>
+    /// <para>
+    /// <b>Idempotent in <paramref name="consumerType"/>.</b> Registering the same consumer twice
+    /// contributes one consumer, not two, and the later registration replaces the earlier — see
+    /// <see cref="GetHandlers"/> for why appending would misreport a first delivery as a
+    /// redelivery.
+    /// </para>
     /// </remarks>
     public void RegisterGeneric<TEvent>(string consumerType, Type handlerType)
         where TEvent : IIntegrationEvent
@@ -68,6 +75,12 @@ public sealed class MessageHandlerRegistry
     /// Registers a handler using a reflection-based invoker. Intended for test helpers
     /// that cannot supply a generic type parameter at compile time.
     /// </summary>
+    /// <remarks>
+    /// <b>Idempotent in <paramref name="consumerType"/></b>, exactly as
+    /// <see cref="RegisterGeneric{TEvent}"/> is — the two share one insertion path. A repeated
+    /// registration replaces the earlier entry rather than appending a second; see
+    /// <see cref="GetHandlers"/>.
+    /// </remarks>
     public void Register(Type eventType, string consumerType, Type handlerType)
     {
         var method = typeof(MessageHandlerRegistry)
@@ -82,6 +95,26 @@ public sealed class MessageHandlerRegistry
         where TEvent : IIntegrationEvent
         => (h, e, ct) => ((IMessageHandler<TEvent>)h).HandleAsync((TEvent)e, ct);
 
+    /// <summary>
+    /// Adds one entry, idempotently in <c>ConsumerType</c>. A repeated registration of the same
+    /// handler replaces its entry rather than appending a second.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <b>Registering the same handler twice must contribute one consumer, not two.</b> It is an
+    /// ordinary mistake in a composition root assembled from several module registrations, and
+    /// appending would make <c>EnvelopeReceiver</c> fan one envelope out to the same consumer
+    /// twice: the second write hits the dedup index, so a <i>first</i> delivery reports
+    /// <c>Duplicates = 1</c> and increments <c>microkit.inbox.messages.deduplicated</c> — the
+    /// counter whose documented use is spotting a lease set too short or a broker replaying. A
+    /// composition typo would read as a broker fault, permanently, at a steady rate.
+    /// </para>
+    /// <para>
+    /// Replace rather than ignore, so the two dictionaries cannot disagree:
+    /// <see cref="_byConsumerType"/> has always overwritten, and a re-registration carries a
+    /// freshly built invoker that must be the one both lookups return.
+    /// </para>
+    /// </remarks>
     private void AddEntry(Type eventType, HandlerEntry entry)
     {
         if (!_byEventType.TryGetValue(eventType, out var list))
@@ -90,7 +123,18 @@ public sealed class MessageHandlerRegistry
             _byEventType[eventType] = list;
         }
 
-        list.Add(entry);
+        var existing = list.FindIndex(
+            e => string.Equals(e.ConsumerType, entry.ConsumerType, StringComparison.Ordinal));
+
+        if (existing >= 0)
+        {
+            list[existing] = entry;
+        }
+        else
+        {
+            list.Add(entry);
+        }
+
         _byConsumerType[entry.ConsumerType] = entry;
     }
 
@@ -98,6 +142,27 @@ public sealed class MessageHandlerRegistry
     /// Returns all registered handler entries for the given runtime event type.
     /// Returns an empty list when no handlers are registered.
     /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <b>At most one entry per <c>ConsumerType</c>.</b> Registration deduplicates on it, so a
+    /// handler registered twice appears once here. That is not a convenience — it is what keeps
+    /// the fan-out honest. <c>EnvelopeReceiver</c> writes one inbox row per entry returned, so a
+    /// doubled entry would send the same consumer two writes for one envelope: the second hits the
+    /// <c>(MessageId, ConsumerType)</c> unique index, so a <b>first</b> delivery would report
+    /// <c>Duplicates = 1</c> and increment <c>microkit.inbox.messages.deduplicated</c> — the
+    /// counter whose documented use is spotting a lease set too short or a broker replaying. A
+    /// composition typo would read as a broker fault, permanently, at a steady rate.
+    /// </para>
+    /// <para>
+    /// A repeated registration <i>replaces</i> rather than being ignored, so that this lookup and
+    /// <see cref="TryGetInvoker"/> cannot return different invokers for one consumer type: the
+    /// consumer-type index has always overwritten, and a re-registration carries a freshly built
+    /// invoker that must be the one both directions return.
+    /// </para>
+    /// <para>
+    /// Ordering is the insertion order of first registration and nothing depends on it.
+    /// </para>
+    /// </remarks>
     public IReadOnlyList<HandlerEntry> GetHandlers(Type eventType)
         => _byEventType.TryGetValue(eventType, out var list)
             ? list
@@ -115,9 +180,19 @@ public sealed class MessageHandlerRegistry
     /// set, and nothing here depends on the order.
     /// </summary>
     /// <remarks>
-    /// Exists so <c>InboxIngestionValidator</c> can report at startup that handlers are registered
-    /// while nothing produces inbox rows for them, and name them in the failure. A count alone
-    /// would say a host is misconfigured without saying which registration to look at.
+    /// <para>
+    /// <b>Distinct by construction, not by filtering.</b> Registration deduplicates on
+    /// <c>ConsumerType</c>, so a handler registered twice appears once here and the count is the
+    /// number of consumers this host will actually fan out to — see <see cref="GetHandlers"/>.
+    /// </para>
+    /// It was written for <c>InboxIngestionValidator</c>, which named the registered consumers in
+    /// its boot failure — and that validator was deleted with the receiving seam, so this property
+    /// now has no production caller. Kept rather than removed, for diagnostics and for the same
+    /// reason ADR-MSG-019 kept <see cref="GetHandlers"/> through the step that had no caller for
+    /// it: a member that answers "which consumers did this host actually register" is what an
+    /// operator needs when <c>EnvelopeReceiver</c> reports a contract nothing consumes. Covered
+    /// directly by <c>MessageHandlerRegistryTests</c>, so it is an uncalled seam rather than
+    /// untested code. Worth revisiting at 1.0.0, not before.
     /// </remarks>
     public IReadOnlyCollection<string> RegisteredConsumerTypes => _byConsumerType.Keys;
 }

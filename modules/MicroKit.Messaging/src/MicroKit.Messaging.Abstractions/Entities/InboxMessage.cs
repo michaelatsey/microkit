@@ -73,7 +73,35 @@ public sealed class InboxMessage
     public int RetryCount { get; set; }
 
     /// <summary>Gets or sets the UTC time at which this message was received.</summary>
+    /// <remarks>
+    /// The local receipt instant, and the claim's ordering key — see
+    /// <see cref="OccurredOnUtc"/> for why the two must not be confused.
+    /// </remarks>
     public DateTimeOffset ReceivedAtUtc { get; set; }
+
+    /// <summary>
+    /// Gets or sets the UTC time at which the underlying business fact occurred, carried from
+    /// <see cref="MessageEnvelope.OccurredOnUtc"/>.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <b>Not the same clock as <see cref="ReceivedAtUtc"/>, and the difference is the point.</b>
+    /// This is the producer's business timeline; <see cref="ReceivedAtUtc"/> is this process's
+    /// relay clock. A handler windowing or ordering on the business fact needs the former, and
+    /// since ADR-MSG-018 made <c>IIntegrationEvent</c> a bare marker a payload is under no
+    /// obligation to carry a timestamp of its own — so without this column the business time
+    /// exists nowhere on the receiving side.
+    /// </para>
+    /// <para>
+    /// <b>It must never enter the claim, an index, or an ordering.</b> It is caller-supplied on
+    /// the producing side — an optional parameter of a public publish method — so a backdated
+    /// value would jump the whole queue and keep jumping it. That is exactly the defect the
+    /// outbox claim moved away from when it switched its sort key from <c>OccurredOnUtc</c> to
+    /// <c>CreatedAtUtc</c>, and the inbox must not reintroduce it. Read-only diagnostic and
+    /// business data, like <see cref="CausationId"/>.
+    /// </para>
+    /// </remarks>
+    public DateTimeOffset OccurredOnUtc { get; set; }
 
     /// <summary>
     /// Gets or sets the UTC time at which the handler completed successfully.

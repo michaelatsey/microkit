@@ -199,9 +199,9 @@ public sealed class InboxSettlementGuaranteeTests
             });
 
             // No IOutboxDispatcher is registered, and none is needed: this suite drives
-            // IInboxCoordinator directly and seeds its own inbox rows. AddMessageHandler is still
-            // legitimate here for the same reason — InboxIngestionValidator only fails a host that
-            // actually starts, and nothing below builds one (ADR-MSG-019).
+            // IInboxCoordinator directly and seeds its own inbox rows rather than going through
+            // IEnvelopeReceiver. That keeps the drain's guarantees tested independently of how the
+            // rows got there.
             services.AddMicroKitMessaging()
                 .AddEfCoreOutbox<TestMessagingDbContext>()
                 .AddMessageHandler<RecordingSettlementHandler, SettlementTestEvent>();

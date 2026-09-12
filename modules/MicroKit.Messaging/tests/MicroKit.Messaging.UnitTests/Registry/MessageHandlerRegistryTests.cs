@@ -56,6 +56,52 @@ public sealed class MessageHandlerRegistryTests
         registry.GetHandlers(typeof(InboxTestEvent)).Count.ShouldBe(2);
     }
 
+    /// <summary>
+    /// Registering the same handler twice contributes one consumer, not two.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// An ordinary mistake in a composition root assembled from several module registrations, and
+    /// silent before this: <c>EnvelopeReceiver</c> would fan one envelope out to the same consumer
+    /// twice, the second write would hit the dedup index, and a <b>first</b> delivery would report
+    /// <c>Duplicates = 1</c> while incrementing
+    /// <c>microkit.inbox.messages.deduplicated</c> — the counter whose documented use is spotting a
+    /// lease set too short or a broker replaying. A composition typo would read as a broker fault,
+    /// at a steady rate, forever.
+    /// </para>
+    /// <para>
+    /// The second assertion is the half that matters beyond the count: the surviving entry must be
+    /// the <i>later</i> registration, so the two dictionaries cannot disagree about which invoker a
+    /// consumer type resolves to.
+    /// </para>
+    /// </remarks>
+    [Fact]
+    public void RegisteringTheSameConsumerTwice_ContributesOneEntry()
+    {
+        var registry = WithOneHandler();
+        registry.RegisterGeneric<InboxTestEvent>(ConsumerType, typeof(RecordingInboxHandler));
+
+        registry.GetHandlers(typeof(InboxTestEvent)).Count.ShouldBe(
+            1, "a doubled registration is one consumer, not a redelivery of every message to it");
+
+        registry.RegisteredConsumerTypes.ShouldHaveSingleItem().ShouldBe(ConsumerType);
+    }
+
+    [Fact]
+    public void ReRegisteringAConsumer_ReplacesTheEntryInBothLookups()
+    {
+        // Same consumer type name, different handler — a host rebinding a consumer. Replace rather
+        // than ignore, so GetHandlers and TryGetInvoker cannot return different invokers for it.
+        var registry = WithOneHandler();
+        registry.RegisterGeneric<InboxTestEvent>(ConsumerType, typeof(SecondHandler));
+
+        registry.GetHandlers(typeof(InboxTestEvent)).ShouldHaveSingleItem()
+            .HandlerType.ShouldBe(typeof(SecondHandler));
+
+        registry.TryGetInvoker(ConsumerType, out var entry).ShouldBeTrue();
+        entry.HandlerType.ShouldBe(typeof(SecondHandler));
+    }
+
     [Fact]
     public void TryGetInvoker_WhenRegistered_ReturnsTheEntry()
     {
@@ -105,8 +151,8 @@ public sealed class MessageHandlerRegistryTests
     [Fact]
     public void RegisteredConsumerTypes_IsEmptyBeforeAnyRegistration()
     {
-        // What InboxIngestionValidator reads. Empty must mean empty, or every host would fail to
-        // start (ADR-MSG-019).
+        // Empty must mean empty. Nothing reads this in production since InboxIngestionValidator
+        // was deleted with the receiving seam, so the direct coverage is what keeps it honest.
         new MessageHandlerRegistry().RegisteredConsumerTypes.ShouldBeEmpty();
     }
 

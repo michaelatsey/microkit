@@ -1317,3 +1317,409 @@ redelivery an expired lease produces, and asserts the properties `InboxRedeliver
 contract row, `RetryCount == 0`, no dead-letter, and nothing from MicroKit's own log categories at
 `Warning` or above. (EF Core logs the rejected `INSERT` at `Error` from its own category on every
 absorbed replay; that setting lives on the consumer's `DbContext`, so a library cannot silence it.)
+
+---
+
+### Implementation note — step 7: the receiving seam (2026-09-05)
+
+The inbox has a producer. `IEnvelopeReceiver` (Abstractions) is implemented by `EnvelopeReceiver`
+(`internal sealed`, Core) and called by a transport provider's consume loop; it resolves
+`MessageEnvelope.ContractName` to this process's own type, and writes one `InboxMessage` per
+registered consumer. `InboxIngestionValidator`, `InboxIngestionValidatorTests` and the
+`AddMessageHandler<,>()` boot failure are **deleted** — the gap they stood in for is closed.
+
+The end-to-end assertion this ADR recorded as owed is repaid by
+`ReceivingSeamTests.AnEnvelopeCrossingTheSeam_CausesTheHandlersWorkThroughTheInboxRow`, and the
+redelivery properties by `Redelivery_ThroughTheSeam_CostsNoConsumerItsRow`.
+
+**Six things were decided while implementing that the ADR did not anticipate.**
+
+1. **`Core_DoesNotDependOnIInboxWriter` was replaced, not deleted — and its real subject was
+   narrower than its name.** The ADR predicted this failure deliberately, so that the step revisited
+   the decision instead of quietly reinstating a producer-side writer. It failed exactly as
+   predicted. But "Core must not reference `IInboxWriter`" was never the property worth pinning:
+   what two rewrites spent their effort removing was a fan-out writing a *consumer's* row inside the
+   *producer*, bypassing the wire and the contract name that make the consumer's own type
+   resolvable. A row written on the receiving side, from an envelope that crossed a transport, is
+   the opposite of that defect. The replacement, `NoOutboxDispatcherWritesInboxRows`, asserts that
+   no `IOutboxDispatcher` in Core **or in the `.MediatR` glue** depends on `IInboxWriter` — the glue
+   included because `MediatROutboxDispatcher` is the other place a producer-side writer could be
+   added unnoticed. It carries **two** controls rather than the original's one: the assertion is now
+   a conjunction, so it can go vacuous on the selector as well as on the dependency query.
+
+2. **The S4 verdict: `InboxPayloadException` is reused, and no receive-side exception type was
+   introduced.** An unbound contract name is permanent — the binding cannot appear without a
+   redeploy — and permanent is exactly what that type already means. It is in practice the module's
+   general permanent-inbox-fault type rather than a payload-specific one: it already covers "unknown
+   consumer type", which is not a payload fault either. Reusing it leaves a provider **one** type to
+   catch for "dead-letter this", and it already carries the *never throw for a timeout, a refused
+   connection, an HTTP 503* guard rail a provider needs. Its `<summary>` was widened from "an inbox
+   row" to cover an inbound envelope, and a bullet names the ingestion case. The one thing genuinely
+   different — that there is no row to dead-letter, so the verdict must reach the broker — is stated
+   on `ReceiveAsync`'s `<exception>` doc, where a provider reads it.
+
+3. **S2's "the receiver owns and commits its own transaction" is met without one, and it has to
+   be.** `MicroKit.Messaging` (Core) references only Abstractions, `MicroKit.Execution.Abstractions`
+   and three `Microsoft.Extensions.*.Abstractions` packages: it has neither EF Core nor
+   `ITransactionalContext`, and **structurally cannot open a transaction**. `IInboxWriter.AddAsync`
+   already covers the case — with no ambient transaction it commits — so `ReceiveAsync` returns only
+   after every row has committed, which is precisely the durability the acknowledgement rule
+   demands. What is *not* obtained is atomicity across the fan-out, and it should not be: the rows
+   advance independently by design (ADR-MSG-017), and a failure after the first row is absorbed on
+   redelivery as `AlreadyPresent`. Recorded because the ADR's wording implies a transaction the
+   package cannot open.
+
+4. **The seam creates the execution scope itself, and uses `IExecutionScopeFactory` rather than
+   `IServiceScopeFactory`.** Not a style choice: a tenant-aware factory resolves a per-tenant
+   connection, and a row for tenant X must land in tenant X's database — so the envelope's tenant
+   has to be in the context *before* `IInboxWriter` is resolved. Creating the scope internally also
+   makes the "never share a scope across messages" rule structural instead of documented, which is
+   what lets the receiver be a singleton a consume loop can hold. One scope per **envelope**, not
+   per consumer: every row of a fan-out carries the same payload and tenant.
+
+5. **Causation is copied onto the row and derived into the scope, and the two are one hop apart.**
+   `InboxMessage.CausationId` takes the envelope's — the producer assigned it and this row does not
+   reassign it. The receive scope's `IExecutionContext.CausationId` is derived from
+   `envelope.MessageId`, matching both processors. The end-to-end test seeds them differently so
+   neither can pass as the other.
+
+6. **`MessageHandlerRegistry.RegisteredConsumerTypes` outlived its only caller and is kept.** It
+   existed so `InboxIngestionValidator` could name the registered consumers in its boot failure. It
+   is now the mirror of `GetHandlers` — which this ADR kept through one step with no caller, on the
+   argument the receiving side would need it, and which `EnvelopeReceiver` now uses. Deleting it
+   would be an unrequested public break for no gain; it stays covered directly by
+   `MessageHandlerRegistryTests`. Worth revisiting at 1.0.0, not before.
+
+**One correction to the passing order, recorded because the same class of drift produced the step-5
+corrections.** The mutation check was specified as "nulling the derivation turns this test red and
+nothing else". It turns **three** red, not one: the new end-to-end test, and the two
+`InboxProcessorTests` cases that have covered that line at unit level since step 5
+(`ProcessBatch_NamesTheDeliveredMessageAsTheCauseOfTheHandlersWork` and
+`ProcessBatch_PropagatesCorrelationUnchangedWhileDerivingCausation`, the latter added by the step-5
+closure lot). All three name that line by their own titles, so this is coverage, not coupling. The
+specification was written from the design session rather than from the tree.
+
+**Verified by mutation, four times, not by reading.** Nulling the causation derivation → three red,
+listed above. Turning the `continue` on `AlreadyPresent` into an early exit → three red, including
+the end-to-end redelivery test. Stamping `EventType` from the contract name instead of the resolved
+type → three red. Stamping `ReceivedAtUtc` from `OccurredOnUtc` → one red, and note that the naive
+form of that mutation **does not compile at all**: `timeProvider` becomes unread and `CS9113`
+is an error under Release, which is a second, free guard on that column.
+
+### Implementation note — step 7 review closure: the two clocks, and what a catch was hiding (2026-09-06)
+
+The distributed-context review of the receiving seam. Seven findings; four applied as code, three as
+documentation, one deliberately not applied. The four focus areas it was asked to verify — the
+per-envelope scope, the copied/derived context, the fan-out, and whether the durability guarantee
+survives having no transaction — all held as designed, so what follows is what the design did **not**
+already cover.
+
+**1. `InboxConfigurationException` meant more than "not registered", and the extra meaning was the
+dangerous one.** `ResolveWriter` documented itself as a structural test — "the try wraps the
+container call and nothing else" — and it was not one. `IInboxWriter` resolves through a factory
+that activates `EfInboxStore<TContext>` and, with it, the consumer's `DbContext`, so
+`catch (InvalidOperationException)` around `GetRequiredService` spanned that entire graph while
+reading as a registration lookup.
+
+The case that matters is the one step 7 §4 chose `IExecutionScopeFactory` *for*: a tenant-aware
+factory resolves a per-tenant connection during that activation, and an envelope naming an unknown
+or de-provisioned tenant throws exactly `InvalidOperationException` from it. Caught, it was reported
+as a missing registration that was in fact present, told "retrying will not help", and — since the
+exception instructs a provider to stop consuming — **one tenant's bad row would halt ingestion for
+every tenant**. The scope choice and the resolution guard were written in the same step and did not
+account for each other.
+
+The fix is the structural test the code claimed to be making: `GetService` plus a null check.
+`GetService` returns null only when nothing is registered and throws when something is registered
+and cannot be activated, so the two verdicts are separated by the container rather than by
+inspecting an exception. An activation failure now propagates unchanged and a provider nacks one
+message. `ReceiveAsync_WhenTheWriterCannotBeActivated_PropagatesRatherThanClassifying` pins it, and
+uses `InvalidOperationException` deliberately — the one type a catch-based implementation would
+swallow.
+
+**`OutboxProcessor.ResolveDispatcher` has the same shape and is left alone, owed.** Its
+`StampOrigin` sibling is harmless (`OriginMessageHolder` is an internal marker with no
+dependencies), but `ResolveDispatcher` activates a real graph. Out of scope for a review of this
+changeset; it should be corrected the same way.
+
+**2. The business clock was dropped at the seam, and that is the step-5 `CausationId` defect
+again.** `EnvelopeReceiver` read seven of the envelope's eight members and never `OccurredOnUtc`;
+`InboxMessage` had no column for it. Since ADR-MSG-018 made `IIntegrationEvent` a bare marker a
+payload carries no timestamp of its own, so the business time existed **nowhere** on the receiving
+side and a handler reading `ReceivedAtUtc` was reading the relay's clock for a business fact — while
+`MessageEnvelope.OccurredOnUtc`'s own documentation described it as consumer-facing. Structurally
+identical to what step 5 fixed on `CausationId`: an envelope member documented for the consumer that
+never reached the consumer.
+
+**Decided: add the column, now.** No broker provider ships, so it costs nothing today; later it is a
+schema migration on every deployed consumer. `InboxMessage.OccurredOnUtc` is non-nullable and
+written verbatim from the envelope.
+
+**`ReceivedAtUtc` stays the claim's ordering key and `OccurredOnUtc` enters no index, no claim and
+no ordering.** It is caller-supplied at the far end of a wire — an optional parameter of a public
+publish method — so ordering on it lets a backdated event jump the queue and keep jumping it, which
+is the defect the outbox claim left behind when it moved to `CreatedAtUtc`. Two tests, because the
+schema and the query fail differently: `ClaimBatchAsync_OrdersOnReceivedAtUtc_NotOnOccurredOnUtc`
+seeds the two clocks in **opposite** directions (seeded together, an implementation ordering on
+either passes and the test proves nothing), and
+`NoIndexTouchesOccurredOnUtc_AndTheClaimIndexSortsOnReceivedAtUtc` pins the model, because adding
+the column to `IX_InboxMessages_Processable` costs no correctness, breaks no test, and makes the
+column look like a legitimate sort key to whoever reads the schema next.
+
+**`Source` was considered and deliberately not added.** Diagnostic and routing metadata with no
+business semantics, already present in the receiver's log line and in the unbound-contract
+exception. A column nothing reads is a migration everyone pays for. Recorded so the omission reads
+as decided.
+
+**3. An uncorrelated envelope fanned out into N unrelated chains.** With
+`envelope.CorrelationId` null, the rows and the scope carried null, and each consumer that went on
+to publish reached `OutboxMessageFactory.ResolveCorrelation`, which mints per staging call — so two
+consumers of one delivery started two chains and neither reached back to the delivery. The seam is
+the last point at which one id still covers the whole fan-out, so it mints there when the producer
+had none. Copying is unchanged when the producer had one.
+
+**4. A doubled `AddMessageHandler<,>()` read as a broker fault.** `MessageHandlerRegistry.AddEntry`
+appended without deduplicating on `ConsumerType`, so one envelope fanned out twice to the same
+consumer, the second write hit the dedup index, and a *first* delivery reported `Duplicates = 1`
+while incrementing `microkit.inbox.messages.deduplicated` — the counter whose documented use is
+detecting a short lease or a replaying broker. A composition typo presented as a steady dedup rate.
+It now replaces rather than appends, so the two lookups cannot disagree about which invoker a
+consumer type resolves to. `EnvelopeReceiver` and `InboxMetrics.Record` were also aligned: both now
+refuse an unrecognised `InboxWriteResult` rather than one counting it as a row added and the other
+counting nothing.
+
+**Documented, not coded.** An ambient `System.Transactions.TransactionScope` around `ReceiveAsync`
+defeats three things at once and reports none of them — the store inspects
+`Database.CurrentTransaction`, which stays null under one, so the rows are not durable on return, no
+savepoint is taken, and the `SupportsSavepoints` guard is bypassed. Noted on `IEnvelopeReceiver`'s
+transaction-boundary paragraph, which previously ruled out only a transaction opened on the
+`DbContext`. And `InboxPayloadException`'s "permanent until redeployed" is true of a *process* and
+acted on by a *fleet*: during a rolling deployment an old instance dead-letters a message the
+instance beside it would have accepted. The classification stays — it is right for a single-version
+deployment, and nacking loops until the broker discards the message with no record of the refusal —
+but the caveat is on the exception now, because the first broker provider inherits the rule
+verbatim.
+
+**Owed, not done.**
+
+- **`OutboxProcessor.ResolveDispatcher`** — the F1 shape, uncorrected. See above.
+- **No probe that a custom `IExecutionScopeFactory` bridged the context.** `OutboxProcessor` gets
+  one incidentally by stamping `OriginMessageHolder` on the scope it is handed; the receiver has no
+  equivalent, so a factory that ignores the `context` parameter writes rows into the default
+  database silently in a DB-per-tenant deployment. Worth having, but it is a new structural check on
+  the scope contract rather than a defect in this changeset — and it belongs on both processors and
+  the receiver at once, not on one of them.
+- **`EfInboxStore.AddAsync`'s savepoint rollback is unpinned.** Discovered while running the
+  mutation checks below, not by the review. `EfIntegrationEventWriter` keeps **two** PostgreSQL
+  cases — `WithAutoSavepoints` and `WithoutAutoSavepoints` — precisely because EF's automatic
+  savepoints make the explicit one redundant when they are on, and load-bearing when a consumer sets
+  `AutoSavepointsEnabled = false`. The inbox store carries the same reasoning in its own remarks but
+  has only the auto-savepoints-on case (`InboxLeaseExpiryTests.Ambient_transaction_survives_a_deduplicated_write`),
+  so deleting its `RollbackToSavepointAsync` turns **nothing** red. It needs the
+  `WithoutAutoSavepoints` twin.
+
+**Verified by mutation, five times.** The four from step 7 still hold; the new column adds the
+fifth.
+
+| Mutation | Expected | Observed |
+|---|---|---|
+| `ClaimToken` loses `IsConcurrencyToken()` | red | 1 red — `InboxLeaseExpiryTests.WhenTheLeaseExpiresMidHandler_…` |
+| `EfIntegrationEventWriter` loses `RollbackToSavepointAsync` | red | 1 red — `AbsorbedDuplicate_…_WithoutAutoSavepoints` only, as designed |
+| `continue` on `AlreadyPresent` → early return | red | 3 red, incl. `Redelivery_ThroughTheSeam_CostsNoConsumerItsRow` |
+| Causation derivation → copy-through | red | 1 red — `ReceiveAsync_BuildsOneScopeCarryingTheTenantCorrelationAndDerivedCausation` |
+| **Claim orders on `OccurredOnUtc`** | **red** | **1 red — `ClaimBatchAsync_OrdersOnReceivedAtUtc_NotOnOccurredOnUtc`** |
+
+Each fix was also reverted and confirmed red: the catch-based `ResolveWriter`, per-row correlation
+minting, and an appending `AddEntry`. The null-correlation revert **does not compile**, which is a
+free second guard.
+
+> ⚠ A caution for the next mutation run, learned the hard way here: restoring a mutated file with
+> `shutil.copy2` preserves its mtime, MSBuild then considers the project up to date, and the *next*
+> test run silently executes the previous mutation's binary. Restore content only and touch the
+> file. One mutation result in this session was wrong until that was found.
+
+Gate: Release, full suite, 396 passed / 0 failed / 0 skipped, including 19 PostgreSQL
+Testcontainers tests. The api-reviewer has **not** run — next session.
+
+#### Re-verification (2026-09-12) — same tree, measured without Docker and then with
+
+The gate and the mutation checks were re-run from a clean session against the same working tree.
+**No code changed**; this records what a second, independent run observed.
+
+Gate: Release, build clean (0 warnings), **377 passed / 0 failed / 19 skipped**. The 19 skipped are
+exactly the `[DockerRequiredFact]` set — no Docker daemon in the environment this time — and
+377 + 19 = 396 reconciles with the run above.
+
+| Check | Observed on re-run |
+|---|---|
+| `continue` on `AlreadyPresent` → early return | 3 red — `ReceivingSeamTests.Redelivery_ThroughTheSeam_CostsNoConsumerItsRow`, `…WhenOneConsumerIsADuplicate_StillWritesTheOthers`, `…WhenEveryConsumerIsADuplicate_ReportsItAndDoesNotThrow` |
+| Causation derivation → copy-through | 1 red — `ReceiveAsync_BuildsOneScopeCarryingTheTenantCorrelationAndDerivedCausation` |
+| Claim orders on `OccurredOnUtc` | 1 red — `ClaimBatchAsync_OrdersOnReceivedAtUtc_NotOnOccurredOnUtc` |
+| Revert F1 → catch-based `ResolveWriter` | 1 red — `ReceiveAsync_WhenTheWriterCannotBeActivated_PropagatesRatherThanClassifying` |
+| Revert F3 → per-row correlation minting | 1 red — `ReceiveAsync_WhenTheEnvelopeCarriesNoCorrelation_MintsOneForTheWholeFanOut` |
+| Revert F4 → appending `AddEntry` | 2 red — `RegisteringTheSameConsumerTwice_ContributesOneEntry`, `ReRegisteringAConsumer_ReplacesTheEntryInBothLookups` |
+
+##### The two PostgreSQL-pinned invariants, measured both ways
+
+The remaining two mutations were run **twice on the same tree** — once with no Docker daemon, once
+with one — so the claim that they are invisible to the fast suite is a measurement rather than an
+assertion. Docker up: the full gate is **396 passed / 0 failed / 0 skipped**.
+
+| Mutation | Without Docker (377 runnable) | With Docker (396 runnable) |
+|---|---|---|
+| `ClaimToken` loses `IsConcurrencyToken()` | **green — 377 passed, 0 red** | **1 red** — `InboxLeaseExpiryTests.WhenTheLeaseExpiresMidHandler_TheLoserRollsBackEntirelyAndTheWinnerStands` |
+| `EfIntegrationEventWriter` loses `RollbackToSavepointAsync` | **green — 377 passed, 0 red** | **1 red** — `IntegrationEventPublishingPostgreSqlTests.AbsorbedDuplicate_LeavesTheCallersOwnWritesIntact_WithoutAutoSavepoints` |
+
+Both failures are the *mechanism*, not a proxy for it. Dropping the concurrency token makes
+`SaveChangesAsync` stop throwing `DbUpdateConcurrencyException` — the lost update the token exists
+to prevent, arriving exactly as ADR-MSG-017 described it. Dropping the savepoint rollback fails with
+Npgsql **`25P02: current transaction is aborted, commands ignored until end of transaction block`**
+— the caller's transaction destroyed by an absorbed duplicate, which is the whole reason the
+explicit savepoint is taken.
+
+**`AbsorbedDuplicate_…_WithAutoSavepoints` stayed green under that second mutation.** That is the
+paired observation that makes keeping both cases non-negotiable: with EF's automatic savepoints on,
+the explicit one is redundant and its removal is invisible; with them off — an ordinary consumer
+setting — it is load-bearing. One case alone reads as dead code.
+
+**What this settles.** Two invariants of this module have exactly one test each standing between
+them and a silent regression, and both of those tests are Docker-gated. A contributor who runs the
+fast suite, sees 377 green and ships gets **no signal at all**. So neither line may be deleted on
+the strength of a local run, and the Docker-backed suite is a release gate rather than an optional
+extra.
+
+**And it converts one owed item from asserted to measured.** The same mutation was applied to
+`EfInboxStore.AddAsync`'s savepoint rollback, **with Docker up**, and turned **nothing** red —
+396 passed / 0 failed / 0 skipped. So the two identical mechanisms are now separated by evidence
+rather than by argument: the writer's line has a demonstrated red at full suite, the store's has
+none at full suite. `EfIntegrationEventWriter` carries both auto-savepoint cases and
+`EfInboxStore` carries only the auto-savepoints-**on** one
+(`InboxLeaseExpiryTests.Ambient_transaction_survives_a_deduplicated_write`), where the explicit
+savepoint is redundant. The `WithoutAutoSavepoints` twin is owed, and it is owed as a measured
+debt — not because the code looks risky, but because a mutation of it was run and the suite did
+not notice.
+
+**Owed, carried forward:** the `WithoutAutoSavepoints` twin for `EfInboxStore`;
+`OutboxProcessor.ResolveDispatcher` (the F1 shape, uncorrected); and the scope-contract probe (A5).
+The api-reviewer still has **not** run — next session.
+
+#### Implementation note — step 7 api-review application (2026-09-12)
+
+The api-reviewer ran against the step-7 tree and its findings were applied in one pass. Nine
+findings, one of which changed code; the rest were documentation, and the documentation half is not
+incidental here — two of the three contracts this step adds (`ReceiveAsync`'s acknowledgement rule,
+`InboxPayloadException`'s permanence) cannot be enforced from this repository at all, so their
+statement *is* the enforcement.
+
+**F1 — `InboxConfigurationException` meant one thing on the type and another in the assembly.**
+Two halves, and only the second touched code.
+
+*The type's remarks* described a single origin — the drain path — and a single mechanism, "raised by
+wrapping the resolution call itself". Both were wrong the moment `EnvelopeReceiver` became a second
+producer, and the remediation paragraph ("the processor settles the batch, releasing every row
+untouched") describes machinery that does not exist at ingestion: no batch, no lease, no row.
+Rewritten the way `OutboxConfigurationException` enumerates its origins on the type, so a reader is
+not dependent on locating the call site: two origins, the remediation stated per origin, and the
+detection mechanism stated once as `GetService` plus a null test.
+
+*The assembly did not honour the narrowing the CHANGELOG claimed.* `InboxProcessor.Resolve` and
+`InboxProcessor.ResolveSettlement` still caught `InvalidOperationException` around
+`GetRequiredService`. `IInboxSettlementStore` resolves through a factory that activates
+`EfInboxStore<TContext>` and with it the consumer's `DbContext`, so that catch spanned the whole
+activation graph while reading as a registration lookup — the exact shape F1 of the previous review
+removed from `ResolveWriter`. **It is worse on this path than at the seam**, which is why the
+CHANGELOG claim was kept and the code moved to meet it rather than the reverse:
+`InboxConfigurationException` abandons the batch and stops the drain worker, so under a tenant-aware
+`IExecutionScopeFactory` one envelope naming an unknown tenant would have halted the inbox for
+*every* tenant while reporting a registration that is present as missing. Both sites now
+`GetService` + null test; an activation failure falls through to the per-message transient path and
+costs one row one retry.
+
+**Owed, and narrowed by one site that was not in the review.** `OutboxProcessor.ResolveDispatcher`
+carries the same uncorrected shape — different exception type, different path, its own lot. While
+applying this, **`OutboxProcessor.StampOrigin` was found to have it too**: it catches
+`InvalidOperationException` around `GetRequiredService<OriginMessageHolder>()` and raises
+`OutboxConfigurationException`. It is the lower-risk of the two (the holder is a plain class
+registered by `AddMicroKitMessaging()` with no graph behind it, so there is little for a catch to
+over-span), but it is the same reasoning and belongs in the same lot. Two sites owed, not one.
+
+**F2 — the acknowledgement rule instructed the wrong reader.** It forbade an *ordering* of an ack
+call, which is necessary but not sufficient, because the acknowledgement that loses a message is
+usually one nobody writes. Restated as a constraint on the client's configuration — *nothing may
+settle the broker message except code that runs after the returned task has completed* — with the
+settling mechanism named per broker, mirroring what `IMessageTransport` already does on the send
+side: Kafka `enable.auto.commit` (**on by default**, commits on a timer, can commit while
+`ReceiveAsync` is in flight), RabbitMQ `autoAck: true`, Azure Service Bus
+`ReceiveMode.ReceiveAndDelete`. `ServiceBusProcessor.AutoCompleteMessages` is named too, as
+**safe** — it also defaults to true but completes after the message handler returns. The safe
+default and the unsafe one both read as "auto"; naming only one would be worse than naming neither.
+
+The conformance obligation was being delegated by cross-reference ("it carries the same conformance
+obligation"). Now assigned, and explicitly **not** the same obligation: `SendAsync`'s asserts a
+callee's return, this one asserts a caller's ordering, so it instruments the acknowledgement rather
+than the seam — fail an `IEnvelopeReceiver` whose task does not complete until released, and assert
+nothing has been settled at the broker meanwhile, against the real client configuration the provider
+ships. Mirrored in the README, which had assigned the send-side test and not this one.
+
+**F3 — registry idempotency was documented on a `private` member.** `AddEntry`'s reasoning was
+sound and invisible: the behaviour change belongs to `Register`, `RegisterGeneric`, `GetHandlers`,
+`RegisteredConsumerTypes` and `MessagingBuilder.AddMessageHandler<,>`, none of which said a second
+registration is absorbed. Stated on all five, with the full consequence on `GetHandlers` (a doubled
+entry makes a *first* delivery report `Duplicates = 1` on
+`microkit.inbox.messages.deduplicated`, so a composition typo reads as a broker fault at a steady
+rate, permanently).
+
+**F4 — decision, recorded rather than left to be re-derived.** `InboxMetrics.Record` throws on an
+unrecognised `InboxWriteResult` where it previously returned silently. That was chosen mid-lot and
+**the throw stands**: `EnvelopeReceiver` classifies the same two cases, so recording nothing here
+while the receiver counted the same write as a row added produces two counts of one write that
+disagree, with neither flagged. A third enum value is this module changing an enum and missing a
+call site, and the two sites must fail together or not at all. The cost is a metrics call that can
+throw — accepted, because it is unreachable while the enum has its two documented values and the
+alternative is a silent divergence. Now carries an `<exception>` tag saying so; it is a public
+method with a public parameterless constructor, on a path `InboxIngestionLogs`' own docs invite
+broker adapters onto.
+
+**F5–F9.** `ReceiveAsync` gained an `<exception>` entry for the unclassified-`InboxWriteResult`
+guard, which the catch-all rule was otherwise routing to redelivery — a module defect looping until
+the broker's own limit. `EnvelopeReceiveResult.From` now rejects negatives, and the type records why
+the factory is public (cross-assembly producer, not an invitation) and that `ConsumersMatched` being
+derived **depends on** the F4 throw: a skipped consumer would leave the sum silently short, so the
+coupling is load-bearing in both directions. `IEnvelopeReceiver` now names where it is registered,
+and says plainly that a provider's assumption the seam is present is a convention rather than
+something the container enforces. The rolling-deployment caveat is cross-referenced from the
+`<exception>` block, which is what a provider author reads while writing the dead-letter branch.
+And the receiver's class remark claimed it does not derive causation while deriving it three
+paragraphs below — rewritten as the three statements that actually exist on the path (row copies,
+receiver's scope derives, `InboxProcessor` derives again one hop later), because reading any one of
+them as the rule for all three is the confusion that left `CausationId` null everywhere.
+
+**A gap in the passing order itself, not a finding.** The surface list handed to the reviewer was
+incomplete: it omitted `InboxMessage.OccurredOnUtc` and `InboxMetrics.RecordUnconsumed(string)`.
+`OccurredOnUtc` is the consequential one — a new **non-nullable** property on a public EF entity,
+so a required-column migration for anyone who has deployed the inbox table. The CHANGELOG documents
+it correctly (migration SQL, backfill from `ReceivedAtUtc`, the no-index warning), so this was a
+passing-order gap rather than an undocumented change. Recorded because **a member that forces a
+migration is exactly what an API review exists to name**, and a reviewer given a list is reviewing
+the list unless the list is complete. The lesson is procedural: derive the surface list
+mechanically from the diff rather than from the changeset's narrative.
+
+**Verified by mutation.** The two new tests mirror
+`ReceiveAsync_WhenTheWriterCannotBeActivated_PropagatesRatherThanClassifying` and were confirmed to
+discriminate, not merely to pass.
+
+| Mutation | Expected | Observed |
+|---|---|---|
+| Revert F1 → catch-based `Resolve` and `ResolveSettlement` | red | **2 red** — `ProcessBatch_WhenSettlementStoreCannotBeActivated_PropagatesRatherThanClassifying`, `ProcessBatch_WhenHandlerCannotBeActivated_PropagatesRatherThanClassifying`. The two pre-existing `SettlesReleasedThenRethrows` tests stayed **green**, which is the other half: a genuinely absent registration must still be a configuration fault. |
+
+Both new tests seed **`InvalidOperationException`** deliberately — the one type a catch-based
+implementation swallows, so any other type would leave the regression free to return — and claim
+**three** messages, because the discriminator is the batch's fate rather than one row's: a
+catch-based implementation breaks the loop at index 0 and releases all three, so `Retried == 3` and
+`Released == 0` is the assertion that says the fleet-wide halt is gone. Mutation applied, built, run
+red, restored by content with an explicit `touch`, rebuilt, run green — per the mtime caution
+above.
+
+Gate: Release, build clean (**0 warnings**), **398 passed / 0 failed / 0 skipped**, Docker up,
+including the 19 PostgreSQL Testcontainers tests. 396 + the two new tests = 398, so the baseline
+reconciles exactly. No test was modified; two were added.

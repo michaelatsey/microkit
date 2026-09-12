@@ -275,3 +275,73 @@ internal sealed record InboxTestEvent(MessageId MessageId, string TenantId) : II
 {
     public DateTimeOffset OccurredOnUtc { get; } = DateTimeOffset.UnixEpoch;
 }
+
+/// <summary>
+/// An <see cref="IInboxWriter"/> that records every row it was handed and reports whatever a
+/// script tells it to.
+/// </summary>
+/// <remarks>
+/// <para>
+/// <b>A recording fake rather than an NSubstitute mock, deliberately.</b> Several receiver tests
+/// assert that nothing was written, and a negative assertion against a mock only holds if it names
+/// a method the subject actually calls. Asserting that <see cref="Written"/> is empty cannot be
+/// satisfied that way.
+/// </para>
+/// <para>
+/// <see cref="ExistsAsync"/> throws on purpose. The obvious ingestion bug is
+/// <c>if (!await ExistsAsync(...)) await AddAsync(...)</c> — a time-of-check-to-time-of-use race
+/// the unique index exists to make unnecessary. Nothing on the receiving path may call it, and a
+/// throw pins that without a separate test.
+/// </para>
+/// </remarks>
+internal sealed class RecordingInboxWriter(Func<InboxMessage, InboxWriteResult>? script = null)
+    : IInboxWriter
+{
+    /// <summary>Every row this writer was handed, in order.</summary>
+    public List<InboxMessage> Written { get; } = [];
+
+    public ValueTask<bool> ExistsAsync(
+        MessageId messageId, string consumerType, CancellationToken ct = default)
+        => throw new InvalidOperationException(
+            "The ingestion path must never guard AddAsync with ExistsAsync — that is the " +
+            "time-of-check-to-time-of-use race the unique index exists to remove.");
+
+    public ValueTask<InboxWriteResult> AddAsync(
+        InboxMessage message, CancellationToken ct = default)
+    {
+        Written.Add(message);
+
+        return ValueTask.FromResult(script?.Invoke(message) ?? InboxWriteResult.Added);
+    }
+}
+
+/// <summary>One log record, flattened to what an assertion needs.</summary>
+internal readonly record struct CapturedLog(LogLevel Level, int EventId, string Message);
+
+/// <summary>
+/// An <see cref="ILogger{T}"/> that keeps every record, so "silent success is forbidden" can be
+/// asserted rather than assumed.
+/// </summary>
+/// <remarks>
+/// <see cref="IsEnabled"/> must return <see langword="true"/> unconditionally: the
+/// <c>[LoggerMessage]</c> generator inserts its own guard, so a logger that reports a level as
+/// disabled makes the call vanish and the assertion vacuous.
+/// </remarks>
+internal sealed class CapturingLogger<T> : ILogger<T>
+{
+    /// <summary>Every record written, in order.</summary>
+    public List<CapturedLog> Records { get; } = [];
+
+    public IDisposable? BeginScope<TState>(TState state)
+        where TState : notnull => null;
+
+    public bool IsEnabled(LogLevel logLevel) => true;
+
+    public void Log<TState>(
+        LogLevel logLevel,
+        EventId eventId,
+        TState state,
+        Exception? exception,
+        Func<TState, Exception?, string> formatter)
+        => Records.Add(new CapturedLog(logLevel, eventId.Id, formatter(state, exception)));
+}
