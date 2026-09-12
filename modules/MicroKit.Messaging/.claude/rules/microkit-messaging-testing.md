@@ -57,7 +57,8 @@ redelivered.ShouldBe(InboxWriteResult.AlreadyPresent);   // the nominal path, no
 - `MediatROutboxDispatcher` routing by `MessageKind`, and the notification-only composition
   (`IMessagePublisher` ingestion is **gone** — the seam was deleted by ADR-MSG-018 and the
   in-process fan-out behind it by ADR-MSG-019; do not write a test against either)
-- `InboxIngestionValidator` — a registered handler with no producer fails at boot
+- `EnvelopeReceiver` — the receiving seam: contract-name resolution, the per-consumer fan-out, the
+  duplicate that must not end it, and the resolvable-but-unconsumed contract
 - `OutboxDispatcherKeys.Standard` value snapshot, and the `IMessageSerializer` default's owner
 - `OutboxProcessor` state transitions (Pending → Processing → Published/Failed)
 - `InboxProcessor` claim, settlement and failure classification (drives `FakeTimeProvider`)
@@ -200,6 +201,15 @@ DefaultErrorMessageLength_FitsTheMappedColumn                        (cross-pack
 
 ### Inbox stores (EfInboxStore, SQLite)
 ```
+ClaimBatchAsync_OrdersOnReceivedAtUtc_NotOnOccurredOnUtc  ← the two clocks seeded in OPPOSITE
+                                                            directions. Seeded together, an
+                                                            implementation ordering on either
+                                                            passes and the test proves nothing
+NoIndexTouchesOccurredOnUtc_AndTheClaimIndexSortsOnReceivedAtUtc   (the schema half — adding the
+                                                            business clock to the claim index
+                                                            costs no correctness and breaks no
+                                                            test, it just makes the column look
+                                                            like a legitimate sort key)
 ClaimBatchAsync_StampsStatusLeaseAndToken
 ClaimBatchAsync_RecoversAnExpiredLease
 ClaimBatchAsync_DoesNotStealALiveLease
@@ -226,14 +236,25 @@ InboxClaimConcurrencyTests.ClaimBatchAsync_TwoProcessorsOverAFannedOutQueue_AreD
 > **neither claim exceeds `batchSize`**; that assertion is the one the cross-product bug failed,
 > and nothing else in the suite would have caught it.
 
+> ⚠ **OWED: `EfInboxStore.AddAsync`'s savepoint rollback is unpinned.** Deleting
+> `RollbackToSavepointAsync` from it turns **nothing** red — confirmed by mutation, 2026-09-06.
+> `Ambient_transaction_survives_a_deduplicated_write` runs with EF's automatic savepoints ON, where
+> the explicit one is redundant. `EfIntegrationEventWriter` keeps **both** cases for exactly this
+> reason (see *The replay key*, above), and the inbox store carries the same reasoning in its own
+> remarks but only the auto-savepoints-on half of the coverage. It needs the
+> `WithoutAutoSavepoints` twin, setting `Database.AutoSavepointsEnabled = false`, which is an
+> ordinary consumer setting.
+
 ### Outbox dispatch routing (MediatROutboxDispatcher)
 
-> ⚠ **The in-process fan-out is gone.** `IMessagePublisher` and `InProcessMessagePublisher` went
-> with ADR-MSG-018; `InProcessIntegrationDispatcher` went with ADR-MSG-019, and its test file with
-> it. Nothing writes an `InboxMessage` in this release — do not write a test against a producer that
-> does not exist. Re-introduction of the type is blocked by
-> `Core_DoesNotContainTypeNamedInProcessIntegrationDispatcher`, and the absence of a producer is
-> pinned by `Core_DoesNotDependOnIInboxWriter`.
+> ⚠ **The in-process fan-out is gone, and it is not what `EnvelopeReceiver` is.**
+> `IMessagePublisher` and `InProcessMessagePublisher` went with ADR-MSG-018;
+> `InProcessIntegrationDispatcher` went with ADR-MSG-019, and its test file with it. Inbox rows are
+> written on the **receiving** side now, from an envelope that crossed a transport — never by a
+> dispatcher. Re-introduction of the type is blocked by
+> `Core_DoesNotContainTypeNamedInProcessIntegrationDispatcher`, and a producer-side writer by
+> `NoOutboxDispatcherWritesInboxRows` (which replaced `Core_DoesNotDependOnIInboxWriter` when the
+> seam landed — see the step-7 implementation note on ADR-MSG-019).
 
 Routing is now decided by `OutboxMessage.MessageKind`, never by the payload's CLR type. The two
 tests that carry the design are marked; the rest would each pass under the old implementation.
@@ -281,17 +302,86 @@ Registration_WithNoTransportDispatcher_ContractRowIsAConfigurationFault
 > consequence recorded in ADR-MSG-019, not a fixture defect — the notification-only tests register
 > no transport dispatcher at all rather than working around it.
 
-### The unfed inbox (InboxIngestionValidator)
+### The receiving seam (EnvelopeReceiver)
+
+Three of these cover a column the envelope does **not** carry, which is where the design actually
+lives. The rest are the fan-out.
 
 ```
-StartAsync_WhenNoHandlersRegistered_DoesNotThrow
-StartAsync_WhenAHandlerIsRegistered_ThrowsInboxConfigurationException
-StartAsync_NamesTheRegisteredConsumersAndTheReason
+ReceiveAsync_WhenContractNameIsUnbound_ThrowsPermanentlyAndWritesNothing   (both halves: it throws
+                                                                            AND nothing was recorded,
+                                                                            or a provider that
+                                                                            dead-letters is discarding
+                                                                            something real)
+ReceiveAsync_WritesOneRowPerRegisteredConsumer
+ReceiveAsync_CopiesTheEnvelopeOntoEveryRow                (CausationId is COPIED here — deriving it
+                                                           would overwrite the producer's link)
+ReceiveAsync_StampsEventTypeFromTheResolvedLocalType_NotFromTheEnvelope  ← asserted through the REAL
+                                                           serializer, not Type.GetType: that is the
+                                                           path the drain takes
+ReceiveAsync_StampsReceivedAtUtcFromTheClock_NotFromOccurredOnUtc   (seed them years apart, or a
+                                                           copy of the wrong one passes — and
+                                                           assert BOTH columns now that both
+                                                           clocks are recorded: either assertion
+                                                           alone misses a swap of the two)
+ReceiveAsync_WhenOneConsumerIsADuplicate_StillWritesTheOthers   ← needs TWO consumers to be visible
+ReceiveAsync_WhenEveryConsumerIsADuplicate_ReportsItAndDoesNotThrow
+ReceiveAsync_WhenNoHandlerIsRegistered_WritesNothingAndWarns
+ReceiveAsync_WhenNoHandlerIsRegistered_CountsIt           (a MeterListener — a log carries an event,
+                                                           a counter carries the rate)
+ReceiveAsync_BuildsOneScopeCarryingTheTenantCorrelationAndDerivedCausation
+ReceiveAsync_WhenTheInboxWriterIsNotRegistered_FailsAsAConfigurationFault
+ReceiveAsync_WhenTheWriterCannotBeActivated_PropagatesRatherThanClassifying  ← registered but
+                                                           unactivatable is NOT a configuration
+                                                           fault: it is one tenant's connection
+                                                           failing, and classifying it stops the
+                                                           consume loop for every tenant
+ReceiveAsync_WhenTheEnvelopeCarriesNoCorrelation_MintsOneForTheWholeFanOut   ← two consumers, or
+                                                           "shared" is invisible
+ReceiveAsync_WhenTheEnvelopeCarriesACorrelation_CopiesItRatherThanMinting
 ```
 
-> Driven **directly**, never by starting a host — a host would start four messaging workers needing
-> stores these tests have no reason to wire. That is also why every other suite may still call
-> `AddMessageHandler` freely: `BuildServiceProvider()` starts no hosted service.
+> **The writer resolution is a `GetService` null test, not a `catch` around `GetRequiredService`.**
+> `IInboxWriter` resolves through a factory that activates the consumer's `DbContext`, so a catch
+> spans that whole graph while reading as a registration lookup. Only `null` means unregistered.
+> The activation test seeds an `InvalidOperationException` deliberately — it is the one type a
+> catch-based implementation swallows, so no other type would keep the regression out.
+
+> **Two consumers, always.** Three properties are invisible with one — one row per consumer, a
+> duplicate not costing the next consumer its row, and the sibling isolation of the compound dedup
+> key. A single-consumer test passes under an implementation that returns on the first duplicate,
+> which is the defect ADR-MSG-017 §6 exists to prevent.
+
+> Use the **recording** `RecordingInboxWriter` rather than a mock. Several of these assert that
+> nothing was written, and a negative assertion against a mock only holds if it names a method the
+> subject actually calls. Its `ExistsAsync` throws on purpose: nothing on the ingestion path may
+> guard `AddAsync` with it, and a throw pins that without a separate test.
+
+### The round trip through the seam (`MicroKit.Messaging.MediatR.IntegrationTests`)
+
+```
+AnEnvelopeCrossingTheSeam_CausesTheHandlersWorkThroughTheInboxRow
+Redelivery_ThroughTheSeam_CostsNoConsumerItsRow
+```
+
+> The first is the end-to-end causation assertion ADR-MSG-019 recorded as owed and step 5 could not
+> write. **Copied and derived are asserted separately**: the row's `CausationId` is the notification
+> that caused the contract, carried inbound; the handler's execution context names the inbox row's
+> own `MessageId`, derived one hop forward. Seed them differently, or an implementation confusing
+> the two passes. Nulling the derivation turns **three** tests red — this one and the two
+> `InboxProcessorTests` cases that cover the same line — and all three name it in their own titles.
+
+> The second carries the five properties the deleted `InboxRedeliveryTests` proved, now over the
+> path they belong to. Its fourth step deletes **the second** consumer's row before replaying, so
+> the duplicate is met *first* — an implementation that returned instead of continuing would never
+> reach the consumer whose row is missing. Its log assertion is scoped to MicroKit's own categories:
+> EF Core logs the rejected `INSERT` at `Error` from its own category on every absorbed duplicate,
+> and that setting lives on the consumer's `DbContext`.
+
+> The two halves are genuinely separate. The only thing crossing between them is a
+> `MessageEnvelope` taken out of `RecordingMessageTransport.Sent` and handed back to
+> `IEnvelopeReceiver` — no shared type resolution, no producer-side write. Without that, it is a
+> fan-out wearing a wire's clothes.
 
 ### Integration event publishing (ADR-MSG-018, completed by step 5)
 

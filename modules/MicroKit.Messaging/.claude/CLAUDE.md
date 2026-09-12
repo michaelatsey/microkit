@@ -17,7 +17,7 @@ Your domain / command handlers
 MicroKit.Messaging            ← transactional outbox, inbox dedup, transport seam
         │
         ├── OutboxProcessor (IHostedService)   ← polls and dispatches pending messages
-        ├── InboxProcessor  (IHostedService)   ← drains inbound rows (NO PRODUCER — ADR-MSG-019)
+        ├── InboxProcessor  (IHostedService)   ← drains inbound rows written by IEnvelopeReceiver
         └── IOutboxDispatcher                  ← routes on MessageKind, never on a CLR type
                 │
                 ├── TransportOutboxDispatcher  ← Kind=Contract → IMessageTransport (Core)
@@ -66,7 +66,8 @@ MicroKit.Messaging/
 │   │                                              IMessageTransport) — it READS
 │   │                                              OutboxDispatcherKeys, which lives in
 │   │                                              Abstractions above, not here,
-│   │                                              InboxIngestionValidator,
+│   │                                              EnvelopeReceiver (the RECEIVING seam — the only
+│   │                                              writer of InboxMessage rows in the module),
 │   │                                              IntegrationEventPublisher, DI, background workers
 │   ├── MicroKit.Messaging.EntityFrameworkCore/ ← EfOutboxStore, EfInboxStore, EF configurations,
 │   │                                              migrations helper
@@ -206,6 +207,14 @@ IInboxRetentionStore               // DeleteProcessedAsync — the inbox retenti
 OutboxMessage                      // sealed class — EF Core entity; Id, TenantId, EventType, Payload,
                                    //   Status, RetryCount, LockedUntilUtc, NextRetryAtUtc, DeadLettered, ...
 InboxMessage                       // sealed class — EF Core entity; MessageId, ConsumerType, Status, ...
+IEnvelopeReceiver                  // the RECEIVING seam — ReceiveAsync(MessageEnvelope, ct) →
+                                   //   EnvelopeReceiveResult. Mirror of IMessageTransport, opposite
+                                   //   direction: Core IMPLEMENTS this and a provider's consume loop
+                                   //   calls it. Returning means the rows are durably committed and
+                                   //   the broker may be acknowledged. Fans out contract name →
+                                   //   local type → one InboxMessage per registered consumer
+EnvelopeReceiveResult              // sealed record — RowsAdded / Duplicates / ConsumersMatched.
+                                   //   ConsumersMatched == 0 is legal and never silent
 MessageEnvelope                    // sealed record — the WIRE FORM. MessageId/ContractName/Source/
                                    //   opaque Payload/TenantId/Correlation/Causation/OccurredOnUtc.
                                    //   A COMPATIBILITY COMMITMENT: adding a member is additive,
@@ -236,9 +245,10 @@ MessageEnvelope                    // sealed record — the WIRE FORM. MessageId
    `OutboxConfigurationException` on one this composition merely cannot serve yet;
    `IIntegrationEventPublisher` throws `IntegrationEventPublishException` rather than let its
    writer's flush be committed by the provider's implicit transaction — an event announced for
-   a fact that may still roll back; and `InboxIngestionValidator` fails the host when
-   handlers are registered while nothing produces inbox rows (ADR-MSG-019) — the one gap in this
-   release that nothing downstream could otherwise detect
+   a fact that may still roll back; and `EnvelopeReceiver` logs at `Warning` and counts
+   `microkit.inbox.envelopes.unconsumed` when a contract resolves to a local type nothing
+   consumes — zero rows is correct there, but a *silent* zero is indistinguishable from a
+   healthy delivery, which is the shape of every silent-success defect in this module
 7. **Background processors never use `IHttpContextAccessor`** — `TenantId` read from `OutboxMessage`/`InboxMessage` only
 8. **`sealed class`** for EF Core entities (`OutboxMessage`, `InboxMessage`) | **`sealed record`** for VOs (`MessageId`, `CorrelationId`, `CausationId`, options) | **`sealed class`** for processors/handlers/publishers
 9. **`ValueTask<T>`** for all async methods | **`ConfigureAwait(false)`** throughout lib code
@@ -385,8 +395,10 @@ All v1 packages share one version per release.
   keyed `OutboxDispatcherKeys.Standard`, so registration order cannot bypass it and a
   notification-only host composes with no transport at all. `InProcessIntegrationDispatcher` and
   `AddInProcessTransport()` are **deleted**; the `IMessageSerializer` default moves to
-  `AddMicroKitMessaging()`. ⚠ **The inbox consequently has no producer** — the drain is intact but
-  unfed, and `AddMessageHandler<,>` now fails at boot via `InboxIngestionValidator`. Also records
+  `AddMicroKitMessaging()`. It left the inbox without a producer; **step 7 closed that** —
+  `IEnvelopeReceiver` writes the rows on the receiving side, `InboxIngestionValidator` is deleted,
+  and `AddMessageHandler<,>` no longer fails at boot (see the ADR's step-7 implementation note).
+  Also records
   per-message settlement, the `(OriginMessageId, ContractName)` natural key, the abandonment of
   `IOutboxSettlementStore` (fan-out makes the target transaction ambiguous), and the registry's
   reversal from publishing-only to bidirectional.

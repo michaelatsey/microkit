@@ -15,6 +15,169 @@ failures and releases are batched.
 
 See ADR-MSG-015 (outbox) and ADR-MSG-017 (inbox).
 
+### Added — the receiving seam: the inbox has a producer again
+
+`IEnvelopeReceiver` turns one `MessageEnvelope` arriving from a transport into one `InboxMessage`
+per registered consumer. It is the mirror of `IMessageTransport` and runs in the opposite
+direction: a provider *implements* the transport and MicroKit calls it, while MicroKit *implements*
+the receiver and a provider's consume loop calls it. So unlike the transport, an implementation
+does ship — `EnvelopeReceiver`, in `MicroKit.Messaging`.
+
+**Returning from `ReceiveAsync` means the message is durably recorded and the broker may be
+acknowledged.** That is the contract, and it carries the same conformance obligation `SendAsync`
+does. A provider that acknowledges before the returned `ValueTask` completes turns every row it has
+not yet written into a message that exists nowhere: the broker considers it delivered, this process
+never recorded it, and nothing logs the loss.
+
+The fan-out is **contract name → local type → consumers**. `IntegrationEventRegistry` resolves the
+wire name to *this* process's own CLR type — never the producer's, whose assembly a consumer does
+not hold — and `MessageHandlerRegistry.GetHandlers` resolves that type to its handlers. Both seams
+were kept alive with no caller through the last step for exactly this.
+
+`EnvelopeReceiveResult` reports the per-consumer tally: `RowsAdded`, `Duplicates`,
+`ConsumersMatched`. A redelivery is reported, never thrown, and **the consumers after a duplicated
+one still get their rows** — an early exit there would turn a partial redelivery into permanent
+loss for consumers 3..N.
+
+**Registration.** `AddIntegrationEventPublishing()` and `AddIntegrationEventConsumption()` both
+register the receiver; either is enough, in any order. There is no builder method of its own —
+nothing to configure, and a method whose omission is invisible until a provider fails to resolve
+the seam would be worse than none.
+
+**Two failure verdicts a provider must distinguish.** A contract name bound to no local type raises
+`InboxPayloadException`: permanent, because the binding cannot appear without a redeploy, and with
+no row written there is nothing to dead-letter but the broker message — **dead-letter it, never
+nack it for retry**. Anything else is a real failure of the recording; the message is not recorded,
+so nack it. A resolvable name with **no registered handler** writes nothing, returns
+`ConsumersMatched == 0`, logs at `Warning` and increments
+`microkit.inbox.envelopes.unconsumed` — correct behaviour, but never a silent one.
+
+> ⚠ **`EventType` on an inbox row names the *receiving* process's type**, resolved from the contract
+> name. `MessageEnvelope` deliberately carries no assembly-qualified name: shipping one would invite
+> a receiver to call `Type.GetType` on it, which works inside a monolith and fails the day the
+> producing module is extracted.
+
+**Correlation is copied when the producer had one and minted once here when it did not.** The seam
+is the last point at which a single id still covers the whole fan-out: downstream,
+`OutboxMessageFactory.ResolveCorrelation` substitutes a fresh id per staging call, so N consumers of
+one uncorrelated delivery would each start an unrelated chain and none of them would reach back to
+the delivery that caused all of them. Causation is unchanged — copied onto the row, derived one hop
+forward for the scope.
+
+**A writer that is registered and fails to activate is not a configuration fault.**
+`InboxConfigurationException` now means *unregistered*, and nothing else: the resolution is a
+`GetService` null test rather than a `catch` around `GetRequiredService`. The two are not
+interchangeable, because `IInboxWriter` resolves through a factory that activates the consumer's
+`DbContext` — so a catch spans that whole graph while reading as a registration lookup. Under a
+tenant-aware `IExecutionScopeFactory` an envelope naming an unknown tenant fails the connection
+resolution with exactly that exception, and classifying it here would report a present registration
+as missing and stop the consume loop for every tenant over one message's data. It now propagates
+unchanged, so a provider nacks one message.
+
+### Added — `InboxMessage.OccurredOnUtc`
+
+The producer's business clock now survives the seam. `EnvelopeReceiver` carries
+`MessageEnvelope.OccurredOnUtc` onto the row verbatim, beside `ReceivedAtUtc`.
+
+Both clocks are needed because they answer different questions, and only one of them was recorded.
+Since ADR-MSG-018 made `IIntegrationEvent` a bare marker, a payload is under no obligation to carry
+a timestamp of its own — so dropping the envelope's left the business time nowhere on the receiving
+side, and a handler reading `ReceivedAtUtc` was reading the relay's clock for a business fact.
+`MessageEnvelope.OccurredOnUtc`'s own documentation describes it as consumer-facing (*"a consumer
+ordering or windowing on this reads the business timeline rather than the relay's clock"*), which
+the only shipped receiver made impossible. Structurally the same defect step 5 fixed on
+`CausationId`: an envelope member documented as consumer-facing that never reached the consumer.
+
+It lands now because no broker provider ships. Later it is a schema migration on every deployed
+consumer.
+
+> ⚠ **`ReceivedAtUtc` remains the claim's ordering key, and `OccurredOnUtc` must never become one.**
+> It is caller-supplied at the far end of a wire — an optional parameter of a public publish method
+> — so ordering on it lets a backdated event jump the whole queue and keep jumping it. That is the
+> defect the outbox claim left behind when it moved its sort key to `CreatedAtUtc`. The column
+> enters no index, no claim and no ordering; pinned by
+> `ClaimBatchAsync_OrdersOnReceivedAtUtc_NotOnOccurredOnUtc` (the two clocks seeded in **opposite**
+> directions, or an implementation ordering on either passes) and by
+> `NoIndexTouchesOccurredOnUtc_AndTheClaimIndexSortsOnReceivedAtUtc`.
+
+**`Source` is deliberately not added.** It is diagnostic and routing metadata with no business
+semantics, it already appears in the receiver's log line and in the unbound-contract exception, and
+a column nothing reads is a migration everyone pays for. Recorded so the omission reads as decided
+rather than overlooked.
+
+**Migration** (PostgreSQL / SQLite):
+
+```sql
+-- Backfill from the receipt clock: for rows that predate the column there is no better answer,
+-- and it is the value a handler would previously have read anyway.
+ALTER TABLE "InboxMessages" ADD COLUMN "OccurredOnUtc" timestamptz NULL;
+UPDATE "InboxMessages" SET "OccurredOnUtc" = "ReceivedAtUtc" WHERE "OccurredOnUtc" IS NULL;
+ALTER TABLE "InboxMessages" ALTER COLUMN "OccurredOnUtc" SET NOT NULL;
+
+-- No index. See the warning above — indexing this column is the first step toward ordering on it.
+```
+
+> Identifiers are quoted PascalCase, matching what the shipped EF configuration emits. The earlier
+> *Migration — inbox schema* block below is snake_case; that divergence is pre-existing and tracked
+> as `L0-FINDINGS.md` #24.
+
+### Fixed — a doubled `AddMessageHandler<,>()` no longer reads as a broker fault
+
+`MessageHandlerRegistry` deduplicates on `ConsumerType`, so registering the same handler twice
+contributes one consumer rather than two. It is an ordinary mistake in a composition root assembled
+from several module registrations, and it was silent: `EnvelopeReceiver` fanned one envelope out to
+the same consumer twice, the second write hit the dedup index, and a **first** delivery reported
+`Duplicates = 1` while incrementing `microkit.inbox.messages.deduplicated` — the counter whose
+documented use is spotting a lease set too short or a broker replaying. A composition typo read as a
+broker fault, at a steady rate, indefinitely. A re-registration replaces rather than being ignored,
+so `GetHandlers` and `TryGetInvoker` cannot return different invokers for one consumer type.
+
+`EnvelopeReceiver` and `InboxMetrics.Record` also now agree about an unrecognised
+`InboxWriteResult`: both refuse it instead of one counting it as a row added and the other counting
+nothing. They carry the same two cases and a third value is this module changing an enum and missing
+a call site.
+
+### Fixed — one tenant's bad connection no longer stops the drain worker for every tenant
+
+⚠ **Behavioural, on the drain path.** `InboxProcessor` resolved the message handler and
+`IInboxSettlementStore` with `GetRequiredService` inside a `catch (InvalidOperationException)` that
+raised `InboxConfigurationException`. `IInboxSettlementStore` resolves through a lambda that
+activates `EfInboxStore<TContext>` and, with it, the consumer's `DbContext` — so the catch spanned
+that entire graph while reading as a registration lookup. Under a tenant-aware
+`IExecutionScopeFactory`, an envelope naming an unknown or de-provisioned tenant fails the
+per-tenant connection resolution with exactly that exception, and because
+`InboxConfigurationException` abandons the batch and **stops the worker**, one message's data fault
+halted the inbox for every tenant while reporting a registration that is present as missing.
+
+Both sites are now a `GetService` call and a null test, which separates the two cases structurally
+rather than by inspecting an exception:
+
+- **Genuinely absent registration** — `GetService` returns `null`, and it is still an
+  `InboxConfigurationException`: the batch settles with every row released untouched, no retry is
+  consumed, and the worker stops. A missing registration will not fix itself without a redeployment.
+- **Registered but unactivatable** — the activation's own exception propagates unchanged into the
+  per-message transient path. One row, one retry with jittered back-off; the rest of the batch runs.
+
+So a handler whose constructor dependencies fail is now retried rather than treated as a
+composition defect. `InboxConfigurationException`'s own remarks now enumerate both of its origins —
+this drain path and `IEnvelopeReceiver`'s ingestion path, where there is no batch, no lease and no
+row, so the settle-then-rethrow remediation does not apply.
+
+`OutboxProcessor.ResolveDispatcher` and `OutboxProcessor.StampOrigin` still carry the old shape.
+They raise `OutboxConfigurationException` on a different path and are tracked separately; this
+change does not make them correct.
+
+### Removed — `InboxIngestionValidator`, and the `AddMessageHandler<,>()` boot failure with it
+
+`AddMessageHandler<THandler, TEvent>()` no longer fails at startup. The validator existed only to
+convert "handlers registered, nothing produces inbox rows" into a loud boot failure rather than a
+queue that looks idle; the receiving seam removes the condition, so the check goes with it, exactly
+as ADR-MSG-019 said it would. **Removing the validator does not remove the safety net:** a
+genuinely missing registration still raises `InboxConfigurationException` and still stops the
+worker — see the drain-path entry above for how that case is now told apart from a registration
+that is present but cannot be activated.
+
+
 ### Changed — integration events are outbox rows; the dedicated table is retired
 
 `IIntegrationEventPublisher.PublishAsync` now writes a `MessageKind.Contract` row into
@@ -259,6 +422,12 @@ contracts; a host that only fans out notifications should not call it. See ADR-M
 
 ### Changed — the inbox has no producer, and a registered handler now fails at boot
 
+> ⚠ **Superseded within this same unreleased cycle** by *Added — the receiving seam* above.
+> `IEnvelopeReceiver` writes the rows, `InboxIngestionValidator` is deleted, and
+> `AddMessageHandler<,>()` does not fail at boot. **Nothing here reached a released package**, so
+> the net effect for a consumer is that this state never existed. Kept because the reasoning below
+> is why the seam is shaped the way it is, and because the removed test's replacement is named here.
+
 `InProcessIntegrationDispatcher` held the only call to `IInboxWriter.AddAsync` in the module.
 **Nothing writes an `InboxMessage` in this release.**
 
@@ -275,11 +444,13 @@ Like `IntegrationEventRegistryValidator` it is a hosted service, so it reaches a
 containers built with `BuildServiceProvider()` in tests are unaffected. It is removed when the
 receiving seam ships.
 
-`Core_DoesNotDependOnIInboxWriter` pins this and is **expected to fail** when that seam arrives.
+`Core_DoesNotDependOnIInboxWriter` pinned this and was **expected to fail** when that seam arrived.
+It did, and was replaced by `NoOutboxDispatcherWritesInboxRows` — see the step-7 note on ADR-MSG-019.
 
 **Removed test:** `InboxRedeliveryTests` — the fan-out was its entire subject. ADR-MSG-018 cited it
 as the evidence blocking this deletion; ADR-MSG-019 records the five properties it proved, what the
-transport now covers, and the one end-to-end assertion the receiving seam owes back.
+transport now covers, and the one end-to-end assertion the receiving seam owes back. **That
+assertion is now repaid** by `ReceivingSeamTests.Redelivery_ThroughTheSeam_CostsNoConsumerItsRow`.
 
 See ADR-MSG-019.
 

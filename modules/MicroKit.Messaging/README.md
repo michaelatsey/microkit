@@ -98,11 +98,12 @@ A host that publishes only domain-event notifications registers no transport at 
 without an `IMessageTransport` behind it the outbox stops on the first row of any kind — loudly,
 with the batch released and nothing lost, but stopped.
 
-> ⚠ **`AddMessageHandler<THandler, TEvent>()` fails at startup in this release.** Nothing produces
-> inbox rows yet — the in-process fan-out was withdrawn and the receiving seam that turns a
-> `MessageEnvelope` back into per-consumer rows has not shipped. The inbox drain itself is intact
-> and correct; it simply has no producer, and a host is told so rather than left believing it
-> consumes events. See ADR-MSG-019.
+> ⚠ **A registered handler needs a transport to reach it.** Inbox rows are written by
+> `IEnvelopeReceiver`, which a broker provider's consume loop calls — and no broker provider ships
+> yet. Beyond `AddMessageHandler<,>()`, a consuming host needs `AddIntegrationEventConsumption()`
+> (or `AddIntegrationEventPublishing()`) so the contract name binds to your event type, and
+> `AddEfCoreOutbox<TContext>()` so there is somewhere to write. Miss the binding and the receiver
+> refuses the message permanently; miss the handler and it logs at `Warning` and writes nothing.
 
 A host built with `Host.CreateApplicationBuilder()` or `WebApplication.CreateBuilder()` already has
 logging. A bare `ServiceCollection` does not, and several types here require `ILogger<T>` — call
@@ -300,10 +301,10 @@ Call `AddTransportDispatcher()` yourself only when you register an `IMessageTran
 rather than through a provider package. It is `TryAdd`, so calling it as well is a no-op rather than
 a duplicate.
 
-**No `IMessageTransport` implementation ships in MicroKit.** A provider package supplies one. That
-is not an oversight: with no receiving seam built yet, an in-process transport could only either
-return successfully for messages it never delivered — marking rows `Published` that are gone — or
-exist purely to throw.
+**No `IMessageTransport` implementation ships in MicroKit.** A provider package supplies one, and
+owes a conformance test that `SendAsync` does not return before its broker has acknowledged. The
+receiving half is the other way round: `IEnvelopeReceiver` **is** implemented here, and a provider
+calls it rather than writing one — see *Receiving messages* below.
 
 ### What `SendAsync` returning means
 
@@ -346,6 +347,99 @@ healthy queue while a consumer is dead-lettering.
 
 ---
 
+## Receiving messages
+
+The other end of the wire. A broker provider's consume loop hands each arriving message to
+`IEnvelopeReceiver`, which records one `InboxMessage` per registered consumer; `InboxProcessor`
+drains them.
+
+```csharp
+// Inside a provider's consume loop.
+var envelope = Decode(brokerMessage);
+
+try
+{
+    var result = await receiver.ReceiveAsync(envelope, ct);
+
+    // Only now. Everything the result counts is already committed.
+    await broker.AcknowledgeAsync(brokerMessage, ct);
+}
+catch (InboxPayloadException)
+{
+    // Permanent: this process has no local type bound to that contract name, and no redelivery
+    // will change that. Nothing was recorded, so the verdict has nowhere to live but the broker.
+    await broker.DeadLetterAsync(brokerMessage, ct);
+}
+```
+
+> **`ReceiveAsync` returning means the message is durably recorded.** Acknowledge *after* it
+> completes, never alongside it. A transport that acknowledges early turns every row it has not yet
+> written into a message that exists nowhere — the broker considers it delivered, this process never
+> recorded it, and nothing logs the loss. It is `SendAsync`'s rule, in the opposite direction.
+
+### The rule is about your client's configuration, not just your call order
+
+The sample above shows an explicit acknowledgement, and moving it after the `await` is necessary but
+not sufficient — because **the acknowledgement that loses the message is usually one nobody wrote**.
+Stated so it cannot be satisfied vacuously: *nothing may settle the broker message except code that
+runs after the returned task has completed.* A consume loop with no ack call at all can agree with
+the ordering and violate the contract.
+
+| Broker | What settles the message implicitly | What to do |
+|---|---|---|
+| **Kafka** | `enable.auto.commit` — **on by default**, commits offsets on a timer for messages `Consume` already returned, so it can commit while `ReceiveAsync` is in flight | `enable.auto.commit = false`, commit after the task completes |
+| **RabbitMQ** | `autoAck: true` on the consume call — settles at dispatch, set once at subscribe time, far from anything that looks like an ack | subscribe with `autoAck: false`, ack after the task completes |
+| **Azure Service Bus** | `ReceiveMode.ReceiveAndDelete` — settles at receive | use `PeekLock` |
+
+`ServiceBusProcessor.AutoCompleteMessages` also defaults to true and **is safe**: it completes after
+the message handler returns, so awaiting `ReceiveAsync` inside that handler satisfies the rule. The
+safe default and the unsafe one both read as "auto", which is why both are named.
+
+### The conformance test a provider owes here
+
+`IMessageTransport` owes one too, and **it is not the same test**. That one asserts a *callee's*
+return — drive `SendAsync`, observe it did not return early. This one asserts a *caller's* ordering,
+so it instruments the acknowledgement rather than the seam. Neither can be enforced from this
+repository: no test here can observe whether somebody else's consume loop settled before calling.
+
+- Fail an `IEnvelopeReceiver` — a stub whose returned task does not complete until the test releases
+  it — and assert that **nothing has been settled at the broker** while it is outstanding: no ack,
+  no offset commit, no lock release, no delete.
+- Run it against the **real client configuration the provider ships**, not a hand-rolled loop. Every
+  defect in the table above lives in client settings, so a test that mocks the client away sees none
+  of them.
+- **A consume loop that fails it is unusable** — regardless of whether it compiles, and regardless
+  of what its other tests show.
+
+The fan-out is **contract name → local type → consumers**: the registry resolves the wire name to
+*your* type, and the handler registry resolves that type to every `IMessageHandler<T>` you
+registered for it. Each consumer gets its own row, keyed on `(MessageId, ConsumerType)`, and those
+rows advance independently — one handler may succeed while another retries.
+
+A redelivery is nominal, not a failure. The unique index absorbs it, `EnvelopeReceiveResult.Duplicates`
+counts it, and the consumers *after* a duplicated one still get their rows.
+
+### The transaction, and why it is the opposite of publishing
+
+`IIntegrationEventPublisher` requires a transaction you already own and never commits.
+`IEnvelopeReceiver` requires none and commits before returning. Both are right: publishing has
+business writes in flight that the contract row must be atomic with, while a consume loop is the
+outer boundary with nothing to join — and the broker cannot be acknowledged until the row is
+already durable.
+
+There is no atomicity *across* the fan-out, and none is wanted: a failure after the second
+consumer's row means the first is recorded, the message is redelivered, the first is absorbed as a
+duplicate and the rest are written.
+
+### A contract nobody consumes
+
+A name you understand with no `IMessageHandler<T>` registered writes nothing and throws nothing —
+a legitimate composition. But it is also what a forgotten `AddMessageHandler<,>()` produces, and the
+two look identical from outside, so it is logged at `Warning` and counted as
+`microkit.inbox.envelopes.unconsumed`. Alert on a sustained non-zero value.
+
+---
+
 ## State
 
 **Stable.** The outbox: atomic batch claim with an ownership token, buffered outcomes settled in one
@@ -354,10 +448,10 @@ claim, the dedup gate actually implemented, and success settled inside the handl
 transaction.** The EF Core stores. The `MessageKind`-routed dispatch seam. The MicroKit.MediatR
 glue and the domain-event → notification → outbox path.
 
-**Not shipping yet.** No `IMessageTransport` implementation (broker providers are v2), and no
-receiving seam — so nothing writes inbox rows in this release and `AddMessageHandler<,>()` fails at
-startup rather than letting a host believe it consumes events. The inbox drain itself is complete
-and correct; it has no producer. See ADR-MSG-019.
+**Not shipping yet.** No `IMessageTransport` implementation — broker providers are v2. That is the
+one missing piece of the round trip: both seams exist and both are proven end to end, so a provider
+supplies a `SendAsync` and drives a consume loop into `IEnvelopeReceiver`, and writes no messaging
+machinery of its own.
 
 ### What the inbox guarantees
 
