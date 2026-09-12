@@ -77,7 +77,16 @@ namespace MicroKit.Messaging;
 /// identifier of a real row. It is the right value to correlate on and the wrong value to treat as
 /// evidence of a write. Consumers are unaffected either way: one contract row means one delivery.
 /// </para>
+/// <para>
+/// <b>The receiving side is the mirror image of the transaction rule above, deliberately.</b>
+/// <see cref="IEnvelopeReceiver.ReceiveAsync"/> requires no ambient transaction and commits before
+/// it returns, where this method requires one it does not own and never commits. Neither is the
+/// exception: here a caller has business writes in flight that the contract row must be atomic
+/// with, and on the receiving side a provider's consume loop is the outer boundary with nothing to
+/// join — and the broker cannot be acknowledged until the row is already durable.
+/// </para>
 /// </remarks>
+/// <seealso cref="IEnvelopeReceiver"/>
 public interface IIntegrationEventPublisher
 {
     /// <summary>Stages one integration event for publication.</summary>

@@ -61,10 +61,8 @@ internal static class E2EHarness
     /// <param name="recorder">The invocation recorder, registered as a singleton.</param>
     /// <param name="logs">Captures every log record so the drain's decisions are observable.</param>
     /// <param name="configureMessaging">
-    /// Optional extra messaging registration, applied after the messaging chain is wired. Note
-    /// that <c>AddMessageHandler</c> is no longer a useful example: nothing produces inbox rows in
-    /// this release, and a host that started would fail on <c>InboxIngestionValidator</c>
-    /// (ADR-MSG-019).
+    /// Optional extra messaging registration, applied after the messaging chain is wired — a
+    /// transport, the integration-event entry points, message handlers.
     /// </param>
     internal static ServiceProvider BuildProvider(
         SqliteConnection connection,
@@ -121,8 +119,9 @@ internal static class E2EHarness
         // rival one (ADR-MEDIATR-014).
         //
         // AddHostedService<OutboxWorker> is registered by AddMicroKitMessaging and starts nothing
-        // without an IHost. It is left alone; every drain goes through DrainOnceAsync. The same is
-        // true of InboxIngestionValidator — no host, so no startup check runs.
+        // without an IHost. It is left alone; every drain goes through DrainOnceAsync or
+        // DrainInboxOnceAsync. The same is true of IntegrationEventRegistryValidator — no host, so
+        // no startup check runs, which is why a suite may compose freely and assert on the drain.
         var messaging = services.AddMicroKitMessaging()
             .AddEfCoreOutbox<E2EDbContext>()
             .AddMediatRDomainEvents();
@@ -149,6 +148,22 @@ internal static class E2EHarness
     {
         await using var scope = root.CreateAsyncScope();
         var coordinator = scope.ServiceProvider.GetRequiredService<IOutboxCoordinator>();
+        await coordinator.ExecuteAsync(ct);
+    }
+
+    /// <summary>
+    /// Runs exactly one inbox processing cycle — the receiving half of the round trip.
+    /// </summary>
+    /// <remarks>
+    /// Rows reach the inbox through <see cref="IEnvelopeReceiver"/>, never from the producing side:
+    /// a test hands it an envelope taken from <c>RecordingMessageTransport.Sent</c>, which is what
+    /// makes the two halves genuinely separate rather than a fan-out wearing a wire's clothes.
+    /// The return value is discarded for the same reason as above.
+    /// </remarks>
+    internal static async Task DrainInboxOnceAsync(IServiceProvider root, CancellationToken ct)
+    {
+        await using var scope = root.CreateAsyncScope();
+        var coordinator = scope.ServiceProvider.GetRequiredService<IInboxCoordinator>();
         await coordinator.ExecuteAsync(ct);
     }
 }

@@ -95,6 +95,14 @@ public sealed class InboxMessageConfiguration : IEntityTypeConfiguration<InboxMe
 
         // No HasQueryFilter — infrastructure table, read cross-tenant by processors (ADR-MSG-002).
 
+        // OccurredOnUtc carries the producer's business timeline and is DELIBERATELY unindexed
+        // and unordered on. It is caller-supplied at the far end of a wire — an optional
+        // parameter of a public publish method — so a backdated value ordered on here would jump
+        // the whole queue and keep jumping it. That is the defect the outbox claim left behind
+        // when it moved its sort key to CreatedAtUtc; adding this column to IX_InboxMessages_
+        // Processable, or to the store's OrderBy, reintroduces it on the inbox. Pinned by
+        // TheProcessableIndex_SortsOnReceivedAtUtc_AndExcludesOccurredOnUtc.
+
         // Claim path: candidates are the non-dead-lettered rows ordered by ReceivedAtUtc.
         // Indexes are deliberately UNFILTERED. A partial index (WHERE dead_lettered = false,
         // WHERE claim_token IS NOT NULL) would keep both smaller as processed rows accumulate,

@@ -18,11 +18,10 @@ namespace MicroKit.Messaging.Processing;
 /// <see cref="MessageEnvelope"/> back into one row per registered consumer.
 /// </para>
 /// <para>
-/// ⚠ <b>No such producer ships in this release.</b> The in-process fan-out that used to write those
-/// rows was withdrawn with the in-process transport (ADR-MSG-019) and its replacement has not
-/// arrived, so this loop is correct and unfed: it claims from an empty table until a host writes
-/// rows itself. <c>InboxIngestionValidator</c> fails startup if handlers are registered so the gap
-/// cannot be mistaken for an idle queue.
+/// That producer is <see cref="EnvelopeReceiver"/>, and it writes rows on the <i>receiving</i>
+/// side. The in-process fan-out that used to write them from the producing side stays deleted
+/// (ADR-MSG-019) — a consumer's row belongs to the process that consumes, which is what the
+/// contract-name indirection exists to make true.
 /// </para>
 /// <para>
 /// <b>Isolation.</b> One <see cref="IExecutionScope"/> per message — never shared across a
@@ -387,44 +386,68 @@ internal sealed class InboxProcessor : IInboxProcessor
         LeaseLost,
     }
 
-    /// <summary>Resolves a handler, converting a missing registration into a typed fault.</summary>
+    /// <summary>Resolves a handler, converting a MISSING registration into a typed fault.</summary>
     /// <remarks>
-    /// The previous implementation resolved the handler <b>outside</b> its try block, so an
-    /// unregistered handler threw straight out of the batch loop: the whole batch died, every
-    /// lease was stranded until expiry, and the worker logged it as transient and retried
-    /// forever. The try here wraps the resolution call and nothing else, so the classification
-    /// is structural rather than a guess at exception text.
+    /// <para>
+    /// The resolution must be classified here rather than left to escape the batch loop. An
+    /// earlier implementation resolved the handler <b>outside</b> the try, so an unregistered
+    /// handler threw straight out: the whole batch died, every lease was stranded until expiry,
+    /// and the worker logged it as transient and retried forever.
+    /// </para>
+    /// <para>
+    /// <b><c>GetService</c> and a null test, not <c>GetRequiredService</c> inside a
+    /// <c>catch (InvalidOperationException)</c>.</b> See <see cref="ResolveSettlement"/> — the
+    /// reasoning is the same on both sites and is written out once there.
+    /// </para>
     /// </remarks>
     private static object Resolve(IServiceProvider serviceProvider, Type handlerType)
-    {
-        try
-        {
-            return serviceProvider.GetRequiredService(handlerType);
-        }
-        catch (InvalidOperationException ex)
-        {
-            throw new InboxConfigurationException(
+        => serviceProvider.GetService(handlerType)
+            ?? throw new InboxConfigurationException(
                 $"Handler '{handlerType.FullName}' is present in the message registry but not in " +
-                "the service provider. Retrying will not help.",
-                ex);
-        }
-    }
+                "the service provider. Retrying will not help.");
 
+    /// <summary>
+    /// Resolves the settlement store, converting a MISSING registration into a typed fault.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <b><c>GetService</c> and a null test, deliberately, and not <c>GetRequiredService</c>
+    /// inside a <c>catch (InvalidOperationException)</c>.</b> The two read alike and classify very
+    /// differently. <see cref="IInboxSettlementStore"/> is registered as a factory resolving
+    /// <c>EfInboxStore&lt;TContext&gt;</c>, which activates the consumer's <c>DbContext</c>, so a
+    /// <c>catch</c> around the resolution spans that entire graph while reading as a registration
+    /// lookup.
+    /// </para>
+    /// <para>
+    /// <b>Miscategorising that graph is worse here than at the ingestion seam.</b>
+    /// <see cref="InboxConfigurationException"/> abandons the batch and stops the drain worker, so
+    /// under a tenant-aware <see cref="IExecutionScopeFactory"/> a single envelope naming an
+    /// unknown or de-provisioned tenant — whose per-tenant connection resolution throws exactly
+    /// <see cref="InvalidOperationException"/> — would halt the inbox for <i>every</i> tenant,
+    /// while reporting a registration that is present as missing.
+    /// </para>
+    /// <para>
+    /// <c>GetService</c> separates the two structurally rather than by inspecting an exception: it
+    /// returns <see langword="null"/> only when nothing is registered, and throws when something
+    /// is registered and cannot be activated. The first is a deployment defect and the only
+    /// configuration fault here. The second propagates unchanged into the transient path, so one
+    /// message is retried with back-off — the correct verdict for a fault a redelivery, or a
+    /// different tenant, may simply not reproduce.
+    /// </para>
+    /// <para>
+    /// ⚠ <b><c>OutboxProcessor.ResolveDispatcher</c> and <c>OutboxProcessor.StampOrigin</c> still
+    /// catch.</b> They raise <see cref="OutboxConfigurationException"/> on a different path and
+    /// are owed the same treatment; that is tracked separately and is not made correct by this
+    /// site being fixed.
+    /// </para>
+    /// </remarks>
     private static IInboxSettlementStore ResolveSettlement(IServiceProvider serviceProvider)
-    {
-        try
-        {
-            return serviceProvider.GetRequiredService<IInboxSettlementStore>();
-        }
-        catch (InvalidOperationException ex)
-        {
-            throw new InboxConfigurationException(
+        => serviceProvider.GetService<IInboxSettlementStore>()
+            ?? throw new InboxConfigurationException(
                 $"{nameof(IInboxSettlementStore)} is not registered in the execution scope. " +
                 "Without it the inbox cannot settle inside the handler transaction, and " +
-                "transactionally atomic processing silently degrades to at-least-once.",
-                ex);
-        }
-    }
+                "transactionally atomic processing silently degrades to at-least-once. " +
+                "Retrying will not help.");
 
     private InboxOutcome BuildTransientOutcome(
         InboxMessage message, InboxMessageKey key, Exception ex)

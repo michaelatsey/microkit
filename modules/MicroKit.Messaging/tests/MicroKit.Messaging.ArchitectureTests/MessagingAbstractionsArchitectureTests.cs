@@ -169,46 +169,72 @@ public sealed class MessagingAbstractionsArchitectureTests
     }
 
     /// <summary>
-    /// Nothing in Core depends on <see cref="IInboxWriter"/> — the inbox has no producer in this
-    /// release, and this is what proves it rather than asserting it in prose.
+    /// No <see cref="IOutboxDispatcher"/> depends on <see cref="IInboxWriter"/> — nothing writes
+    /// inbox rows on the <i>producing</i> side.
     /// </summary>
     /// <remarks>
     /// <para>
-    /// After ADR-MSG-019 the ingestion half of the inbox is <i>unfed</i>, not deleted:
-    /// <c>InboxProcessor</c>, the claim, the settlement and both retention workers are unchanged
-    /// and still correct, but nothing in this package writes a row for them to drain. Prose says
-    /// that; this test makes it checkable.
+    /// <b>This replaces <c>Core_DoesNotDependOnIInboxWriter</c>, which ADR-MSG-019 predicted would
+    /// fail at exactly this step.</b> It did, and deliberately: it was written so that whoever
+    /// built the receiving seam had to come back to the ADR rather than quietly reinstate an
+    /// in-process producer. That has now happened — <c>EnvelopeReceiver</c> lives in Core and takes
+    /// <see cref="IInboxWriter"/> — so the old assertion is retired rather than deleted, and the
+    /// subject it was really guarding is stated here instead.
     /// </para>
     /// <para>
-    /// <b>It is expected to fail when the receiving seam arrives</b>, and that is the point. Whoever
-    /// builds it must come back to this assertion and to the ADR rather than quietly reinstating an
-    /// in-process producer — which is exactly how the fan-out survived two rewrites that should
-    /// have removed it.
+    /// <b>The subject was never "Core must not reference <see cref="IInboxWriter"/>".</b> It was
+    /// "no dispatcher writes inbox rows": the defect ADR-MSG-018 and ADR-MSG-019 spent two rewrites
+    /// removing was a fan-out that wrote a <i>consumer's</i> row inside the <i>producer</i>,
+    /// bypassing the wire and the contract name that make a consumer's own type resolvable. A row
+    /// written from the receiving side, from an envelope that crossed a transport, is the opposite
+    /// of that defect. This test therefore narrows to the dispatch path, where the regression would
+    /// actually reappear, and covers the glue as well as Core — <c>MediatROutboxDispatcher</c> is
+    /// the other place a producer-side writer could be added without anyone noticing.
     /// </para>
     /// </remarks>
     [Fact]
-    public void Core_DoesNotDependOnIInboxWriter()
+    public void NoOutboxDispatcherWritesInboxRows()
     {
-        // CONTROL FIRST. An emptiness assertion is worthless if the query can never match anything
-        // — a misspelled name, or a matching rule that does not see interface implementations,
-        // would make this test permanently green and permanently useless. EfCoreAssembly is known
-        // to depend on IInboxWriter (EfInboxStore implements it), so this proves the query works
-        // before the real assertion below rests on it.
+        // CONTROL 1 — the dependency query. An emptiness assertion is worthless if the query can
+        // never match anything: a misspelled name, or a matching rule that does not see interface
+        // implementations, would make this permanently green and permanently useless. EfCoreAssembly
+        // is known to depend on IInboxWriter (EfInboxStore implements it).
         Types.InAssembly(EfCoreAssembly)
             .That()
             .HaveDependencyOn(typeof(IInboxWriter).FullName)
             .GetTypes()
             .ShouldNotBeEmpty(
-                "control assertion: if this is empty the query below cannot detect anything and " +
-                "the real assertion is vacuous");
+                "control assertion: if this is empty the dependency query below cannot detect " +
+                "anything and the real assertion is vacuous");
 
-        Types.InAssembly(CoreAssembly)
-            .That()
-            .HaveDependencyOn(typeof(IInboxWriter).FullName)
-            .GetTypes()
-            .ShouldBeEmpty(
-                "the inbox has no producer in this release (ADR-MSG-019). If the envelope receiver " +
-                "has landed, update this test AND the ADR rather than deleting the assertion");
+        // CONTROL 2 — the selector. The assertion below is a CONJUNCTION, so it can go vacuous on
+        // either side: a selector matching no dispatcher at all yields an empty set whatever the
+        // dispatchers do. The original test needed one control; this one needs two.
+        Assembly[] dispatchHosts = [CoreAssembly, MediatRGlueAssembly];
+
+        foreach (var assembly in dispatchHosts)
+        {
+            Types.InAssembly(assembly)
+                .That()
+                .ImplementInterface(typeof(IOutboxDispatcher))
+                .GetTypes()
+                .ShouldNotBeEmpty(
+                    $"control assertion: {assembly.GetName().Name} must contain at least one " +
+                    "IOutboxDispatcher, or the assertion below selects nothing and proves nothing");
+
+            Types.InAssembly(assembly)
+                .That()
+                .ImplementInterface(typeof(IOutboxDispatcher))
+                .And()
+                .HaveDependencyOn(typeof(IInboxWriter).FullName)
+                .GetTypes()
+                .ShouldBeEmpty(
+                    $"{assembly.GetName().Name} must not write inbox rows from the dispatch path. " +
+                    "Inbox rows are written by IEnvelopeReceiver, on the RECEIVING side, from an " +
+                    "envelope that crossed a transport (ADR-MSG-019). A dispatcher that writes one " +
+                    "is the in-process fan-out coming back. Update this test AND the ADR rather " +
+                    "than deleting the assertion");
+        }
     }
 
     /// <summary>
