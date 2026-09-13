@@ -439,8 +439,8 @@ write. Four kinds, and the difference between the last two is load-bearing:
 
 > `Released` is what stops a broker outage from burning the retry allowance of every message in the
 > queue. A message claimed but never attempted — because the batch aborted on
-> `OutboxTransportUnavailableException`, a cancellation, or a missing registration — goes back
-> untouched.
+> `OutboxTransportUnavailableException`, a cancellation, a missing registration, or a dispatcher
+> that could not be activated — goes back untouched.
 
 ### Dispatcher failure classification
 
@@ -452,6 +452,32 @@ write. Four kinds, and the difference between the last two is load-bearing:
 | `OutboxTransportUnavailableException` | abort the batch, release the remainder, consume no retries |
 | `OutboxConfigurationException` | settle the batch (all released), then rethrow so the worker stops |
 | anything else | transient — retry with back-off until `MaxRetries` |
+
+The processor adds one verdict of its own, before any dispatcher runs, and **the container decides it,
+not an exception type**. `GetService<IOutboxDispatcher>()` returning null is
+`OutboxConfigurationException` (above). `GetService` *throwing `InvalidOperationException`* — a
+registered dispatcher that cannot be activated, most often a transport dispatcher with no
+`IMessageTransport` — aborts the batch, releases the remainder, consumes no retries and is **not**
+rethrown (`OutboxBatchAbortReason.DispatcherActivationFailed`, event 1009, which names the row's
+`MessageId`, `TenantId` and `MessageKind`); the worker backs off and the next cycle retries. It is
+batch-wide so that a cause every message shares — a missing transport — cannot spend the whole
+queue's retry budget.
+
+**Only `InvalidOperationException` is tagged.** It is the type the container throws for an
+unsatisfiable dependency, and the one type the old `catch` read as a missing registration. Any other
+type thrown during activation reaches the loop as if the dispatcher had thrown it — typed exceptions
+keep their arms above, the rest is transient per message — and widening the catch past it is a
+regression, pinned by `…WhenActivationThrowsAnythingButInvalidOperationException_…`: a tenant lookup
+failing with its own type would leave the per-message path for the stall below.
+`ObjectDisposedException` derives from it and is excluded — shutdown, not activation.
+`OperationCanceledException` never matches.
+
+> ⚠ **Known defect — do not copy this verdict** into the inbox or a per-tenant coordinator
+> (ADR-MSG-019). A dispatcher is **not** independent of its message: it is activated in the
+> message's own scope, built from its `TenantId`, so a tenant-scoped `InvalidOperationException`
+> fails for some rows only.
+> One that never clears — a de-provisioned tenant — leaves its row oldest, heading every claim, and
+> stalls the outbox for every tenant with no dead-letter exit. The fix is owed.
 
 > ⚠ **Never throw `OutboxPayloadException` for** a broker nack, a timeout, a refused connection, an
 > HTTP 503 or a database timeout. Only proven permanence dead-letters; everything unrecognised stays
@@ -478,11 +504,14 @@ stay a *constructor* dependency or a missing transport is misclassified as trans
 > interpreted at all and re-reading the row will never change that — permanent for this deployment,
 > so it dead-letters. Loud and reversible where a redeployment fixes it; terminal where nothing can.
 
-**`OutboxConfigurationException` therefore has three origins, not one**, and any log or message
-about it must name none of them specifically: `IOutboxDispatcher` unregistered; a *dependency* of a
-registered dispatcher unregistered (a transport dispatcher with no `IMessageTransport` — the
-likeliest of the three); or a dispatcher handed a row it structurally cannot serve. A transport
-implementation must never raise it — by the time one runs, the composition is already proven.
+**`OutboxConfigurationException` therefore has two origins, not one**, and any log or message about
+it must name neither specifically: something the processor resolves from the scope is not registered
+at all (`IOutboxDispatcher`, or `OriginMessageHolder`); or a dispatcher handed a row it structurally
+cannot serve. A *dependency* of a registered dispatcher that is missing — a transport dispatcher with
+no `IMessageTransport`, the commonest composition fault — is **not** one of them: the container
+throws `InvalidOperationException` while activating the dispatcher, and that is the batch-fatal,
+no-budget, no-rethrow verdict above. A transport implementation must never raise `OutboxConfigurationException` — by the time one
+runs, the composition is already proven.
 
 ## Inbox Store Contracts (Abstractions — split by consumer, ISP)
 

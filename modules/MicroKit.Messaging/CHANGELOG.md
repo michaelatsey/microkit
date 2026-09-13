@@ -163,9 +163,84 @@ composition defect. `InboxConfigurationException`'s own remarks now enumerate bo
 this drain path and `IEnvelopeReceiver`'s ingestion path, where there is no batch, no lease and no
 row, so the settle-then-rethrow remediation does not apply.
 
-`OutboxProcessor.ResolveDispatcher` and `OutboxProcessor.StampOrigin` still carry the old shape.
-They raise `OutboxConfigurationException` on a different path and are tracked separately; this
-change does not make them correct.
+`OutboxProcessor.ResolveDispatcher` and `OutboxProcessor.StampOrigin` now make the same separation —
+see the next entry, which also records why the outbox's remedy for an activation failure differs.
+
+### Fixed — a dispatcher that cannot be activated no longer stops the outbox worker
+
+⚠ **Behavioural, on the dispatch path. No signature moves.** `OutboxProcessor` resolved
+`IOutboxDispatcher` with `GetRequiredService` inside a `catch (InvalidOperationException)` that
+raised `OutboxConfigurationException`. The catch spanned the dispatcher's whole activation graph, so
+a dispatcher that **is** registered but whose activation threw that type — a
+`TransportOutboxDispatcher` with no `IMessageTransport`, for which the container throws it, or
+anything else in the graph throwing it — was reported as a missing registration, told "retrying will
+not help", and stopped the worker.
+
+Resolution is now `GetService` and a null test, and the container's verdict decides:
+
+- **Not registered** (`GetService` returns `null`) — unchanged: `OutboxConfigurationException`, the
+  batch is released with no retry consumed, and the worker stops.
+- **Registered, and activation throws `InvalidOperationException`** — the message that met it and
+  every one after it are released untouched, **no retry budget is consumed and nothing is
+  rethrown**, and the result reports the new `OutboxBatchAbortReason.DispatcherActivationFailed`.
+  The worker keeps running, backs off on the outage curve (`TransportUnavailableBackoff`) and retries
+  next cycle, logging event **1009** at `Error` each time, naming the row it failed on (`MessageId`,
+  `TenantId`, `MessageKind`). It is batch-wide rather than per message because, for a cause every
+  message shares — a missing transport — a per-message verdict would spend every queued message's
+  retry budget on one cause and dead-letter the queue. Not every cause is shared: see *Known defect*
+  below.
+- **Registered, and activation throws any other type** — unchanged: it reaches the batch loop as if
+  the dispatcher had thrown it. `OutboxTransportUnavailableException`, `OutboxConfigurationException`
+  and `OutboxPayloadException` keep their own verdicts, and anything else is retried per message.
+  Only `InvalidOperationException` moved, because it is the one type the old `catch` read as a
+  missing registration.
+- **Anything thrown once the dispatcher exists** — unchanged, classified per message.
+
+For a missing transport this changes what an operator sees, not what is kept: the rows still stay
+`Pending` and nothing is lost, but the worker no longer stops, and a build that registers a
+transport drains them on its first cycle. A cancellation or a disposed provider during that
+resolution is shutdown and is not reported as 1009.
+
+⚠ **Unintended behavioural change — an `ObjectDisposedException` during dispatcher resolution now
+costs the message one retry instead of stopping the worker, cancelled token or not.** Nobody decided
+this. It is a side effect of how shutdown was excluded from the activation verdict: the resolver tags
+`InvalidOperationException` and excludes `ObjectDisposedException`, which derives from it, whether or
+not a shutdown is under way — and an `ObjectDisposedException` is not an `OperationCanceledException`,
+so it never reaches the loop's cancellation arm, not even during a shutdown.
+
+- **Before this change:** `ObjectDisposedException` derives from `InvalidOperationException`, so the
+  old `catch` caught it. The batch was released, `OutboxConfigurationException` was rethrown, and the
+  worker stopped.
+- **Now:** it matches no batch-fatal arm and is classified per message as transient. Each message it
+  hits consumes one retry and is logged as an ordinary dispatch failure, not as 1009. The retry is
+  settled on the outcome-flush timeout, not on the shutdown token, so it persists even when the host
+  is stopping — provided the settlement write succeeds; if it does not, event 1008 is logged and the
+  lease expires instead.
+- **How a consumer meets it:** a message that meets it again and again dead-letters at `MaxRetries`,
+  and one already at `MaxRetries - 1` dead-letters the first time.
+  Outside a shutdown, that is a factory handing out an object that was already disposed. During
+  one, it is a service that restarts often: a healthy message caught in dispatcher resolution at
+  each stop loses one retry every time, with nothing wrong with the message. Dead-lettered rows come
+  back only through `IOutboxAdminStore.RequeueAsync`.
+
+Both halves are owed as their own lots, in ADR-MSG-019, *Owed, carried forward*: *The tagging filter
+outside a shutdown* decides whether a non-shutdown occurrence should release the batch like any
+other activation failure, and *The shutdown retry charge* decides whether a shutdown should release
+rather than retry.
+
+`OutboxBatchAbortReason.DispatcherActivationFailed` is an **additive** member of a public enum: a
+consumer switching exhaustively over `OutboxBatchAbortReason` now sees a value it does not handle.
+
+**Known defect — one tenant can stall the outbox for every tenant.** The dispatcher is activated in
+the scope of the row being dispatched, built from its `TenantId`, so a tenant-aware composition can
+throw `InvalidOperationException` during activation for one tenant only. (The same failure thrown
+as any other untyped exception is retried per message and dead-letters at `MaxRetries`; no other
+tenant waits.)
+A cause that never clears — a de-provisioned tenant — leaves
+that row oldest: it heads every claim, every batch aborts before anything publishes, and nothing
+moves for any tenant, with no retry budget spent and therefore no dead-letter exit. Nothing is lost,
+event 1009 names the blocking row, and the way out is a SQL statement given in the README under
+*Sending to a broker*. The fix is owed. See ADR-MSG-019.
 
 ### Removed — `InboxIngestionValidator`, and the `AddMessageHandler<,>()` boot failure with it
 
@@ -407,6 +482,11 @@ Behavioural, both directions. Calling `AddTransportDispatcher()` **without** reg
 activates its keyed inner when constructed. Calling that method declares an intent to send
 contracts; a host that only fans out notifications should not call it. See ADR-MSG-019.
 
+> **Superseded within this same unreleased cycle**, in one word: notification rows are now
+> *blocked* as well as contract rows, not *stopped* — the batch is released every cycle with no
+> retry consumed and the worker keeps running (*Fixed — a dispatcher that cannot be activated no
+> longer stops the outbox worker*, above). The advice stands.
+
 ### Removed — the in-process fan-out
 
 - **`InProcessIntegrationDispatcher` is deleted.** It wrote inbox rows on the *producing* side,
@@ -611,6 +691,13 @@ stops. This is deliberately not a startup validation: whether a transport is *ne
 whether any contract row exists, which is data rather than composition, so a host publishing only
 notifications must compose without one and must not fail at boot.
 
+> **Superseded within this same unreleased cycle** by *Fixed — a dispatcher that cannot be
+> activated no longer stops the outbox worker*, above. A missing transport is an activation failure:
+> the batch is still released with no retry consumed and the rows still stay `Pending`, but nothing
+> is rethrown and the worker keeps running, backing off. Nothing here reached a released package, so
+> for a consumer the worker-stopping state never existed. Not deleted — the reasoning for the
+> constructor dependency and against a startup validation stands.
+
 #### Conformance obligation — owed by the first broker provider
 
 The acknowledgement rule above cannot be enforced from this repository: no test here can observe
@@ -742,6 +829,13 @@ with. `EventId` 1006 is unchanged, so log-based alerting keyed on it is unaffect
 The test that pinned the old text now pins `IMessageTransport` instead: an assertion holding
 misleading text in place is worse than no assertion, because it makes correcting the message look
 like breaking a contract.
+
+> **Superseded within this same unreleased cycle** by *Fixed — a dispatcher that cannot be
+> activated no longer stops the outbox worker*, above. The second origin in the table is gone: a
+> missing dependency of a registered dispatcher is an **activation failure** — released with no
+> retry consumed, not rethrown, `DispatcherActivationFailed`, event 1009 — not
+> `OutboxConfigurationException`. Two origins remain. The test that pinned `IMessageTransport` in the
+> message no longer asserts text at all; it asserts the abort reason. `EventId` 1006 is unchanged.
 
 #### Which layer may raise `OutboxConfigurationException`
 

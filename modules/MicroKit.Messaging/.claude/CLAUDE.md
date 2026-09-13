@@ -172,8 +172,16 @@ CausationId                        // sealed record — causal parent identifier
 // The real transport seam has now arrived: IMessageTransport + MessageEnvelope, fed by
 // TransportOutboxDispatcher. NO IMessageTransport IMPLEMENTATION SHIPS — a broker provider
 // supplies one, and owes a conformance test that SendAsync does not return before the broker
-// acknowledges. With none registered, a Contract row releases the batch, consumes no retry
-// budget and stops the worker (OutboxConfigurationException) rather than failing silently.
+// acknowledges. With none registered, the transport dispatcher cannot be ACTIVATED: the batch is
+// released, no retry budget is consumed, nothing is rethrown, and the worker backs off and retries
+// each cycle (OutboxBatchAbortReason.DispatcherActivationFailed, event 1009) rather than failing
+// silently. The verdict follows the exception's TYPE, not who throws it: any InvalidOperationException
+// except ObjectDisposedException thrown while the dispatcher is built, whether it comes from Microsoft DI
+// or from a constructor or factory in the graph. An exception of any other type is classified as if the
+// dispatcher threw it. OutboxConfigurationException (the worker stops) is a dispatcher registered
+// NOWHERE; an OriginMessageHolder the scope cannot supply (a scope built from a foreign container); or a
+// row a dispatcher structurally cannot serve — a Notification row with no MediatR glue, a non-Notification
+// row behind the glue with no inner.
 // IMessageDispatcher is internal to Core — not a public Abstractions contract
 ```
 
