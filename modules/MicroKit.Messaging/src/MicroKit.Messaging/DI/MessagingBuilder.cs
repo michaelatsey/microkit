@@ -58,15 +58,34 @@ public sealed class MessagingBuilder
     /// <para>
     /// <b>With no transport registered, a contract row fails loudly and reversibly.</b> The
     /// dispatcher takes <see cref="IMessageTransport"/> through its constructor, so the container
-    /// fails while <c>OutboxProcessor</c> is resolving the dispatcher — which the processor converts
-    /// into <see cref="OutboxConfigurationException"/>. The batch is released untouched, no retry
-    /// budget is consumed, the rows stay <see cref="OutboxMessageStatus.Pending"/>, and the worker
-    /// stops so the missing registration is visible rather than absorbed.
+    /// throws <see cref="InvalidOperationException"/> while <c>OutboxProcessor</c> is activating the
+    /// dispatcher. That is a registered dispatcher that cannot be activated, not a missing
+    /// registration, and it is not <see cref="OutboxConfigurationException"/>: the batch is released
+    /// untouched, no retry budget is consumed, the rows stay <see cref="OutboxMessageStatus.Pending"/>,
+    /// the batch result reports <see cref="OutboxBatchAbortReason.DispatcherActivationFailed"/>, and an
+    /// error is logged on every cycle. The worker keeps running and backs off rather than stopping, so
+    /// the rows drain on the first cycle after a build that registers a transport is deployed, and a
+    /// cause that clears on its own drains them with no intervention at all.
+    /// </para>
+    /// <para>
+    /// <b>Only that exception type gets that verdict.</b> A constructor in the dispatcher's graph that
+    /// throws any other type — a broker client failing to connect with its own exception, say — is
+    /// classified as if the send had thrown it: <see cref="OutboxTransportUnavailableException"/>
+    /// releases the batch, and anything untyped is retried per message. A provider whose client knows
+    /// the broker is down should raise the former.
+    /// </para>
+    /// <para>
+    /// ⚠ <b>Known defect — a failure scoped to one tenant stalls every tenant.</b> The dispatcher is
+    /// activated in the scope of the row being dispatched, built from its tenant. If anything in this
+    /// graph is resolved per tenant — a transport holding per-tenant credentials, say — and throws
+    /// <see cref="InvalidOperationException"/> for a tenant that never recovers, that row heads every
+    /// claim and no tenant publishes, with no dead-letter exit. ADR-MSG-019 records it and the fix
+    /// owed; the module README gives the way out.
     /// </para>
     /// <para>
     /// <b>Calling this method declares an intent to send contracts, and the failure above is not
     /// scoped to them.</b> Because a decorator activates the keyed dispatcher when it is
-    /// constructed, calling this without ever registering an <see cref="IMessageTransport"/> stops
+    /// constructed, calling this without ever registering an <see cref="IMessageTransport"/> blocks
     /// notification rows too. A host that publishes only domain-event notifications should
     /// therefore <b>not</b> call this method: with no transport dispatcher registered at all, the
     /// decorator's inner is simply absent, notifications dispatch, and only a contract row — which
@@ -75,7 +94,10 @@ public sealed class MessagingBuilder
     /// <para>
     /// This is deliberately <b>not</b> a startup validation, unlike the integration-event registry
     /// check. Whether a transport is needed depends on whether any contract row exists, which is
-    /// data rather than composition.
+    /// data rather than composition. A service provider built with <c>ValidateOnBuild</c> — which the
+    /// default host builders turn on in the <c>Development</c> environment — is the exception: the
+    /// container checks the keyed dispatcher's constructor when it is built, so there a missing
+    /// transport fails at startup instead.
     /// </para>
     /// <para>
     /// It requires no <c>IMessageSerializer</c>, and that is not an oversight — the dispatcher

@@ -112,6 +112,27 @@ ProcessBatch_WhenTransportUnavailable_StillSettlesEveryClaimedMessage
 ProcessBatch_WhenCancelledMidBatch_ReleasesRemainderWithoutConsumingRetries
 ProcessBatch_WhenDispatcherUnregistered_SettlesBatchThenRethrows
 ProcessBatch_WhenDispatcherUnregistered_ConsumesNoRetryBudget
+ProcessBatch_WhenTheDispatcherCannotBeActivated_ReleasesTheBatchWithoutConsumingRetriesOrRethrowing
+                                                    ← fails activation for ONE message — the shape a
+                                                      tenant-scoped cause really has, and the only one
+                                                      that separates batch-wide from per-message. It
+                                                      pins today's verdict, KNOWN DEFECT included
+                                                      (ADR-MSG-019). Its outcomes do NOT discriminate
+                                                      against the old catch — the absent rethrow and
+                                                      the abort reason do
+ProcessBatch_WhenTheDispatcherItselfThrowsInvalidOperationException_RetriesOnlyThatMessage
+                                                    ← keeps the activation arm from being a bare catch
+ProcessBatch_WhenActivationThrowsAnythingButInvalidOperationException_RetriesOnlyThatMessage
+                                                    ← keeps the tagging catch from widening past
+                                                      InvalidOperationException: a tenant lookup
+                                                      throwing its own type must stay per message,
+                                                      or it joins the KNOWN DEFECT's stall
+ProcessBatch_WhenDispatcherActivationIsCancelled_ReleasesAsCancelledRatherThanAsAnActivationFault
+                                                    ← pins the type hierarchy, not a filter term:
+                                                      OperationCanceledException is not an
+                                                      InvalidOperationException
+ProcessBatch_WhenTheProviderIsDisposedDuringActivation_IsNotReportedAsAnActivationFault
+                                                    ← pins a retry charged at shutdown — owed, not a design
 ProcessBatch_WhenTheScopeCannotSupplyTheOriginHolder_SettlesBatchThenRethrows   ← a foreign container
 ProcessBatch_WhenTheScopeCannotSupplyTheOriginHolder_ConsumesNoRetryBudget
 ProcessBatch_NamesTheDispatchedRowAsTheCauseOfWorkInItsScope     ← seed a DIFFERENT ancestor cause,

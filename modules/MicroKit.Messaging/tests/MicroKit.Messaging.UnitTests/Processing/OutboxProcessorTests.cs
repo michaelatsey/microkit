@@ -254,6 +254,264 @@ public sealed class OutboxProcessorTests
     }
 
     // ---------------------------------------------------------------------------
+    // Dispatcher activation failure — batch-fatal, no retry budget, no rethrow
+    // ---------------------------------------------------------------------------
+
+    /// <summary>
+    /// A dispatcher that is registered but cannot be activated abandons the batch: the remainder is
+    /// released, no retry budget moves, and nothing is rethrown, so the worker keeps running.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <b>The fixture fails activation for message 2 only, and that shape is realistic.</b> Activation
+    /// runs in the message's own scope, built from its <c>TenantId</c>, so a tenant-scoped cause fails
+    /// for some messages and not others. It is also the only shape that makes batch-wide handling
+    /// visible: a per-message implementation would retry message 2 and go on to publish message 3.
+    /// This test pins today's verdict. Releasing message 3 for message 2's cause is the known defect
+    /// ADR-MSG-019 records, so the owed fix is expected to change this test.
+    /// </para>
+    /// <para>
+    /// <b>Which assertion discriminates against what.</b> The outcomes —
+    /// <c>[Published, Released, Released]</c> — rule out a per-message implementation. They do
+    /// <i>not</i> rule out the catch-based implementation this replaced, which produces the same
+    /// three: against that one, the discriminators are the absent rethrow, the abort reason, and
+    /// event 1009 where it logged 1006.
+    /// </para>
+    /// <para>
+    /// The fault is an <see cref="InvalidOperationException"/> on purpose — the type the container
+    /// throws for a dependency it cannot supply, the one a catch-based implementation swallows, and the
+    /// only one the resolution tags. Every other type stays per message, pinned by
+    /// <c>ProcessBatch_WhenActivationThrowsAnythingButInvalidOperationException_RetriesOnlyThatMessage</c>.
+    /// </para>
+    /// </remarks>
+    [Fact]
+    public async Task ProcessBatch_WhenTheDispatcherCannotBeActivated_ReleasesTheBatchWithoutConsumingRetriesOrRethrowing()
+    {
+        var first = OutboxFixtures.Message(retryCount: 1);
+        // Its own tenant and kind, so the 1009 assertion below cannot pass on a neighbour's values.
+        var second = OutboxFixtures.ContractMessage(retryCount: 1, tenantId: "tenant-b");
+        var third = OutboxFixtures.Message(retryCount: 1);
+        var claim = OutboxFixtures.Claim(first, second, third);
+        var (store, captured) = StoreReturning(claim);
+
+        var dispatcher = new ScriptedDispatcher();
+        var logger = new CapturingLogger<OutboxProcessor>();
+        var sut = BuildFailingActivationFor(
+            store,
+            dispatcher,
+            second.Id,
+            () => new InvalidOperationException(
+                "Unable to resolve service for type 'IMessageTransport' while attempting to " +
+                "activate 'TransportOutboxDispatcher'."),
+            logger);
+
+        // Not rethrown: a registered dispatcher that cannot be built must not stop the worker.
+        var result = await sut.ProcessBatchAsync(10, CancellationToken.None);
+
+        result.AbortReason.ShouldBe(OutboxBatchAbortReason.DispatcherActivationFailed);
+        logger.Records.ShouldContain(
+            r => r.EventId == 1009 && r.Level == LogLevel.Error,
+            "a batch abandoned with no rethrow and no retry movement must not be silent");
+
+        // The row an operator has to find when the cause never clears (ADR-MSG-019, known defect).
+        var activationFailure = logger.Records.Single(r => r.EventId == 1009).Message;
+        activationFailure.ShouldContain(second.Id.Value.ToString());
+        activationFailure.ShouldContain("tenant-b");
+        activationFailure.ShouldContain(nameof(MessageKind.Contract));
+
+        result.Published.ShouldBe(1, "message 1 was delivered before message 2's dispatcher failed");
+        result.Released.ShouldBe(2, "the message that hit the fault AND every message after it");
+        result.Retried.ShouldBe(0, "an activation failure is not a per-message fault");
+        result.DeadLettered.ShouldBe(0);
+
+        captured.Single(o => o.MessageId == first.Id).Kind.ShouldBe(OutboxOutcomeKind.Published);
+        foreach (var released in captured.Where(o => o.MessageId != first.Id))
+        {
+            released.Kind.ShouldBe(OutboxOutcomeKind.Released);
+            released.RetryCount.ShouldBe(0, "Released carries no retry count — the row keeps its own");
+            released.NextRetryAtUtc.ShouldBeNull();
+        }
+
+        dispatcher.Dispatched.ShouldHaveSingleItem().Id.ShouldBe(first.Id, "message 3 is never attempted");
+        await store.Received(1).ApplyOutcomesAsync(
+            claim.Token, Arg.Any<IReadOnlyList<OutboxOutcome>>(), Arg.Any<CancellationToken>());
+    }
+
+    /// <summary>
+    /// An <see cref="InvalidOperationException"/> thrown by a dispatcher that activated fine is still
+    /// one message's transient fault — the activation arm must not be a bare catch on that type.
+    /// </summary>
+    [Fact]
+    public async Task ProcessBatch_WhenTheDispatcherItselfThrowsInvalidOperationException_RetriesOnlyThatMessage()
+    {
+        var first = OutboxFixtures.Message();
+        var second = OutboxFixtures.Message();
+        var third = OutboxFixtures.Message();
+        var (store, captured) = StoreReturning(OutboxFixtures.Claim(first, second, third));
+        var dispatcher = new ScriptedDispatcher(
+            m => m.Id == second.Id ? new InvalidOperationException("channel closed mid-send") : null);
+
+        var result = await Build(store, dispatcher).ProcessBatchAsync(10, CancellationToken.None);
+
+        result.AbortReason.ShouldBe(OutboxBatchAbortReason.None);
+        result.Published.ShouldBe(2);
+        result.Retried.ShouldBe(1);
+        result.Released.ShouldBe(0);
+
+        var retried = captured.Single(o => o.MessageId == second.Id);
+        retried.Kind.ShouldBe(OutboxOutcomeKind.Retry);
+        retried.RetryCount.ShouldBe(1);
+        // 2^1 = 2 s, jitter neutralised by FixedRandom.NoJitter.
+        retried.NextRetryAtUtc.ShouldBe(Now.AddSeconds(2));
+
+        dispatcher.Dispatched.Count.ShouldBe(3, "the batch continues past the failing message");
+    }
+
+    /// <summary>
+    /// Only the container's <see cref="InvalidOperationException"/> is an activation failure. Any other
+    /// type thrown while the dispatcher is being built is classified as if the dispatcher had thrown
+    /// it: that message is retried, the rest of the batch runs, and event 1009 is not written.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// A tenant lookup failing with its own type — <see cref="KeyNotFoundException"/> here — is the
+    /// case a catch wider than <see cref="InvalidOperationException"/> moves from a per-message retry,
+    /// which dead-letters while every other tenant keeps publishing, into the batch-wide verdict, which
+    /// stalls the outbox for every tenant (ADR-MSG-019, known defect). This test keeps it on the path it
+    /// had before the resolution was reworked.
+    /// </para>
+    /// <para>
+    /// The fixture is test 1's, message for message, so the two tests differ in the exception type
+    /// alone. Message 3 must still be dispatched: that is what separates a per-message verdict from a
+    /// batch-wide one.
+    /// </para>
+    /// </remarks>
+    [Fact]
+    public async Task ProcessBatch_WhenActivationThrowsAnythingButInvalidOperationException_RetriesOnlyThatMessage()
+    {
+        var first = OutboxFixtures.Message(retryCount: 1);
+        var second = OutboxFixtures.ContractMessage(retryCount: 1, tenantId: "tenant-b");
+        var third = OutboxFixtures.Message(retryCount: 1);
+        var (store, captured) = StoreReturning(OutboxFixtures.Claim(first, second, third));
+
+        var dispatcher = new ScriptedDispatcher();
+        var logger = new CapturingLogger<OutboxProcessor>();
+        var sut = BuildFailingActivationFor(
+            store,
+            dispatcher,
+            second.Id,
+            () => new KeyNotFoundException("No connection string is configured for tenant 'tenant-b'."),
+            logger);
+
+        var result = await sut.ProcessBatchAsync(10, CancellationToken.None);
+
+        result.AbortReason.ShouldBe(
+            OutboxBatchAbortReason.None, "one message's fault must not abandon the batch");
+        logger.Records.ShouldNotContain(
+            r => r.EventId == 1009, "only InvalidOperationException is an activation failure");
+
+        result.Published.ShouldBe(2);
+        result.Retried.ShouldBe(1);
+        result.Released.ShouldBe(0);
+
+        var retried = captured.Single(o => o.MessageId == second.Id);
+        retried.Kind.ShouldBe(OutboxOutcomeKind.Retry);
+        retried.RetryCount.ShouldBe(2, "the processor persists RetryCount + 1");
+        // 2^2 = 4 s, jitter neutralised by FixedRandom.NoJitter.
+        retried.NextRetryAtUtc.ShouldBe(Now.AddSeconds(4));
+        retried.ErrorMessage.ShouldBe("No connection string is configured for tenant 'tenant-b'.");
+
+        dispatcher.Dispatched.Select(m => m.Id).ShouldBe(
+            new[] { first.Id, third.Id }, "the batch continues past the failing message");
+    }
+
+    /// <summary>
+    /// A cancellation raised while the dispatcher is being activated is the host shutting down, not
+    /// an activation fault: the batch is cancelled, and event 1009 is not written.
+    /// </summary>
+    /// <remarks>
+    /// <see cref="OperationCanceledException"/> does not derive from
+    /// <see cref="InvalidOperationException"/>, the only type <c>ResolveDispatcher</c> tags, so nothing
+    /// in the tagging filter names it and this test no longer pins that filter: it pins the type
+    /// hierarchy. It still guards against a catch widened past <see cref="InvalidOperationException"/>
+    /// that forgets to leave cancellation out.
+    /// </remarks>
+    [Fact]
+    public async Task ProcessBatch_WhenDispatcherActivationIsCancelled_ReleasesAsCancelledRatherThanAsAnActivationFault()
+    {
+        using var cts = new CancellationTokenSource();
+        var first = OutboxFixtures.Message();
+        var second = OutboxFixtures.Message();
+        var third = OutboxFixtures.Message();
+        var (store, _) = StoreReturning(OutboxFixtures.Claim(first, second, third));
+
+        var logger = new CapturingLogger<OutboxProcessor>();
+        var sut = BuildFailingActivationFor(
+            store,
+            new ScriptedDispatcher(),
+            second.Id,
+            () =>
+            {
+                cts.Cancel();
+                return new OperationCanceledException(cts.Token);
+            },
+            logger);
+
+        var result = await sut.ProcessBatchAsync(10, cts.Token);
+
+        result.AbortReason.ShouldBe(OutboxBatchAbortReason.Cancelled);
+        result.Published.ShouldBe(1);
+        result.Released.ShouldBe(2);
+        result.Retried.ShouldBe(0);
+        logger.Records.ShouldNotContain(r => r.EventId == 1009, "shutdown is not an activation fault");
+    }
+
+    /// <summary>
+    /// A provider disposed at shutdown is not reported as an activation fault either — but it is
+    /// charged one retry, and that is pinned here as it stands.
+    /// </summary>
+    /// <remarks>
+    /// <see cref="ObjectDisposedException"/> derives from <see cref="InvalidOperationException"/>, not
+    /// from <see cref="OperationCanceledException"/>, so once it propagates untagged it cannot reach
+    /// the cancellation arm: it reaches the transient arm, and the message it hit gets a
+    /// <c>Retry</c>. The next iteration sees the cancelled token and releases the rest. That is what
+    /// the same exception from <c>CreateScopeAsync</c> already does. Charging a retry to a message
+    /// whose only fault was meeting a clean shutdown is owed — whether shutdown should release
+    /// rather than retry is a change to the cancellation arm (ADR-MSG-019).
+    /// </remarks>
+    [Fact]
+    public async Task ProcessBatch_WhenTheProviderIsDisposedDuringActivation_IsNotReportedAsAnActivationFault()
+    {
+        using var cts = new CancellationTokenSource();
+        var first = OutboxFixtures.Message();
+        var second = OutboxFixtures.Message();
+        var third = OutboxFixtures.Message();
+        var (store, captured) = StoreReturning(OutboxFixtures.Claim(first, second, third));
+
+        var logger = new CapturingLogger<OutboxProcessor>();
+        var sut = BuildFailingActivationFor(
+            store,
+            new ScriptedDispatcher(),
+            second.Id,
+            () =>
+            {
+                // Shutdown as it actually arrives: the token is cancelled, then the provider goes.
+                cts.Cancel();
+                return new ObjectDisposedException(nameof(IServiceProvider));
+            },
+            logger);
+
+        var result = await sut.ProcessBatchAsync(10, cts.Token);
+
+        result.AbortReason.ShouldBe(OutboxBatchAbortReason.Cancelled);
+        logger.Records.ShouldNotContain(r => r.EventId == 1009, "shutdown is not an activation fault");
+
+        captured.Single(o => o.MessageId == first.Id).Kind.ShouldBe(OutboxOutcomeKind.Published);
+        captured.Single(o => o.MessageId == second.Id).Kind.ShouldBe(OutboxOutcomeKind.Retry);
+        captured.Single(o => o.MessageId == third.Id).Kind.ShouldBe(OutboxOutcomeKind.Released);
+    }
+
+    // ---------------------------------------------------------------------------
     // Nominal path and claim handling
     // ---------------------------------------------------------------------------
 
@@ -439,10 +697,10 @@ public sealed class OutboxProcessorTests
     /// stops.
     /// </summary>
     /// <remarks>
-    /// This pins the conversion in <c>StampOrigin</c>'s <c>catch</c>. Every other test in this file
-    /// registers the holder, so nothing else enters that branch — and what it guards is silent by
-    /// nature: without the conversion, a foreign container yields a raw
-    /// <see cref="InvalidOperationException"/>, which the processor classifies as transient and
+    /// This pins <c>StampOrigin</c>'s null branch. Every other test in this file registers the
+    /// holder, so nothing else enters it — and what it guards is silent by nature: without the null
+    /// test, a foreign container yields a null holder, the stamp throws
+    /// <see cref="NullReferenceException"/>, and the processor classifies that as transient and
     /// retries until the whole queue is dead-lettered.
     /// </remarks>
     [Fact]
@@ -593,12 +851,40 @@ public sealed class OutboxProcessorTests
         return BuildCore(store, services, options: null, random: null, registerOriginHolder: false);
     }
 
+    /// <summary>
+    /// A processor whose container holds a dispatcher registration that throws while being
+    /// activated for one message, and activates normally for every other.
+    /// </summary>
+    /// <remarks>
+    /// REGISTERED but unactivatable — a factory that throws, as in <c>InboxProcessorTests.Build</c>.
+    /// Not the same as absent: only an absent descriptor makes <c>GetService</c> return null. The
+    /// factory reads the scope's origin holder to know which message it is being built for, which
+    /// works because the processor stamps the origin before it resolves the dispatcher.
+    /// </remarks>
+    private static OutboxProcessor BuildFailingActivationFor(
+        IOutboxProcessorStore store,
+        ScriptedDispatcher dispatcher,
+        MessageId failOn,
+        Func<Exception> fault,
+        ILogger<OutboxProcessor> logger)
+    {
+        var services = new ServiceCollection();
+        services.AddLogging();
+        services.AddScoped<IOutboxDispatcher>(sp =>
+            sp.GetRequiredService<OriginMessageHolder>().OriginMessageId == failOn
+                ? throw fault()
+                : dispatcher);
+
+        return BuildCore(store, services, options: null, random: null, logger: logger);
+    }
+
     private static OutboxProcessor BuildCore(
         IOutboxProcessorStore store,
         ServiceCollection services,
         OutboxProcessorOptions? options,
         Random? random,
-        bool registerOriginHolder = true)
+        bool registerOriginHolder = true,
+        ILogger<OutboxProcessor>? logger = null)
     {
         // Registered by AddMicroKitMessaging() in production. The processor stamps the row being
         // dispatched onto it, and treats a scope that cannot supply it as a composition fault
@@ -616,7 +902,7 @@ public sealed class OutboxProcessorTests
             options ?? DefaultOptions,
             new FakeTimeProvider(Now),
             random ?? FixedRandom.NoJitter,
-            NullLogger<OutboxProcessor>.Instance);
+            logger ?? NullLogger<OutboxProcessor>.Instance);
     }
 
     /// <summary>

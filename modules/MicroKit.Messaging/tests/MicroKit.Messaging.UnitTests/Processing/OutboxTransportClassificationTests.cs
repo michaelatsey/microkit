@@ -21,8 +21,9 @@ using MicroKit.Messaging.Outbox;
 /// <para>
 /// The no-transport tests here are load-bearing for a second reason: the behaviour they pin lives
 /// entirely outside the dispatcher's own code — in <c>OutboxProcessor.ResolveDispatcher</c>'s
-/// <c>catch</c>, and in the decision to take <see cref="IMessageTransport"/> through the
-/// constructor. Nothing in <c>TransportOutboxDispatcher</c> would look wrong if either changed.
+/// null-versus-throw separation and the batch loop's activation arm, and in the decision to take
+/// <see cref="IMessageTransport"/> through the constructor. Nothing in
+/// <c>TransportOutboxDispatcher</c> would look wrong if any of them changed.
 /// </para>
 /// </remarks>
 public sealed class OutboxTransportClassificationTests
@@ -177,15 +178,17 @@ public sealed class OutboxTransportClassificationTests
     // -----------------------------------------------------------------------------------------
 
     /// <summary>
-    /// A missing <see cref="IMessageTransport"/> registration releases the batch and stops the
-    /// worker — it does not burn the queue's retry budget.
+    /// A missing <see cref="IMessageTransport"/> registration releases the batch without
+    /// rethrowing — it neither stops the worker nor burns the queue's retry budget.
     /// </summary>
     /// <remarks>
     /// <para>
     /// Nothing in <c>TransportOutboxDispatcher</c> implements this. It works because the transport
-    /// is a <b>constructor</b> dependency, so the container fails while the processor is resolving
-    /// the dispatcher, inside the one <c>try</c> that converts an activation failure into
-    /// <see cref="OutboxConfigurationException"/>.
+    /// is a <b>constructor</b> dependency, so the container throws while the processor is
+    /// <i>activating</i> the dispatcher — a registered dispatcher that cannot be built, which the
+    /// processor classifies batch-wide: every message released, no retry consumed, nothing
+    /// rethrown, and <see cref="OutboxBatchAbortReason.DispatcherActivationFailed"/> reported so the
+    /// worker backs off and tries again on the next cycle.
     /// </para>
     /// <para>
     /// Move that resolution into <c>DispatchAsync</c> — a one-line refactor that looks equivalent —
@@ -194,9 +197,14 @@ public sealed class OutboxTransportClassificationTests
     /// budget and is then dead-lettered, over a missing line in a composition root. This test is
     /// the tripwire for that change.
     /// </para>
+    /// <para>
+    /// No assertion on an exception's text. The type the container could not supply is named in the
+    /// container's own message, logged with the activation event — text this module does not produce
+    /// and must not pin.
+    /// </para>
     /// </remarks>
     [Fact]
-    public async Task ProcessBatch_WhenNoTransportRegistered_SettlesEveryMessageReleasedThenRethrows()
+    public async Task ProcessBatch_WhenNoTransportRegistered_SettlesEveryMessageReleasedWithoutRethrowing()
     {
         var messages = Enumerable.Range(0, 3).Select(_ => OutboxFixtures.ContractMessage()).ToArray();
         var claim = OutboxFixtures.Claim(messages);
@@ -204,16 +212,12 @@ public sealed class OutboxTransportClassificationTests
 
         var processor = BuildWithoutTransport(store);
 
-        var ex = await Should.ThrowAsync<OutboxConfigurationException>(
-            async () => await processor.ProcessBatchAsync(10, CancellationToken.None));
+        // Not rethrown: a registered dispatcher that cannot be built must not stop the worker.
+        var result = await processor.ProcessBatchAsync(10, CancellationToken.None);
 
-        // Asserted on IMessageTransport, not on IOutboxDispatcher. The dispatcher IS registered in
-        // this composition — only its transport is missing — so a message naming the dispatcher as
-        // the absent registration sends an operator to check a line that is already there. This is
-        // the fault the message has to identify, so it is the one pinned.
-        ex.Message.ShouldContain(nameof(IMessageTransport));
+        result.AbortReason.ShouldBe(OutboxBatchAbortReason.DispatcherActivationFailed);
 
-        // Settled before the rethrow: a stranded lease blocks its row for the whole LockDuration.
+        // Settled: a stranded lease blocks its row for the whole LockDuration.
         await store.Received(1).ApplyOutcomesAsync(
             claim.Token, Arg.Any<IReadOnlyList<OutboxOutcome>>(), Arg.Any<CancellationToken>());
         captured.Count.ShouldBe(messages.Length);
@@ -229,8 +233,7 @@ public sealed class OutboxTransportClassificationTests
         var message = OutboxFixtures.ContractMessage(retryCount: 2);
         var (store, captured) = StoreReturning(OutboxFixtures.Claim(message));
 
-        await Should.ThrowAsync<OutboxConfigurationException>(
-            async () => await BuildWithoutTransport(store).ProcessBatchAsync(10, CancellationToken.None));
+        await BuildWithoutTransport(store).ProcessBatchAsync(10, CancellationToken.None);
 
         var outcome = captured.ShouldHaveSingleItem();
         outcome.Kind.ShouldBe(OutboxOutcomeKind.Released);

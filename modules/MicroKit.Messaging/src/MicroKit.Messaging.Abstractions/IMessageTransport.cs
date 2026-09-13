@@ -106,10 +106,14 @@ public interface IMessageTransport
     /// <para>
     /// The ban is on transports specifically, not on the exception having a single origin — two
     /// things inside the engine do raise it, and both establish the fault before any send is
-    /// attempted. The processor raises it structurally, by wrapping the container call that
-    /// activates <c>IOutboxDispatcher</c>, so a missing registration — including a missing
-    /// <see cref="IMessageTransport"/> behind a registered dispatcher — is classified by where it
-    /// failed rather than by parsing a message. An <c>IOutboxDispatcher</c> may also raise it for
+    /// attempted. The processor raises it when a service it resolves from the scope is not
+    /// registered at all — <c>GetService</c> returns <see langword="null"/> — which the container
+    /// decides rather than a parsed message. A missing <see cref="IMessageTransport"/> behind a
+    /// <i>registered</i> dispatcher is not that case: the container throws
+    /// <see cref="InvalidOperationException"/> while activating the dispatcher, and the processor
+    /// releases the batch without rethrowing
+    /// (<see cref="OutboxBatchAbortReason.DispatcherActivationFailed"/>). An
+    /// <c>IOutboxDispatcher</c> may also raise it for
     /// a row it <i>structurally cannot serve in this composition</i>: <c>TransportOutboxDispatcher</c>
     /// does so for a <see cref="MessageKind.Notification"/> row, which is a perfectly good row that
     /// only <c>MicroKit.Messaging.MediatR</c> can fan out, so its arrival proves that package is
@@ -117,6 +121,16 @@ public interface IMessageTransport
     /// A transport's failures never are: by the time it runs, the composition has already been
     /// proven adequate by the fact that the transport was resolved and called at all.
     /// </para>
+    /// </para>
+    /// <para>
+    /// <b>What the constructor throws is classified the same way, with one exception.</b> The
+    /// transport is resolved from the per-message scope, so a constructor that fails does so while the
+    /// dispatcher is being activated. A typed exception from there reaches the same verdict it would
+    /// from this method, and an untyped one is retried per message — except
+    /// <see cref="InvalidOperationException"/>, the type the container uses for a dependency it cannot
+    /// supply, which is reported as <see cref="OutboxBatchAbortReason.DispatcherActivationFailed"/> and
+    /// abandons the batch. A client that knows its broker is unreachable should say so with
+    /// <see cref="OutboxTransportUnavailableException"/> rather than let that type escape.
     /// </para>
     /// </remarks>
     ValueTask SendAsync(MessageEnvelope envelope, CancellationToken ct = default);

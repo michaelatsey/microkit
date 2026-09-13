@@ -1090,6 +1090,12 @@ an unanswerable question.
 | `AddTransportDispatcher()`, no transport, contract row | `OutboxConfigurationException` | unchanged |
 | no `AddTransportDispatcher()`, notification row | not composable — the glue threw at registration | dispatches |
 
+> ⚠ **Superseded in part** by the implementation note *outbox resolution classification
+> (2026-09-13)*, below. The two `OutboxConfigurationException` cells for `AddTransportDispatcher()`
+> with no transport now read: batch released, no retry consumed, **not rethrown** —
+> `OutboxBatchAbortReason.DispatcherActivationFailed`, the worker backs off. The argument against lazy
+> resolution stands, on a new ground. This note is not rewritten.
+
 The decorator activates its keyed inner when constructed, so a missing transport fails inside the
 resolution `OutboxProcessor` wraps, before any row is examined. Calling that method declares an
 intent to send contracts; a host that only fans out notifications now has a composition that says
@@ -1723,3 +1729,313 @@ above.
 Gate: Release, build clean (**0 warnings**), **398 passed / 0 failed / 0 skipped**, Docker up,
 including the 19 PostgreSQL Testcontainers tests. 396 + the two new tests = 398, so the baseline
 reconciles exactly. No test was modified; two were added.
+
+### Implementation note — outbox resolution classification: the container decides, the batch pays (2026-09-13)
+
+Discharges the first bullet of the step-7 review closure's **Owed, not done** —
+`OutboxProcessor.ResolveDispatcher`, "the F1 shape, uncorrected" — together with the second site the
+api-review application note added to it, `OutboxProcessor.StampOrigin`. Both are now `GetService`
+plus a null test.
+
+**The model: three verdicts, decided by the container.**
+
+| Container verdict | Classification | Effect |
+|---|---|---|
+| `GetService` returns **null** | configuration fault | batch released and settled, `OutboxConfigurationException` rethrown, worker stops — unchanged |
+| `GetService` throws **`InvalidOperationException`** (not `ObjectDisposedException`) — how Microsoft DI reports an unsatisfiable dependency; a container that reports it with another type lands in the next row | batch-fatal, no budget | batch released and settled, **no rethrow**, no retry count, no dead-letter; `OutboxBatchAbortReason.DispatcherActivationFailed`, event 1009 at `Error`; the next cycle re-claims |
+| `GetService` throws **any other type** | whatever the loop makes of that type | unchanged from HEAD — typed exceptions keep their arms, the rest is transient per message |
+| anything thrown once the dispatcher exists | transient per message | unchanged |
+
+No fourth nature of failure is introduced: the second row reuses the transport-unavailable arm's
+shape — set the reason, break, release the remainder, do not rethrow — and adds one member to a
+public enum.
+
+**Per-message classification was rejected — for a cause every message shares.** The lot's first
+passing order classified an activation failure as transient per message, mirroring the inbox, and was
+withdrawn before implementation. For a missing `IMessageTransport`, classifying it per message
+charges N retry budgets for one cause and, at `MaxRetries`, dead-letters the entire queue over one
+line in a composition root. It would have turned "worker stops, rows `Pending`" into "every row,
+notifications included, dead-lettered within a few cycles, recoverable only by requeue", and it would
+have inverted `ProcessBatch_WhenNoTransportRegistered_ConsumesNoRetryBudget`, a test that names the
+invariant by hand.
+
+This note first grounded the rejection in a stronger premise: "a dispatcher is not state carried by a
+message: if it cannot be built for message 1 it cannot be built for message 40". **That premise is
+false.** `DispatchAsync` builds the scope from the row's `TenantId` and stamps its origin before
+`ResolveDispatcher` runs, so activation can see the message, and a tenant-scoped cause fails for some
+rows and not others. The rejection holds for a shared cause only; for the rest, see *Known defect*
+below.
+
+**The inbox/outbox asymmetry is not explained by who owns the failure.** `EnvelopeReceiver.ResolveWriter`
+and `InboxProcessor.ResolveSettlement` let the same container verdict propagate. For the receiver the
+difference is real: it holds one envelope and no batch, so a provider nacks one message. For the drain
+processor it is not. `InboxProcessor` owns a claimed batch, a retry budget and `Released` outcomes
+exactly as the outbox does; it retries the one row, and its `ResolveSettlement` remarks reject a
+verdict that abandons the batch for this very cause, because under a tenant-aware scope factory it
+would halt the inbox for every tenant. This note first argued that the outbox's batch-scoped remedy
+followed from the outbox owning a batch and a retry budget, so the two sites only looked
+inconsistent. **That argument is withdrawn**: it holds for `EnvelopeReceiver` only. The asymmetry
+between the outbox and the drain processor stays in the code, and it is part of the known defect
+below.
+
+**Known defect — a batch-wide release that spends no retry budget stalls the queue for every tenant.
+Fix owed.** This paragraph first recorded the stall as a decision, and as a property of dispatcher
+activation: a deliberate liveness trade, preferred to the withdrawn draft's loss-by-dead-letter. The
+distributed-context review challenged it, and it is **withdrawn as a decision**. Its second review, on
+the narrowed premise, showed it is not specific to activation either: activation is one of three
+routes to it. The verdict still ships because it improves on what it replaced for the
+one input it covers — an `InvalidOperationException` during activation, on which the catch-based
+resolver reported a missing registration and stopped the worker — but the stall is a defect, not a
+design property. This sentence first said "on the same input" while the tagging catch covered every
+type, where it was false: see *Only `InvalidOperationException` is tagged*, below.
+
+- **The mechanism is the release, not the path that triggers it.** Both claims order on the row's own
+  staging time — the outbox on `CreatedAtUtc` (`EfOutboxStore.cs:88`), the inbox on `ReceivedAtUtc`
+  (`EfInboxStore.cs:212`) — and on both sides `Released` writes only `Status`, `LockedUntilUtc` and
+  `ClaimToken`. A row released for a cause that never clears therefore stays eligible and stays oldest:
+  it heads every claim, every batch aborts at it before anything behind it is processed, and the
+  queue makes **no progress for any tenant** — on the outbox, notifications included. No budget
+  moves, so there is no dead-letter exit, and neither admin store has an operation that steps past a
+  row that is not dead-lettered.
+- **Three routes reach it.**
+  1. **Dispatcher activation.** A tenant-scoped `InvalidOperationException` while the dispatcher is
+     built: `OutboxBatchAbortReason.DispatcherActivationFailed`, event 1009. New in this lot; at HEAD
+     the same input stopped the worker.
+  2. **A transport rejecting one tenant's credentials.** `IMessageTransport` names "authentication
+     rejected" as a reason to throw `OutboxTransportUnavailableException`, and that arm releases the
+     batch: `OutboxBatchAbortReason.TransportUnavailable`, event 1004. A provider holding per-tenant
+     broker credentials meets it the moment one tenant's are revoked. The send path predates this lot.
+     The constructor guidance this lot added to `IMessageTransport` and `AddTransportDispatcher()` —
+     raise `OutboxTransportUnavailableException` when the broker is down — is right for a shared broker
+     and silent on a per-tenant one.
+  3. **The inbox analogue.** A handler throwing `InboxDependencyUnavailableException`, which names
+     "authentication rejected" too, and whose arm releases the batch:
+     `InboxBatchAbortReason.DependencyUnavailable`, event 2004. Pre-existing; this lot does not touch it.
+
+  For all three, the parts are verified in code: the ordering, the release write, and a
+  batch-breaking arm. The stall itself has been run on none of them.
+- **Only the activation route can be traced from its event.** Event 1009 names the blocking row
+  (`MessageId`, `TenantId`, `MessageKind`). **Events 1004 and 2004 carry no row identity** — their
+  templates name a released count and nothing else — so an operator watching either cannot tell
+  which tenant to act on. The row is still the oldest eligible one, since that is what heads the claim,
+  so a query can find it. That follows from the claim predicate and has not been run.
+- **The way out.** For both outbox routes, the README's SQL statement (*Sending to a broker*): mark the
+  failing tenant's `Pending` rows dead-lettered, which takes them out of the claim. **It is not a way
+  out of the inbox route.** It updates `"OutboxMessages"`, and the README documents no equivalent for
+  `"InboxMessages"`.
+- **It is reachable with the shipped dispatchers.** This note first said a tenant-scoped cause
+  reaches the stall "only through a dispatcher with a tenant-scoped constructor dependency; the
+  shipped dispatcher graphs are tenant-agnostic". **Overstated.** Activation runs in the message's
+  scope, built from its `TenantId`. `MediatROutboxDispatcher`'s factory resolves `IPublisher` eagerly.
+  That graph reaches `DomainEventsCascadeNotificationPublisher`, then `DomainEventDispatcher`, which
+  materializes its sinks in its constructor, and through them `EfDomainEventsProvider<TContext>` and
+  `OutboxDomainEventSink`'s `IOutboxWriter`: the consumer's `DbContext`. A host that resolves that
+  context's connection per tenant, and throws `InvalidOperationException` for a de-provisioned
+  tenant, fails right here and never recovers. The graphs are tenant-agnostic only while no host
+  builds its `DbContext` per tenant, and nothing prevents one from doing so. (That the container picks MediatR's
+  `Mediator(IServiceProvider, INotificationPublisher)` constructor is inferred from Microsoft DI's
+  selection rule, not run.)
+- **The dichotomy was false.** Liveness loss and loss-by-dead-letter are not the only options:
+  deferring only the failing tenant's rows, spending no retry budget, loses neither. And
+  dead-lettering has a supported exit, `RequeueAsync`; the stall has none.
+- **The boundary is accidental, twice.** The same tenant-scoped cause thrown one line earlier, from
+  `IExecutionScopeFactory.CreateScopeAsync`, is transient per message and dead-letters after
+  `MaxRetries`. Whether a host's factory validates the tenant eagerly or lazily decides between a
+  dead-letter after `MaxRetries` attempts and a stall with no end. Since the narrowing, the exception
+  type the host throws decides the same thing: a lookup failing with `KeyNotFoundException` is
+  retried per message while every other tenant publishes; failing with `InvalidOperationException`,
+  it stalls them all.
+- **Mitigated in this lot, not fixed, and only on one route.** On the activation route, event 1009
+  names the blocking row (`MessageId`, `TenantId`, `MessageKind`), so an operator can find it. The
+  transport and inbox routes gained nothing. Nothing is lost on any route.
+- **Owed, each its own lot:** deferral of the failing tenant's rows without spending retry budget; an
+  admin operation to park or dead-letter a `Pending` row; an outbox metric (age of the oldest eligible
+  row, aborted batches by reason); and a decision on where tenant validation belongs, scope creation or
+  dispatcher activation, written into the custom `IExecutionScopeFactory` contract.
+- **Two constraints travel with the deferral lot** (api-review N1, N5).
+  - Deferral takes its **own event id** rather than changing what 1009 means. 1009 is new in this
+    cycle, its text ("Abandoning batch and releasing …") becomes false for the case deferral fixes,
+    and operators may match on it. The stable surface is the event id and the property names
+    `MessageId`, `TenantId`, `MessageKind` and `ReleasedCount`, not the text; `EventName` follows the
+    method name, so renaming `DispatcherActivationFailed` would change it silently.
+  - Its done list rewrites every site that documents the stall:
+    `OutboxBatchAbortReason.DispatcherActivationFailed`, `OutboxConfigurationException`,
+    `MessagingBuilder.AddTransportDispatcher()`, `OutboxProcessor` (`ResolveDispatcher` and the
+    activation arm), event 1009's remarks, the README section, the CHANGELOG entry, the outbox-inbox
+    rule, the testing rule, and test 1.
+
+**The worker needed a cadence arm, or the new reason would spin.** `OutboxBatchResult.IsSaturated`
+ignores the abort reason, and `OutboxWorker.NextDelay` tested only `TransportUnavailable` and
+`Cancelled` before saturation. A full abandoned batch therefore polled again at zero delay and
+re-claimed the rows it had just released, failing the same way in a tight loop.
+`DispatcherActivationFailed` now shares the transport-outage arm (`TransportUnavailableBackoff`),
+pinned on a saturated result.
+
+**How the loop recognises the verdict.** `ResolveDispatcher` keeps one `try`, around `GetService`
+alone, and rethrows the `InvalidOperationException` it catches as the internal
+`OutboxDispatcherActivationException`, which the loop catches by type. `GetService` never throws for
+an absent registration, so the wrapper *tags* an activation failure and classifies nothing as
+configuration; the null test alone produces `OutboxConfigurationException`. A bare
+`catch (InvalidOperationException)` in the loop was rejected: a dispatcher's own `DispatchAsync`
+throws that type as a genuine per-message fault. The wrapper derives from `Exception`, not
+`InvalidOperationException`, so no such catch can capture it.
+
+**Only `InvalidOperationException` is tagged — narrowed after the api-review (2026-09-13).** The
+tagging catch first covered every type except `OperationCanceledException` and
+`ObjectDisposedException`. The api-reviewer blocked on it (B2), and the finding holds against HEAD:
+HEAD's resolver caught `InvalidOperationException` alone, so any other type thrown during activation
+reached the loop's `catch (Exception)`, was retried per message and dead-lettered at `MaxRetries`,
+while the rest of the batch — every other tenant — carried on. The wide catch moved that case into
+the batch-wide verdict. A tenant lookup failing with `KeyNotFoundException` for a de-provisioned
+tenant went from "that tenant dead-letters" to "no tenant publishes", and this note recorded it as an
+improvement. It also cost typed exceptions their arms (S2): an `OutboxTransportUnavailableException`
+from a transport's constructor would have logged 1009 instead of 1004, and an
+`OutboxConfigurationException` from a constructor would no longer have stopped the worker.
+
+The fix narrows the catch rather than documenting the widening:
+`catch (InvalidOperationException ex) when (ex is not ObjectDisposedException)`. The lot's mandate was
+to separate two verdicts the container — Microsoft DI, which is all that was probed — conflates under **one** type — "not registered" and
+"registered, cannot be activated", both read as `InvalidOperationException` by the catch-based form.
+Nothing else was ever conflated, so nothing else moves.
+
+- **B2 and S2 collapse.** Every type but `InvalidOperationException` keeps HEAD's classification.
+- **The main case is unaffected.** Microsoft DI reports an unsatisfiable constructor dependency as a
+  raw `InvalidOperationException`, whether the dispatcher is reached through the keyed forwarder or
+  through a decorator's `GetKeyedService`, and wraps nothing it did not throw itself: a
+  `KeyNotFoundException` from a constructor, a nested constructor or a factory reaches the caller
+  unwrapped. Both were run in a scratch probe on the net10.0 shared framework; the first is also what
+  keeps the no-transport tests green on a real container.
+- **The known defect narrows; it does not close.** A tenant-scoped cause still stalls the outbox
+  when it surfaces as `InvalidOperationException`, the idiomatic type for "no connection string is
+  configured for this tenant".
+- **The win is Microsoft DI's.** A container that reports an unsatisfiable dependency with another
+  type keeps HEAD's per-message verdict for a missing transport. Inferred from the type test; no
+  third-party container was run.
+- **Pinned** by
+  `ProcessBatch_WhenActivationThrowsAnythingButInvalidOperationException_RetriesOnlyThatMessage`:
+  test 1's fixture with a `KeyNotFoundException` — message 2 retried, message 3 published, no abort
+  reason, no 1009. M10 below restores the wide catch against it.
+
+**Shutdown is not activation.** `OperationCanceledException` does not derive from
+`InvalidOperationException`, so the tagging catch never sees it: it reaches the loop's cancellation
+arm when the token is cancelled, and the transient arm otherwise, exactly as at HEAD.
+`ObjectDisposedException` does derive from it, and the filter excludes it. Not being an
+`OperationCanceledException`, it can never reach the cancellation arm: it reaches the transient arm and
+costs the message it hit one retry — which is what the same exception from `CreateScopeAsync` already
+did. Since the narrowing, the cancellation test pins the type hierarchy rather than a term of the
+filter.
+
+**`StampOrigin`: same idiom, unchanged behaviour, half unpinnable.** Its exception message is kept
+verbatim, and it has no activation arm: `OriginMessageHolder` is a dependency-free internal marker, so
+its activation cannot fail, and its remarks say the method must be revisited if that changes. The
+change of *form* from catch to null check is unpinnable — no reachable input tells them apart — but the
+*null branch* is pinned: removing it turns both `WhenTheScopeCannotSupplyTheOriginHolder` tests red.
+
+**Test 1's fixture fails activation for one message, and that shape is realistic.**
+`ProcessBatch_WhenTheDispatcherCannotBeActivated_ReleasesTheBatchWithoutConsumingRetriesOrRethrowing`
+fails activation for message 2 only, which is what a tenant-scoped cause does. This note first called
+the fixture deliberately unrealistic, on the premise that the model admits no per-message activation
+failure; that premise is false (see *Per-message classification*). Failing one message is also the
+only fixture that tells batch-wide handling apart from per-message handling: a per-message
+implementation retries message 2 and publishes message 3. The test pins today's verdict, the known
+defect included (message 3 is released for message 2's cause), so the owed fix is expected to change
+it. Since the review it also asserts that event 1009 names message 2's id, tenant and kind, with
+message 2 given its own tenant and kind so the assertion cannot pass on a neighbour's values. And the
+batch's outcomes, `[Published, Released, Released]`, do **not** discriminate against the catch-based
+implementation this replaced, which produced the same three. Against that one, the discriminators are
+the absent rethrow, the abort reason, and event 1009 where it logged 1006.
+
+**Owed, carried forward.**
+
+- **The four worker sites.** `OutboxWorker.cs:64`, `InboxWorker.cs:64`, `OutboxRetentionWorker.cs:69`
+  and `InboxRetentionWorker.cs:77` each catch `InvalidOperationException` around `GetRequiredService`
+  of a service whose graph reaches the consumer's `DbContext`, report any activation failure as a
+  missing registration, and stop the worker. At worker level an activation failure stops the worker
+  either way, so the right verdict there is not obviously this one. Its own lot, decided cold.
+- **The tagging filter outside a shutdown.** `ResolveDispatcher` excludes `ObjectDisposedException`
+  whether or not the processor's token is cancelled, and the loop's cancellation arm matches only a
+  cancelled token, so outside a shutdown it reaches the transient arm. The catch-based resolver caught
+  it as an `InvalidOperationException`, reported a configuration fault and stopped the worker, so this
+  lot has already moved it to *retried*. A non-shutdown `OperationCanceledException` — a factory
+  timeout surfacing as `TaskCanceledException` — is transient too, is charged per message and can
+  dead-letter the queue, but not because of this lot: it is not an `InvalidOperationException`, and no
+  form of the resolver tagged it, at HEAD, under the wide catch, or since the narrowing. Tagging
+  either when the token is not cancelled would move it to the batch-wide activation verdict. Raised by
+  the distributed-context review and declined here as a classification decision this lot did not set
+  out to take; its own lot, beside the worker sites.
+- **The shutdown retry charge.** "A shutdown-time ObjectDisposedException from either
+  CreateScopeAsync or dispatcher activation is charged to the message's retry budget. Deciding
+  whether shutdown should release rather than retry is a change to the :150 arm and is owed." (`:150`
+  is the `OperationCanceledException` arm of `ProcessBatchAsync` as the lot found it.)
+- Unchanged from the step-7 closure: the custom-factory context probe, and `EfInboxStore.AddAsync`'s
+  `WithoutAutoSavepoints` twin.
+
+**Verified by mutation — fifteen mutations, re-run in full after the narrowing.** Eleven were written
+before the distributed-context review and M12–M12c after it, one per value event 1009 names; after
+the api-review, M10 was replaced and M10b added. M9 removes the whole call, so it cannot tell a right
+value from a wrong one; M12–M12c each replace one value with what a wrong row in test 1's batch would
+carry, and none stayed green. Each mutation was applied by content, built in Release, run against the
+full suite (404 tests, Docker up), then restored by content and touched — the mtime caution above.
+Every run checked for an injected marker comment and a rebuilt `MicroKit.Messaging.dll`; both mutated
+files were restored to their pristine sha256, and the clean gate after them passed 404. The re-run
+re-derived M1–M11 from the descriptions below, because the first runner's script was not kept. Every
+count but M10's matches the first run's.
+
+| # | Mutation | Expected | Observed |
+|---|---|---|---|
+| M1 | `ResolveDispatcher` back to `GetRequiredService` + `catch (InvalidOperationException)` → `OutboxConfigurationException` | red — test 1, the no-transport test | **4 red** — `…WhenTheDispatcherCannotBeActivated_…`, both `…WhenNoTransportRegistered_…`, and `…WhenTheProviderIsDisposedDuringActivation_…` |
+| M2 | Null check removed (`GetService<IOutboxDispatcher>()!`) | red — `WhenDispatcherUnregistered` ×2 | **2 red** — both `…WhenDispatcherUnregistered_…` |
+| M3 | Activation arm classified per message (`BuildTransientOutcome`, no `break`) | red — test 1 | **3 red** — test 1 and both `…WhenNoTransportRegistered_…` |
+| M4 | The naive form: no wrapping for `InvalidOperationException`, the arm a bare catch on it | red — test 2; **test 1 green** | **6 red, test 1 green** — `…WhenTheDispatcherItselfThrowsInvalidOperationException_…`, `…WhenTheProviderIsDisposedDuringActivation_…`, and four pre-existing per-message tests (`…DispatchThrows_BelowThreshold…`, `…DispatchThrows_AtThreshold…`, `…ErrorMessageExceedsLimit…`, `…WhenTransportFailsUnclassified…`) |
+| M5 | `StampOrigin` null check removed | red ×2 | **2 red** — both `…WhenTheScopeCannotSupplyTheOriginHolder_…` |
+| M6 | `StampOrigin` back to the catch form, exception message verbatim | **green, expected** | **green — 404 passed.** No reachable input distinguishes the forms. The re-run's first attempt also replaced the message and went red on the test asserting it names `OriginMessageHolder` — a runner fault, corrected and re-run |
+| M7 | `DispatcherActivationFailed` removed from the `NextDelay` arm | red | **1 red** — `NextDelay_WhenTheDispatcherCannotBeActivated_BacksOffTowardTheOutageCeiling` |
+| M8 | Activation arm also assigns `configurationFault`, so it rethrows | red — test 1, the no-transport test | **3 red** — test 1 and both `…WhenNoTransportRegistered_…` |
+| M9 | Event 1009 log call removed | red — test 1 | **1 red** — test 1 |
+| M10 | The tagging catch widened back to `Exception` minus `OperationCanceledException` and `ObjectDisposedException` — the form before the narrowing. Replaces the first M10, which dropped `OperationCanceledException` from a filter term that no longer exists | red — test 5 | **1 red** — `…WhenActivationThrowsAnythingButInvalidOperationException_…` |
+| M10b | Widened to `Exception` minus `ObjectDisposedException` only — cancellation forgotten | red — tests 3 and 5 | **2 red** — `…WhenDispatcherActivationIsCancelled_…` and `…WhenActivationThrowsAnythingButInvalidOperationException_…` |
+| M11 | `ObjectDisposedException` no longer excluded (`catch (InvalidOperationException ex)`, no filter) | red | **1 red** — `…WhenTheProviderIsDisposedDuringActivation_…` |
+| M12 | The activation arm's 1009 call logs `messages[0].Id.Value` (the batch's first message) instead of `message.Id.Value` — added after the review | red — test 1 | **1 red** — `…WhenTheDispatcherCannotBeActivated_…` |
+| M12b | The same call logs the constant `"tenant-a"` (the neighbours' tenant) instead of `message.TenantId` | red — test 1 | **1 red** — test 1 |
+| M12c | The same call logs `MessageKind.Notification` (the neighbours' kind) instead of `message.MessageKind` | red — test 1 | **1 red** — test 1 |
+
+Four observations beyond the expectations:
+
+- **`…WhenNoTransportRegistered_ConsumesNoRetryBudget` now guards the rethrow as well as the budget.**
+  Its `Should.ThrowAsync` wrapper was the one line this lot removed from it. Called directly, it fails
+  under M1 and M8 because the call throws, so the edit made it a second guard rather than a weaker one.
+- **M1 also reddens the disposal test.** A catch-based resolver catches `ObjectDisposedException`, because
+  that type *is* an `InvalidOperationException`. It would report a clean shutdown as a missing
+  registration and stop the worker.
+- **M4 reaches four older tests.** They all throw `InvalidOperationException` from a dispatch or a
+  transport, and a bare catch in the loop would have released their batches instead of retrying.
+  `…WhenTheDispatcherItselfThrowsInvalidOperationException_…` is the only one whose name states the
+  property. Test 1 stays green under M4, which is exactly why test 1 alone cannot rule out that form.
+- **Test 5 stays green under M4, and that is correct.** The naive form wraps nothing a
+  `KeyNotFoundException` could reach, so that type takes the transient arm there exactly as it does
+  in the narrowed code. Test 5 separates the narrowed catch from a *wider* one (M10, M10b); it was
+  never meant to catch the naive form, which test 2 does.
+
+Gate: Release, build clean (**0 warnings**), **404 passed / 0 failed / 0 skipped** (43 · 21 · 233 · 8 ·
+99), Docker 29.7.2 up, so the 19 PostgreSQL Testcontainers tests ran inside the full suite. The
+separate filtered run (19 passed) was not repeated after the narrowing. The gate ran on the final
+bytes, after a reflow of four remarks and the M6 re-run. It ran once more after the second
+specialist review's documentation edits, with the same result and no compiled input changed.
+
+- The baseline, measured before any edit, was 398. 398 plus the six new tests gives 404; the rename
+  leaves the count unchanged.
+- One test was renamed and inverted: `…SettlesEveryMessageReleasedWithoutRethrowing`.
+- One test had its `ThrowAsync` wrapper removed: `…ConsumesNoRetryBudget`.
+- The distributed-context specialist has run (2026-09-13). The corrected premise, the withdrawn
+  asymmetry argument, the *Known defect* paragraph and event 1009's row fields above are its findings;
+  the tagging-filter item under *Owed* is one it raised and this lot declined.
+- The api-reviewer has run (2026-09-13): BLOCK on B1 and B2. B2 is resolved by the narrowing above
+  rather than by documenting the widening. B1, S1–S3 and the notes are applied to the enum member,
+  `OutboxBatchResult.IsSaturated`, `AddTransportDispatcher()`, `OutboxConfigurationException`,
+  `IMessageTransport` and the README (`IS NULL` variant, `ValidateOnBuild`); S2 collapsed with B2.
+- The distributed-context specialist has run again (2026-09-13), on the narrowed premise: stands
+  with amendments, no BLOCK. It found that the stall is not specific to activation (*Known defect*,
+  three routes) and that the `InvalidOperationException` claim is Microsoft DI's (the verdict table
+  and the narrowing paragraph now say so). Its constraints on the deferral lot, the XML-doc
+  qualifier it scoped to the next api-reviewed lot, and its notes are carried in trace 029, §7
+  and §10.

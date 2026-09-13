@@ -147,6 +147,31 @@ public sealed class OutboxWorkerTests
         sut.NextDelay(outage, TimeSpan.FromMinutes(5)).ShouldBe(TimeSpan.FromMinutes(5));
     }
 
+    /// <summary>
+    /// A dispatcher that cannot be built backs off like an outage, even when the abandoned batch
+    /// was full.
+    /// </summary>
+    /// <remarks>
+    /// Saturated on purpose. An abandoned batch still reports every row it claimed, so a full one
+    /// matches the saturation arm — poll again immediately — unless the abort reason is checked
+    /// first. The rows it released are claimable at once, so that ordering would re-claim them,
+    /// fail the same way and spin against the database.
+    /// </remarks>
+    [Fact]
+    public void NextDelay_WhenTheDispatcherCannotBeActivated_BacksOffTowardTheOutageCeiling()
+    {
+        var sut = BuildWorker(Substitute.For<IOutboxCoordinator>(), out _, CadenceOptions);
+        var abandoned = new OutboxBatchResult(
+            Claimed: 10, Published: 0, Retried: 0, DeadLettered: 0, Released: 10,
+            OutboxBatchAbortReason.DispatcherActivationFailed);
+
+        abandoned.IsSaturated(CadenceOptions.BatchSize).ShouldBeTrue("the case the ordering exists for");
+
+        sut.NextDelay(abandoned, TimeSpan.FromMinutes(1)).ShouldBe(TimeSpan.FromMinutes(2));
+        sut.NextDelay(abandoned, TimeSpan.FromMinutes(4)).ShouldBe(TimeSpan.FromMinutes(5));
+        sut.NextDelay(abandoned, TimeSpan.FromMinutes(5)).ShouldBe(TimeSpan.FromMinutes(5));
+    }
+
     [Fact]
     public void NextDelay_WhenCancelled_LeavesTheIntervalAlone()
     {

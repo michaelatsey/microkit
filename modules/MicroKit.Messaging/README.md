@@ -95,8 +95,8 @@ or after `AddMediatRDomainEvents()` — either works.
 
 A host that publishes only domain-event notifications registers no transport at all, as above. Do
 **not** call `AddTransportDispatcher()` "just in case": it declares an intent to send contracts, and
-without an `IMessageTransport` behind it the outbox stops on the first row of any kind — loudly,
-with the batch released and nothing lost, but stopped.
+without an `IMessageTransport` behind it the outbox cannot dispatch a row of any kind — loudly, with
+every batch released, nothing lost and no retry budget spent, but nothing delivered either.
 
 > ⚠ **A registered handler needs a transport to reach it.** Inbox rows are written by
 > `IEnvelopeReceiver`, which a broker provider's consume loop calls — and no broker provider ships
@@ -330,12 +330,79 @@ The first row is what stops an hour-long outage from dead-lettering the whole qu
 ### With no transport registered
 
 A `Contract` row then fails **loudly and reversibly**: the batch is released untouched, no retry
-budget is consumed, the rows stay `Pending`, and the worker stops so the missing registration is
-visible. Deploy the provider, restart, they drain.
+budget is consumed, the rows stay `Pending`, and an error (event 1009) is logged on every cycle.
+The worker does **not** stop — it backs off and tries again, reporting
+`OutboxBatchAbortReason.DispatcherActivationFailed` — so the rows drain on the first cycle after a
+build that registers a transport is deployed. A cause that clears on its own drains them with no
+intervention at all.
+
+That verdict follows the exception's type, not who throws it. It applies to any
+`InvalidOperationException` except `ObjectDisposedException` thrown while the dispatcher is built,
+whether it comes from Microsoft DI or from a constructor or factory in the graph.
+
+A missing transport reaches it because Microsoft.Extensions.DependencyInjection reports a missing
+dependency as `InvalidOperationException`; that is the only container this has been verified against.
+Another container may report a missing dependency with a different exception type, and there a
+missing transport is treated like any failed send: retried per message, and dead-lettered at
+`MaxRetries`.
+
+An exception of any other type thrown while the dispatcher is built, such as a broker client failing
+to connect in its constructor with its own exception type, is treated like a failed send too: see
+the table above.
+
+A dispatcher that is **not registered at all** is different and stays fatal: the batch is released
+and the worker stops, because nothing but a redeployment can fix it.
 
 This is not checked at startup, deliberately — whether a transport is needed depends on whether any
 contract row exists, which is data rather than composition. An application that publishes only
-domain-event notifications composes legitimately without one.
+domain-event notifications composes legitimately without one. The exception is a host that validates
+its container when it is built, which the default host builders do in the `Development` environment:
+there, the missing transport fails at startup.
+
+### A known defect: one tenant's row can stall the whole outbox
+
+The dispatcher is activated inside the scope of the row being dispatched, and that scope carries the
+row's `TenantId`. If your composition resolves something per tenant while that graph is built — a
+`DbContext` whose connection string is looked up from the tenant, a transport with per-tenant
+credentials — and that lookup throws `InvalidOperationException`, activation fails for one tenant
+only and is still handled as above: the whole batch is released. (Thrown as any other untyped
+exception, the same failure is retried per message and dead-letters at `MaxRetries`, and no other
+tenant waits.)
+When the cause never clears, as with a de-provisioned tenant, the outbox does not just wait one
+cycle:
+
+- the claim orders on `CreatedAtUtc` and a released row keeps its place, so the failing row heads
+  every claim and every batch aborts before anything is published;
+- the outbox makes **no progress for any tenant**, notifications included;
+- no retry budget moves, so the row never dead-letters, and no API steps past a `Pending` row.
+
+The fix is owed (ADR-MSG-019). Until it ships, event 1009 (`Error`, every cycle) names the blocking
+row's `MessageId`, `TenantId` and `MessageKind`, and **the way out is SQL**: dead-letter that tenant's
+pending rows. That takes them out of the claim, and every other tenant drains on the next cycle.
+
+```sql
+-- PostgreSQL, default mapping: table "OutboxMessages", enums stored as strings.
+UPDATE "OutboxMessages"
+SET    "Status"         = 'Failed',
+       "DeadLettered"   = TRUE,
+       "ProcessedAtUtc" = now(),
+       "ErrorMessage"   = 'Parked by an operator: tenant cannot be dispatched'
+WHERE  "TenantId" = '<TenantId from event 1009>'
+  AND  "Status"   = 'Pending'
+  AND  NOT "DeadLettered";
+```
+
+Event 1009 renders a null `TenantId` as `(null)`, and that string matches no row: write
+`WHERE "TenantId" IS NULL` instead. Only do so where other rows carry a real tenant. In a
+single-tenant deployment every row's tenant is null, so the cause cannot be tenant-scoped, and the
+statement would park the whole queue: fix the composition instead.
+
+- A row a processor holds at that instant is `Processing` and is left alone. The batch releases it,
+  so run the statement again if the next 1009 still names that tenant.
+- Once the tenant is restored, bring its rows back one at a time with
+  `IOutboxAdminStore.RequeueAsync`, which also resets their retry count.
+- If the next 1009 names a row from a **different** tenant, the cause is not tenant-scoped. Fix the
+  composition instead of parking rows.
 
 ### One thing worth knowing before an incident
 

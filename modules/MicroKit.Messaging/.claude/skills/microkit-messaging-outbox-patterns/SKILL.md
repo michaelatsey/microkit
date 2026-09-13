@@ -181,6 +181,7 @@ foreach (var message in batch) await ProcessSingleAsync(shared, message, ct);
 | `OutboxPayloadException` | dead-letter **on first sight** — unresolvable `EventType`, malformed JSON, payload matching no known contract |
 | `OutboxTransportUnavailableException` | abort the batch, release the remainder, **consume no retries** |
 | `OutboxConfigurationException` | settle the batch (all released), then rethrow so the worker stops |
+| dispatcher registered but not activatable (`GetService` throws `InvalidOperationException` — e.g. no `IMessageTransport`; any other type thrown there falls to the other rows) | abort the batch, release the remainder, **consume no retries**, do **not** rethrow — `DispatcherActivationFailed`, the worker backs off and retries next cycle |
 | anything else | transient — retry with back-off until `MaxRetries` |
 
 > ⚠ **Never throw `OutboxPayloadException` for** a broker nack, a timeout, a refused connection,

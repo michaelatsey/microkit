@@ -28,10 +28,28 @@ namespace MicroKit.Messaging.Processing;
 /// wrongly loses messages, so only proven permanence dead-letters.
 /// </para>
 /// <para>
+/// Resolving the dispatcher yields three verdicts, and the container decides between them rather
+/// than an inspection of its exception: <c>GetService</c> returning <see langword="null"/> is a
+/// configuration fault; <c>GetService</c> throwing <see cref="InvalidOperationException"/> is
+/// batch-fatal at no retry cost; any other type it throws, and anything thrown once the dispatcher
+/// exists, is classified as above.
+/// </para>
+/// <para>
 /// <b>Misconfiguration.</b> A missing <see cref="IOutboxDispatcher"/> registration is not
-/// a transient fault. It is caught separately and abandons the batch, so a missing line
-/// in the composition root cannot silently consume the retry budget of every queued
+/// a transient fault. A null test detects it, not a <c>catch</c>, and it abandons the batch, so a
+/// missing line in the composition root cannot silently consume the retry budget of every queued
 /// message.
+/// </para>
+/// <para>
+/// <b>Configuration failure and activation failure are not synonyms.</b> A registration the
+/// container cannot supply at all — <c>GetService</c> returns <see langword="null"/> — abandons the
+/// batch, rethrows <see cref="OutboxConfigurationException"/> and stops the worker: it will not fix
+/// itself without a redeployment. A registration the container can supply but cannot activate —
+/// <c>GetService</c> throws <see cref="InvalidOperationException"/>, most often because
+/// <see cref="IMessageTransport"/> is missing behind a transport dispatcher — abandons the batch
+/// too, but costs no retry budget and is not rethrown: the batch reports
+/// <see cref="OutboxBatchAbortReason.DispatcherActivationFailed"/>, the worker backs off, and the
+/// next cycle tries again.
 /// </para>
 /// <para>
 /// <b>Delivery semantics.</b> At-least-once. A crash between dispatch and the settlement
@@ -174,6 +192,30 @@ internal sealed class OutboxProcessor : IOutboxProcessor
                 OutboxProcessorLogs.DispatchMisconfigured(_logger, ex, messages.Count - index);
                 break;
             }
+            catch (OutboxDispatcherActivationException ex)
+            {
+                // A dispatcher that is registered but cannot be activated — the container's
+                // InvalidOperationException, the only type ResolveDispatcher tags: neither a
+                // per-message retry nor a configuration fault. The batch is abandoned and released
+                // untouched, costing no retry budget, and NOT rethrown: the worker backs off and the
+                // next cycle tries again, so a transient condition, or a redeployment that supplies a
+                // missing dependency, drains the queue.
+                //
+                // KNOWN DEFECT (ADR-MSG-019). Activation runs in THIS message's scope, built from its
+                // TenantId, so it can fail for one tenant only. A cause that never clears — a
+                // de-provisioned tenant — leaves this row oldest, heading every claim, and stalls the
+                // outbox for every tenant with no dead-letter exit. The log names the row so an
+                // operator can find it; the fix is owed.
+                abortReason = OutboxBatchAbortReason.DispatcherActivationFailed;
+                OutboxProcessorLogs.DispatcherActivationFailed(
+                    _logger,
+                    ex.InnerException ?? ex,
+                    message.Id.Value,
+                    message.TenantId,
+                    message.MessageKind,
+                    messages.Count - index);
+                break;
+            }
             catch (OutboxPayloadException ex)
             {
                 OutboxProcessorLogs.PermanentFailure(_logger, ex, message.Id.Value, message.EventType);
@@ -268,70 +310,139 @@ internal sealed class OutboxProcessor : IOutboxProcessor
     /// event records which dispatch produced it.
     /// </summary>
     /// <remarks>
-    /// An activation failure is converted the same way <see cref="ResolveDispatcher"/> converts
-    /// one, and for the same reason: a scope whose provider cannot supply
-    /// <see cref="OriginMessageHolder"/> comes from a container this composition does not control,
-    /// which is a deployment defect rather than a transient fault. Classifying it as transient
-    /// would spend the retry budget of every queued message on it.
+    /// <para>
+    /// <see cref="OriginMessageHolder"/> is registered by <c>AddMicroKitMessaging()</c>. A scope whose
+    /// provider does not have it was built from a container this composition does not control — most
+    /// likely by a custom <see cref="IExecutionScopeFactory"/> — which is a deployment defect, not a
+    /// transient fault. It is therefore <see cref="OutboxConfigurationException"/>: the batch is
+    /// released and the worker stops. Classifying it as transient would spend the retry budget of
+    /// every queued message on a condition no retry can change, and carrying on without it would
+    /// leave the origin null, which silently disables the replay key for every contract this dispatch
+    /// publishes.
+    /// </para>
+    /// <para>
+    /// <c>GetService</c> and a null test rather than <c>GetRequiredService</c> inside a <c>catch</c>,
+    /// because only <see langword="null"/> means nothing is registered. Here no reachable input tells
+    /// the two forms apart: the holder is an internal marker with no constructor dependencies, so its
+    /// activation cannot fail — which is also why this method, unlike
+    /// <see cref="ResolveDispatcher"/>, has no activation verdict.
+    /// </para>
+    /// <para>
+    /// ⚠ <b>If the holder ever gains a dependency, revisit this method.</b> An activation failure
+    /// would then propagate unwrapped into the per-message transient arm — the misclassification
+    /// <see cref="ResolveDispatcher"/> exists to avoid.
+    /// </para>
     /// </remarks>
     private static void StampOrigin(IServiceProvider serviceProvider, MessageId originId)
     {
-        OriginMessageHolder holder;
-
-        try
-        {
-            holder = serviceProvider.GetRequiredService<OriginMessageHolder>();
-        }
-        catch (InvalidOperationException ex)
-        {
-            throw new OutboxConfigurationException(
+        var holder = serviceProvider.GetService<OriginMessageHolder>()
+            ?? throw new OutboxConfigurationException(
                 $"{nameof(OriginMessageHolder)} could not be resolved from the execution scope. " +
                 "It is registered by AddMicroKitMessaging(), so the likeliest cause is an " +
                 "IExecutionScopeFactory returning a scope built from a different container. " +
                 "Without it a published integration event cannot record the dispatch that " +
                 "produced it, and the replay key that stops a redelivery duplicating it is " +
-                "silently inactive. Retrying will not help.",
-                ex);
-        }
+                "silently inactive. Retrying will not help.");
 
         holder.OriginMessageId = originId;
     }
 
-    /// <summary>Resolves the dispatcher, converting an activation failure into a typed fault.</summary>
+    /// <summary>
+    /// Resolves the dispatcher, converting a MISSING registration into a typed fault and tagging the
+    /// container's activation failure.
+    /// </summary>
     /// <remarks>
     /// <para>
-    /// The try block wraps the resolution call and nothing else, so the classification is
-    /// structural. Matching on <c>InvalidOperationException.Message</c> instead would depend
-    /// on text emitted by the DI container — text that varies by version and container — and
-    /// would misclassify a genuine <see cref="InvalidOperationException"/> thrown by the
-    /// dispatcher whose message happened to name the same type.
+    /// <c>GetService</c> and a null test decide "not registered", deliberately, and <b>not</b>
+    /// <c>GetRequiredService</c> inside a <c>catch (InvalidOperationException)</c>. The two read alike
+    /// and classify very differently: resolving <see cref="IOutboxDispatcher"/> activates a graph — a
+    /// <c>TransportOutboxDispatcher</c> takes <see cref="IMessageTransport"/> through its
+    /// constructor, and a decorator activates its keyed inner — so a <c>catch</c> around the
+    /// resolution spans that entire graph rather than the registration lookup it appears to guard.
     /// </para>
     /// <para>
-    /// It catches <b>activation</b> failures, not merely a missing <see cref="IOutboxDispatcher"/>
-    /// descriptor, and the message says so because the two are no longer equally likely. A
-    /// registered <c>TransportOutboxDispatcher</c> with no <see cref="IMessageTransport"/> behind
-    /// it fails right here — that is the whole reason the transport is a constructor dependency —
-    /// and it is the commoner fault of the two once <c>AddTransportDispatcher()</c> is composed.
-    /// A message asserting the dispatcher is unregistered would send an operator to verify a line
-    /// that is already in their composition root.
+    /// <b>The case that matters is the common one.</b> A transport dispatcher registered with no
+    /// <see cref="IMessageTransport"/> behind it fails right here: the container reports the dependency
+    /// it cannot supply as an <see cref="InvalidOperationException"/>, and so does anything else in the
+    /// graph that throws that type. Caught as a configuration fault, each was reported as a missing
+    /// registration that is in fact present, told "retrying will not help", and stopped the worker.
+    /// </para>
+    /// <para>
+    /// <b>Only <see cref="InvalidOperationException"/> is tagged, because it is the only type that was
+    /// ever conflated.</b> It is what the container throws for an unsatisfiable dependency, and what the
+    /// catch-based form read as a missing registration; separating those two is this method's whole job.
+    /// Every other type thrown while the graph is built keeps the classification it had under that form:
+    /// a typed <see cref="OutboxTransportUnavailableException"/>, <see cref="OutboxConfigurationException"/>
+    /// or <see cref="OutboxPayloadException"/> reaches its own arm in the batch loop, and anything else
+    /// reaches the transient arm — one message, one retry, and the rest of the batch runs. A wider
+    /// catch would move a tenant lookup failing with its own type, a <see cref="KeyNotFoundException"/>
+    /// say, from a per-message retry that dead-letters while every other tenant keeps publishing into
+    /// the batch-wide verdict below, which stalls them all.
+    /// </para>
+    /// <para>
+    /// <b>That stall is narrowed, not closed.</b> This method runs in the scope of the message being
+    /// dispatched, built from its <c>TenantId</c> and stamped with its origin before the call, so
+    /// activation can see the message and throw <see cref="InvalidOperationException"/> for one tenant
+    /// only. A de-provisioned tenant does not recover on its own: its row stays oldest, heads every
+    /// claim, and the verdict below stalls the outbox for every tenant. ADR-MSG-019 records that as a
+    /// known defect with the fix owed.
+    /// </para>
+    /// <para>
+    /// <c>GetService</c> separates the two verdicts structurally rather than by inspecting an exception:
+    /// it returns <see langword="null"/> only when nothing is registered, and throws when something is
+    /// registered and cannot be activated.
+    /// <list type="bullet">
+    ///   <item><b>Null</b> is <see cref="OutboxConfigurationException"/>: the batch is released,
+    ///         settled and rethrown, and the worker stops. A missing registration will not fix itself
+    ///         without a redeployment.</item>
+    ///   <item><b>An <see cref="InvalidOperationException"/></b> is wrapped in
+    ///         <see cref="OutboxDispatcherActivationException"/>, which the batch loop catches by type:
+    ///         the batch is released and settled, no retry budget moves, nothing is rethrown, and the
+    ///         next cycle tries again. The <c>try</c> wraps <c>GetService</c> and nothing else, and
+    ///         <c>GetService</c> never throws for an absent registration, so the wrapper tags an
+    ///         activation failure — it classifies nothing as configuration.</item>
+    ///   <item><b>Cancellation and disposal are not tagged.</b> An
+    ///         <see cref="OperationCanceledException"/> does not derive from
+    ///         <see cref="InvalidOperationException"/>, so it never reaches the <c>catch</c>: it takes the
+    ///         loop's cancellation arm when the token is cancelled, and the transient arm otherwise. An
+    ///         <see cref="ObjectDisposedException"/> does derive from it, and the filter excludes it: the
+    ///         provider going away is the host shutting down, not the composition failing. Not being an
+    ///         <see cref="OperationCanceledException"/>, it reaches the transient arm and costs that
+    ///         message one retry — exactly as one thrown by <c>CreateScopeAsync</c> does. Whether
+    ///         shutdown should release rather than retry is owed (ADR-MSG-019).</item>
+    /// </list>
+    /// </para>
+    /// <para>
+    /// <b>Batch-wide rather than per message.</b> For a cause every message shares — a missing
+    /// <see cref="IMessageTransport"/> — a per-message verdict would charge N retry budgets for one
+    /// cause and, at <c>MaxRetries</c>, dead-letter the queue over one line in a composition root. Not
+    /// every cause is shared: a tenant-scoped one fails for some messages only, and releasing the batch
+    /// for it is the known defect above. <c>EnvelopeReceiver.ResolveWriter</c> lets the same container
+    /// verdict propagate, because the receiver holds one envelope and no batch to abandon.
+    /// <c>InboxProcessor.ResolveSettlement</c> retries the one row although the drain processor owns a
+    /// batch and a retry budget too, so ownership does not explain this method's difference from it.
+    /// ADR-MSG-019 records all three.
     /// </para>
     /// </remarks>
     private static IOutboxDispatcher ResolveDispatcher(IServiceProvider serviceProvider)
     {
+        IOutboxDispatcher? dispatcher;
+
         try
         {
-            return serviceProvider.GetRequiredService<IOutboxDispatcher>();
+            dispatcher = serviceProvider.GetService<IOutboxDispatcher>();
         }
-        catch (InvalidOperationException ex)
+        catch (InvalidOperationException ex) when (ex is not ObjectDisposedException)
         {
-            throw new OutboxConfigurationException(
-                $"{nameof(IOutboxDispatcher)} could not be resolved: either it is not registered, " +
-                $"or one of its dependencies is not. A {nameof(IMessageTransport)} missing behind " +
-                "a registered transport dispatcher fails here and is the likelier of the two — " +
-                "register one from a broker provider's Add{Provider}Transport(). The inner " +
-                "exception names the type the container could not supply. Retrying will not help.",
-                ex);
+            throw new OutboxDispatcherActivationException(ex);
         }
+
+        return dispatcher
+            ?? throw new OutboxConfigurationException(
+                $"{nameof(IOutboxDispatcher)} is not registered, so no outbox row can be dispatched. " +
+                "Call AddTransportDispatcher() on the MessagingBuilder — a broker provider's " +
+                "Add{Provider}Transport() calls it — or AddMediatRDomainEvents() for domain-event " +
+                "notifications. Retrying will not help.");
     }
 
     private OutboxOutcome BuildTransientOutcome(OutboxMessage message, Exception ex)
