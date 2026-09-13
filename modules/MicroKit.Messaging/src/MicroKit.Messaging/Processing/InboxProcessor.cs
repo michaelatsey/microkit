@@ -435,10 +435,13 @@ internal sealed class InboxProcessor : IInboxProcessor
     /// different tenant, may simply not reproduce.
     /// </para>
     /// <para>
-    /// ⚠ <b><c>OutboxProcessor.ResolveDispatcher</c> and <c>OutboxProcessor.StampOrigin</c> still
-    /// catch.</b> They raise <see cref="OutboxConfigurationException"/> on a different path and
-    /// are owed the same treatment; that is tracked separately and is not made correct by this
-    /// site being fixed.
+    /// <c>OutboxProcessor.ResolveDispatcher</c> separates the same two verdicts the same way, but
+    /// remedies an activation failure batch-wide when it is the container's
+    /// <see cref="InvalidOperationException"/> — the batch is released with no retry consumed.
+    /// Owning a claimed batch and a retry budget does not explain the difference: this processor owns
+    /// both. For a tenant-scoped cause of that type the outbox's verdict produces exactly the halt
+    /// for every tenant described above, and ADR-MSG-019 records it as a known defect, not as a reason
+    /// to copy it here.
     /// </para>
     /// </remarks>
     private static IInboxSettlementStore ResolveSettlement(IServiceProvider serviceProvider)

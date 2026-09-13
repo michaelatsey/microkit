@@ -31,9 +31,11 @@ namespace MicroKit.Messaging.Dispatch;
 /// <see cref="InvalidOperationException"/> would then be thrown from inside a dispatch, where the
 /// processor classifies it as <i>transient</i> — spending the full retry budget of every queued
 /// message on a missing line in a composition root, then dead-lettering them all. Taken through the
-/// constructor, the same missing registration fails while the processor is resolving this type,
-/// where it is converted into <see cref="OutboxConfigurationException"/>: the batch is released
-/// untouched, no retry is consumed, and the worker stops so the defect is visible.
+/// constructor, the same missing registration fails while the processor is <i>activating</i> this
+/// type, which it classifies batch-wide: the batch is released untouched, no retry is consumed, the
+/// batch result reports <see cref="OutboxBatchAbortReason.DispatcherActivationFailed"/>, and the
+/// worker backs off and tries again on the next cycle, logging each time. The rows stay
+/// <see cref="OutboxMessageStatus.Pending"/> until a transport is there to take them.
 /// </para>
 /// <para>
 /// <b>No <c>try</c>/<c>catch</c> around the send.</b> A transport's exception type <i>is</i> its

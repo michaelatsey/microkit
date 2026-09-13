@@ -11,8 +11,10 @@ namespace MicroKit.Messaging.Processing;
 /// than fixed. A saturated batch polls again immediately instead of sleeping while work
 /// piles up; an idle queue backs off geometrically instead of spending a round trip
 /// every few seconds forever; an unreachable transport backs off hard instead of
-/// hammering a broker that is already down. On a connection-constrained database this
-/// is a larger and more permanent saving than the round trips inside a batch.
+/// hammering a broker that is already down, and so does a dispatcher that cannot be built,
+/// whose abandoned batch would otherwise look saturated and be re-claimed at once. On a
+/// connection-constrained database this is a larger and more permanent saving than the round
+/// trips inside a batch.
 /// </para>
 /// <para>
 /// <b>Resilience.</b> An <see cref="InvalidOperationException"/> resolving the
@@ -120,8 +122,12 @@ internal sealed class OutboxWorker : BackgroundService
     /// <returns>The interval to wait before the next pass.</returns>
     internal TimeSpan NextDelay(OutboxBatchResult result, TimeSpan current) => result switch
     {
-        // Broker down: every message would fail identically. Back off hard.
-        { AbortReason: OutboxBatchAbortReason.TransportUnavailable }
+        // Broker down, or the dispatcher cannot be built: every message would fail identically.
+        // Back off hard. Checked BEFORE saturation on purpose — an abandoned batch still reports
+        // every row it claimed, so a full one would otherwise poll again at once, re-claim the rows
+        // it has just released, fail the same way, and spin against the database.
+        { AbortReason: OutboxBatchAbortReason.TransportUnavailable
+            or OutboxBatchAbortReason.DispatcherActivationFailed }
             => Grow(current, _options.TransportUnavailableBackoff),
 
         // Shutting down: the delay is irrelevant, the loop is about to exit.

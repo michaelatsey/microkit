@@ -117,8 +117,11 @@ public static class MessagingMediatRExtensions
     /// a legal composition (notification-only), and the decorator is built to tolerate a
     /// <see langword="null"/> inner. Where one <i>is</i> registered but its own dependencies are
     /// not — a transport dispatcher with no <see cref="IMessageTransport"/> — this resolution
-    /// throws, inside the call <c>OutboxProcessor</c> wraps, and is converted to
-    /// <see cref="OutboxConfigurationException"/> there.
+    /// throws <see cref="InvalidOperationException"/> while <c>OutboxProcessor</c> is activating the
+    /// decorator. That is an activation
+    /// failure, not a missing registration: the processor releases the batch with no retry consumed
+    /// and reports <see cref="OutboxBatchAbortReason.DispatcherActivationFailed"/>, rather than
+    /// raising <see cref="OutboxConfigurationException"/>.
     /// </para>
     /// </remarks>
     private static void TakeOutboxDispatcherSeam(IServiceCollection services)
