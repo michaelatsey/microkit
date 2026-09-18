@@ -23,7 +23,7 @@ OutboxWorker : BackgroundService        internal sealed — when: loop + adaptiv
             OutboxProcessor             internal sealed
               ├─► IOutboxProcessorStore   ClaimBatchAsync / ApplyOutcomesAsync
               ├─► IExecutionScopeFactory  one scope per message
-              └─► IOutboxDispatcher       deserialize + deliver (resolved per message)
+              └─► IOutboxDispatcher       route on MessageKind + deliver (resolved per message)
 ```
 
 The inbox is the same four roles: `InboxWorker` → `IInboxCoordinator` → `IInboxProcessor` →
@@ -58,20 +58,9 @@ public sealed class PlaceOrderHandler(IOrderRepository repo)
 ```
 
 ```csharp
-// ✅ The direct path — writing an integration event yourself.
-var message = outboxMessageFactory.Create(          // OutboxMessageFactory, singleton
-    payload:       evt,                              // any object; runtime type is stamped
-    messageId:     evt.MessageId.Value,              // intrinsic to the event, never regenerated
-    occurredOnUtc: evt.OccurredOnUtc,                // intrinsic to the event
-    context:       executionContext);                // ambient: TenantId/Correlation/Causation
-
-await outboxWriter.AddAsync(message, ct);            // stages; does NOT save
-// ... your unit of work commits, and the row commits with it.
-```
-
-```csharp
 // ❌ WRONG — publish before commit. The broker has it; the commit may still fail.
-await publisher.PublishAsync(evt, ct);
+//    brokerClient is a broker SDK called directly — NOT IIntegrationEventPublisher, which stages.
+await brokerClient.PublishAsync(evt, ct);
 await uow.CommitAsync(ct);
 ```
 
@@ -94,7 +83,7 @@ contended), plus one settlement.
 //    operators translate there varies by EF Core version and provider.
 //    Full rows, not ids — that is what lets step 3 be skipped when nothing was contended.
 var candidates = await Dispatchable(now)
-    .OrderBy(m => m.OccurredOnUtc)
+    .OrderBy(m => m.CreatedAtUtc)   // the staging time — never OccurredOnUtc, which callers supply
     .Take(batchSize)
     .ToListAsync(ct);
 
@@ -293,10 +282,12 @@ if (result is InboxWriteResult.AlreadyPresent)
 }
 ```
 
-The `continue` is load-bearing twice. The publisher returns normally, so the outbox marks the
-message `Published` instead of retrying it to death — **and** consumers after a duplicated one
-still get their row. When the duplicate escaped as an exception it ended the whole publish, so a
-partial redelivery became permanent loss for consumers 3..N.
+The `continue` is load-bearing twice, and it lives on the receiving side, in
+`EnvelopeReceiver.ReceiveAsync`. The duplicate is counted in `EnvelopeReceiveResult.Duplicates` and
+nothing is thrown, so `ReceiveAsync` returns and the provider acknowledges the broker instead of
+nacking the message into a redelivery that meets the same duplicate every time — **and** consumers
+after a duplicated one still get their row. Thrown instead, the duplicate would end the fan-out, and
+a partial redelivery would become permanent loss for consumers 3..N.
 
 ```csharp
 // ❌ FORBIDDEN — guarding the insert with ExistsAsync is a time-of-check-to-time-of-use race.

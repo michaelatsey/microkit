@@ -15,6 +15,31 @@ failures and releases are batched.
 
 See ADR-MSG-015 (outbox) and ADR-MSG-017 (inbox).
 
+### Changed — BREAKING: `OutboxMessageFactory` is internal
+
+**`OutboxMessageFactory` becomes `internal sealed`**, leaving the `MicroKit.Messaging` public
+surface. It is an internal collaborator: the container builds it — `AddMicroKitMessaging()`
+registers it as a singleton — and its only consumers, `IntegrationEventPublisher` and, through
+`InternalsVisibleTo`, `OutboxDomainEventSink`, receive it by constructor injection. No consumer is
+meant to build outbox rows through it. ADR-MSG-002's v1 discipline makes Core's concrete
+implementations `internal sealed`, and this type was an exception to it — **not the last one**:
+`InboxMetrics` and `MessageHandlerRegistry` are still `public`. Both are owed before `2.0.0` under
+ADR-GLOBAL-002 D10, and neither changes in this release.
+
+The packages are `1.0.0-preview.*` with no external consumers, so the break ships outright rather
+than accumulating a permanent shim, and no `[Obsolete]` member is available before `2.0.0`
+(ADR-MSG-016 §4, ADR-GLOBAL-002 D10). The precedent is `IMessagePublisher`: named in the
+`1.0.0-preview.4` inventory and removed with no shim (*Changed — BREAKING (in-process transport
+withdrawn)*, below). Discharges ADR-GLOBAL-002 migration step 6, a precondition of the first tag.
+
+**Migration — the type is no longer reachable, so there is no call to rename.** Nothing outside
+`MicroKit.Messaging` can name `OutboxMessageFactory`. A consumer on `1.0.0-preview.4` meets this one
+break and no other: the `Create` → `CreateNotification` rename recorded under *Changed — integration
+events are outbox rows; the dedicated table is retired*, below, never reached a released package.
+Publish integration events through `IIntegrationEventPublisher.PublishAsync` inside your own
+transaction, and domain events through `AddMediatRDomainEvents()`: both stage the row for you, with
+metadata assigned from the ambient `IExecutionContext`.
+
 ### Added — the receiving seam: the inbox has a producer again
 
 `IEnvelopeReceiver` turns one `MessageEnvelope` arriving from a transport into one `InboxMessage`
@@ -291,6 +316,11 @@ identifier, which is the one a consumer's inbox deduplicates on. Note EF Core lo
 **`OutboxMessageFactory.Create` is renamed `CreateNotification`**, with a new `CreateContract`
 sibling. `Create` + `CreateContract` would read as "the default and the special case"; the two kinds
 are peers. The factory also takes `TimeProvider` now.
+
+> **Superseded within this same unreleased cycle** by *Changed — BREAKING: `OutboxMessageFactory`
+> is internal*, above. The type left the public surface, so a consumer has no `CreateNotification`
+> to call. Nothing here reached a released package, so for a consumer on `1.0.0-preview.4` the
+> renamed-but-public state never existed. Kept because the reason the two methods are peers stands.
 
 **The claim orders on `CreatedAtUtc`, not `OccurredOnUtc`.** Dispatch order must not depend on a
 business timestamp the caller supplies — on the contract path it is an optional parameter of a

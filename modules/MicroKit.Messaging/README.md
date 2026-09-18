@@ -35,7 +35,7 @@ transaction is durable, and nothing durable goes unpublished.
 | Package | Description |
 |---------|-------------|
 | `MicroKit.Messaging.Abstractions` | Contracts: `IIntegrationEvent`, `IIntegrationEventPublisher`, `IMessageHandler<T>`, `IOutboxWriter`, `IMessageTransport`, `MessageEnvelope`, the outbox/inbox stores, `OutboxMessage`, `InboxMessage`, `IntegrationEventWriteResult` |
-| `MicroKit.Messaging` | Outbox/inbox processors and workers, the transport dispatcher, integration-event publishing, `OutboxMessageFactory`, DI |
+| `MicroKit.Messaging` | Outbox/inbox processors and workers, the transport dispatcher, integration-event publishing, DI |
 | `MicroKit.Messaging.EntityFrameworkCore` | `EfOutboxStore`, `EfInboxStore`, entity configuration for your `DbContext` |
 | `MicroKit.Messaging.MediatR` | Glue: puts MicroKit.MediatR domain events on the outbox as notifications |
 
