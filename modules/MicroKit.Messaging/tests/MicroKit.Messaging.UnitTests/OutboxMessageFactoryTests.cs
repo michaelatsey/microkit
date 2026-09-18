@@ -1,4 +1,7 @@
-namespace MicroKit.Messaging.MediatR.UnitTests;
+using Microsoft.Extensions.Time.Testing;
+using MicroKit.Messaging.Outbox;
+
+namespace MicroKit.Messaging.UnitTests;
 
 public sealed class OutboxMessageFactoryTests
 {
@@ -12,7 +15,7 @@ public sealed class OutboxMessageFactoryTests
     public OutboxMessageFactoryTests()
     {
         _serializer.Serialize(Arg.Any<object>()).Returns(x => $"{{\"$t\":\"{x.Arg<object>().GetType().Name}\"}}");
-        _sut = new OutboxMessageFactory(_serializer, new FixedTimeProvider(Now));
+        _sut = new OutboxMessageFactory(_serializer, new FakeTimeProvider(Now));
     }
 
     [Fact]
@@ -127,16 +130,7 @@ public sealed class OutboxMessageFactoryTests
 
     // ── helpers ──────────────────────────────────────────────────────────────
 
-    private sealed class FakeNotification : IDomainEventNotification<FakeDomainEvent>
-    {
-        public FakeDomainEvent DomainEvent { get; } = new();
-    }
-
-    private sealed class FakeDomainEvent : IDomainEvent
-    {
-        public Guid EventId { get; } = Guid.NewGuid();
-        public DateTimeOffset OccurredAt { get; } = DateTimeOffset.UtcNow;
-    }
+    private sealed class FakeNotification;
 
     /// <summary>
     /// <c>CreatedAtUtc</c> comes from the injected clock, not from <c>DateTimeOffset.UtcNow</c>.
@@ -152,11 +146,5 @@ public sealed class OutboxMessageFactoryTests
             new FakeNotification(), Guid.NewGuid(), DateTimeOffset.UtcNow, _ctx);
 
         msg.CreatedAtUtc.ShouldBe(Now);
-    }
-
-    /// <summary>Minimal fixed clock — this project does not reference the testing TimeProvider.</summary>
-    private sealed class FixedTimeProvider(DateTimeOffset now) : TimeProvider
-    {
-        public override DateTimeOffset GetUtcNow() => now;
     }
 }

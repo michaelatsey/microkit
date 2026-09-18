@@ -389,10 +389,9 @@ public sealed class OutboxMessage
     /// </para>
     /// <para>
     /// Diagnostic, never load-bearing: nothing keys, indexes, filters or orders on it, and it
-    /// degrades to <see langword="null"/> rather than failing when it cannot be parsed
-    /// (<c>OutboxMessageFactory.ResolveCausation</c>). Do not confuse it with
-    /// <see cref="OriginMessageId"/>, which records the same identity on a contract row for the
-    /// opposite kind of reason — that one is half of a unique key and may never degrade.
+    /// degrades to <see langword="null"/> rather than failing when it cannot be parsed. Do not
+    /// confuse it with <see cref="OriginMessageId"/>, which records the same identity on a contract
+    /// row for the opposite kind of reason — that one is half of a unique key and may never degrade.
     /// </para>
     /// </remarks>
     public CausationId? CausationId { get; set; }

@@ -33,7 +33,7 @@ using System.Diagnostics;
 /// unsupplied <c>occurredOnUtc</c> are both assertable against exact values in tests rather than
 /// approximated with a tolerance.
 /// </param>
-public sealed class OutboxMessageFactory(IMessageSerializer serializer, TimeProvider timeProvider)
+internal sealed class OutboxMessageFactory(IMessageSerializer serializer, TimeProvider timeProvider)
 {
     /// <summary>
     /// Creates a <see cref="MessageKind.Notification"/> row — a domain event fanned out in process.
