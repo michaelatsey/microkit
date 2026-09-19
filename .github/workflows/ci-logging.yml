@@ -2,14 +2,14 @@ name: CI — MicroKit.Logging
 
 on:
   push:
-    branches: [main, dev]
+    branches: [main]
     paths:
       - 'modules/MicroKit.Logging/**'
       - 'Directory.Build.props'
       - 'Directory.Packages.props'
       - 'global.json'
   pull_request:
-    branches: [main, dev]
+    branches: [main]
     paths:
       - 'modules/MicroKit.Logging/**'
       - 'Directory.Build.props'
