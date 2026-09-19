@@ -70,9 +70,11 @@ Verification: the commands to run and the result that proves the fix.
 **Ready** — one `mod:*`, one `type:*`, a finding with references, a `## Spec`, no
 `needs:decision`.
 
-**Done** — for any type that changes the repository: one branch, one PR to `dev`, closed
+**Done** — for any type that changes the repository: one branch, one PR to `main`, closed
 by `Closes #N`, verification green. For `audit` and for work not planned: closed by hand
-with a comment linking the issues it produced or stating why.
+with a comment linking the issues it produced or stating why. Work that changes
+GitHub settings rather than files is closed by hand, with a comment carrying the
+verification output.
 
 Anything found and not fixed gets its own issue before the PR is merged.
 
