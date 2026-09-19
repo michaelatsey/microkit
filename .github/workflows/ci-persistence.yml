@@ -2,14 +2,14 @@ name: CI — MicroKit.Persistence
 
 on:
   push:
-    branches: [main, dev]
+    branches: [main]
     paths:
       - 'modules/MicroKit.Persistence/**'
       - 'Directory.Build.props'
       - 'Directory.Packages.props'
       - 'global.json'
   pull_request:
-    branches: [main, dev]
+    branches: [main]
     paths:
       - 'modules/MicroKit.Persistence/**'
       - 'Directory.Build.props'
