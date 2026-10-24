@@ -127,6 +127,17 @@ public sealed class PhoneNumberTests
     }
 
     [Fact]
+    public void ImplicitConversionToString_NullPhoneNumber_ReturnsNull()
+    {
+        // Declared non-null on purpose: the conversion must cope with a null that slipped through.
+        PhoneNumber phone = null!;
+
+        string? value = phone;
+
+        value.ShouldBeNull();
+    }
+
+    [Fact]
     public void ImplicitConversions_RoundTripTheNormalizedValue()
     {
         PhoneNumber phone = "+33 6 12 34 56 78";

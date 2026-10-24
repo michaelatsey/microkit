@@ -85,6 +85,17 @@ public sealed class EmailTests
         new Email(email).Value.ShouldBe(email.ToLowerInvariant());
     }
 
+    [Fact]
+    public void ImplicitConversionToString_NullEmail_ReturnsNull()
+    {
+        // Declared non-null on purpose: the conversion must cope with a null that slipped through.
+        Email email = null!;
+
+        string? value = email;
+
+        value.ShouldBeNull();
+    }
+
     [Theory]
     [InlineData("a")]
     [InlineData("@")]

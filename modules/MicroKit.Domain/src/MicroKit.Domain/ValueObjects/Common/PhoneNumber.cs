@@ -95,8 +95,9 @@ public sealed record PhoneNumber(string Value) : IValueObject
     /// Implicitly converts a PhoneNumber to a string.
     /// </summary>
     /// <param name="phoneNumber">The PhoneNumber instance</param>
-    /// <returns>The phone number string value</returns>
-    public static implicit operator string(PhoneNumber phoneNumber) => phoneNumber.Value;
+    /// <returns>The phone number string value, or <see langword="null"/> for a null instance (ADR-004 D10).</returns>
+    [return: NotNullIfNotNull(nameof(phoneNumber))]
+    public static implicit operator string?(PhoneNumber? phoneNumber) => phoneNumber?.Value;
 
     /// <summary>
     /// Returns the phone number value.

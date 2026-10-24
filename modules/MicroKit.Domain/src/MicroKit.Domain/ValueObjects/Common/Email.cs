@@ -104,8 +104,9 @@ public sealed record Email(string Value) : IValueObject
     /// Implicitly converts an Email to a string.
     /// </summary>
     /// <param name="email">The Email instance</param>
-    /// <returns>The email string value</returns>
-    public static implicit operator string(Email email) => email.Value;
+    /// <returns>The email string value, or <see langword="null"/> for a null instance (ADR-004 D10).</returns>
+    [return: NotNullIfNotNull(nameof(email))]
+    public static implicit operator string?(Email? email) => email?.Value;
 
     /// <summary>
     /// Returns the email address value.

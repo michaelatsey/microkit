@@ -220,6 +220,21 @@ a documented limit to that break.
 - *Turn `MaxLength` into a `static readonly` field.* A binary break for every caller, for the same
   outcome.
 
+#### D10 — Converting a null `Email` or `PhoneNumber` to `string` gives `null`
+
+**Decision.** The implicit conversions from `Email` and `PhoneNumber` to `string` return `null` for
+a null instance, annotated `[return: NotNullIfNotNull]`, instead of dereferencing it.
+
+**Reasoning.** `string s = (Email?)null;` threw a `NullReferenceException` from inside the
+operator, at a call site that shows no member access; the .NET design guidelines rule out an
+exception from an implicit conversion. Returning `null` is what the language does for any
+reference conversion. The return type stays `string`, so the change is binary compatible, and the
+annotation keeps a non-null argument's result non-null for the compiler.
+
+**Rejected alternatives.**
+- *Throw `ArgumentNullException`.* Still an exception from an implicit conversion.
+- *Remove the conversions.* A break to fix a null case.
+
 ## Consequences
 
 - A built-in actor serializes with any options: `Actor.System` is written `"$system"`.
