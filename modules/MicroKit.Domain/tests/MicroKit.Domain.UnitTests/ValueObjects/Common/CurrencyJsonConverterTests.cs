@@ -6,7 +6,6 @@ using MicroKit.Domain.ValueObjects.Common;
 using MicroKit.Domain.ValueObjects.Common.Json;
 using Shouldly;
 using Xunit;
-using static MicroKit.Domain.UnitTests.ValueObjects.Common.JsonTestOptions;
 
 namespace MicroKit.Domain.UnitTests.ValueObjects.Common;
 
@@ -15,8 +14,25 @@ namespace MicroKit.Domain.UnitTests.ValueObjects.Common;
 #pragma warning disable IL2026
 public sealed class CurrencyJsonConverterTests
 {
+    public static TheoryData<string> Options => ["default", "web"];
+
+    private static JsonSerializerOptions For(string options) => options switch
+    {
+        "default" => JsonSerializerOptions.Default,
+        "web" => JsonSerializerOptions.Web,
+        _ => throw new ArgumentOutOfRangeException(nameof(options)),
+    };
+
+    private static JsonSerializerOptions Trusted(string options) =>
+        new(For(options)) { Converters = { new TrustedActorJsonConverter() } };
+
+    private static T RoundTrip<T>(T value, string options) => RoundTrip(value, For(options));
+
+    private static T RoundTrip<T>(T value, JsonSerializerOptions options) =>
+        JsonSerializer.Deserialize<T>(JsonSerializer.Serialize(value, options), options)!;
+
     [Theory]
-    [MemberData(nameof(JsonTestOptions.Options), MemberType = typeof(JsonTestOptions))]
+    [MemberData(nameof(Options))]
     public void Currency_RoundTrips(string options)
     {
         var currency = Currency.FromCode("KWD");
@@ -39,7 +55,7 @@ public sealed class CurrencyJsonConverterTests
     }
 
     [Theory]
-    [MemberData(nameof(JsonTestOptions.Options), MemberType = typeof(JsonTestOptions))]
+    [MemberData(nameof(Options))]
     public void CurrencyAndActor_RoundTripAsDictionaryKeys(string options)
     {
         var totals = new Dictionary<Currency, Money>

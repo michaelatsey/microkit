@@ -28,4 +28,20 @@
     <ProjectReference Include="../../src/MicroKit.Domain/MicroKit.Domain.csproj" />
   </ItemGroup>
 
+  <!-- TestClassConventionsTests reads this project's sources to check that every file declares a
+       test, so helper types live next to the tests that use them. Copied, never compiled twice. -->
+  <ItemGroup>
+    <None Include="**/*.cs" Exclude="bin/**;obj/**" Link="test-sources/%(RecursiveDir)%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
+  <!-- The list of the sources compiled now: a copy of a deleted file can linger in the output, and
+       must not be read as a source of this build. -->
+  <Target Name="RequireTestSources" AfterTargets="CopyFilesToOutputDirectory">
+    <WriteLinesToFile File="$(OutDir)test-sources/files.txt"
+                      Lines="@(Compile->'%(Identity)'->Replace('\', '/'))"
+                      Overwrite="true" WriteOnlyWhenDifferent="true" />
+    <Error Condition="!Exists('$(OutDir)test-sources/TestClassConventionsTests.cs')"
+           Text="The test sources were not copied to $(OutDir)test-sources; TestClassConventionsTests cannot run without them." />
+  </Target>
+
 </Project>

@@ -6,7 +6,6 @@ using MicroKit.Domain.ValueObjects.Common;
 using MicroKit.Domain.ValueObjects.Common.Json;
 using Shouldly;
 using Xunit;
-using static MicroKit.Domain.UnitTests.ValueObjects.Common.JsonTestOptions;
 
 namespace MicroKit.Domain.UnitTests.ValueObjects.Common;
 
@@ -15,8 +14,25 @@ namespace MicroKit.Domain.UnitTests.ValueObjects.Common;
 #pragma warning disable IL2026
 public sealed class TrustedActorJsonConverterTests
 {
+    public static TheoryData<string> Options => ["default", "web"];
+
+    private static JsonSerializerOptions For(string options) => options switch
+    {
+        "default" => JsonSerializerOptions.Default,
+        "web" => JsonSerializerOptions.Web,
+        _ => throw new ArgumentOutOfRangeException(nameof(options)),
+    };
+
+    private static JsonSerializerOptions Trusted(string options) =>
+        new(For(options)) { Converters = { new TrustedActorJsonConverter() } };
+
+    private static T RoundTrip<T>(T value, string options) => RoundTrip(value, For(options));
+
+    private static T RoundTrip<T>(T value, JsonSerializerOptions options) =>
+        JsonSerializer.Deserialize<T>(JsonSerializer.Serialize(value, options), options)!;
+
     [Theory]
-    [MemberData(nameof(JsonTestOptions.Options), MemberType = typeof(JsonTestOptions))]
+    [MemberData(nameof(Options))]
     public void Actor_BuiltIn_WithTheTrustedConverter_RoundTripsToTheSameInstance(string options)
     {
         JsonSerializer.Serialize(Actor.System, Trusted(options)).ShouldBe("\"$system\"");
@@ -25,7 +41,7 @@ public sealed class TrustedActorJsonConverterTests
     }
 
     [Theory]
-    [MemberData(nameof(JsonTestOptions.Options), MemberType = typeof(JsonTestOptions))]
+    [MemberData(nameof(Options))]
     public void Actor_User_WithTheTrustedConverter_RoundTrips(string options)
     {
         var actor = new Actor("user-123");
@@ -34,7 +50,7 @@ public sealed class TrustedActorJsonConverterTests
     }
 
     [Theory]
-    [MemberData(nameof(JsonTestOptions.Options), MemberType = typeof(JsonTestOptions))]
+    [MemberData(nameof(Options))]
     public void Actor_UnknownReservedValue_WithTheTrustedConverter_FailsOnDeserialization(string options)
     {
         Should.Throw<JsonException>(() => JsonSerializer.Deserialize<Actor>("\"$root\"", Trusted(options)))
@@ -42,7 +58,7 @@ public sealed class TrustedActorJsonConverterTests
     }
 
     [Theory]
-    [MemberData(nameof(JsonTestOptions.Options), MemberType = typeof(JsonTestOptions))]
+    [MemberData(nameof(Options))]
     public void DomainEvent_CarryingABuiltInActor_RoundTripsOnlyWithTheTrustedConverter(string options)
     {
         var archived = new OrderArchived(Actor.System, new DateTimeOffset(2026, 10, 24, 9, 0, 0, TimeSpan.Zero));
@@ -57,3 +73,5 @@ public sealed class TrustedActorJsonConverterTests
     }
 }
 #pragma warning restore IL2026
+
+public sealed record OrderArchived(Actor ArchivedBy, DateTimeOffset OccurredAt) : DomainEvent(OccurredAt);

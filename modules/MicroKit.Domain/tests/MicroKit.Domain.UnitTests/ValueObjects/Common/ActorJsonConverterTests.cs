@@ -6,7 +6,6 @@ using MicroKit.Domain.ValueObjects.Common;
 using MicroKit.Domain.ValueObjects.Common.Json;
 using Shouldly;
 using Xunit;
-using static MicroKit.Domain.UnitTests.ValueObjects.Common.JsonTestOptions;
 
 namespace MicroKit.Domain.UnitTests.ValueObjects.Common;
 
@@ -15,8 +14,22 @@ namespace MicroKit.Domain.UnitTests.ValueObjects.Common;
 #pragma warning disable IL2026
 public sealed class ActorJsonConverterTests
 {
+    public static TheoryData<string> Options => ["default", "web"];
+
+    private static JsonSerializerOptions For(string options) => options switch
+    {
+        "default" => JsonSerializerOptions.Default,
+        "web" => JsonSerializerOptions.Web,
+        _ => throw new ArgumentOutOfRangeException(nameof(options)),
+    };
+
+    private static T RoundTrip<T>(T value, string options) => RoundTrip(value, For(options));
+
+    private static T RoundTrip<T>(T value, JsonSerializerOptions options) =>
+        JsonSerializer.Deserialize<T>(JsonSerializer.Serialize(value, options), options)!;
+
     [Theory]
-    [MemberData(nameof(JsonTestOptions.Options), MemberType = typeof(JsonTestOptions))]
+    [MemberData(nameof(Options))]
     public void Actor_ReservedValue_ThroughTheDefaultConverter_ThrowsJsonExceptionWithAPath(string options)
     {
         var json = options == "web" ? """{"by":"$system"}""" : """{"By":"$system"}""";
@@ -28,7 +41,7 @@ public sealed class ActorJsonConverterTests
     }
 
     [Theory]
-    [MemberData(nameof(JsonTestOptions.Options), MemberType = typeof(JsonTestOptions))]
+    [MemberData(nameof(Options))]
     public void Actor_BuiltIn_WithTheDefaultConverter_FailsOnWrite(string options)
     {
         var ex = Should.Throw<JsonException>(() => JsonSerializer.Serialize(Actor.System, For(options)));
@@ -37,7 +50,7 @@ public sealed class ActorJsonConverterTests
     }
 
     [Theory]
-    [MemberData(nameof(JsonTestOptions.Options), MemberType = typeof(JsonTestOptions))]
+    [MemberData(nameof(Options))]
     public void Actor_BuiltInAsDictionaryKey_WithTheDefaultConverter_FailsOnWrite(string options)
     {
         var byActor = new Dictionary<Actor, int> { [Actor.System] = 1 };
@@ -47,7 +60,7 @@ public sealed class ActorJsonConverterTests
     }
 
     [Theory]
-    [MemberData(nameof(JsonTestOptions.Options), MemberType = typeof(JsonTestOptions))]
+    [MemberData(nameof(Options))]
     public void Actor_User_RoundTrips(string options)
     {
         var actor = new Actor("user-123");
@@ -64,7 +77,7 @@ public sealed class ActorJsonConverterTests
     }
 
     [Theory]
-    [MemberData(nameof(JsonTestOptions.Options), MemberType = typeof(JsonTestOptions))]
+    [MemberData(nameof(Options))]
     public void DomainEvent_CarryingMoneyAUserActorAndABuiltInActorValue_RoundTrips(string options)
     {
         // A built-in actor travels as its value until the outbox can register the trusted converter (#174).
@@ -85,3 +98,8 @@ public sealed class ActorJsonConverterTests
     }
 }
 #pragma warning restore IL2026
+
+public sealed record ActorHolder(Actor By);
+
+public sealed record OrderPlaced(Money Total, string PlacedBy, Actor Customer, DateTimeOffset OccurredAt)
+    : DomainEvent(OccurredAt);

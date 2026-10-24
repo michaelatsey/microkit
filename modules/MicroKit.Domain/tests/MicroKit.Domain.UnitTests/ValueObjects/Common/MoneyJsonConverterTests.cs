@@ -6,7 +6,6 @@ using MicroKit.Domain.ValueObjects.Common;
 using MicroKit.Domain.ValueObjects.Common.Json;
 using Shouldly;
 using Xunit;
-using static MicroKit.Domain.UnitTests.ValueObjects.Common.JsonTestOptions;
 
 namespace MicroKit.Domain.UnitTests.ValueObjects.Common;
 
@@ -15,6 +14,20 @@ namespace MicroKit.Domain.UnitTests.ValueObjects.Common;
 #pragma warning disable IL2026
 public sealed class MoneyJsonConverterTests
 {
+    public static TheoryData<string> Options => ["default", "web"];
+
+    private static JsonSerializerOptions For(string options) => options switch
+    {
+        "default" => JsonSerializerOptions.Default,
+        "web" => JsonSerializerOptions.Web,
+        _ => throw new ArgumentOutOfRangeException(nameof(options)),
+    };
+
+    private static T RoundTrip<T>(T value, string options) => RoundTrip(value, For(options));
+
+    private static T RoundTrip<T>(T value, JsonSerializerOptions options) =>
+        JsonSerializer.Deserialize<T>(JsonSerializer.Serialize(value, options), options)!;
+
     [Theory]
     [InlineData("default", 10.50, "EUR")]
     [InlineData("default", 1500, "XOF")]
@@ -44,7 +57,7 @@ public sealed class MoneyJsonConverterTests
     }
 
     [Theory]
-    [MemberData(nameof(JsonTestOptions.Options), MemberType = typeof(JsonTestOptions))]
+    [MemberData(nameof(Options))]
     public void Money_UnknownCurrencyCode_FailsOnDeserialization(string options)
     {
         var json = options == "web"
@@ -56,7 +69,7 @@ public sealed class MoneyJsonConverterTests
     }
 
     [Theory]
-    [MemberData(nameof(JsonTestOptions.Options), MemberType = typeof(JsonTestOptions))]
+    [MemberData(nameof(Options))]
     public void Money_ExcessScale_FailsOnDeserialization(string options)
     {
         var json = options == "web"
@@ -102,3 +115,5 @@ public sealed class MoneyJsonConverterTests
     }
 }
 #pragma warning restore IL2026
+
+public sealed record Holder(Money Total);

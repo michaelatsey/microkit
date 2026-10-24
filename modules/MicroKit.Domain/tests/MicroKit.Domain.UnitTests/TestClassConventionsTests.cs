@@ -30,6 +30,29 @@ public sealed class TestClassConventionsTests
         offenders.ShouldBeEmpty();
     }
 
+    [Fact]
+    public void EverySourceFile_DeclaresATest()
+    {
+        // .claude/rules/testing.md: helper types (stubs of aggregates, identifiers) are defined in the
+        // same file as the tests that use them, never in a file of their own.
+        var root = Path.Combine(AppContext.BaseDirectory, "test-sources");
+
+        var files = File.ReadAllLines(Path.Combine(root, "files.txt"))
+            // Only this project's own sources: not generated files under obj/, nor the test SDK's
+            // entry point, which is compiled from the package cache by absolute path.
+            .Where(f => !Path.IsPathRooted(f) && !f.StartsWith("obj/", StringComparison.Ordinal) && f.EndsWith(".cs", StringComparison.Ordinal))
+            .Select(f => Path.Combine(root, f))
+            .ToArray();
+        var offenders = files
+            .Where(f => Path.GetFileName(f) != "GlobalUsings.cs")
+            .Where(f => File.ReadAllText(f) is var text && !text.Contains("[Fact]", StringComparison.Ordinal) && !text.Contains("[Theory]", StringComparison.Ordinal))
+            .Select(f => Path.GetRelativePath(root, f))
+            .ToArray();
+
+        files.ShouldContain(f => Path.GetFileName(f) == "AuditRulesTests.cs");
+        offenders.ShouldBeEmpty();
+    }
+
     private static string StripArity(string name) =>
         name.IndexOf('`', StringComparison.Ordinal) is var tick and >= 0 ? name[..tick] : name;
 
