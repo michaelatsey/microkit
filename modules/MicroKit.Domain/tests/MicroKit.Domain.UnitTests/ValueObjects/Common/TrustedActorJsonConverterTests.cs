@@ -56,7 +56,7 @@ public sealed class TrustedActorJsonConverterTests
     [MemberData(nameof(Options))]
     public void Record_CarryingABuiltInActor_WithTheTrustedConverter_RoundTripsToTheSameInstance(string options)
     {
-        RoundTrip(new AuditSnapshot(Actor.System), Trusted(options)).UpdatedBy.ShouldBeSameAs(Actor.System);
+        RoundTrip(new StoredAuditSnapshot(Actor.System), Trusted(options)).UpdatedBy.ShouldBeSameAs(Actor.System);
     }
 
     [Theory]
@@ -94,3 +94,5 @@ public sealed class TrustedActorJsonConverterTests
 #pragma warning restore IL2026
 
 public sealed record OrderArchived(Actor ArchivedBy, DateTimeOffset OccurredAt) : DomainEvent(OccurredAt);
+
+public sealed record StoredAuditSnapshot(Actor UpdatedBy);
