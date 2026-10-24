@@ -89,6 +89,17 @@ public sealed class DocumentationExamplesTests
         adr.ShouldContain("idempotency store and caching behaviour, now writes a response carrying a built-in actor and fails");
     }
 
+    [Theory]
+    [InlineData("ADR-001-Records-First-Value-Objects.md")]
+    [InlineData("ADR-002-Domain-Events-Collection-Strategy.md")]
+    public void SupersededAdr_PointsToEveryAdrRecordingTheCurrentSurface(string file)
+    {
+        var note = string.Join(' ', File.ReadLines(Path.Combine(AppContext.BaseDirectory, "module-adr", file)).Take(6));
+
+        note.ShouldContain("ADR-003-Domain-Surface-Before-Stable.md");
+        note.ShouldContain("ADR-004-Domain-Surface-Amendments.md");
+    }
+
     [Fact]
     public void Adr003_DescribesTheShippedEventRollback()
     {
