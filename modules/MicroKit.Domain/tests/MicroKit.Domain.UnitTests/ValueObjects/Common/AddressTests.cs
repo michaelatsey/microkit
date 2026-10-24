@@ -8,7 +8,7 @@ namespace MicroKit.Domain.UnitTests.ValueObjects.Common;
 public sealed class AddressTests
 {
     [Fact]
-    public void Constructor_TrimsEveryComponent()
+    public void Constructor_PaddedComponents_TrimsEach()
     {
         var address = new Address("  10 rue de la Paix ", " Paris ", " 75002 ", " FR ");
 
@@ -38,7 +38,7 @@ public sealed class AddressTests
     }
 
     [Fact]
-    public void ToString_JoinsTheComponents()
+    public void ToString_ValidAddress_JoinsTheComponents()
     {
         new Address("10 rue de la Paix", "Paris", "75002", "FR").ToString()
             .ShouldBe("10 rue de la Paix, Paris, 75002, FR");

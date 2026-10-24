@@ -8,7 +8,7 @@ namespace MicroKit.Domain.UnitTests.Exceptions;
 public sealed class EntityNotFoundExceptionTests
 {
     [Fact]
-    public void Constructor_CarriesTheIdentifierAndTheEntityType()
+    public void Constructor_ValidIdentifier_CarriesTheIdentifierAndTheEntityType()
     {
         var id = GuidId.From(Guid.CreateVersion7());
 

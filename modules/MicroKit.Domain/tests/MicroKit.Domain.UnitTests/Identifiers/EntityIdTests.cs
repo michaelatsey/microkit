@@ -13,7 +13,7 @@ public sealed class EntityIdTests
     }
 
     [Fact]
-    public void Constructor_KeepsTheValue()
+    public void Constructor_ValidGuid_KeepsTheValue()
     {
         var value = Guid.CreateVersion7();
 
@@ -32,7 +32,7 @@ public sealed class EntityIdTests
     }
 
     [Fact]
-    public void Equality_IsByValueWithinOneIdentifierType()
+    public void Equality_SameOrOtherIdentifierType_IsByValueAndType()
     {
         var value = Guid.CreateVersion7();
 

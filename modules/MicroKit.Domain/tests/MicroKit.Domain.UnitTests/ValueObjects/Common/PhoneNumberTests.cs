@@ -147,7 +147,7 @@ public sealed class PhoneNumberTests
     }
 
     [Fact]
-    public void ImplicitConversions_RoundTripTheNormalizedValue()
+    public void ImplicitConversions_FormattedString_RoundTripTheNormalizedValue()
     {
         PhoneNumber phone = "+33 6 12 34 56 78";
         string value = phone;

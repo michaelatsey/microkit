@@ -8,7 +8,7 @@ namespace MicroKit.Domain.UnitTests.ValueObjects.Common;
 public sealed class FullNameTests
 {
     [Fact]
-    public void Constructor_TrimsBothComponents()
+    public void Constructor_PaddedComponents_TrimsBoth()
     {
         var name = new FullName("  Ada ", " Lovelace  ");
 
