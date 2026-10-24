@@ -55,6 +55,15 @@ public sealed class DocumentationExamplesTests
     }
 
     [Fact]
+    public void Guide_DeclaresTheRuleItsAuditableExampleChecks()
+    {
+        var guide = File.ReadAllText(Path.Combine(Root, "docs", "guides", "Implementing-Aggregates.md"));
+
+        guide.ShouldContain("CheckRule(new InvoiceTotalMustBePositiveRule(total));");
+        guide.ShouldContain("public sealed class InvoiceTotalMustBePositiveRule(Money total) : BusinessRule");
+    }
+
+    [Fact]
     public void Documentation_TeachesNoReplacedSurface()
     {
         var offenders =

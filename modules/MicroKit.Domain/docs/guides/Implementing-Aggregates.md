@@ -67,6 +67,15 @@ public sealed class Customer : AggregateRoot<CustomerId>
 `AuditableAggregateRoot<TId>` records who created and last changed the aggregate. The creation fields come from the constructor; the update fields change only through `Mutate`, which validates the instant and the actor, runs the change, and sets both fields together only if the change succeeded.
 
 ```csharp
+public sealed class InvoiceTotalMustBePositiveRule(Money total) : BusinessRule
+{
+    public override bool IsBroken() => total.Amount <= 0;
+
+    public override string Message => "An invoice total must be positive";
+
+    public override string Code => "invoice.total-must-be-positive";
+}
+
 public sealed class Invoice : AuditableAggregateRoot<InvoiceId>
 {
     private Invoice(InvoiceId id, Money total, TimeProvider clock, Actor createdBy)
