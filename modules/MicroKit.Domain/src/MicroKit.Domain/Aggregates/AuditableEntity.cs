@@ -129,9 +129,11 @@ public abstract class AuditableEntity<TId> : Entity<TId>, IAuditableEntity
     /// their previous values and the exception propagates.
     /// </para>
     /// <para>
-    /// The limit: a mutation that throws halfway keeps the field changes it made before throwing.
-    /// Validate the change at the start of the mutation, before its first assignment, so that an
-    /// invalid change throws while nothing has changed.
+    /// The limit: a mutation that throws halfway keeps the field changes it made before throwing,
+    /// on this object and on any other: a child entity whose own <c>Mutate</c> succeeded inside it
+    /// keeps its audit stamp. Only this object's audit fields are left as they were. Validate the
+    /// change at the start of the mutation, before its first assignment and before mutating any
+    /// child, so that an invalid change throws while nothing has changed.
     /// </para>
     /// <para>
     /// A nested <c>Mutate</c> on the same object, run inside <paramref name="mutation"/>, may record a

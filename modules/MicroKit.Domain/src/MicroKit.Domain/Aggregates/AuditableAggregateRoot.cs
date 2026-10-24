@@ -130,9 +130,12 @@ public abstract class AuditableAggregateRoot<TId> : AggregateRoot<TId>, IAuditab
     /// failed operation publishes no fact.
     /// </para>
     /// <para>
-    /// The limit: a mutation that throws halfway keeps the field changes it made before throwing.
+    /// The limit: a mutation that throws halfway keeps the field changes it made before throwing,
+    /// on this object and on any other: a child entity whose own <c>Mutate</c> succeeded inside it
+    /// keeps its audit stamp. Only this object's audit fields and events are left as they were.
     /// Check the business rules (<c>CheckRule</c>) at the start of the mutation, before its first
-    /// assignment, so that a broken rule throws while nothing has changed.
+    /// assignment and before mutating any child, so that a broken rule throws while nothing has
+    /// changed.
     /// </para>
     /// <para>
     /// A nested <c>Mutate</c> on the same object, run inside <paramref name="mutation"/>, may record a

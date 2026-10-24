@@ -56,6 +56,19 @@ public sealed class PublishedDocumentationTests
         Count(doc, "removed").ShouldBe(1);
     }
 
+    [Theory]
+    [InlineData("AuditableEntity`1")]
+    [InlineData("AuditableAggregateRoot`1")]
+    public void Mutate_StatesThatAFailedMutationKeepsChangesToOtherObjects(string type)
+    {
+        var doc = Member(
+            $"M:MicroKit.Domain.Aggregates.{type}.Mutate(System.DateTimeOffset,MicroKit.Domain.ValueObjects.Common.Actor,System.Action)");
+
+        doc.ShouldContain("on this object and on any other");
+        doc.ShouldContain("keeps its audit stamp");
+        doc.ShouldContain("before mutating any child");
+    }
+
     private static int Count(string text, string word) =>
         text.Split(word, StringSplitOptions.None).Length - 1;
 
