@@ -1,3 +1,4 @@
+using System.Globalization;
 using MicroKit.Domain.Identifiers;
 using MicroKit.Domain.ValueObjects.Common;
 
@@ -131,9 +132,11 @@ public abstract class AuditableEntity<TId> : Entity<TId>, IAuditableEntity
     /// <para>
     /// <see cref="UpdatedAt"/> never decreases. An instant earlier than the current one is rejected
     /// rather than clamped: clamping would record the actor against an instant that is not when the
-    /// change happened, and would hide a skewed clock instead of surfacing it. The accepted cost: a
-    /// host whose nodes' clocks disagree by more than its own update cadence gets this exception at
-    /// the faulty write, not a silent drift.
+    /// change happened, and would hide a skewed clock instead of surfacing it. The accepted cost: when
+    /// a host's nodes' clocks disagree by more than its own update cadence, the skew surfaces as this
+    /// exception rather than as a silent drift. A node whose clock is behind gets it at its own write;
+    /// a node whose clock is ahead writes successfully, and the healthy nodes then get it until real
+    /// time passes the instant it recorded.
     /// </para>
     /// </remarks>
     protected void Touch(DateTimeOffset updatedAt, Actor updatedBy)
@@ -141,10 +144,12 @@ public abstract class AuditableEntity<TId> : Entity<TId>, IAuditableEntity
         ArgumentNullException.ThrowIfNull(updatedBy);
 
         var instant = UtcInstant.Normalize(updatedAt, nameof(updatedAt));
-        if (instant < (UpdatedAt ?? CreatedAt))
+        var bound = UpdatedAt ?? CreatedAt;
+        if (instant < bound)
             throw new ArgumentOutOfRangeException(
                 nameof(updatedAt), updatedAt,
-                "A modification cannot precede the previous modification, or the creation instant when there is none.");
+                string.Create(CultureInfo.InvariantCulture,
+                    $"A modification at {instant:O} cannot precede {bound:O}, the {(UpdatedAt is null ? "creation instant" : "previous modification")}."));
 
         UpdatedAt = instant;
         UpdatedBy = updatedBy;

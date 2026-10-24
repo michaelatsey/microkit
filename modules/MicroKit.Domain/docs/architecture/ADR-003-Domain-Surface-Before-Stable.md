@@ -98,12 +98,14 @@ sharing one identifier space is a modelling error this rule does not try to repa
 - Every instant entering the domain (`CreatedAt`, `UpdatedAt` through `Touch`, and `OccurredAt`
   on construction and through `with`) is normalised to offset zero with `ToUniversalTime()`, and
   `default(DateTimeOffset)` is rejected with `ArgumentOutOfRangeException`. `Touch` rejects an
-  instant earlier than `CreatedAt`; an equal one is accepted (#165).
+  instant earlier than `CreatedAt`; an equal one is accepted (#165). Values EF Core materialises
+  through the backing fields bypass the rule; database column mapping is outside this decision.
 - `UpdatedAt` never decreases: `Touch` rejects an instant earlier than the current `UpdatedAt`, or
   than `CreatedAt` when the entity was never updated, with `ArgumentOutOfRangeException`; an equal
-  instant is accepted (#171). The accepted cost: a host whose nodes' clocks disagree beyond its
-  own update cadence gets an exception at the faulty write, not a silent drift. Values EF Core materialises
-  through the backing fields bypass the rule; database column mapping is outside this decision.
+  instant is accepted (#171). The accepted cost: when a host's nodes' clocks disagree beyond its
+  own update cadence, the skew surfaces as an exception, not a silent drift. A node whose clock is
+  behind gets it at its own write; a node whose clock is ahead writes successfully, and the
+  healthy nodes then get it until real time passes the instant it recorded.
 
 **Reasoning.**
 - Reading `DateTimeOffset.UtcNow` in a constructor hides a dependency: tests can only assert a

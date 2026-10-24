@@ -149,6 +149,7 @@ public sealed class AuditableAggregateRootTests
             () => sut.Rename(new DateTimeOffset(2026, 10, 24, 10, 1, 0, TimeSpan.Zero), Creator));
 
         ex.ParamName.ShouldBe("updatedAt");
+        ex.Message.ShouldContain("cannot precede 2026-10-24T10:05:00.0000000+00:00, the previous modification");
         sut.UpdatedAt.ShouldBe(at1005);
         sut.UpdatedBy.ShouldBe(updater);
     }
