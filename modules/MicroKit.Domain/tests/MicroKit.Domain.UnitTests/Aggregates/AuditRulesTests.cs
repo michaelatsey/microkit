@@ -8,8 +8,9 @@ using Xunit;
 
 namespace MicroKit.Domain.UnitTests.Aggregates;
 
-// The audit rules (#112, #113, #116, #165, #171, #176), run once against each auditable base (#179).
-public sealed class AuditableBasesTests
+// AuditRules (#179), the audit rules both auditable bases share (#112, #113, #116, #165, #171, #176),
+// run once against each base.
+public sealed class AuditRulesTests
 {
     private static readonly DateTimeOffset CreatedAt = new(2026, 10, 24, 9, 0, 0, TimeSpan.Zero);
     private static readonly DateTimeOffset PlusTwo = new(2026, 10, 24, 11, 0, 0, TimeSpan.FromHours(2));

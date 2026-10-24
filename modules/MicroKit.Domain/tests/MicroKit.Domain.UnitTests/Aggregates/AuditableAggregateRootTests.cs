@@ -7,7 +7,7 @@ using Xunit;
 
 namespace MicroKit.Domain.UnitTests.Aggregates;
 
-// What is specific to the aggregate base. The audit rules both bases share run in AuditableBasesTests.
+// What is specific to the aggregate base. The audit rules both bases share run in AuditRulesTests.
 public sealed class AuditableAggregateRootTests
 {
     private static readonly DateTimeOffset CreatedAt = new(2026, 10, 24, 9, 0, 0, TimeSpan.Zero);
