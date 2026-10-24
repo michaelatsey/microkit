@@ -161,6 +161,10 @@ public sealed record Email(string Value) : IValueObject
     /// </summary>
     /// <param name="email">The email string</param>
     /// <returns>An Email instance</returns>
+    /// <exception cref="DomainException">
+    /// Thrown when <paramref name="email"/> is null or not a valid address: the conversion validates
+    /// as the constructor does (ADR-004 D10).
+    /// </exception>
     public static implicit operator Email(string email) => new(email);
 
     /// <summary>

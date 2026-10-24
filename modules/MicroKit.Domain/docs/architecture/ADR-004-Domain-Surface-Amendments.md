@@ -263,17 +263,27 @@ a documented limit to that break.
 #### D10 — Converting a null `Email` or `PhoneNumber` to `string` gives `null`
 
 **Decision.** The implicit conversions from `Email` and `PhoneNumber` to `string` return `null` for
-a null instance, annotated `[return: NotNullIfNotNull]`, instead of dereferencing it.
+a null instance, annotated `[return: NotNullIfNotNull]`, instead of dereferencing it. The
+conversions the other way, from `string`, keep validating as the constructors do, and their XML
+documentation now states the `DomainException` they throw.
 
 **Reasoning.** `string s = (Email?)null;` threw a `NullReferenceException` from inside the
-operator, at a call site that shows no member access; the .NET design guidelines rule out an
-exception from an implicit conversion. Returning `null` is what the language does for any
-reference conversion. The return type stays `string`, so the change is binary compatible, and the
-annotation keeps a non-null argument's result non-null for the compiler.
+operator, at a call site that shows no member access: a defect of the operator, not a decision.
+Returning `null` is what the language does for any reference conversion. The runtime return type
+stays `System.String`; only its nullable annotation changes to `string?`, so the change is binary
+compatible, and the annotation keeps a non-null argument's result non-null for the compiler.
+
+The conversions from `string` throw by design, since converting text that is not an address or a
+number must fail. The .NET design guidelines advise against an implicit conversion that can throw;
+removing or making them explicit is a break the rule does not allow to fix a design preference, so
+the exception is documented instead.
 
 **Rejected alternatives.**
-- *Throw `ArgumentNullException`.* Still an exception from an implicit conversion.
-- *Remove the conversions.* A break to fix a null case.
+- *Throw `ArgumentNullException` from the conversion to `string`.* Still an exception for a null
+  that any reference conversion passes through.
+- *Remove the conversions, or make them explicit.* A break without an incorrect behaviour to remove.
+- *Return `null` from the conversion from a null `string`.* It would turn an invalid input into a
+  null value silently; the constructor rejects a null string.
 
 ## Consequences
 

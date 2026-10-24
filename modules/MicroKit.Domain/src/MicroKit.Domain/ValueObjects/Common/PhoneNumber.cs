@@ -172,6 +172,10 @@ public sealed record PhoneNumber(string Value) : IValueObject
     /// </summary>
     /// <param name="phoneNumber">The phone number string</param>
     /// <returns>A PhoneNumber instance</returns>
+    /// <exception cref="DomainException">
+    /// Thrown when <paramref name="phoneNumber"/> is null or not a valid phone number: the conversion
+    /// validates as the constructor does (ADR-004 D10).
+    /// </exception>
     public static implicit operator PhoneNumber(string phoneNumber) => new(phoneNumber);
 
     /// <summary>

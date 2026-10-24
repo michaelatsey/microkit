@@ -146,6 +146,14 @@ public sealed class PublishedDocumentationTests
         Member(member).ShouldContain(limit);
     }
 
+    [Theory]
+    [InlineData("M:MicroKit.Domain.ValueObjects.Common.Email.op_Implicit(System.String)~MicroKit.Domain.ValueObjects.Common.Email")]
+    [InlineData("M:MicroKit.Domain.ValueObjects.Common.PhoneNumber.op_Implicit(System.String)~MicroKit.Domain.ValueObjects.Common.PhoneNumber")]
+    public void ConversionFromString_DocumentsItsDomainException(string member)
+    {
+        Member(member).ShouldContain("<exception cref=\"T:MicroKit.Domain.Exceptions.DomainException\">");
+    }
+
     [Fact]
     public void Actor_DoesNotPromiseThatAnActorCannotPassForAnother()
     {
