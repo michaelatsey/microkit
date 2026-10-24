@@ -58,6 +58,8 @@ Settles the public surface before `2.0.0` (#160). Every item under **Breaking** 
   value back (D5).
 - `Currency` value type, from the active codes of ISO 4217 List One (D7).
 - `Money.Allocate(params int[] ratios)` (D7).
+- `Money`, `Currency` and `Actor` round-trip through `System.Text.Json` with default options:
+  `Currency` and `Actor` as strings, `Money` as `{ "Amount": …, "Currency": "EUR" }` (#167).
 - `BusinessRuleViolationException.Code` (D9).
 - Architecture tests: no MicroKit, EF Core, ASP.NET Core or DI dependency; sealed value objects;
   record domain events (D10).

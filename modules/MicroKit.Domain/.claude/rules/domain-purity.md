@@ -37,7 +37,15 @@ using System.Linq.Expressions;
 using System.Diagnostics.CodeAnalysis;
 using System.Runtime.CompilerServices;
 using System.Text.RegularExpressions; // si nécessaire pour VO validation
+using System.Text.Json;               // uniquement dans ValueObjects/Common/Json/ (convertisseurs internes)
+using System.Text.Json.Serialization; // [JsonConverter] sur Money, Currency, Actor
 ```
+
+> **Pourquoi `System.Text.Json` est autorisé (#167, ADR-003 D7).** Les value objects du module
+> doivent faire l'aller-retour JSON avec les options par défaut : un événement de domaine qui porte
+> un `Money` ou un `Actor` passe par l'outbox. `System.Text.Json` fait partie du framework partagé,
+> donc aucun package n'est ajouté. Seuls des `[JsonConverter]` et des convertisseurs `internal`
+> sont permis — aucune autre API de sérialisation, aucun type public de sérialisation.
 
 ## Triggers de violation (code review bloquant)
 ```

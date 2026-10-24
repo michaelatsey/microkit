@@ -1,5 +1,7 @@
 using System.Collections.Frozen;
+using System.Text.Json.Serialization;
 using MicroKit.Domain.Exceptions;
+using MicroKit.Domain.ValueObjects.Common.Json;
 
 namespace MicroKit.Domain.ValueObjects.Common;
 
@@ -19,11 +21,17 @@ namespace MicroKit.Domain.ValueObjects.Common;
 /// </para>
 /// <para>
 /// <c>default(Currency)</c> is not a currency: its <see cref="Code"/> is <see langword="null"/>,
-/// and <see cref="Money"/> rejects it. A serializer or a persistence converter must therefore
-/// rebuild an instance through <see cref="FromCode(string)"/>: one that fills the struct through
-/// its default constructor and skips the get-only properties produces <c>default(Currency)</c>.
+/// and <see cref="Money"/> rejects it.
+/// </para>
+/// <para>
+/// <c>System.Text.Json</c> writes a currency as its code, a JSON string, and reads it back through
+/// <see cref="FromCode(string)"/>, with default options and without registration. Another
+/// serializer or a persistence converter must rebuild an instance the same way: one that fills
+/// the struct through its default constructor and skips the get-only properties produces
+/// <c>default(Currency)</c>.
 /// </para>
 /// </remarks>
+[JsonConverter(typeof(CurrencyJsonConverter))]
 public readonly record struct Currency : IValueObject
 {
     // ISO 4217 List One, active codes with a numeric minor unit.

@@ -1,4 +1,6 @@
+using System.Text.Json.Serialization;
 using MicroKit.Domain.Exceptions;
+using MicroKit.Domain.ValueObjects.Common.Json;
 
 namespace MicroKit.Domain.ValueObjects.Common;
 
@@ -22,7 +24,15 @@ namespace MicroKit.Domain.ValueObjects.Common;
 /// public constructor rejects. <see cref="System"/> therefore never equals an actor built from a
 /// user whose identifier happens to be <c>system</c>.
 /// </para>
+/// <para>
+/// <c>System.Text.Json</c> writes an actor as its identifier, a JSON string, and reads it back
+/// through <see cref="Restore(string)"/>, so a stored built-in actor round-trips. JSON carrying an
+/// actor must therefore come from trusted storage the application wrote, such as an outbox
+/// payload, never from a request body: a payload naming <c>$system</c> would be read as the
+/// built-in actor.
+/// </para>
 /// </remarks>
+[JsonConverter(typeof(ActorJsonConverter))]
 public sealed record Actor : IValueObject
 {
     /// <summary>
@@ -96,6 +106,11 @@ public sealed record Actor : IValueObject
     /// reserved values into the built-in actors, so a caller supplying <c>$system</c> would be
     /// recorded as the application itself. Build an actor from external input with the
     /// constructor, which rejects the reserved prefix.
+    /// </para>
+    /// <para>
+    /// The <c>System.Text.Json</c> converter of <see cref="Actor"/> calls this method, so the same
+    /// rule applies to JSON: deserialize an actor only from trusted storage, never from a request
+    /// body.
     /// </para>
     /// </remarks>
     public static Actor Restore(string value) => value switch

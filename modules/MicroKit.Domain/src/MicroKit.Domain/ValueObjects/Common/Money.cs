@@ -1,5 +1,7 @@
 using System.Globalization;
+using System.Text.Json.Serialization;
 using MicroKit.Domain.Exceptions;
+using MicroKit.Domain.ValueObjects.Common.Json;
 using MicroKit.Domain.ValueObjects;
 
 namespace MicroKit.Domain.ValueObjects.Common;
@@ -22,7 +24,14 @@ namespace MicroKit.Domain.ValueObjects.Common;
 /// error. Operations throw <see cref="DomainException"/> for mismatched currencies and
 /// <see cref="ArgumentException"/> for invalid arguments.
 /// </para>
+/// <para>
+/// <c>System.Text.Json</c> writes <c>{ "Amount": 10.50, "Currency": "EUR" }</c>, with property names
+/// following <c>JsonSerializerOptions.PropertyNamingPolicy</c>, and reads it back through this
+/// constructor, so an unknown code or an excess scale fails on deserialization.
+/// <see cref="IsZero"/> is not serialized.
+/// </para>
 /// </remarks>
+[JsonConverter(typeof(MoneyJsonConverter))]
 public sealed record Money(decimal Amount, Currency Currency) : IValueObject
 {
     /// <summary>

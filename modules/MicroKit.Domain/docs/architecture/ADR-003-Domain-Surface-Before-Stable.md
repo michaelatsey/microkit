@@ -208,7 +208,20 @@ with `ArgumentException` (#164).
 - Codes whose minor unit is `N.A.` in List One (precious metals, SDR, test and no-currency
   codes) cannot carry a minor-unit scale, so they are not in the table.
 
+**JSON (#167).** `MicroKit.Domain` makes its own value objects round-trip with default
+`System.Text.Json` options, through `[JsonConverter]` attributes and internal converters:
+`Currency` as its code, read back through `Currency.FromCode`; `Actor` as its value, read back
+through `Actor.Restore`; `Money` as `{ "Amount": …, "Currency": "EUR" }`, with names following
+`PropertyNamingPolicy` and `IsZero` not serialized. Without them, a domain event carrying a `Money`
+or a built-in `Actor` could be written to the outbox and never read back. `System.Text.Json` is
+part of the shared framework, so no package is added. JSON carrying an `Actor` must come from
+trusted storage, never from a request body, since it can name a built-in actor.
+
 **Rejected alternatives.**
+- *A separate `MicroKit.Domain.SystemTextJson` package.* A new publishable id for three
+  converters (#167).
+- *Register the converters in the Messaging serializer.* A cross-module edge for a Domain defect
+  (#167).
 - *Derive the minor unit from `RegionInfo` or `NumberFormatInfo`.* The result depends on the
   host's ICU data and is unavailable under invariant globalization.
 - *A default rounding mode, banker's or away-from-zero.* Hides the business decision.
