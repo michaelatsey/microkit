@@ -111,6 +111,7 @@ public sealed class PublishedDocumentationTests
 
         doc.ShouldContain("does not roll back the domain events it raised");
         doc.ShouldContain("AuditableAggregateRoot`1");
+        doc.ShouldContain("Discard the change set that tracks it too");
     }
 
     // #182, ADR-004 D2: the closure and delegate a capturing Mutate lambda allocates.

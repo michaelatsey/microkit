@@ -74,6 +74,10 @@ public sealed class DocumentationExamplesTests
 
         guide.ShouldContain("### When a domain method throws");
         guide.ShouldContain("the aggregate instance must be discarded, not saved");
+        guide.ShouldContain("Discarding means the change set too, not only the reference");
+        guide.ShouldContain("IUnitOfWork.DiscardChanges()");
+        guide.ShouldContain("the events the method raised outside `Mutate`");
+        guide.ShouldNotContain("catch (DomainException)");
         guide.ShouldContain("allocates a closure and a delegate on each call");
     }
 

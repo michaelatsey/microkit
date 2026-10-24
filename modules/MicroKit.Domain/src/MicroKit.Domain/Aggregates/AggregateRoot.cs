@@ -19,8 +19,9 @@ namespace MicroKit.Domain.Aggregates;
 /// </para>
 /// <para>
 /// After a domain method throws, the aggregate instance must be discarded, not saved. Saving it, or
-/// draining its events, would publish facts of an operation that failed. To retry, load the
-/// aggregate again.
+/// draining its events, would publish facts of an operation that failed. Discard the change set
+/// that tracks it too, not only the reference: an EF Core <c>DbContext</c> committed after the throw
+/// saves the instance anyway. To retry, load the aggregate again.
 /// </para>
 /// </remarks>
 public abstract class AggregateRoot<TId> : Entity<TId>, IDomainEventsProvider, IAggregateRoot, IEventJournal
