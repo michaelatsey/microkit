@@ -104,6 +104,13 @@ public sealed class PhoneNumberTests
     }
 
     [Fact]
+    public void Constructor_FormatCharacterOutsideTheBmp_IsFormatting()
+    {
+        // U+E0001 LANGUAGE TAG, a Cf encoded as a surrogate pair; built in code for xUnit.
+        new PhoneNumber("0612345678" + char.ConvertFromUtf32(0xE0001)).Value.ShouldBe("0612345678");
+    }
+
+    [Fact]
     public void Constructor_DecimalDigitOutsideTheBmp_IsStoredAsAsciiDigit()
     {
         // U+1D7CE MATHEMATICAL BOLD DIGIT ZERO, a surrogate pair; built in code, since xUnit's

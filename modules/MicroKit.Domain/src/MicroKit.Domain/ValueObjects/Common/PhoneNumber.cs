@@ -84,14 +84,15 @@ public sealed record PhoneNumber(string Value) : IValueObject
                 i += markerLength;
             }
             else if (UnicodeText.CodePointAt(text, i, out var width) is { } codePoint
-                && CharUnicodeInfo.GetUnicodeCategory(codePoint) == UnicodeCategory.DecimalDigitNumber)
+                && CharUnicodeInfo.GetUnicodeCategory(codePoint) is var category
+                && (category == UnicodeCategory.DecimalDigitNumber || category == UnicodeCategory.Format
+                    || char.IsWhiteSpace(c) || FormattingCharacters.Contains(c)))
             {
-                buffer[length++] = (char)('0' + CharUnicodeInfo.GetDecimalDigitValue(text, i));
+                // A digit of any script is kept as its ASCII digit; the rest is formatting.
+                if (category == UnicodeCategory.DecimalDigitNumber)
+                    buffer[length++] = (char)('0' + CharUnicodeInfo.GetDecimalDigitValue(text, i));
                 i += width;
             }
-            else if (char.IsWhiteSpace(c) || FormattingCharacters.Contains(c)
-                || CharUnicodeInfo.GetUnicodeCategory(c) == UnicodeCategory.Format)
-                i++;
             else
                 throw new DomainException(
                     "Phone number contains a character that is not a digit, a leading '+' or 'tel:', an extension marker or formatting; the PhoneNumber remarks list them.");
