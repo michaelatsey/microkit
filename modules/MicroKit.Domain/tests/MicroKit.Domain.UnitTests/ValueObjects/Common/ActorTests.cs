@@ -94,6 +94,8 @@ public sealed class ActorTests
     [InlineData("alice\u0000")]
     [InlineData("ali\u200Bce")]   // zero-width space
     [InlineData("alice\u202E")]   // right-to-left override
+    [InlineData("alice\u2028INFO forged")]   // line separator, a line break in log viewers
+    [InlineData("alice\u2029INFO forged")]   // paragraph separator
     public void Constructor_ControlOrFormatCharacter_ThrowsDomainException(string value)
     {
         Should.Throw<DomainException>(() => new Actor(value))
@@ -101,10 +103,29 @@ public sealed class ActorTests
         Should.Throw<DomainException>(() => Actor.Restore(value));
     }
 
+    // Facts, not theory data: xUnit serializes theory data at discovery and replaces an unpaired
+    // surrogate with U+FFFD, so the value would never reach the test.
+    [Fact]
+    public void Constructor_UnpairedSurrogate_ThrowsDomainException()
+    {
+        foreach (var value in new[] { "alice" + '\uD800', '\uDC00' + "alice" })
+            Should.Throw<DomainException>(() => new Actor(value))
+                .Message.ShouldBe("Actor identifier cannot contain a control or format character.");
+    }
+
+    [Fact]
+    public void Constructor_FormatCharacterOutsideTheBmp_ThrowsDomainException()
+    {
+        // U+E0041 TAG LATIN CAPITAL LETTER A, an invisible Cf encoded as a surrogate pair.
+        Should.Throw<DomainException>(() => new Actor("alice" + char.ConvertFromUtf32(0xE0041)))
+            .Message.ShouldBe("Actor identifier cannot contain a control or format character.");
+    }
+
     [Theory]
     [InlineData("service account")]
     [InlineData("auth0|5f7c8ec7c33c6c004bbafe82")]
     [InlineData("Jos\u00E9")]
+    [InlineData("user-\uD83D\uDE00")]       // a surrogate pair is one printable character
     public void Constructor_PrintableIdentifier_IsAccepted(string value)
     {
         new Actor(value).Value.ShouldBe(value);

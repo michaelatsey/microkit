@@ -191,12 +191,15 @@ to remove an incorrect behaviour.
 #### D8 — `Actor` rejects control and format characters
 
 **Decision.** An actor identifier, built by the constructor or by `Actor.Restore`, rejects a control
-character (Unicode category Cc, line breaks included) or a format character (Cf, such as U+200B or
-U+202E) with a `DomainException`.
+character (Unicode category Cc, line breaks included), a format character (Cf, such as U+200B or
+U+202E, or a tag character outside the BMP), a line or paragraph separator (Zl, Zp: U+2028,
+U+2029) or an unpaired surrogate with a `DomainException`.
 
 **Reasoning.** An actor is built from a token claim or a header and ends up in audit fields and in
 the log lines built from them. `"alice\nINFO forged audit line"` was a valid actor, so a caller
-could forge a line in an audit log; an invisible format character made two actors look identical.
+could forge a line in an audit log, and U+2028 does the same in any viewer that renders it as a line
+break; an invisible format character made two actors look identical. An unpaired surrogate is
+written by `System.Text.Json` as U+FFFD, so the actor read back was not the one written.
 No identity provider issues identifiers with such characters, so the break only removes an unsafe
 behaviour.
 
