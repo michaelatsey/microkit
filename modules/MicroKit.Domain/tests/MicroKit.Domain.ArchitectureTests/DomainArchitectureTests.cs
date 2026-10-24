@@ -47,6 +47,21 @@ public sealed class DomainArchitectureTests
     }
 
     [Fact]
+    public void Domain_DeclaresNoPersistenceContract()
+    {
+        // MicroKit.Persistence.Abstractions owns repositories and the unit of work (ADR-003 D1).
+        var types = Types.InAssembly(DomainAssembly).GetTypes().ToArray();
+
+        types.ShouldNotBeEmpty();
+        types.Select(t => t.FullName!)
+            .Where(name => name.StartsWith("MicroKit.Domain.Repositories", StringComparison.Ordinal)
+                           || name.Contains(".IRepository", StringComparison.Ordinal)
+                           || name.Contains(".IReadRepository", StringComparison.Ordinal)
+                           || name.Contains(".IUnitOfWork", StringComparison.Ordinal))
+            .ShouldBeEmpty();
+    }
+
+    [Fact]
     public void ValueObjects_AreSealed()
     {
         var result = ValueObjectsAreSealed(DomainAssembly);

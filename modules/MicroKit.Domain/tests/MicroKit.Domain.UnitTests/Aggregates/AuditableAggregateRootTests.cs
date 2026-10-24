@@ -112,6 +112,21 @@ public sealed class AuditableAggregateRootTests
         aggregate.DomainEvents[0].OccurredAt.ShouldBe(CreatedAt);
     }
 
+    [Fact]
+    public void UpdateFields_AreSetOnlyThroughTouch()
+    {
+        System.Reflection.PropertyInfo[] properties =
+        [
+            typeof(AuditableAggregateRoot<TestAuditableId>).GetProperty(nameof(IAuditableEntity.UpdatedAt))!,
+            typeof(AuditableAggregateRoot<TestAuditableId>).GetProperty(nameof(IAuditableEntity.UpdatedBy))!,
+            typeof(AuditableEntity<GuidId>).GetProperty(nameof(IAuditableEntity.UpdatedAt))!,
+            typeof(AuditableEntity<GuidId>).GetProperty(nameof(IAuditableEntity.UpdatedBy))!,
+        ];
+
+        // A private setter leaves Touch as the only way a derived type can change the field.
+        properties.ShouldAllBe(p => p.SetMethod!.IsPrivate);
+    }
+
     private static TestAuditableId NewId() => new(Guid.CreateVersion7());
 }
 
