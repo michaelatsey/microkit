@@ -86,8 +86,17 @@ public sealed record Actor : IValueObject
     /// without being a built-in actor.
     /// </exception>
     /// <remarks>
-    /// Use this, not the constructor, in a value converter or a deserializer: the constructor
-    /// rejects the reserved prefix, so it cannot read back a stored built-in actor.
+    /// <para>
+    /// This only rehydrates a value this domain persisted earlier, in a value converter or a
+    /// deserializer reading back its own data: the constructor rejects the reserved prefix, so it
+    /// cannot read back a stored built-in actor.
+    /// </para>
+    /// <para>
+    /// Never pass user input, a request header or a token claim to this method. It turns the
+    /// reserved values into the built-in actors, so a caller supplying <c>$system</c> would be
+    /// recorded as the application itself. Build an actor from external input with the
+    /// constructor, which rejects the reserved prefix.
+    /// </para>
     /// </remarks>
     public static Actor Restore(string value) => value switch
     {
