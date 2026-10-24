@@ -61,6 +61,31 @@ public sealed class EmailTests
     }
 
     [Theory]
+    [InlineData("victim@example.com,attacker@example.org")]   // a header would read a recipient list
+    [InlineData("a@b.c,evil")]
+    [InlineData("a;b@example.com")]
+    [InlineData("a<b>@example.com")]
+    [InlineData("\"john\"@example.com")]
+    [InlineData("admin\u200B@example.com")]                    // zero-width space, invisible
+    [InlineData("admin@exam\u202Eple.com")]                    // right-to-left override
+    [InlineData("a@exa_mple.com")]
+    [InlineData("a@[192.168.0.1]")]
+    public void Constructor_CharacterOutsideTheAllowedSets_ThrowsDomainException(string email)
+    {
+        Should.Throw<DomainException>(() => new Email(email));
+    }
+
+    [Theory]
+    [InlineData("o'brien@example.com")]
+    [InlineData("a!#$%&*/=?^_`{|}~-z@example.com")]
+    [InlineData("jos\u00E9@exemple.fr")]
+    [InlineData("user@b\u00FCcher.de")]
+    public void Constructor_AllowedCharacters_Succeed(string email)
+    {
+        new Email(email).Value.ShouldBe(email.ToLowerInvariant());
+    }
+
+    [Theory]
     [InlineData("a")]
     [InlineData("@")]
     [InlineData("ab")]

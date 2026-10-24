@@ -8,13 +8,24 @@ namespace MicroKit.Domain.ValueObjects.Common;
 /// Provides case-insensitive equality and normalized storage.
 /// </summary>
 /// <remarks>
+/// <para>
 /// Leading and trailing white space is removed. White space or a control character inside the
 /// address, a line break included, is rejected, so an address can never carry an injected header
-/// line into a message built from it (ADR-004 D5).
+/// line into a message built from it.
+/// </para>
+/// <para>
+/// The local part accepts letters and digits, of any script, and the RFC 5322 <c>atext</c> symbols
+/// <c>! # $ % &amp; ' * + - / = ? ^ _ ` { | } ~</c> and the dot; the domain accepts letters, digits,
+/// <c>-</c> and the dot. Anything else is rejected, so a value is always a single bare address: no
+/// comma or semicolon that a header would read as a list of recipients, no angle bracket, no quoted
+/// local part, no invisible format character (ADR-004 D5).
+/// </para>
 /// </remarks>
 /// <param name="Value">The email address value</param>
 public sealed record Email(string Value) : IValueObject
 {
+    private const string LocalPartSymbols = "!#$%&'*+-/=?^_`{|}~.";
+
     /// <summary>
     /// Gets the normalized email address in lowercase.
     /// </summary>
@@ -70,6 +81,13 @@ public sealed record Email(string Value) : IValueObject
 
         if (domainPart.StartsWith('.') || domainPart.EndsWith('.') || domainPart.Contains(".."))
             throw new DomainException("Email domain contains invalid dot placement.");
+
+        if (!localPart.All(c => char.IsLetterOrDigit(c) || LocalPartSymbols.Contains(c)))
+            throw new DomainException(
+                "Email local part can contain only letters, digits and the characters ! # $ % & ' * + - / = ? ^ _ ` { | } ~ .");
+
+        if (!domainPart.All(c => char.IsLetterOrDigit(c) || c is '-' or '.'))
+            throw new DomainException("Email domain can contain only letters, digits, '-' and '.'.");
 
         // Normalize to lowercase for consistent storage and comparison
         return trimmed.ToLowerInvariant();

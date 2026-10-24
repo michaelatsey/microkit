@@ -121,17 +121,22 @@ failed on every built-in actor. The change is additive: it only accepts inputs t
   normalising differently.
 - *Trim in the value converter.* Every consumer would have to know it.
 
-#### D5 — `Email` rejects white space and control characters inside the address
+#### D5 — `Email` accepts only the characters of a bare address
 
 **Decision.** After trimming, `Email` rejects an address that contains white space or a control
-character, a line break included, with a `DomainException`.
+character, a line break included, with a `DomainException`. The local part accepts letters and
+digits of any script (RFC 6531) and the RFC 5322 `atext` symbols plus the dot; the domain accepts
+letters, digits, `-` and the dot. Any other character is rejected.
 
 **Reasoning.** The validation checked the `@`, the dots and the lengths only, so
 `"victim@example.com\r\nBcc: attacker@example.org"` was a valid `Email`. An application that puts an
 address in a mail header could then send to a recipient the caller chose: header injection, an
 unsafe behaviour, which the rule allows a break to remove. No unquoted address contains white space
 or a control character (RFC 5322 §3.4.1); a quoted local part may, but the type never parsed quoting,
-so it accepted those by accident, not by design.
+so it accepted those by accident, not by design. For the same reason a value could hold a comma
+or a semicolon, which a header reads as a second recipient, an angle bracket, or an invisible format
+character such as U+200B or U+202E, which makes two different values look identical. An allow-list
+closes the class of defect, where a deny-list of white space only closed one instance of it.
 
 **Rejected alternatives.**
 - *Strip the characters.* Stores an address other than the one supplied.
