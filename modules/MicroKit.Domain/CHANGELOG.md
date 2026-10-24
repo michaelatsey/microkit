@@ -38,6 +38,8 @@ Settles the public surface before `2.0.0` (#160). Every item under **Breaking** 
   `ArgumentOutOfRangeException`, and so does a `Touch` earlier than `CreatedAt` (#165).
 - `DomainEvent.EventId` defaults to `Guid.CreateVersion7()` instead of `Guid.NewGuid()` (D6; #114).
 - `GuidId.New()` returns a UUID version 7 (D6).
+- A `with` expression on a `DomainEvent` assigns a new `EventId`; only an explicit
+  `EventId = …` initializer preserves one, and `Guid.Empty` throws `ArgumentException` (#164).
 - `Money` holds a `Currency` instead of a `string`, rejects unknown ISO 4217 codes and amounts
   finer than the minor unit; `Money.Zero` takes a `Currency` (D7).
 - `Money.Multiply(decimal)` becomes `Multiply(decimal, MidpointRounding)` and rounds to the minor

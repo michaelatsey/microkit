@@ -24,6 +24,12 @@ namespace MicroKit.Domain.Events;
 /// accessor stays public so that replay, import and migration can preserve an original
 /// identity, which is what makes downstream deduplication work.
 /// </para>
+/// <para>
+/// An event produced by a <see langword="with"/> expression is a different fact, so it receives a
+/// new <see cref="EventId"/>; only an explicit initializer, <c>with { EventId = original.EventId }</c>
+/// or <c>new X(…) { EventId = id }</c>, preserves one. Otherwise deduplication keyed on the
+/// identifier would drop the derived fact as a duplicate of the original.
+/// </para>
 /// </remarks>
 /// <example>
 /// <code>
@@ -79,5 +85,38 @@ public abstract record DomainEvent(DateTimeOffset OccurredAt) : IDomainEvent
     /// for keys EF Core generates, never for an identifier the domain already assigned.
     /// </para>
     /// </remarks>
-    public Guid EventId { get; init; } = Guid.CreateVersion7();
+    /// <exception cref="ArgumentException">
+    /// Thrown when an initializer assigns <see cref="Guid.Empty"/>.
+    /// </exception>
+    public Guid EventId
+    {
+        get;
+        init => field = RequireIdentity(value, nameof(EventId));
+    } = Guid.CreateVersion7();
+
+    /// <summary>
+    /// Copies <paramref name="original"/> for a <see langword="with"/> expression, giving the copy
+    /// a new <see cref="EventId"/>.
+    /// </summary>
+    /// <param name="original">The event being copied.</param>
+    /// <remarks>
+    /// The copy is a different fact. An initializer in the same <see langword="with"/> expression
+    /// runs after this constructor, so <c>with { EventId = original.EventId }</c> still preserves
+    /// the identity on purpose.
+    /// </remarks>
+    protected DomainEvent(DomainEvent original)
+    {
+        ArgumentNullException.ThrowIfNull(original);
+
+        OccurredAt = original.OccurredAt;
+        EventId = Guid.CreateVersion7();
+    }
+
+    private static Guid RequireIdentity(Guid value, string paramName)
+    {
+        if (value == Guid.Empty)
+            throw new ArgumentException("An event identifier cannot be Guid.Empty.", paramName);
+
+        return value;
+    }
 }

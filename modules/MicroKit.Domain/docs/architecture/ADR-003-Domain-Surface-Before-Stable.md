@@ -159,6 +159,12 @@ sharing one identifier space is a modelling error this rule does not try to repa
 
 **Decision.** `DomainEvent.EventId` and `GuidId.New()` use `Guid.CreateVersion7()`.
 
+An event produced by a `with` expression is a different fact and receives a new identity:
+`DomainEvent` declares its copy constructor, which copies `OccurredAt` and assigns a fresh
+version 7 `EventId`. Only an explicit initializer (`with { EventId = id }`, `new X(…) { EventId = id }`)
+preserves an identity, for replay, import and migration. `EventId`'s `init` rejects `Guid.Empty`
+with `ArgumentException` (#164).
+
 **Reasoning.**
 - A random version 4 GUID fragments the index of a table receiving millions of rows, such as an
   outbox keyed by `EventId`, and `ORDER BY` on it reflects no real order (#114). The same holds
@@ -168,6 +174,9 @@ sharing one identifier space is a modelling error this rule does not try to repa
   no worse than version 4.
 - EF Core's `SequentialGuidValueGenerator` only runs for keys EF generates; it never runs for a
   key the domain assigned.
+- The compiler-generated copy constructor of a record copies every field, so `evt with { … }`
+  produced a new fact under the original `EventId`, and deduplication keyed on it dropped the new
+  fact silently. `Guid.Empty` would make every such event collide with every other (#164).
 
 **Rejected alternatives.**
 - *`Guid.NewGuid()` (status quo).* See above.

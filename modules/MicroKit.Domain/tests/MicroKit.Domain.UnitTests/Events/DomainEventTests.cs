@@ -38,6 +38,64 @@ public sealed class DomainEventTests
     }
 
     [Fact]
+    public void With_ChangingAMember_GivesANewEventId()
+    {
+        var original = new SampleEvent("a", OccurredAt);
+
+        var later = original with { OccurredAt = OccurredAt.AddMinutes(1) };
+
+        later.EventId.ShouldNotBe(original.EventId);
+        later.EventId.Version.ShouldBe(7);
+    }
+
+    [Fact]
+    public void With_NoChange_CopiesTheFactUnderANewEventId()
+    {
+        var original = new SampleEvent("a", OccurredAt);
+
+        var copy = original with { };
+
+        copy.Data.ShouldBe("a");
+        copy.OccurredAt.ShouldBe(original.OccurredAt);
+        copy.EventId.ShouldNotBe(original.EventId);
+    }
+
+    [Fact]
+    public void With_ExplicitEventId_KeepsIt()
+    {
+        var original = new SampleEvent("a", OccurredAt);
+
+        var replayed = original with { Data = "b", EventId = original.EventId };
+
+        replayed.EventId.ShouldBe(original.EventId);
+        replayed.Data.ShouldBe("b");
+    }
+
+    [Fact]
+    public void Initializer_ExplicitEventId_KeepsIt()
+    {
+        var id = Guid.CreateVersion7();
+
+        new SampleEvent("a", OccurredAt) { EventId = id }.EventId.ShouldBe(id);
+    }
+
+    [Fact]
+    public void Initializer_EmptyEventId_ThrowsArgumentException()
+    {
+        Should.Throw<ArgumentException>(() => new SampleEvent("a", OccurredAt) { EventId = Guid.Empty })
+            .ParamName.ShouldBe("EventId");
+    }
+
+    [Fact]
+    public void With_EmptyEventId_ThrowsArgumentException()
+    {
+        var original = new SampleEvent("a", OccurredAt);
+
+        Should.Throw<ArgumentException>(() => original with { EventId = Guid.Empty })
+            .ParamName.ShouldBe("EventId");
+    }
+
+    [Fact]
     public void OccurredAt_NonZeroOffset_IsStoredAtOffsetZero()
     {
         var plusTwo = OccurredAt.ToOffset(TimeSpan.FromHours(2));
