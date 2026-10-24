@@ -143,7 +143,9 @@ public abstract class AuditableEntity<TId> : Entity<TId>, IAuditableEntity
     /// on this object and on any other: a child entity whose own <c>Mutate</c> succeeded inside it
     /// keeps its audit stamp. Only this object's audit fields are left as they were. Validate the
     /// change at the start of the mutation, before its first assignment and before mutating any
-    /// child, so that an invalid change throws while nothing has changed.
+    /// child, so that an invalid change throws while nothing has changed. After a mutation throws,
+    /// the aggregate that owns this entity must be discarded, not saved: it may hold the partial
+    /// changes (ADR-004 D3).
     /// </para>
     /// <para>
     /// A nested <c>Mutate</c> on the same object, run inside <paramref name="mutation"/>, may record a
@@ -159,6 +161,11 @@ public abstract class AuditableEntity<TId> : Entity<TId>, IAuditableEntity
     /// exception rather than as a silent drift. A node whose clock is behind gets it at its own write;
     /// a node whose clock is ahead writes successfully, and the healthy nodes then get it until real
     /// time passes the instant it recorded.
+    /// </para>
+    /// <para>
+    /// A <paramref name="mutation"/> lambda that captures a parameter or a local, as the example
+    /// does, allocates a closure and a delegate on each call. That cost is negligible next to the
+    /// I/O that persists the change, so there is a single overload (ADR-004 D2).
     /// </para>
     /// </remarks>
     /// <example>

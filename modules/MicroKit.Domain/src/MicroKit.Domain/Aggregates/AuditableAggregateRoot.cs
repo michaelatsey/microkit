@@ -145,7 +145,8 @@ public abstract class AuditableAggregateRoot<TId> : AggregateRoot<TId>, IAuditab
     /// keeps its audit stamp. Only this object's audit fields and events are left as they were.
     /// Check the business rules (<c>CheckRule</c>) at the start of the mutation, before its first
     /// assignment and before mutating any child, so that a broken rule throws while nothing has
-    /// changed.
+    /// changed. After a mutation throws, the aggregate instance must be discarded, not saved: it may
+    /// hold the partial changes (ADR-004 D3).
     /// </para>
     /// <para>
     /// A nested <c>Mutate</c> on the same object, run inside <paramref name="mutation"/>, may record a
@@ -161,6 +162,11 @@ public abstract class AuditableAggregateRoot<TId> : AggregateRoot<TId>, IAuditab
     /// exception rather than as a silent drift. A node whose clock is behind gets it at its own write;
     /// a node whose clock is ahead writes successfully, and the healthy nodes then get it until real
     /// time passes the instant it recorded.
+    /// </para>
+    /// <para>
+    /// A <paramref name="mutation"/> lambda that captures a parameter or a local, as the example
+    /// does, allocates a closure and a delegate on each call. That cost is negligible next to the
+    /// I/O that persists the change, so there is a single overload (ADR-004 D2).
     /// </para>
     /// </remarks>
     /// <example>

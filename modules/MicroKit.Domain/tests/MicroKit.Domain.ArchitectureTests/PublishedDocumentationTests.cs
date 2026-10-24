@@ -76,6 +76,42 @@ public sealed class PublishedDocumentationTests
         doc.ShouldContain("before mutating any child");
     }
 
+    // #182, ADR-004 D3: a plain aggregate keeps the events and changes of a method that throws.
+    [Theory]
+    [InlineData("T:MicroKit.Domain.Aggregates.AggregateRoot`1")]
+    [InlineData("M:MicroKit.Domain.Aggregates.AggregateRoot`1.RaiseDomainEvent(MicroKit.Domain.Events.IDomainEvent)")]
+    [InlineData("M:MicroKit.Domain.Aggregates.AuditableEntity`1.Mutate(System.DateTimeOffset,MicroKit.Domain.ValueObjects.Common.Actor,System.Action)")]
+    [InlineData(AggregateMutate)]
+    public void AggregateMembers_StateThatAnInstanceIsDiscardedAfterAThrow(string member)
+    {
+        var doc = Member(member);
+
+        doc.ShouldContain("must be discarded, not saved");
+        doc.ShouldContain("ADR-004 D3");
+    }
+
+    [Fact]
+    public void AggregateRoot_StatesThatOnlyMutateRemovesTheEventsOfAFailedOperation()
+    {
+        var doc = Member("T:MicroKit.Domain.Aggregates.AggregateRoot`1");
+
+        doc.ShouldContain("does not roll back the domain events it raised");
+        doc.ShouldContain("AuditableAggregateRoot`1");
+    }
+
+    // #182, ADR-004 D2: the closure and delegate a capturing Mutate lambda allocates.
+    [Theory]
+    [InlineData("AuditableEntity`1")]
+    [InlineData("AuditableAggregateRoot`1")]
+    public void Mutate_StatesItsAllocation(string type)
+    {
+        var doc = Member(
+            $"M:MicroKit.Domain.Aggregates.{type}.Mutate(System.DateTimeOffset,MicroKit.Domain.ValueObjects.Common.Actor,System.Action)");
+
+        doc.ShouldContain("allocates a closure and a delegate on each call");
+        doc.ShouldContain("ADR-004 D2");
+    }
+
     private static string Member(string name)
     {
         var member = Documentation.Descendants("member")

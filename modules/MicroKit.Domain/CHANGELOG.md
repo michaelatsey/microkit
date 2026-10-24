@@ -80,6 +80,9 @@ Settles the public surface before `2.0.0` (#160). Every item under **Breaking** 
 ### Fixed
 - XML documentation of the `Entity` and `Auditable*` constructors explains EF Core constructor
   binding (#121); `IEvent` no longer cites the rejected `IApplicationEvent` (#153) (D11).
+- XML documentation of `AggregateRoot<TId>` and both `Mutate` methods, and the aggregates guide,
+  state that after a domain method throws the aggregate instance must be discarded, not saved, and
+  that a capturing `Mutate` lambda allocates per call (ADR-004 D2, D3; #182).
 
 ## [1.0.0-preview.1] — 2026-05-28
 

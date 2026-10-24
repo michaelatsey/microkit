@@ -105,6 +105,31 @@ var invoice = Invoice.Issue(
     new Money(120.00m, Currency.FromCode("EUR")), TimeProvider.System, Actor.System);
 ```
 
+A `Mutate` lambda that captures a parameter, as `Adjust` does, allocates a closure and a delegate on each call. That cost is negligible next to the I/O that persists the change, so `Mutate` has a single overload (ADR-004 D2).
+
+### When a domain method throws
+
+A domain method that throws leaves the aggregate as it was at the moment of the throw:
+
+- **Plain `AggregateRoot<TId>`:** the domain events raised before the throw stay in `DomainEvents`, and the state changed before the throw stays changed. Nothing rolls them back.
+- **`AuditableAggregateRoot<TId>`:** `Mutate` removes the domain events raised inside a mutation that throws and restores `UpdatedAt` and `UpdatedBy`, but the field changes made before the throw stay.
+
+So after a domain method throws, the aggregate instance must be discarded, not saved. Saving it, or draining its events, would publish facts of an operation that failed. Load the aggregate again to retry.
+
+```csharp
+try
+{
+    order.Ship(tracking, now);
+}
+catch (DomainException)
+{
+    // Do not save `order`: it may hold events and changes of the failed Ship.
+    throw;
+}
+```
+
+Checking every rule before the first assignment and the first `RaiseDomainEvent` keeps a broken rule from leaving anything behind; the discard rule covers every other exception (ADR-004 D3).
+
 ## Complex Aggregate Example
 
 ```csharp

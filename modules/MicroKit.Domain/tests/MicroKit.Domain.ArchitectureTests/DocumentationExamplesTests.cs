@@ -67,6 +67,17 @@ public sealed class DocumentationExamplesTests
     }
 
     [Fact]
+    public void Guide_StatesThatAnAggregateIsDiscardedAfterADomainMethodThrows()
+    {
+        // #182, ADR-004 D2 and D3.
+        var guide = File.ReadAllText(Path.Combine(Root, "docs", "guides", "Implementing-Aggregates.md"));
+
+        guide.ShouldContain("### When a domain method throws");
+        guide.ShouldContain("the aggregate instance must be discarded, not saved");
+        guide.ShouldContain("allocates a closure and a delegate on each call");
+    }
+
+    [Fact]
     public void Adr003_DescribesTheShippedEventRollback()
     {
         var adr = File.ReadAllText(Path.Combine(AppContext.BaseDirectory, "module-adr", "ADR-003-Domain-Surface-Before-Stable.md"));

@@ -57,6 +57,46 @@ read"). The rest of D7, the #170 read guard included, stands.
 - *Register `TrustedActorJsonConverter` from MicroKit.MediatR or MicroKit.Messaging.* Out of
   scope for a Domain decision, and #174 owns the Messaging side.
 
+### D2 — `Mutate` keeps a single overload (#182)
+
+**Decision.** `AuditableEntity<TId>` and `AuditableAggregateRoot<TId>` keep the single
+`Mutate(DateTimeOffset at, Actor by, Action mutation)`. Its XML remarks state the cost: a lambda
+that captures a parameter or a local allocates a closure and a delegate on each call.
+
+**Reasoning.**
+- `Mutate` wraps a business mutation, which is followed by the I/O that persists it. One closure
+  and one delegate are negligible next to that I/O.
+- `Mutate<TState>(DateTimeOffset, Actor, TState, Action<TState>)` is an additive overload: it can
+  ship after `2.0.0` without a break, if a benchmark ever shows a cost.
+
+**Rejected alternatives.**
+- *Add `Mutate<TState>` now.* Surface without a measured need, and a second way to write every
+  mutation.
+- *Replace `Action` with `Action<TState>`.* A break, and noisier call sites for every consumer.
+
+### D3 — Event rollback stays internal to the auditable path (#182)
+
+**Decision.** Only `AuditableAggregateRoot<TId>.Mutate` removes the domain events of a mutation
+that throws, through the internal `IEventJournal`. A plain `AggregateRoot<TId>` keeps the events
+raised by a method that throws, and its state changes. The limit is documented in the XML
+remarks of `AggregateRoot<TId>` (class and `RaiseDomainEvent`), of both `Mutate` methods, and in
+`docs/guides/Implementing-Aggregates.md`: after a domain method throws, the aggregate instance
+must be discarded, not saved.
+
+**Reasoning.**
+- A plain aggregate has no point of passage around its methods: the base class cannot tell where
+  an operation starts or ends, so it cannot know which events to remove.
+- Removing the events would not be enough anyway: the state changed before the throw stays, so the
+  instance is unsafe to save either way. Discarding it is the rule that covers both.
+- A `protected Atomically(Action)` is additive and can ship later, after `2.0.0`, without a break.
+
+**Rejected alternatives.**
+- *Expose `IEventJournal` or a public rollback.* Surface for a partial fix: state is not rolled
+  back.
+- *Add `Atomically(Action)` now.* Surface without a demonstrated need; additive later.
+- *Snapshot and restore the whole aggregate.* Needs a copy of arbitrary derived state, which the
+  base class cannot make.
+
 ## Consequences
 
 - A built-in actor serializes with any options: `Actor.System` is written `"$system"`.
@@ -65,6 +105,8 @@ read"). The rest of D7, the #170 read guard included, stands.
 - An event that carries an `Actor` whose value is a built-in actor is written to an outbox with
   default options, and fails only when it is read back. The `string` rule above prevents it until
   #174.
+- `Mutate` allocates per call when its lambda captures; no API changes (D2).
+- After a domain method throws, the aggregate instance is discarded, not saved (D3).
 
 ## References
 
