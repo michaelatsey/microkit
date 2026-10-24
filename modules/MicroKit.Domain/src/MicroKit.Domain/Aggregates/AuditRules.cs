@@ -39,6 +39,54 @@ internal static class AuditRules
     }
 
     /// <summary>
+    /// Runs one audited modification, the body of <c>Mutate</c> on both auditable bases.
+    /// </summary>
+    /// <param name="at">The instant of the modification.</param>
+    /// <param name="by">The actor performing it.</param>
+    /// <param name="mutation">The state change it wraps.</param>
+    /// <param name="createdAt">The creation instant of the audited object.</param>
+    /// <param name="updatedAt">The audited object's modification-instant field.</param>
+    /// <param name="updatedBy">The audited object's modifying-actor field.</param>
+    /// <param name="journal">The aggregate's events, or <see langword="null"/> for an entity.</param>
+    /// <remarks>
+    /// Validates before anything changes; runs <paramref name="mutation"/>; if it throws, restores
+    /// both audit fields to their values before it ran and removes the events it raised, then
+    /// rethrows; otherwise records the modification, unless a nested one already recorded a later
+    /// instant. The fields are written through <see langword="ref"/>, so a nested modification of
+    /// the same object writes the same storage this call reads back.
+    /// </remarks>
+    internal static void Mutate(
+        DateTimeOffset at,
+        Actor by,
+        Action mutation,
+        DateTimeOffset createdAt,
+        ref DateTimeOffset? updatedAt,
+        ref Actor? updatedBy,
+        IEventJournal? journal)
+    {
+        var instant = Modification(at, by, mutation, createdAt, updatedAt);
+
+        var (previousAt, previousBy) = (updatedAt, updatedBy);
+        var raisedEventCount = journal?.RaisedEventCount ?? 0;
+        try
+        {
+            mutation();
+        }
+        catch
+        {
+            (updatedAt, updatedBy) = (previousAt, previousBy);
+            journal?.RemoveEventsRaisedSince(raisedEventCount);
+            throw;
+        }
+
+        if (Supersedes(instant, updatedAt))
+        {
+            updatedAt = instant;
+            updatedBy = by;
+        }
+    }
+
+    /// <summary>
     /// Validates a modification before its mutation runs, and returns its instant at offset zero.
     /// </summary>
     /// <param name="at">The instant of the modification.</param>
@@ -53,7 +101,7 @@ internal static class AuditRules
     /// Thrown when <paramref name="at"/> is <c>default(DateTimeOffset)</c>, or precedes
     /// <paramref name="updatedAt"/>, or <paramref name="createdAt"/> when there is no update yet.
     /// </exception>
-    internal static DateTimeOffset Modification(
+    private static DateTimeOffset Modification(
         DateTimeOffset at, Actor by, Action mutation, DateTimeOffset createdAt, DateTimeOffset? updatedAt)
     {
         ArgumentNullException.ThrowIfNull(by);
@@ -80,6 +128,6 @@ internal static class AuditRules
     /// mutation, already recorded a later instant: overwriting it would make the recorded instant
     /// decrease.
     /// </returns>
-    internal static bool Supersedes(DateTimeOffset instant, DateTimeOffset? updatedAt) =>
+    private static bool Supersedes(DateTimeOffset instant, DateTimeOffset? updatedAt) =>
         updatedAt is null || instant >= updatedAt.Value;
 }

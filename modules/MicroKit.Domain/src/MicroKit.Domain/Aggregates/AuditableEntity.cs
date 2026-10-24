@@ -97,11 +97,16 @@ public abstract class AuditableEntity<TId> : Entity<TId>, IAuditableEntity
     /// <inheritdoc />
     public Actor CreatedBy { get; private init; }
 
-    /// <inheritdoc />
-    public DateTimeOffset? UpdatedAt { get; private set; }
+    // Explicit backing fields: AuditRules.Mutate writes them by reference. EF Core finds them by
+    // the _camelCase convention and materialises through them, as it did the auto-property fields.
+    private DateTimeOffset? _updatedAt;
+    private Actor? _updatedBy;
 
     /// <inheritdoc />
-    public Actor? UpdatedBy { get; private set; }
+    public DateTimeOffset? UpdatedAt { get => _updatedAt; private set => _updatedAt = value; }
+
+    /// <inheritdoc />
+    public Actor? UpdatedBy { get => _updatedBy; private set => _updatedBy = value; }
 
     /// <summary>
     /// Applies a state change to this entity and records it, updating <see cref="UpdatedAt"/> and
@@ -161,25 +166,6 @@ public abstract class AuditableEntity<TId> : Entity<TId>, IAuditableEntity
     ///     });
     /// </code>
     /// </example>
-    protected void Mutate(DateTimeOffset at, Actor by, Action mutation)
-    {
-        var instant = AuditRules.Modification(at, by, mutation, CreatedAt, UpdatedAt);
-
-        var (previousAt, previousBy) = (UpdatedAt, UpdatedBy);
-        try
-        {
-            mutation();
-        }
-        catch
-        {
-            (UpdatedAt, UpdatedBy) = (previousAt, previousBy);
-            throw;
-        }
-
-        if (AuditRules.Supersedes(instant, UpdatedAt))
-        {
-            UpdatedAt = instant;
-            UpdatedBy = by;
-        }
-    }
+    protected void Mutate(DateTimeOffset at, Actor by, Action mutation) =>
+        AuditRules.Mutate(at, by, mutation, CreatedAt, ref _updatedAt, ref _updatedBy, journal: null);
 }

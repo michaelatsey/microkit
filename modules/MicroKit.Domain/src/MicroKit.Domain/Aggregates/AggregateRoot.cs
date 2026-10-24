@@ -10,7 +10,7 @@ namespace MicroKit.Domain.Aggregates;
 /// Manages domain events and serves as consistency boundary.
 /// </summary>
 /// <typeparam name="TId">The strongly-typed identifier type</typeparam>
-public abstract class AggregateRoot<TId> : Entity<TId>, IDomainEventsProvider, IAggregateRoot
+public abstract class AggregateRoot<TId> : Entity<TId>, IDomainEventsProvider, IAggregateRoot, IEventJournal
     where TId : IEntityId
 {
     private readonly List<IDomainEvent> _domainEvents = [];
@@ -74,25 +74,22 @@ public abstract class AggregateRoot<TId> : Entity<TId>, IDomainEventsProvider, I
         return events;
     }
 
-    /// <summary>
-    /// Gets the number of domain events raised by this aggregate and not removed by
-    /// <see cref="RemoveEventsRaisedSince"/>, drained or not.
-    /// </summary>
-    internal int RaisedEventCount => _raisedEventCount;
+    /// <inheritdoc />
+    int IEventJournal.RaisedEventCount => _raisedEventCount;
 
     /// <summary>
-    /// Removes the domain events raised since <see cref="RaisedEventCount"/> read
+    /// Removes the domain events raised since <see cref="IEventJournal.RaisedEventCount"/> read
     /// <paramref name="raisedEventCount"/>, so that an operation that failed publishes none of the
     /// facts it raised.
     /// </summary>
-    /// <param name="raisedEventCount">The value of <see cref="RaisedEventCount"/> taken before the operation.</param>
+    /// <param name="raisedEventCount">The value of <see cref="IEventJournal.RaisedEventCount"/> taken before the operation.</param>
     /// <remarks>
     /// The events raised since then are the last ones of the list, because raising appends and
     /// draining empties it. If the operation drained events, only the ones it raised after the
     /// drain are still there to remove. The removed events are uncounted, so a rollback nested in
     /// another one leaves the outer rollback only the events the outer operation itself raised.
     /// </remarks>
-    internal void RemoveEventsRaisedSince(int raisedEventCount)
+    void IEventJournal.RemoveEventsRaisedSince(int raisedEventCount)
     {
         var removable = Math.Min(_raisedEventCount - raisedEventCount, _domainEvents.Count);
         _domainEvents.RemoveRange(_domainEvents.Count - removable, removable);

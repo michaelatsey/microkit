@@ -83,6 +83,22 @@ public sealed class DomainArchitectureTests
             .ShouldBeEmpty();
     }
 
+    [Theory]
+    [InlineData("MicroKit.Domain.Aggregates.AuditableEntity`1")]
+    [InlineData("MicroKit.Domain.Aggregates.AuditableAggregateRoot`1")]
+    public void AuditableBases_DelegateMutateToAuditRules(string typeName)
+    {
+        // The Mutate sequence lives once, in AuditRules (#179); a base must not grow its own copy.
+        using var module = ModuleDefinition.ReadModule(DomainAssembly.Location);
+        var mutate = module.GetType(typeName).Methods.Single(m => m.Name == "Mutate");
+
+        mutate.Body.HasExceptionHandlers.ShouldBeFalse();
+        mutate.Body.Instructions
+            .Select(i => i.Operand)
+            .OfType<MethodReference>()
+            .ShouldContain(m => m.DeclaringType.FullName == "MicroKit.Domain.Aggregates.AuditRules" && m.Name == "Mutate");
+    }
+
     [Fact]
     public void ValueObjects_AreSealed()
     {
