@@ -26,14 +26,15 @@ namespace MicroKit.Domain.ValueObjects.Common;
 /// </para>
 /// <para>
 /// <c>System.Text.Json</c> handles an actor asymmetrically, by design (ADR-004 D1). It writes every
-/// actor, built-in ones included, as its identifier, a JSON string, also as a dictionary key, so an
-/// HTTP response, a log or a cache written with default options never fails on an actor. With
-/// default options it reads the identifier back through the public constructor: JSON is treated as
-/// untrusted, so a value with the reserved prefix fails as a
+/// actor, built-in ones included, as its identifier, a JSON string, also as a dictionary key, so
+/// writing never fails on an actor. With default options it reads the identifier back through the
+/// public constructor: JSON is treated as untrusted, so a value with the reserved prefix fails as a
 /// <see cref="System.Text.Json.JsonException"/>. A built-in actor written with default options
-/// therefore <b>cannot be read back</b> with them. Storage the application wrote itself (an outbox,
-/// an event store, a cache) reads built-in actors back by registering
-/// <see cref="Json.TrustedActorJsonConverter"/> in <c>JsonSerializerOptions.Converters</c>.
+/// therefore <b>cannot be read back</b> with them. A path that only writes, such as an HTTP response
+/// or a log, needs nothing. Storage the application writes and reads back itself (an outbox, an
+/// event store, a cache, an idempotency store) must register
+/// <see cref="Json.TrustedActorJsonConverter"/> in the <c>JsonSerializerOptions.Converters</c> it
+/// reads with, or reading a built-in actor back fails.
 /// </para>
 /// <para>
 /// Until the Messaging outbox can register that converter (#174), an event that must carry a

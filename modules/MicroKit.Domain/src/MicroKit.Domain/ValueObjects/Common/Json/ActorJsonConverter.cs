@@ -11,16 +11,17 @@ namespace MicroKit.Domain.ValueObjects.Common.Json;
 /// <remarks>
 /// <para>
 /// The converter is asymmetric by design (ADR-004 D1). Writing carries no risk, so it writes every
-/// actor, built-in ones included, as its identifier, a JSON string, and as a dictionary key: an HTTP
-/// response, a log or a cache written with default options never fails on an actor.
+/// actor, built-in ones included, as its identifier, a JSON string, and as a dictionary key: a path
+/// that only writes, such as an HTTP response or a log, never fails on an actor.
 /// </para>
 /// <para>
 /// Reading is where the risk lies. JSON reaching <see cref="Actor"/> through this type-level
 /// converter is untrusted, so a value with the reserved prefix <see cref="Actor.ReservedPrefix"/>
 /// fails as a <see cref="JsonException"/> carrying the JSON path, as any other invalid identifier
 /// does. A built-in actor written with default options therefore cannot be read back with them:
-/// storage the application wrote itself reads it by registering
-/// <see cref="TrustedActorJsonConverter"/> in <see cref="JsonSerializerOptions.Converters"/>.
+/// storage the application writes and reads back itself (an outbox, an event store, a cache) reads
+/// it by registering <see cref="TrustedActorJsonConverter"/> in the
+/// <see cref="JsonSerializerOptions.Converters"/> it reads with.
 /// </para>
 /// </remarks>
 internal sealed class ActorJsonConverter : JsonConverter<Actor>

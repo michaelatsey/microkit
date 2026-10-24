@@ -76,6 +76,20 @@ public sealed class PublishedDocumentationTests
         doc.ShouldContain("before mutating any child");
     }
 
+    // ADR-004 D1: a cache reads back what it wrote, so it is not a path that only writes.
+    [Theory]
+    [InlineData("T:MicroKit.Domain.ValueObjects.Common.Actor")]
+    [InlineData("T:MicroKit.Domain.ValueObjects.Common.Json.ActorJsonConverter")]
+    public void ActorJson_DoesNotPresentACacheAsAWriteOnlyPath(string type)
+    {
+        var doc = Member(type);
+
+        doc.ShouldNotContain("or a cache written with default options never fails");
+        doc.ShouldContain("only writes, such as an HTTP response or a log");
+        doc.ShouldContain("a cache");
+        doc.ShouldContain("reads with");
+    }
+
     // #182, ADR-004 D3: a plain aggregate keeps the events and changes of a method that throws.
     [Theory]
     [InlineData("T:MicroKit.Domain.Aggregates.AggregateRoot`1")]

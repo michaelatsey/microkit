@@ -78,6 +78,18 @@ public sealed class DocumentationExamplesTests
     }
 
     [Fact]
+    public void Adr004_GivesAnAccurateAccountOfCachesAnd180()
+    {
+        // CachingBehavior handles queries, not commands; and a cache reads back what it wrote.
+        var adr = File.ReadAllText(Path.Combine(AppContext.BaseDirectory, "module-adr", "ADR-004-Domain-Surface-Amendments.md"));
+
+        adr.ShouldNotContain("idempotency and caching behaviours threw after the command");
+        adr.ShouldNotContain("a cache entry is written by the application and read, if ever");
+        adr.ShouldContain("its caching behaviour failed every query");
+        adr.ShouldContain("idempotency store and caching behaviour, now writes a response carrying a built-in actor and fails");
+    }
+
+    [Fact]
     public void Adr003_DescribesTheShippedEventRollback()
     {
         var adr = File.ReadAllText(Path.Combine(AppContext.BaseDirectory, "module-adr", "ADR-003-Domain-Surface-Before-Stable.md"));

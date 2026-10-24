@@ -11,9 +11,10 @@ merged:
 
 - #175 made the default `System.Text.Json` converter of `Actor` refuse to write a built-in actor,
   so that a value it could not read back would fail inside the business transaction. #180 showed
-  the cost: every write-only path using default options (an HTTP response, a log, a cache) failed
-  on a built-in actor, and MediatR's idempotency and caching behaviours threw after the command
-  had committed, so a retry ran it again (#181).
+  the cost: every serialization with default options failed on a built-in actor, an HTTP response
+  or a log as much as a store. MediatR's idempotency behaviour threw after the command had
+  committed, so a retry ran it again, and its caching behaviour failed every query whose response
+  carried a built-in actor (#181).
 - PR #169 left two questions under "Needs decision": the allocation of `Mutate`, and the domain
   events a plain `AggregateRoot<TId>` keeps after a domain method throws (#182).
 
@@ -42,10 +43,11 @@ read"). The rest of D7, the #170 read guard included, stands.
 - Writing a built-in actor carries no risk. Only reading untrusted JSON does, and #170 already
   guards that path.
 - The write refusal traded a contained failure, one event that an outbox processor cannot read,
-  for a wider one: every write-only path with default options, most of which never read back.
-  #180 is the worst case, a side effect committed and reported as failed.
-- A response, a log line or a cache entry is written by the application and read, if ever, by a
-  client or by the application itself, which knows its own options.
+  for a wider one: every serialization with default options, including the paths that never read
+  back. #180 is the worst case, a side effect committed and reported as failed.
+- A response or a log line is written by the application and never read back by it. Storage the
+  application reads back itself (an outbox, an event store, a cache, an idempotency store) knows
+  its own options, and registers `TrustedActorJsonConverter` on the options it reads with.
 
 **Rejected alternatives.**
 - *Keep the write refusal (#175, status quo).* Breaks every write-only path, as above.
@@ -105,6 +107,10 @@ must be discarded, not saved.
 - An event that carries an `Actor` whose value is a built-in actor is written to an outbox with
   default options, and fails only when it is read back. The `string` rule above prevents it until
   #174.
+- A store that reads back what it wrote with the same options, such as MicroKit.MediatR's
+  idempotency store and caching behaviour, now writes a response carrying a built-in actor and fails
+  when it reads it back, unless `TrustedActorJsonConverter` is registered on those options. That
+  registration belongs to the store's module, as #174 does for Messaging.
 - `Mutate` allocates per call when its lambda captures; no API changes (D2).
 - After a domain method throws, the aggregate instance is discarded, not saved (D3).
 
