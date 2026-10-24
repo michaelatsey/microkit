@@ -62,6 +62,10 @@ Settles the public surface before `2.0.0` (#160). Every item under **Breaking** 
   marker, spaces and `- . ( ) /`; rejects a `+` after the first character, a second marker and an
   empty extension; stores `X` as `x`; counts the 7 to 15 E.164 digits before the extension only
   (ADR-004 D6).
+- `PhoneNumber` extensions have at most 10 digits (ADR-004 D6).
+- `Actor` rejects control and format characters, line breaks included (ADR-004 D8).
+- Values persisted before these rules that they reject no longer rehydrate: clean them in the store
+  before deploying (ADR-004, Consequences).
 - `EntityId<T>.ToString()` is sealed: a derived identifier returns its `Guid` value instead of the
   record's synthesized `OrderId { Value = … }`, and can no longer declare its own `ToString`
   (ADR-004 D7).
@@ -95,6 +99,11 @@ Settles the public surface before `2.0.0` (#160). Every item under **Breaking** 
   that a capturing `Mutate` lambda allocates per call (ADR-004 D2, D3; #182).
 - `Actor.Restore` trims the stored value before matching a built-in actor, so a padded `$system`
   restores `Actor.System` (ADR-004 D4).
+- The implicit conversions of a null `Email` or `PhoneNumber` to `string` return `null` instead of
+  throwing `NullReferenceException` (ADR-004 D10).
+- XML documentation: `Actor` states that an OIDC `sub` longer than `MaxLength` is rejected
+  (ADR-004 D9); `Money.Add`, `Subtract` and `Multiply` list their `OverflowException`;
+  `PhoneNumber` states that a trunk prefix is kept.
 
 ## [1.0.0-preview.1] — 2026-05-28
 

@@ -250,6 +250,11 @@ annotation keeps a non-null argument's result non-null for the compiler.
   idempotency store and caching behaviour, now writes a response carrying a built-in actor and fails
   when it reads it back, unless `TrustedActorJsonConverter` is registered on those options. That
   registration belongs to the store's module, as #174 does for Messaging.
+- A value persisted before D5, D6 or D8 that the new rules reject (an `Email` with white space or a
+  comma, a `PhoneNumber` with a letter, a second `x` or an inner `+`, an `Actor` with a control
+  character) no longer rehydrates: the value converter or deserializer throws `DomainException` when
+  the row is read. Clean such values in the store before deploying; a `PhoneNumber` stored with `X`
+  rehydrates and reads back with `x`.
 - `Mutate` allocates per call when its lambda captures; no API changes (D2).
 - After a domain method throws, the aggregate instance is discarded, not saved (D3).
 

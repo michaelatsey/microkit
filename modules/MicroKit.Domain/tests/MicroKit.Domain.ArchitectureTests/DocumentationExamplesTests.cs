@@ -82,6 +82,15 @@ public sealed class DocumentationExamplesTests
     }
 
     [Fact]
+    public void Adr004_StatesWhatHappensToValuesPersistedBeforeTheStricterRules()
+    {
+        var adr = File.ReadAllText(Path.Combine(AppContext.BaseDirectory, "module-adr", "ADR-004-Domain-Surface-Amendments.md"));
+
+        adr.ShouldContain("A value persisted before D5, D6 or D8");
+        adr.ShouldContain("no longer rehydrates");
+    }
+
+    [Fact]
     public void Adr004_GivesAnAccurateAccountOfCachesAnd180()
     {
         // CachingBehavior handles queries, not commands; and a cache reads back what it wrote.
