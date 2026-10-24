@@ -263,10 +263,21 @@ src/MicroKit.Domain/
 │   └── Specification.cs
 ├── ValueObjects/
 │   ├── IValueObject.cs
-│   └── Common/          ← Actor, Address, Currency, DateRange, Email, FullName,
-│       │                   Money, Percentage, PhoneNumber
-│       └── Json/        ← ActorJsonConverter, CurrencyJsonConverter, MoneyJsonConverter
-│                           (internal), TrustedActorJsonConverter (public, ADR-004 D1)
+│   └── Common/
+│       ├── Actor.cs
+│       ├── Address.cs
+│       ├── Currency.cs
+│       ├── DateRange.cs
+│       ├── Email.cs
+│       ├── FullName.cs
+│       ├── Money.cs
+│       ├── Percentage.cs
+│       ├── PhoneNumber.cs
+│       └── Json/
+│           ├── ActorJsonConverter.cs          ← internal
+│           ├── CurrencyJsonConverter.cs       ← internal
+│           ├── MoneyJsonConverter.cs          ← internal
+│           └── TrustedActorJsonConverter.cs   ← public, opt-in (ADR-004 D1)
 ├── GlobalUsings.cs
 ├── UnicodeText.cs       ← internal : caractères invisibles ou de saut de ligne refusés (Actor, Email)
 └── UtcInstant.cs        ← internal : offset zéro, jamais default (instants d'audit et d'events)

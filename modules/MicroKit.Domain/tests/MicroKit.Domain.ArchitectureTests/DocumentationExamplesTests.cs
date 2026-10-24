@@ -1,3 +1,4 @@
+using System.Text.RegularExpressions;
 using Shouldly;
 
 namespace MicroKit.Domain.ArchitectureTests;
@@ -47,8 +48,9 @@ public sealed class DocumentationExamplesTests
         var brain = File.ReadAllText(Path.Combine(Root, ".claude", "CLAUDE.md"));
         var sources = File.ReadAllLines(Path.Combine(AppContext.BaseDirectory, "module-src", "files.txt"));
 
+        // A whole file name: "Entity.cs" must not be satisfied by "AuditableEntity.cs".
         sources.ShouldNotBeEmpty();
-        sources.Where(name => !brain.Contains(name, StringComparison.Ordinal)).ShouldBeEmpty();
+        sources.Where(name => !Regex.IsMatch(brain, $@"(?<![\w.]){Regex.Escape(name)}\.cs\b")).ShouldBeEmpty();
         brain.ShouldContain("EntityNotFoundException<TEntity, TId>(TId entityId)");
     }
 
