@@ -1,3 +1,4 @@
+using System.Globalization;
 using MicroKit.Domain.Exceptions;
 using MicroKit.Domain.ValueObjects;
 
@@ -14,17 +15,24 @@ namespace MicroKit.Domain.ValueObjects.Common;
 /// line into a message built from it.
 /// </para>
 /// <para>
-/// The local part accepts letters and digits, of any script, and the RFC 5322 <c>atext</c> symbols
+/// The local part accepts letters, digits and combining marks, of any script, and the RFC 5322
+/// <c>atext</c> symbols
 /// <c>! # $ % &amp; ' * + - / = ? ^ _ ` { | } ~</c> and the dot; the domain accepts letters, digits,
-/// <c>-</c> and the dot. Anything else is rejected, so a value is always a single bare address: no
-/// comma or semicolon that a header would read as a list of recipients, no angle bracket, no quoted
-/// local part, no invisible format character (ADR-004 D5).
+/// combining marks, <c>-</c> and the dot. Anything else is rejected, so a value is always a single
+/// bare address: no comma or semicolon that a header would read as a list of recipients, no angle
+/// bracket, no quoted local part, no invisible format character or variation selector
+/// (ADR-004 D5).
+/// </para>
+/// <para>
+/// The validation is lexical. It does not check the length or the hyphens of a domain label, and it
+/// does not detect look-alike letters from different scripts, as with any internationalized address.
 /// </para>
 /// </remarks>
 /// <param name="Value">The email address value</param>
 public sealed record Email(string Value) : IValueObject
 {
     private const string LocalPartSymbols = "!#$%&'*+-/=?^_`{|}~.";
+    private const string DomainSymbols = "-.";
 
     /// <summary>
     /// Gets the normalized email address in lowercase.
@@ -82,16 +90,55 @@ public sealed record Email(string Value) : IValueObject
         if (domainPart.StartsWith('.') || domainPart.EndsWith('.') || domainPart.Contains(".."))
             throw new DomainException("Email domain contains invalid dot placement.");
 
-        if (!localPart.All(c => char.IsLetterOrDigit(c) || LocalPartSymbols.Contains(c)))
+        if (!ContainsOnly(localPart, LocalPartSymbols))
             throw new DomainException(
                 "Email local part can contain only letters, digits and the characters ! # $ % & ' * + - / = ? ^ _ ` { | } ~ .");
 
-        if (!domainPart.All(c => char.IsLetterOrDigit(c) || c is '-' or '.'))
+        if (!ContainsOnly(domainPart, DomainSymbols))
             throw new DomainException("Email domain can contain only letters, digits, '-' and '.'.");
 
         // Normalize to lowercase for consistent storage and comparison
         return trimmed.ToLowerInvariant();
     }
+
+    /// <summary>
+    /// Whether <paramref name="part"/> holds only letters, digits and combining marks of any script,
+    /// read code point by code point, and the given ASCII symbols.
+    /// </summary>
+    /// <remarks>
+    /// The combining marks (Mn, Mc, Me) are what Indic and other scripts, and decomposed accents, are
+    /// written with. The invisible ones that only select a glyph variant, U+034F and the variation
+    /// selectors, are excluded. An unpaired surrogate is rejected.
+    /// </remarks>
+    private static bool ContainsOnly(string part, string symbols)
+    {
+        for (var i = 0; i < part.Length; i++)
+        {
+            var c = part[i];
+            if (symbols.Contains(c))
+                continue;
+
+            var pair = char.IsHighSurrogate(c) && i + 1 < part.Length && char.IsLowSurrogate(part[i + 1]);
+            var codePoint = pair ? char.ConvertToUtf32(c, part[i + 1]) : c;
+            var category = CharUnicodeInfo.GetUnicodeCategory(codePoint);
+
+            if (!IsLetterDigitOrMark(category) || IsVariantSelector(codePoint))
+                return false;
+
+            if (pair)
+                i++;
+        }
+
+        return true;
+    }
+
+    private static bool IsLetterDigitOrMark(UnicodeCategory category) => category is
+        UnicodeCategory.UppercaseLetter or UnicodeCategory.LowercaseLetter or UnicodeCategory.TitlecaseLetter
+        or UnicodeCategory.ModifierLetter or UnicodeCategory.OtherLetter or UnicodeCategory.DecimalDigitNumber
+        or UnicodeCategory.NonSpacingMark or UnicodeCategory.SpacingCombiningMark or UnicodeCategory.EnclosingMark;
+
+    private static bool IsVariantSelector(int codePoint) =>
+        codePoint is 0x034F or (>= 0x180B and <= 0x180D) or (>= 0xFE00 and <= 0xFE0F) or (>= 0xE0100 and <= 0xE01EF);
 
     /// <summary>
     /// Implicitly converts a string to an Email.

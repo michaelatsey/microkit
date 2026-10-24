@@ -75,11 +75,38 @@ public sealed class EmailTests
         Should.Throw<DomainException>(() => new Email(email));
     }
 
+    [Fact]
+    public void Constructor_LetterOutsideTheBmp_Succeeds()
+    {
+        // U+20000, a CJK Extension B ideograph, encoded as a surrogate pair. Built in code because
+        // xUnit's theory-data serialization is not reliable for surrogates.
+        var email = char.ConvertFromUtf32(0x20000) + "@example.com";
+
+        new Email(email).Value.ShouldBe(email);
+    }
+
+    [Theory]
+    [InlineData("admin\uFE0F@example.com")]   // variation selector, invisible
+    [InlineData("ad\u034Fmin@example.com")]   // combining grapheme joiner, invisible
+    public void Constructor_InvisibleVariantSelector_ThrowsDomainException(string email)
+    {
+        Should.Throw<DomainException>(() => new Email(email));
+    }
+
+    [Fact]
+    public void Constructor_UnpairedSurrogate_ThrowsDomainException()
+    {
+        Should.Throw<DomainException>(() => new Email("ab" + '\uD800' + "@example.com"));
+    }
+
     [Theory]
     [InlineData("o'brien@example.com")]
     [InlineData("a!#$%&*/=?^_`{|}~-z@example.com")]
     [InlineData("jos\u00E9@exemple.fr")]
     [InlineData("user@b\u00FCcher.de")]
+    [InlineData("jose\u0301@exemple.fr")]                                        // decomposed accent (Mn)
+    [InlineData("\u0928\u092E\u0938\u094D\u0924\u0947@example.com")]              // Devanagari, Mc and Mn signs
+    [InlineData("user@\u092E\u0930\u093E\u0920\u0940.\u092D\u093E\u0930\u0924")]  // Devanagari domain
     public void Constructor_AllowedCharacters_Succeed(string email)
     {
         new Email(email).Value.ShouldBe(email.ToLowerInvariant());

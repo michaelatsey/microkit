@@ -124,9 +124,12 @@ failed on every built-in actor. The change is additive: it only accepts inputs t
 #### D5 — `Email` accepts only the characters of a bare address
 
 **Decision.** After trimming, `Email` rejects an address that contains white space or a control
-character, a line break included, with a `DomainException`. The local part accepts letters and
-digits of any script (RFC 6531) and the RFC 5322 `atext` symbols plus the dot; the domain accepts
-letters, digits, `-` and the dot. Any other character is rejected.
+character, a line break included, with a `DomainException`. The local part accepts letters,
+digits and combining marks of any script (RFC 6531), read code point by code point, and the
+RFC 5322 `atext` symbols plus the dot; the domain accepts letters, digits, combining marks, `-` and
+the dot. Variation selectors and U+034F, invisible marks, are excluded. Any other character is
+rejected. The validation stays lexical: domain label lengths and hyphens, and look-alike letters
+from different scripts, are documented as not checked.
 
 **Reasoning.** The validation checked the `@`, the dots and the lengths only, so
 `"victim@example.com\r\nBcc: attacker@example.org"` was a valid `Email`. An application that puts an
