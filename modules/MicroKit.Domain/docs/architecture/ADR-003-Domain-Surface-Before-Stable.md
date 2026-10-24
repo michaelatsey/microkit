@@ -141,7 +141,8 @@ sharing one identifier space is a modelling error this rule does not try to repa
 - `UpdatedAt` and `UpdatedBy` are `private set` and change only through
   `protected void Mutate(DateTimeOffset at, Actor by, Action mutation)`, which replaced
   `Touch(DateTimeOffset, Actor)` (#176). Auditing wraps the mutation instead of following it:
-  `Mutate` validates `at` (default, offset, monotonicity) and `by` before anything changes, then
+  `Mutate` validates `at` (not default, not before the current stamp) and `by`, and normalises the
+  offset of `at` to zero (any offset is accepted), before anything changes, then
   runs `mutation`, and sets `UpdatedAt` and `UpdatedBy` only if it returns. If it throws, both
   audit fields are restored to their values before it ran, even when a nested `Mutate` on the
   same object succeeded inside it. On `AuditableAggregateRoot<TId>`, domain events raised inside a
@@ -159,7 +160,8 @@ sharing one identifier space is a modelling error this rule does not try to repa
   value converter can round-trip every actor.
 - The two auditable classes keep their own audit members, but not their own audit rules: the
   creation rules (null creator, default instant, offset) and the rules of `Mutate` (actor,
-  mutation, default instant, offset, monotonicity, and its exception message) live once, in the
+  mutation, default instant, offset normalisation, monotonicity, and its exception message) live
+  once, in the
   `internal static` class `AuditRules`, which both bases call (#179). The refusal below was of a
   public component, not of an internal one.
 

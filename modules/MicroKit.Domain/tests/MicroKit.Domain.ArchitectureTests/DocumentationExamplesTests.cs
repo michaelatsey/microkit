@@ -69,6 +69,8 @@ public sealed class DocumentationExamplesTests
         var adr = File.ReadAllText(Path.Combine(AppContext.BaseDirectory, "module-adr", "ADR-003-Domain-Surface-Before-Stable.md"));
 
         adr.ShouldNotContain("truncates its event list to the count");
+        adr.ShouldNotContain("(default, offset, monotonicity)");
+        adr.ShouldContain("any offset is accepted");
         adr.ShouldContain("`IEventJournal`");
         adr.ShouldContain("across a drain inside");
         adr.ShouldContain("`AuditRules.Mutate`");
