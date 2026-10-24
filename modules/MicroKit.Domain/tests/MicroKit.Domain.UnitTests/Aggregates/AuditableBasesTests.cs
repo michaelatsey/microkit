@@ -318,6 +318,44 @@ public sealed class AuditableBasesTests
     }
 
     [Fact]
+    public void Mutate_ThrowingMutationThatDrainedEvents_KeepsItsExceptionAndRemovesWhatItRaised()
+    {
+        var aggregate = new AuditedAggregate(new GuidId(Guid.CreateVersion7()), CreatedAt, Creator);
+        aggregate.RenameAndRaise("one", At);
+        aggregate.RenameAndRaise("two", At);
+        IReadOnlyList<IDomainEvent> drained = [];
+
+        var ex = Should.Throw<InvalidOperationException>(() => aggregate.Run(At.AddMinutes(1), Updater, () =>
+        {
+            drained = aggregate.DrainDomainEvents();
+            aggregate.Raise(new Renamed("lost", At.AddMinutes(1)));
+            throw new InvalidOperationException("rule broken");
+        }));
+
+        ex.Message.ShouldBe("rule broken");
+        drained.Count.ShouldBe(2);
+        aggregate.DomainEvents.ShouldBeEmpty();
+    }
+
+    [Fact]
+    public void Mutate_ThrowingMutation_KeepsEventsRaisedAfterAnEarlierDrain()
+    {
+        var aggregate = new AuditedAggregate(new GuidId(Guid.CreateVersion7()), CreatedAt, Creator);
+        aggregate.RenameAndRaise("one", At);
+        aggregate.DrainDomainEvents();
+        aggregate.RenameAndRaise("two", At);
+        var kept = aggregate.DomainEvents.ShouldHaveSingleItem();
+
+        Should.Throw<InvalidOperationException>(() => aggregate.Run(At.AddMinutes(1), Updater, () =>
+        {
+            aggregate.Raise(new Renamed("lost", At.AddMinutes(1)));
+            throw new InvalidOperationException("rule broken");
+        }));
+
+        aggregate.DomainEvents.ShouldBe([kept]);
+    }
+
+    [Fact]
     public void Mutate_SuccessfulMutation_KeepsTheEventsItRaised()
     {
         var aggregate = new AuditedAggregate(new GuidId(Guid.CreateVersion7()), CreatedAt, Creator);

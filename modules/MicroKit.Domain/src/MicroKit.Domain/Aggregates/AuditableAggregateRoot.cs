@@ -163,14 +163,14 @@ public abstract class AuditableAggregateRoot<TId> : AggregateRoot<TId>, IAuditab
     {
         var instant = AuditRules.Modification(at, by, mutation, CreatedAt, UpdatedAt);
 
-        var eventCount = DomainEventCount;
+        var raisedEventCount = RaisedEventCount;
         try
         {
             mutation();
         }
         catch
         {
-            TruncateDomainEvents(eventCount);
+            RemoveEventsRaisedSince(raisedEventCount);
             throw;
         }
 

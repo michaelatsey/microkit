@@ -14,6 +14,7 @@ public abstract class AggregateRoot<TId> : Entity<TId>, IDomainEventsProvider, I
     where TId : IEntityId
 {
     private readonly List<IDomainEvent> _domainEvents = [];
+    private int _raisedEventCount;
 
     /// <summary>
     /// Initializes a new instance of the <see cref="AggregateRoot{TId}"/> class.
@@ -47,6 +48,7 @@ public abstract class AggregateRoot<TId> : Entity<TId>, IDomainEventsProvider, I
     {
         ArgumentNullException.ThrowIfNull(domainEvent);
         _domainEvents.Add(domainEvent);
+        _raisedEventCount++;
     }
 
     /// <summary>
@@ -73,17 +75,26 @@ public abstract class AggregateRoot<TId> : Entity<TId>, IDomainEventsProvider, I
     }
 
     /// <summary>
-    /// Gets the number of domain events raised and not yet drained.
+    /// Gets the number of domain events ever raised by this aggregate, drained or not.
     /// </summary>
-    internal int DomainEventCount => _domainEvents.Count;
+    internal int RaisedEventCount => _raisedEventCount;
 
     /// <summary>
-    /// Removes the domain events raised after the first <paramref name="count"/>, so that an
-    /// operation that failed publishes none of the facts it raised.
+    /// Removes the domain events raised since <see cref="RaisedEventCount"/> read
+    /// <paramref name="raisedEventCount"/>, so that an operation that failed publishes none of the
+    /// facts it raised.
     /// </summary>
-    /// <param name="count">The number of events to keep, as read from <see cref="DomainEventCount"/>.</param>
-    internal void TruncateDomainEvents(int count) =>
-        _domainEvents.RemoveRange(count, _domainEvents.Count - count);
+    /// <param name="raisedEventCount">The value of <see cref="RaisedEventCount"/> taken before the operation.</param>
+    /// <remarks>
+    /// The events raised since then are the last ones of the list, because raising appends and
+    /// draining empties it. If the operation drained events, only the ones it raised after the
+    /// drain are still there to remove.
+    /// </remarks>
+    internal void RemoveEventsRaisedSince(int raisedEventCount)
+    {
+        var removable = Math.Min(_raisedEventCount - raisedEventCount, _domainEvents.Count);
+        _domainEvents.RemoveRange(_domainEvents.Count - removable, removable);
+    }
 
     /// <summary>
     /// Validates a business rule and throws if it's violated.
