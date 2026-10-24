@@ -8,7 +8,7 @@ namespace MicroKit.Domain.Specifications;
 /// <remarks>
 /// A derived specification implements <see cref="ToExpression"/> only. <see cref="IsSatisfiedBy"/>
 /// evaluates that same expression in memory, so a query provider translating the expression and an
-/// in-memory evaluation can never disagree.
+/// in-memory evaluation run one definition of the predicate.
 /// </remarks>
 public abstract class Specification<T> : ISpecification<T>
 {
@@ -43,9 +43,19 @@ public abstract class Specification<T> : ISpecification<T>
     /// </summary>
     /// <returns>An expression representing this specification's logic</returns>
     /// <remarks>
+    /// <para>
     /// This is the only member a derived specification implements. Return an expression the
     /// intended query provider can translate; <see cref="IsSatisfiedBy"/> compiles the same
     /// expression for in-memory evaluation.
+    /// </para>
+    /// <para>
+    /// Return an equivalent expression on every call. <see cref="IsSatisfiedBy"/> compiles the first
+    /// one and keeps it for the lifetime of the instance: an expression that captures a value read
+    /// at call time, such as the current time, would leave the cached delegate and a later
+    /// translation evaluating different predicates. Pass such a value to the constructor instead.
+    /// An expression that only a query provider can evaluate, such as one calling
+    /// <c>EF.Functions</c>, cannot be evaluated in memory.
+    /// </para>
     /// </remarks>
     public abstract Expression<Func<T, bool>> ToExpression();
 

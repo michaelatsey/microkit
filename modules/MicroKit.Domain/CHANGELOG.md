@@ -41,11 +41,13 @@ Settles the public surface before `2.0.0` (#160). Every item under **Breaking** 
 - `Specification<T>.IsSatisfiedBy` is no longer abstract and cannot be overridden; it evaluates
   `ToExpression()`. Derived specifications remove their `IsSatisfiedBy` override (D8).
 - `IBusinessRule` gains `string Code`, abstract on `BusinessRule`; every rule implements it.
-  `BusinessRuleViolationException` names the rule by `Code` in its message (D9).
+  `BusinessRuleViolationException` names the rule by `Code` in its message and rejects a rule
+  whose `Code` is null or empty (D9).
 
 ### Added
 - `Actor` value object, with the built-ins `Actor.System`, `Actor.Anonymous` and
-  `Actor.Migration` (`$system`, `$anonymous`, `$migration`) (D5).
+  `Actor.Migration` (`$system`, `$anonymous`, `$migration`), and `Actor.Restore` to read a stored
+  value back (D5).
 - `Currency` value type, from the active codes of ISO 4217 List One (D7).
 - `Money.Allocate(params int[] ratios)` (D7).
 - `BusinessRuleViolationException.Code` (D9).

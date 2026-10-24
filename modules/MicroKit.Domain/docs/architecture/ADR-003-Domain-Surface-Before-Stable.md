@@ -120,7 +120,9 @@ sharing one identifier space is a modelling error this rule does not try to repa
 - `UpdatedAt` and `UpdatedBy` are `private set` and change only through
   `protected void Touch(DateTimeOffset, Actor)`.
 - The built-in actors carry the reserved prefix `$`: `$system`, `$anonymous`, `$migration`.
-  Public construction rejects a leading `$`.
+  Public construction rejects a leading `$`. `Actor.Restore(string)` reads a stored value back,
+  returning the built-in instance for a reserved value and rejecting any other `$` value, so a
+  value converter can round-trip every actor.
 - The two auditable classes keep their duplicated audit code.
 
 **Reasoning.**
@@ -209,6 +211,12 @@ their `IsSatisfiedBy` overrides. `ISpecification<T>` is unchanged.
 - The cache is a plain field: two threads compiling the same expression produce equivalent
   delegates, so the race is benign and needs no lock.
 - Under NativeAOT, `Expression.Compile()` falls back to the expression interpreter.
+
+**Consequences.** `ToExpression` must return an equivalent expression on every call, since the
+first compilation is kept for the lifetime of the instance. An expression only a query provider
+can evaluate, such as one calling `EF.Functions`, can no longer be evaluated in memory: the
+in-memory store now runs what production runs, and fails where production would need the
+database. Each new instance pays one compilation on its first `IsSatisfiedBy`.
 
 **Rejected alternatives.**
 - *Keep both abstract (status quo).* Two copies that can drift.

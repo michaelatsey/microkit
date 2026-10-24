@@ -107,6 +107,7 @@ public abstract class Entity<TId> where TId : IEntityId
 ### ValueObject (2026 Modern Approach)
 ```csharp
 // ✅ RECOMMANDÉ: sealed record pour les value objects complexes
+// Exemple de motif : le Money livré (ValueObjects/Common/Money.cs) tient un Currency ISO 4217
 public sealed record Money(decimal Amount, string Currency) : IValueObject
 {
     // Validation dans le constructeur
@@ -138,7 +139,6 @@ public readonly record struct Percentage(decimal Value) : IValueObject
 public readonly record struct OrderId(Guid Value) : IEntityId
 {
     public static OrderId New() => new(Guid.NewGuid());
-    public static OrderId Empty => new(Guid.Empty);
     public override string ToString() => Value.ToString();
 }
 
@@ -196,6 +196,7 @@ public sealed record OrderCreatedEvent(
     DateTimeOffset OccurredAt) : DomainEvent(OccurredAt);
 
 // ✅ ValueObject immuable — record sealed recommandé
+// Exemple de motif : le Money livré (ValueObjects/Common/Money.cs) tient un Currency ISO 4217
 public sealed record Money(decimal Amount, string Currency) : IValueObject
 {
     public static Money Zero(string currency) => new(0, currency);

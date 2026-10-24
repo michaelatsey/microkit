@@ -65,6 +65,7 @@ public DateTimeOffset CreatedAt { get; init; }
 ### ValueObject (2026 Modern Approach)
 ```csharp
 // ✅ sealed record pour value objects complexes
+// Exemple de motif : le Money livré (ValueObjects/Common/Money.cs) tient un Currency ISO 4217
 public sealed record Money(decimal Amount, string Currency) : IValueObject
 {
     // Validation dans le constructeur
@@ -134,7 +135,6 @@ protected void CheckRule(IBusinessRule rule)
 public readonly record struct OrderId(Guid Value) : IEntityId
 {
     public static OrderId New() => new(Guid.NewGuid());
-    public static OrderId Empty => new(Guid.Empty);
     public static OrderId From(Guid value) => new(value);
     public override string ToString() => Value.ToString();
 }

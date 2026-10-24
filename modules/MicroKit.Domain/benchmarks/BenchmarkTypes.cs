@@ -27,6 +27,13 @@ public readonly record struct BenchmarkProductId(Guid Value) : IEntityId
     public override string ToString() => Value.ToString();
 }
 
+// Currencies resolved once, so measured methods do not include the ISO 4217 lookup
+public static class BenchmarkCurrencies
+{
+    public static readonly Currency Usd = Currency.FromCode("USD");
+    public static readonly Currency Eur = Currency.FromCode("EUR");
+}
+
 // Supporting value objects for benchmarks
 public sealed record TrackingNumber(string Value)
 {

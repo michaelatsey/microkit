@@ -19,7 +19,9 @@ namespace MicroKit.Domain.ValueObjects.Common;
 /// </para>
 /// <para>
 /// <c>default(Currency)</c> is not a currency: its <see cref="Code"/> is <see langword="null"/>,
-/// and <see cref="Money"/> rejects it.
+/// and <see cref="Money"/> rejects it. A serializer or a persistence converter must therefore
+/// rebuild an instance through <see cref="FromCode(string)"/>: one that fills the struct through
+/// its default constructor and skips the get-only properties produces <c>default(Currency)</c>.
 /// </para>
 /// </remarks>
 public readonly record struct Currency : IValueObject

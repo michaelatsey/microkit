@@ -3,13 +3,13 @@ using MicroKit.Domain.ValueObjects.Common;
 namespace MicroKit.Domain.Aggregates;
 
 /// <summary>
-/// Marker interface for entities that support audit tracking.
+/// Contract for entities that support audit tracking.
 /// Provides lightweight audit metadata without infrastructure dependencies.
 /// </summary>
 /// <remarks>
-/// This interface defines the contract for audit properties but does not specify
-/// how these properties are populated. The Application/Infrastructure layers are
-/// responsible for setting audit values during persistence operations.
+/// The members are read-only. <see cref="AuditableEntity{TId}"/> and
+/// <see cref="AuditableAggregateRoot{TId}"/> set the creation fields in their constructors and the
+/// update fields through <c>Touch</c>; no audit value is set by the persistence layer.
 /// </remarks>
 public interface IAuditableEntity
 {

@@ -179,6 +179,19 @@ public class MoneyTests
         M(1.000m, "TND").Allocate(1, 1, 1).Select(s => s.Amount).ShouldBe([0.334m, 0.333m, 0.333m]);
     }
 
+    [Fact]
+    public void Allocate_AtTheEdgeOfDecimalPrecision_StillSumsExactly()
+    {
+        // 3q + 2 minor units with 29 significant digits: a decimal quotient rounds up before Floor.
+        var original = M(79228162514264337593543950334m, "XOF");
+
+        var shares = original.Allocate(1, 1, 1);
+
+        shares.Aggregate((a, b) => a + b).ShouldBe(original);
+        shares.Select(s => s.Amount).ShouldBe(
+            [26409387504754779197847983445m, 26409387504754779197847983445m, 26409387504754779197847983444m]);
+    }
+
     [Theory]
     [InlineData(new int[0])]
     [InlineData(new[] { 1, -1 })]

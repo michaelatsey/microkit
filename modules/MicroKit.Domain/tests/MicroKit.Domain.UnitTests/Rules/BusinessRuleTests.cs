@@ -45,6 +45,24 @@ public sealed class BusinessRuleTests
         Should.Throw<ArgumentNullException>(() => new BusinessRuleViolationException(null!));
     }
 
+    [Theory]
+    [InlineData(null)]
+    [InlineData("")]
+    [InlineData("   ")]
+    public void Exception_RuleWithoutCode_ThrowsArgumentException(string? code)
+    {
+        Should.Throw<ArgumentException>(() => new BusinessRuleViolationException(new CodelessRule(code!)));
+    }
+
+    private sealed class CodelessRule(string code) : BusinessRule
+    {
+        public override bool IsBroken() => true;
+
+        public override string Message => "Always broken.";
+
+        public override string Code => code;
+    }
+
     private sealed class OrderMustHaveItemsRule(int itemCount) : BusinessRule
     {
         public override bool IsBroken() => itemCount == 0;

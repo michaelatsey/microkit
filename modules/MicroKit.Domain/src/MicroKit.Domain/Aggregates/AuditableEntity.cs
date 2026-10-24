@@ -37,10 +37,12 @@ public abstract class AuditableEntity<TId> : Entity<TId>, IAuditableEntity
     /// </para>
     /// <para>
     /// <see cref="CreatedBy"/> binds the same way only when <see cref="Actor"/> is mapped as a scalar
-    /// through a value converter. Mapped as an owned or complex type, it is not a scalar property
-    /// and EF Core cannot pass it to a constructor; give the derived entity a private constructor
-    /// for materialisation that takes the scalar members only, and let EF Core set
-    /// <see cref="CreatedBy"/> afterwards.
+    /// through a value converter, which must read values back with <see cref="Actor.Restore"/>.
+    /// Mapped as an owned or complex type, it is not a scalar property and EF Core cannot pass it
+    /// to a constructor; give the derived entity a private constructor for materialisation that
+    /// takes the scalar members only and passes a placeholder such as <see cref="Actor.System"/> to
+    /// this constructor, which requires a non-null actor. EF Core then overwrites
+    /// <see cref="CreatedBy"/> with the stored value.
     /// </para>
     /// </remarks>
     protected AuditableEntity(TId id, DateTimeOffset createdAt, Actor createdBy)

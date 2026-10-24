@@ -72,6 +72,32 @@ public sealed record Actor : IValueObject
     public static Actor Migration { get; } = new("$migration", allowReserved: true);
 
     /// <summary>
+    /// Restores an actor from an identifier read back from storage or a message, built-in actors
+    /// included.
+    /// </summary>
+    /// <param name="value">The stored identifier, as <see cref="Value"/> returned it.</param>
+    /// <returns>
+    /// The built-in instance when <paramref name="value"/> is the value of <see cref="System"/>,
+    /// <see cref="Anonymous"/> or <see cref="Migration"/>; otherwise a new actor built by the public
+    /// constructor.
+    /// </returns>
+    /// <exception cref="DomainException">
+    /// Thrown when the identifier is empty, too long, or starts with <see cref="ReservedPrefix"/>
+    /// without being a built-in actor.
+    /// </exception>
+    /// <remarks>
+    /// Use this, not the constructor, in a value converter or a deserializer: the constructor
+    /// rejects the reserved prefix, so it cannot read back a stored built-in actor.
+    /// </remarks>
+    public static Actor Restore(string value) => value switch
+    {
+        "$system" => System,
+        "$anonymous" => Anonymous,
+        "$migration" => Migration,
+        _ => new Actor(value),
+    };
+
+    /// <summary>
     /// Validates and normalizes an actor identifier.
     /// </summary>
     /// <param name="raw">The identifier to validate.</param>

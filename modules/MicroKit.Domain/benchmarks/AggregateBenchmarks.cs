@@ -23,9 +23,9 @@ public class AggregateBenchmarks
         _customerId = BenchmarkCustomerId.New();
         _orderItems = new List<BenchmarkOrderItemRequest>
         {
-            new(BenchmarkProductId.New(), 2, new Money(29.99m, Currency.FromCode("USD"))),
-            new(BenchmarkProductId.New(), 1, new Money(45.00m, Currency.FromCode("USD"))),
-            new(BenchmarkProductId.New(), 3, new Money(12.50m, Currency.FromCode("USD")))
+            new(BenchmarkProductId.New(), 2, new Money(29.99m, BenchmarkCurrencies.Usd)),
+            new(BenchmarkProductId.New(), 1, new Money(45.00m, BenchmarkCurrencies.Usd)),
+            new(BenchmarkProductId.New(), 3, new Money(12.50m, BenchmarkCurrencies.Usd))
         };
     }
 
@@ -70,7 +70,7 @@ public class AggregateBenchmarks
         // Add more items (generates events)
         for (int i = 0; i < 5; i++)
         {
-            order.AddItem(BenchmarkProductId.New(), 1, new Money(10.00m, Currency.FromCode("USD")));
+            order.AddItem(BenchmarkProductId.New(), 1, new Money(10.00m, BenchmarkCurrencies.Usd));
         }
 
         // Ship order (generates event)
@@ -101,7 +101,7 @@ public sealed class TestOrder : AggregateRoot<BenchmarkOrderId>
     public IReadOnlyList<OrderItem> Items => _items.AsReadOnly();
 
     public Money TotalAmount => _items.Count == 0
-        ? Money.Zero(Currency.FromCode("USD"))
+        ? Money.Zero(BenchmarkCurrencies.Usd)
         : _items.Select(i => i.TotalPrice).Aggregate((a, b) => a.Add(b));
 
     public static TestOrder Create(BenchmarkOrderId id, BenchmarkCustomerId customerId)

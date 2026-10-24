@@ -28,7 +28,7 @@ public class DomainEventBenchmarks
     {
         _orderId = BenchmarkOrderId.New();
         _customerId = BenchmarkCustomerId.New();
-        _amount = new Money(100.50m, Currency.FromCode("USD"));
+        _amount = new Money(100.50m, BenchmarkCurrencies.Usd);
         _timestamp = DateTimeOffset.UtcNow;
 
         _event1 = new OrderPlacedEvent(_orderId, _customerId, _amount, _timestamp);

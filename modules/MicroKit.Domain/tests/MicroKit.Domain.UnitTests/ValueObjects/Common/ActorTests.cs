@@ -70,6 +70,32 @@ public sealed class ActorTests
     }
 
     [Fact]
+    public void Restore_BuiltInValues_ReturnTheBuiltIns()
+    {
+        Actor.Restore(Actor.System.Value).ShouldBeSameAs(Actor.System);
+        Actor.Restore(Actor.Anonymous.Value).ShouldBeSameAs(Actor.Anonymous);
+        Actor.Restore(Actor.Migration.Value).ShouldBeSameAs(Actor.Migration);
+    }
+
+    [Fact]
+    public void Restore_UserValue_RoundTrips()
+    {
+        var actor = new Actor("user-1");
+
+        Actor.Restore(actor.Value).ShouldBe(actor);
+        Actor.Restore("system").ShouldNotBe(Actor.System);
+    }
+
+    [Theory]
+    [InlineData("$other")]
+    [InlineData("$System")]
+    [InlineData("")]
+    public void Restore_UnknownReservedOrEmptyValue_ThrowsDomainException(string value)
+    {
+        Should.Throw<DomainException>(() => Actor.Restore(value));
+    }
+
+    [Fact]
     public void Equality_IsByValue()
     {
         new Actor("user-1").ShouldBe(new Actor(" user-1 "));

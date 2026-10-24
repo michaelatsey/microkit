@@ -1,5 +1,10 @@
 # Value Objects 2026 Strategy — Implementation Guide
 
+> This guide records the records-first migration of the value objects. Its compatibility claims
+> concern that migration only. The later breaks of #160, `Money` among them, are listed in
+> `CHANGELOG.md` and reasoned in `architecture/ADR-003-Domain-Surface-Before-Stable.md`. The
+> `Money` declarations below illustrate the record pattern; the shipped `Money` holds a `Currency`.
+
 ## 🎯 Executive Summary
 
 **FINDING**: MicroKit.Domain already follows 2026 best practices! All value objects use modern `sealed record` pattern.
@@ -116,7 +121,6 @@ public sealed record Money(decimal Amount, string Currency) : IValueObject
 public readonly record struct ProductId(Guid Value) : IEntityId
 {
     public static ProductId New() => new(Guid.NewGuid());
-    public static ProductId Empty => new(Guid.Empty);
 }
 ```
 
@@ -160,12 +164,12 @@ Creation   | 4.3 ns    | 32 B
 ### Creating Value Objects (2026 Style)
 ```csharp
 // ✅ Simple, clean, performant
-var money = new Money(100.50m, "USD");
+var money = new Money(100.50m, Currency.FromCode("USD"));
 var email = new Email("user@example.com");
 var range = new DateRange(start, end);
 
 // ✅ Immutable operations
-var doubled = money.Multiply(2);
+var doubled = money.Multiply(2, MidpointRounding.ToEven);
 var sum = money.Add(otherMoney);
 
 // ✅ Zero-allocation equality

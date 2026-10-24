@@ -34,9 +34,9 @@ public class ValueObjectBenchmarks
         _legacyMoney2 = new LegacyMoney(100.50m, "USD");
         _legacyMoneyDifferent = new LegacyMoney(200.75m, "EUR");
 
-        _modernMoney1 = new Money(100.50m, Currency.FromCode("USD"));
-        _modernMoney2 = new Money(100.50m, Currency.FromCode("USD"));
-        _modernMoneyDifferent = new Money(200.75m, Currency.FromCode("EUR"));
+        _modernMoney1 = new Money(100.50m, BenchmarkCurrencies.Usd);
+        _modernMoney2 = new Money(100.50m, BenchmarkCurrencies.Usd);
+        _modernMoneyDifferent = new Money(200.75m, BenchmarkCurrencies.Eur);
 
         // ID benchmarks
         var testGuid = Guid.NewGuid();
@@ -51,7 +51,7 @@ public class ValueObjectBenchmarks
     public LegacyMoney CreateLegacyMoney() => new(99.99m, "USD");
 
     [Benchmark(Description = "Modern Money Creation")]
-    public Money CreateModernMoney() => new(99.99m, Currency.FromCode("USD"));
+    public Money CreateModernMoney() => new(99.99m, BenchmarkCurrencies.Usd);
 
     [Benchmark(Baseline = true, Description = "Legacy Money Equality (True)")]
     public bool LegacyMoneyEqualityTrue() => _legacyMoney1.Equals(_legacyMoney2);

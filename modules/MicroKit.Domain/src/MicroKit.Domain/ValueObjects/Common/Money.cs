@@ -16,6 +16,12 @@ namespace MicroKit.Domain.ValueObjects.Common;
 /// <see cref="Add"/> and <see cref="Subtract"/> keep that scale by construction; <see cref="Multiply"/>
 /// rounds to it with the mode the caller states, and <see cref="Allocate"/> splits an amount
 /// without losing a minor unit.
+/// <para>
+/// Construction throws <see cref="DomainException"/> for an amount finer than the minor unit, a
+/// domain rule, and <see cref="ArgumentException"/> for <c>default(Currency)</c>, a programming
+/// error. Operations throw <see cref="DomainException"/> for mismatched currencies and
+/// <see cref="ArgumentException"/> for invalid arguments.
+/// </para>
 /// </remarks>
 public sealed record Money(decimal Amount, Currency Currency) : IValueObject
 {
@@ -97,6 +103,9 @@ public sealed record Money(decimal Amount, Currency Currency) : IValueObject
     /// <exception cref="ArgumentException">
     /// Thrown when <paramref name="ratios"/> is empty, contains a negative value, or sums to zero.
     /// </exception>
+    /// <exception cref="OverflowException">
+    /// Thrown when the amount in minor units multiplied by a ratio exceeds the range of <see cref="decimal"/>.
+    /// </exception>
     public IReadOnlyList<Money> Allocate(params int[] ratios)
     {
         ArgumentNullException.ThrowIfNull(ratios);
@@ -122,9 +131,12 @@ public sealed record Money(decimal Amount, Currency Currency) : IValueObject
         var shares = new decimal[ratios.Length];
         var remainder = units;
 
+        // Exact integer division: a decimal quotient rounds to 28-29 significant digits and could
+        // round up before a floor, over-allocating a share.
         for (var i = 0; i < ratios.Length; i++)
         {
-            shares[i] = Math.Floor(units * ratios[i] / total);
+            var product = units * ratios[i];
+            shares[i] = (product - product % total) / total;
             remainder -= shares[i];
         }
 
