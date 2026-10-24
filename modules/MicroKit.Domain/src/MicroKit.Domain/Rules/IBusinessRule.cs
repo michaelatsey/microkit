@@ -18,4 +18,15 @@ public interface IBusinessRule
     /// Used in exception messages when the rule is violated.
     /// </summary>
     string Message { get; }
+
+    /// <summary>
+    /// Gets the stable, machine-readable code that identifies this rule, such as
+    /// <c>order.must-have-items</c>.
+    /// </summary>
+    /// <remarks>
+    /// The code is a contract: consumers persist it, translate it and map it to API error codes.
+    /// Keep it stable across renames of the implementing type, which is why it is never derived
+    /// from the type name.
+    /// </remarks>
+    string Code { get; }
 }
