@@ -121,6 +121,25 @@ failed on every built-in actor. The change is additive: it only accepts inputs t
   normalising differently.
 - *Trim in the value converter.* Every consumer would have to know it.
 
+#### D5 — `Email` rejects white space and control characters inside the address
+
+**Decision.** After trimming, `Email` rejects an address that contains white space or a control
+character, a line break included, with a `DomainException`.
+
+**Reasoning.** The validation checked the `@`, the dots and the lengths only, so
+`"victim@example.com\r\nBcc: attacker@example.org"` was a valid `Email`. An application that puts an
+address in a mail header could then send to a recipient the caller chose: header injection, an
+unsafe behaviour, which the rule allows a break to remove. No unquoted address contains white space
+or a control character (RFC 5322 §3.4.1); a quoted local part may, but the type never parsed quoting,
+so it accepted those by accident, not by design.
+
+**Rejected alternatives.**
+- *Strip the characters.* Stores an address other than the one supplied.
+- *Full RFC 5322 parsing, quoted local parts included.* A new validator for addresses that mail
+  providers do not issue; out of proportion for a lightweight type.
+- *`System.Net.Mail.MailAddress`.* It parses a display name and an address, not a bare address, so
+  it accepts input this type must reject.
+
 ## Consequences
 
 - A built-in actor serializes with any options: `Actor.System` is written `"$system"`.

@@ -7,6 +7,11 @@ namespace MicroKit.Domain.ValueObjects.Common;
 /// Represents an email address with lightweight format validation and normalization.
 /// Provides case-insensitive equality and normalized storage.
 /// </summary>
+/// <remarks>
+/// Leading and trailing white space is removed. White space or a control character inside the
+/// address, a line break included, is rejected, so an address can never carry an injected header
+/// line into a message built from it (ADR-004 D5).
+/// </remarks>
 /// <param name="Value">The email address value</param>
 public sealed record Email(string Value) : IValueObject
 {
@@ -27,6 +32,9 @@ public sealed record Email(string Value) : IValueObject
             throw new DomainException("Email address cannot be null or empty.");
 
         var trimmed = email.Trim();
+
+        if (trimmed.Any(c => char.IsWhiteSpace(c) || char.IsControl(c)))
+            throw new DomainException("Email address cannot contain white space or control characters.");
 
         if (trimmed.Length < 3) // Minimum: a@b
             throw new DomainException("Email address is too short.");

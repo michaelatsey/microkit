@@ -46,6 +46,21 @@ public sealed class EmailTests
     }
 
     [Theory]
+    [InlineData("victim@example.com\r\nBcc: attacker@example.org")]
+    [InlineData("victim@example.com\nBcc:attacker@example.org")]
+    [InlineData("john doe@example.com")]
+    [InlineData("john@exam ple.com")]
+    [InlineData("john\t@example.com")]
+    [InlineData("john\u0000@example.com")]
+    [InlineData("john\u00A0doe@example.com")]
+    public void Constructor_WhiteSpaceOrControlCharacterInside_ThrowsDomainException(string email)
+    {
+        // A line break would let an address inject a header into a message built from it.
+        Should.Throw<DomainException>(() => new Email(email))
+            .Message.ShouldBe("Email address cannot contain white space or control characters.");
+    }
+
+    [Theory]
     [InlineData("a")]
     [InlineData("@")]
     [InlineData("ab")]
