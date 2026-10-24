@@ -20,8 +20,12 @@ namespace MicroKit.Domain.ValueObjects.Common;
 /// <c>! # $ % &amp; ' * + - / = ? ^ _ ` { | } ~</c> and the dot; the domain accepts letters, digits,
 /// combining marks, <c>-</c> and the dot. Anything else is rejected, so a value is always a single
 /// bare address: no comma or semicolon that a header would read as a list of recipients, no angle
-/// bracket, no quoted local part, no invisible format character or variation selector
-/// (ADR-004 D5).
+/// bracket, no quoted local part, no invisible character such as a format character, a variation
+/// selector or a Hangul filler (ADR-004 D5).
+/// </para>
+/// <para>
+/// The address is normalized to Unicode NFC before it is checked and stored, so a decomposed accent
+/// and its precomposed form give equal values.
 /// </para>
 /// <para>
 /// The validation is lexical. It does not check the length or the hyphens of a domain label, and it
@@ -54,6 +58,13 @@ public sealed record Email(string Value) : IValueObject
 
         if (trimmed.Any(c => char.IsWhiteSpace(c) || char.IsControl(c)))
             throw new DomainException("Email address cannot contain white space or control characters.");
+
+        if (!UnicodeText.IsVisible(trimmed))
+            throw new DomainException("Email address cannot contain an invisible character.");
+
+        // NFC: a decomposed accent and its precomposed form are the same address, so they must compare
+        // equal and collide in a unique index. Normalize throws on an unpaired surrogate, refused above.
+        trimmed = trimmed.Normalize();
 
         if (trimmed.Length < 3) // Minimum: a@b
             throw new DomainException("Email address is too short.");
@@ -98,7 +109,7 @@ public sealed record Email(string Value) : IValueObject
             throw new DomainException("Email domain can contain only letters, digits, '-' and '.'.");
 
         // Normalize to lowercase for consistent storage and comparison
-        return trimmed.ToLowerInvariant();
+        return trimmed.ToLowerInvariant().Normalize();
     }
 
     /// <summary>
@@ -106,27 +117,27 @@ public sealed record Email(string Value) : IValueObject
     /// read code point by code point, and the given ASCII symbols.
     /// </summary>
     /// <remarks>
-    /// The combining marks (Mn, Mc, Me) are what Indic and other scripts, and decomposed accents, are
-    /// written with. The invisible ones that only select a glyph variant, U+034F and the variation
-    /// selectors, are excluded. An unpaired surrogate is rejected.
+    /// The combining marks (Mn, Mc, Me) are what Indic and other scripts are written with. A code point
+    /// <see cref="UnicodeText"/> refuses, invisible or unassigned, is rejected even when it is a letter
+    /// or a mark, and so is an unpaired surrogate.
     /// </remarks>
     private static bool ContainsOnly(string part, string symbols)
     {
-        for (var i = 0; i < part.Length; i++)
+        var i = 0;
+        while (i < part.Length)
         {
-            var c = part[i];
-            if (symbols.Contains(c))
+            if (symbols.Contains(part[i]))
+            {
+                i++;
                 continue;
+            }
 
-            var pair = char.IsHighSurrogate(c) && i + 1 < part.Length && char.IsLowSurrogate(part[i + 1]);
-            var codePoint = pair ? char.ConvertToUtf32(c, part[i + 1]) : c;
-            var category = CharUnicodeInfo.GetUnicodeCategory(codePoint);
-
-            if (!IsLetterDigitOrMark(category) || IsVariantSelector(codePoint))
+            if (UnicodeText.CodePointAt(part, i, out var length) is not { } codePoint
+                || UnicodeText.IsRefused(codePoint)
+                || !IsLetterDigitOrMark(CharUnicodeInfo.GetUnicodeCategory(codePoint)))
                 return false;
 
-            if (pair)
-                i++;
+            i += length;
         }
 
         return true;
@@ -136,9 +147,6 @@ public sealed record Email(string Value) : IValueObject
         UnicodeCategory.UppercaseLetter or UnicodeCategory.LowercaseLetter or UnicodeCategory.TitlecaseLetter
         or UnicodeCategory.ModifierLetter or UnicodeCategory.OtherLetter or UnicodeCategory.DecimalDigitNumber
         or UnicodeCategory.NonSpacingMark or UnicodeCategory.SpacingCombiningMark or UnicodeCategory.EnclosingMark;
-
-    private static bool IsVariantSelector(int codePoint) =>
-        codePoint is 0x034F or (>= 0x180B and <= 0x180D) or (>= 0xFE00 and <= 0xFE0F) or (>= 0xE0100 and <= 0xE01EF);
 
     /// <summary>
     /// Implicitly converts a string to an Email.

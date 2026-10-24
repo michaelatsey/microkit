@@ -268,6 +268,7 @@ src/MicroKit.Domain/
 │       └── Json/        ← ActorJsonConverter, CurrencyJsonConverter, MoneyJsonConverter
 │                           (internal), TrustedActorJsonConverter (public, ADR-004 D1)
 ├── GlobalUsings.cs
+├── UnicodeText.cs       ← internal : caractères invisibles ou de saut de ligne refusés (Actor, Email)
 └── UtcInstant.cs        ← internal : offset zéro, jamais default (instants d'audit et d'events)
 ```
 

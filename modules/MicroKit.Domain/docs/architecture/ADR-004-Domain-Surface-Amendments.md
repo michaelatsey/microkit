@@ -127,9 +127,11 @@ failed on every built-in actor. The change is additive: it only accepts inputs t
 character, a line break included, with a `DomainException`. The local part accepts letters,
 digits and combining marks of any script (RFC 6531), read code point by code point, and the
 RFC 5322 `atext` symbols plus the dot; the domain accepts letters, digits, combining marks, `-` and
-the dot. Variation selectors and U+034F, invisible marks, are excluded. Any other character is
-rejected. The validation stays lexical: domain label lengths and hyphens, and look-alike letters
-from different scripts, are documented as not checked.
+the dot. A code point `UnicodeText` refuses (D8) is excluded even when it is a letter or a mark,
+such as a Hangul filler or a variation selector. Any other character is rejected. The address is
+normalized to Unicode NFC first, so a decomposed accent and its precomposed form give equal values.
+The validation stays lexical: domain label lengths and hyphens, and look-alike letters from
+different scripts, are documented as not checked.
 
 **Reasoning.** The validation checked the `@`, the dots and the lengths only, so
 `"victim@example.com\r\nBcc: attacker@example.org"` was a valid `Email`. An application that puts an
@@ -197,18 +199,24 @@ to remove an incorrect behaviour.
   every consumer who does not read it.
 - *Format the identifier in `EntityNotFoundException`.* Fixes one caller out of all.
 
-#### D8 — `Actor` rejects control and format characters
+#### D8 — `Actor` rejects invisible, control and line-breaking characters
 
-**Decision.** An actor identifier, built by the constructor or by `Actor.Restore`, rejects a control
-character (Unicode category Cc, line breaks included), a format character (Cf, such as U+200B or
-U+202E, or a tag character outside the BMP), a line or paragraph separator (Zl, Zp: U+2028,
-U+2029) or an unpaired surrogate with a `DomainException`.
+**Decision.** An actor identifier, built by the constructor or by `Actor.Restore`, rejects with a
+`DomainException` every code point the internal `UnicodeText` refuses: a control character (Cc,
+line breaks included), a format character (Cf, such as U+200B, U+202E or a tag character outside
+the BMP), a line or paragraph separator (Zl, Zp: U+2028, U+2029), an unassigned code point (Cn),
+an unpaired surrogate, and every Unicode `Default_Ignorable_Code_Point` (variation selectors,
+Hangul fillers, U+034F, the soft hyphen). `Email` applies the same definition (D5): one rule, in
+one place, decoded code point by code point.
 
 **Reasoning.** An actor is built from a token claim or a header and ends up in audit fields and in
 the log lines built from them. `"alice\nINFO forged audit line"` was a valid actor, so a caller
 could forge a line in an audit log, and U+2028 does the same in any viewer that renders it as a line
-break; an invisible format character made two actors look identical. An unpaired surrogate is
-written by `System.Text.Json` as U+FFFD, so the actor read back was not the one written.
+break; an invisible character, format or default-ignorable, made two actors look identical. An
+unpaired surrogate is written by `System.Text.Json` as U+FFFD, so the actor read back was not the
+one written. An unassigned code point is refused so that a later Unicode version can only make the
+rule accept more: a version assigning it as a format character cannot make a stored actor fail to
+rehydrate.
 No identity provider issues identifiers with such characters, so the break only removes an unsafe
 behaviour.
 
@@ -216,6 +224,8 @@ behaviour.
 - *Strip the characters.* Two different inputs would become the same actor.
 - *Restrict actors to ASCII.* Identifiers such as service-account display names may be non-ASCII;
   only the invisible and control characters are unsafe.
+- *A list per value object.* `Actor` and `Email` had drifted apart within one review round; the
+  shared definition keeps them aligned.
 
 #### D9 — `Actor.MaxLength` stays 200, as a documented limit
 
@@ -260,8 +270,10 @@ annotation keeps a non-null argument's result non-null for the compiler.
   #174.
 - A store that reads back what it wrote with the same options, such as MicroKit.MediatR's
   idempotency store and caching behaviour, now writes a response carrying a built-in actor and fails
-  when it reads it back, unless `TrustedActorJsonConverter` is registered on those options. That
-  registration belongs to the store's module, as #174 does for Messaging.
+  when it reads it back, unless `TrustedActorJsonConverter` is registered on those options. The
+  failure lasts as long as the entry: the idempotency store sets no expiry, and a cached query
+  without one never expires, so such a key fails until the entry is removed. That registration
+  belongs to the store's module, as #174 does for Messaging.
 - A value persisted before D5, D6 or D8 that the new rules reject (an `Email` with white space or a
   comma, a `PhoneNumber` with a letter other than a marker, a second marker or an inner `+`, an
   `Actor` with a control

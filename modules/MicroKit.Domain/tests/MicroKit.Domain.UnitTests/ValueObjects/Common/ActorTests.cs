@@ -96,10 +96,14 @@ public sealed class ActorTests
     [InlineData("alice\u202E")]   // right-to-left override
     [InlineData("alice\u2028INFO forged")]   // line separator, a line break in log viewers
     [InlineData("alice\u2029INFO forged")]   // paragraph separator
+    [InlineData("alice\uFE0F")]              // variation selector, default-ignorable
+    [InlineData("ali\u3164ce")]              // Hangul filler, an invisible letter
+    [InlineData("alice\u00AD")]              // soft hyphen
+    [InlineData("alice\u0378")]              // unassigned code point
     public void Constructor_ControlOrFormatCharacter_ThrowsDomainException(string value)
     {
         Should.Throw<DomainException>(() => new Actor(value))
-            .Message.ShouldBe("Actor identifier cannot contain a control or format character.");
+            .Message.ShouldBe("Actor identifier cannot contain an invisible, control or line-breaking character.");
         Should.Throw<DomainException>(() => Actor.Restore(value));
     }
 
@@ -110,7 +114,7 @@ public sealed class ActorTests
     {
         foreach (var value in new[] { "alice" + '\uD800', '\uDC00' + "alice" })
             Should.Throw<DomainException>(() => new Actor(value))
-                .Message.ShouldBe("Actor identifier cannot contain a control or format character.");
+                .Message.ShouldBe("Actor identifier cannot contain an invisible, control or line-breaking character.");
     }
 
     [Fact]
@@ -118,7 +122,7 @@ public sealed class ActorTests
     {
         // U+E0041 TAG LATIN CAPITAL LETTER A, an invisible Cf encoded as a surrogate pair.
         Should.Throw<DomainException>(() => new Actor("alice" + char.ConvertFromUtf32(0xE0041)))
-            .Message.ShouldBe("Actor identifier cannot contain a control or format character.");
+            .Message.ShouldBe("Actor identifier cannot contain an invisible, control or line-breaking character.");
     }
 
     [Theory]

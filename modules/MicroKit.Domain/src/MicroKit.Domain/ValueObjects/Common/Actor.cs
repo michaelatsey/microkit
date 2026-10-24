@@ -1,4 +1,3 @@
-using System.Globalization;
 using System.Text.Json.Serialization;
 using MicroKit.Domain.Exceptions;
 using MicroKit.Domain.ValueObjects.Common.Json;
@@ -17,9 +16,11 @@ namespace MicroKit.Domain.ValueObjects.Common;
 /// provider issuing longer ones needs a shorter identifier mapped to it (ADR-004 D9).
 /// </para>
 /// <para>
-/// A control character, a line break or a line or paragraph separator included, an invisible format
-/// character or an unpaired surrogate is rejected, so an actor read from a token claim or a header
-/// cannot forge a line in an audit log, and always reads back as itself (ADR-004 D8).
+/// An invisible, control or line-breaking character is rejected: a control or format character, a
+/// line or paragraph separator, a default-ignorable character such as a variation selector or a
+/// Hangul filler, an unassigned code point or an unpaired surrogate. An actor read from a token claim
+/// or a header therefore cannot forge a line in an audit log nor pass for another one, and always
+/// reads back as itself (ADR-004 D8).
 /// </para>
 /// <para>
 /// Prefer the built-in instances (<see cref="System"/>, <see cref="Anonymous"/>,
@@ -75,7 +76,7 @@ public sealed record Actor : IValueObject
     /// <param name="value">The actor identifier. Leading and trailing white space is removed.</param>
     /// <exception cref="DomainException">
     /// Thrown when the identifier is empty, exceeds <see cref="MaxLength"/>, starts with
-    /// <see cref="ReservedPrefix"/>, or contains a control or format character.
+    /// <see cref="ReservedPrefix"/>, or contains an invisible, control or line-breaking character.
     /// </exception>
     public Actor(string value) : this(value, allowReserved: false) { }
 
@@ -120,7 +121,8 @@ public sealed record Actor : IValueObject
     /// constructor.
     /// </returns>
     /// <exception cref="DomainException">
-    /// Thrown when the identifier is empty, too long, contains a control or format character, or
+    /// Thrown when the identifier is empty, too long, contains an invisible, control or line-breaking
+    /// character, or
     /// starts with <see cref="ReservedPrefix"/> without being a built-in actor.
     /// </exception>
     /// <remarks>
@@ -158,8 +160,8 @@ public sealed record Actor : IValueObject
     /// <param name="allowReserved">Whether the identifier may start with <see cref="ReservedPrefix"/>.</param>
     /// <returns>The trimmed identifier.</returns>
     /// <exception cref="DomainException">
-    /// Thrown when the identifier is empty, exceeds <see cref="MaxLength"/>, contains a control or
-    /// format character, or starts with <see cref="ReservedPrefix"/> while
+    /// Thrown when the identifier is empty, exceeds <see cref="MaxLength"/>, contains an invisible,
+    /// control or line-breaking character, or starts with <see cref="ReservedPrefix"/> while
     /// <paramref name="allowReserved"/> is false.
     /// </exception>
     private static string Validate(string raw, bool allowReserved)
@@ -172,50 +174,14 @@ public sealed record Actor : IValueObject
         if (trimmed.Length > MaxLength)
             throw new DomainException($"Actor identifier cannot exceed {MaxLength} characters.");
 
-        if (!IsPrintable(trimmed))
-            throw new DomainException("Actor identifier cannot contain a control or format character.");
+        if (!UnicodeText.IsVisible(trimmed))
+            throw new DomainException("Actor identifier cannot contain an invisible, control or line-breaking character.");
 
         if (!allowReserved && trimmed[0] == ReservedPrefix)
             throw new DomainException(
                 $"Actor identifier cannot start with '{ReservedPrefix}', which is reserved for the built-in actors.");
 
         return trimmed;
-    }
-
-    /// <summary>
-    /// Whether an identifier holds only characters that print as themselves on one line.
-    /// </summary>
-    /// <remarks>
-    /// Rejects control and format characters, outside the BMP too, the line and paragraph separators
-    /// U+2028 and U+2029,
-    /// which a log viewer renders as a line break, and an unpaired surrogate, which a serializer
-    /// replaces with U+FFFD so the actor would not read back as itself (ADR-004 D8).
-    /// </remarks>
-    private static bool IsPrintable(string value)
-    {
-        for (var i = 0; i < value.Length; i++)
-        {
-            var c = value[i];
-
-            if (char.IsHighSurrogate(c) && i + 1 < value.Length && char.IsLowSurrogate(value[i + 1]))
-            {
-                // A pair is one character outside the BMP, such as an invisible tag character (Cf).
-                if (CharUnicodeInfo.GetUnicodeCategory(value, i) == UnicodeCategory.Format)
-                    return false;
-
-                i++;
-                continue;
-            }
-
-            if (char.IsSurrogate(c) || char.IsControl(c))
-                return false;
-
-            var category = CharUnicodeInfo.GetUnicodeCategory(c);
-            if (category is UnicodeCategory.Format or UnicodeCategory.LineSeparator or UnicodeCategory.ParagraphSeparator)
-                return false;
-        }
-
-        return true;
     }
 
     /// <summary>

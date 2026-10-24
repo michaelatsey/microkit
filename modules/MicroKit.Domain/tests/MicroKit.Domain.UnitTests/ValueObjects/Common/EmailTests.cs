@@ -76,6 +76,15 @@ public sealed class EmailTests
     }
 
     [Fact]
+    public void Constructor_DecomposedAccent_IsNormalizedToNfcAndEqualsThePrecomposedForm()
+    {
+        var decomposed = new Email("jose\u0301@exemple.fr");
+
+        decomposed.Value.ShouldBe("jos\u00E9@exemple.fr");
+        decomposed.ShouldBe(new Email("jos\u00E9@exemple.fr"));
+    }
+
+    [Fact]
     public void Constructor_LetterOutsideTheBmp_Succeeds()
     {
         // U+20000, a CJK Extension B ideograph, encoded as a surrogate pair. Built in code because
@@ -88,6 +97,10 @@ public sealed class EmailTests
     [Theory]
     [InlineData("admin\uFE0F@example.com")]   // variation selector, invisible
     [InlineData("ad\u034Fmin@example.com")]   // combining grapheme joiner, invisible
+    [InlineData("a\u180Fb@example.com")]      // Mongolian free variation selector four
+    [InlineData("a\u3164b@example.com")]      // Hangul filler, an invisible letter (Lo)
+    [InlineData("a\u17B4b@example.com")]      // Khmer inherent vowel, invisible (Mn)
+    [InlineData("a\u00ADb@example.com")]      // soft hyphen
     public void Constructor_InvisibleVariantSelector_ThrowsDomainException(string email)
     {
         Should.Throw<DomainException>(() => new Email(email));
@@ -104,7 +117,6 @@ public sealed class EmailTests
     [InlineData("a!#$%&*/=?^_`{|}~-z@example.com")]
     [InlineData("jos\u00E9@exemple.fr")]
     [InlineData("user@b\u00FCcher.de")]
-    [InlineData("jose\u0301@exemple.fr")]                                        // decomposed accent (Mn)
     [InlineData("\u0928\u092E\u0938\u094D\u0924\u0947@example.com")]              // Devanagari, Mc and Mn signs
     [InlineData("user@\u092E\u0930\u093E\u0920\u0940.\u092D\u093E\u0930\u0924")]  // Devanagari domain
     public void Constructor_AllowedCharacters_Succeed(string email)
