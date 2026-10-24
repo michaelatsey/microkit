@@ -36,10 +36,11 @@ public abstract class AuditableEntity<TId> : Entity<TId>, IAuditableEntity
     /// </exception>
     /// <remarks>
     /// <para>
-    /// Every instant entering an auditable type is normalised to offset zero with
+    /// Every instant passed to a constructor or to <c>Touch</c> is normalised to offset zero with
     /// <see cref="DateTimeOffset.ToUniversalTime"/>: the instant is preserved, only its
     /// representation changes, so <c>DateTimeOffset.Now</c> is accepted. <c>default(DateTimeOffset)</c>
-    /// is rejected.
+    /// is rejected. A value EF Core materialises through the backing field bypasses the rule and is
+    /// kept as the database returned it.
     /// </para>
     /// <para>
     /// EF Core binds constructor parameters to mapped properties by name, so a derived constructor

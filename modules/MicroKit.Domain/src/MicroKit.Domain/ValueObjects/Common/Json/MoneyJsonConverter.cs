@@ -1,6 +1,7 @@
 using System.Globalization;
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using MicroKit.Domain.Exceptions;
 
 namespace MicroKit.Domain.ValueObjects.Common.Json;
 
@@ -9,9 +10,19 @@ namespace MicroKit.Domain.ValueObjects.Common.Json;
 /// through the <see cref="Money"/> constructor, so an unknown code or an excess scale is rejected.
 /// </summary>
 /// <remarks>
+/// <para>
 /// Property names follow <see cref="JsonSerializerOptions.PropertyNamingPolicy"/> and are matched
 /// case-insensitively when <see cref="JsonSerializerOptions.PropertyNameCaseInsensitive"/> is set.
 /// <see cref="Money.IsZero"/> is derived, so it is not written, and ignored when read.
+/// </para>
+/// <para>
+/// The amount follows <see cref="JsonSerializerOptions.NumberHandling"/>: it is written as a
+/// string under <see cref="JsonNumberHandling.WriteAsString"/>, and a quoted amount is read under
+/// <see cref="JsonNumberHandling.AllowReadingFromString"/>. The currency code is read and written
+/// as <see cref="CurrencyJsonConverter"/> does. Invalid content fails with a
+/// <see cref="JsonException"/>, whose inner exception is the <see cref="DomainException"/> when the
+/// domain rejected the value.
+/// </para>
 /// </remarks>
 internal sealed class MoneyJsonConverter : JsonConverter<Money>
 {
@@ -41,7 +52,15 @@ internal sealed class MoneyJsonConverter : JsonConverter<Money>
                 if (amount is null || code is null)
                     throw new JsonException($"Money requires both '{amountName}' and '{currencyName}'.");
 
-                return new Money(amount.Value, Currency.FromCode(code));
+                var currency = CurrencyJsonConverter.FromCode(code);
+                try
+                {
+                    return new Money(amount.Value, currency);
+                }
+                catch (DomainException ex)
+                {
+                    throw new JsonException(ex.Message, ex);
+                }
             }
 
             if (reader.TokenType != JsonTokenType.PropertyName)
@@ -70,8 +89,11 @@ internal sealed class MoneyJsonConverter : JsonConverter<Money>
         ArgumentNullException.ThrowIfNull(options);
 
         writer.WriteStartObject();
-        writer.WriteNumber(ConvertName(AmountName, options), value.Amount);
-        writer.WriteString(ConvertName(CurrencyName, options), value.Currency.Code);
+        if (options.NumberHandling.HasFlag(JsonNumberHandling.WriteAsString))
+            writer.WriteString(ConvertName(AmountName, options), value.Amount.ToString(CultureInfo.InvariantCulture));
+        else
+            writer.WriteNumber(ConvertName(AmountName, options), value.Amount);
+        writer.WriteString(ConvertName(CurrencyName, options), CurrencyJsonConverter.CodeOf(value.Currency));
         writer.WriteEndObject();
     }
 
@@ -82,7 +104,7 @@ internal sealed class MoneyJsonConverter : JsonConverter<Money>
 
         if (reader.TokenType == JsonTokenType.String
             && options.NumberHandling.HasFlag(JsonNumberHandling.AllowReadingFromString)
-            && decimal.TryParse(reader.GetString(), NumberStyles.Number, CultureInfo.InvariantCulture, out var parsed))
+            && decimal.TryParse(reader.GetString(), NumberStyles.Float, CultureInfo.InvariantCulture, out var parsed))
             return parsed;
 
         throw new JsonException($"'{ConvertName(AmountName, options)}' is a JSON number.");

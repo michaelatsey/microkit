@@ -98,7 +98,8 @@ sharing one identifier space is a modelling error this rule does not try to repa
 - Every instant entering the domain (`CreatedAt`, `UpdatedAt` through `Touch`, and `OccurredAt`
   on construction and through `with`) is normalised to offset zero with `ToUniversalTime()`, and
   `default(DateTimeOffset)` is rejected with `ArgumentOutOfRangeException`. `Touch` rejects an
-  instant earlier than `CreatedAt`; an equal one is accepted (#165).
+  instant earlier than `CreatedAt`; an equal one is accepted (#165). Values EF Core materialises
+  through the backing fields bypass the rule; database column mapping is outside this decision.
 
 **Reasoning.**
 - Reading `DateTimeOffset.UtcNow` in a constructor hides a dependency: tests can only assert a

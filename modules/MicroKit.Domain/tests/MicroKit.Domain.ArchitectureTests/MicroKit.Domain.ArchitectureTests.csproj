@@ -27,11 +27,17 @@
     <ProjectReference Include="../../src/MicroKit.Domain/MicroKit.Domain.csproj" />
   </ItemGroup>
 
-  <!-- PublishedDocumentationTests read MicroKit.Domain.xml next to the test assembly. Copy the
-       referenced project's documentation file explicitly, and fail the build if it is missing. -->
-  <PropertyGroup>
-    <AllowedReferenceRelatedFileExtensions>$(AllowedReferenceRelatedFileExtensions);.xml</AllowedReferenceRelatedFileExtensions>
-  </PropertyGroup>
+  <!-- PublishedDocumentationTests read MicroKit.Domain.xml next to the test assembly. The SDK
+       default already copies a referenced project's .xml; appending it states the dependency in
+       this file, so a change to that default cannot drop the file silently, and the target below
+       fails the build if it is missing anyway. The extension is appended inside a target: set in
+       the project body, the property would pre-empt the SDK default (.pdb, .xml, …), which is only
+       applied when it is empty. -->
+  <Target Name="CopyReferenceDocumentationFiles" BeforeTargets="ResolveAssemblyReferences">
+    <PropertyGroup>
+      <AllowedReferenceRelatedFileExtensions>$(AllowedReferenceRelatedFileExtensions);.xml</AllowedReferenceRelatedFileExtensions>
+    </PropertyGroup>
+  </Target>
 
   <!-- DocumentationExamplesTests search the module's guides, performance notes, .claude/ files and
        README for samples of the surface #160 replaced. Copy them to the output, keeping their
@@ -44,7 +50,7 @@
   </ItemGroup>
 
   <Target Name="RequireModuleDocumentation" AfterTargets="CopyFilesToOutputDirectory">
-    <Error Condition="!Exists('$(OutDir)module-docs/README.md') Or !Exists('$(OutDir)module-docs/docs/guides/Implementing-Aggregates.md') Or !Exists('$(OutDir)module-docs/.claude/rules/csharp-style.md')"
+    <Error Condition="!Exists('$(OutDir)module-docs/README.md') Or !Exists('$(OutDir)module-docs/docs/guides/Implementing-Aggregates.md') Or !Exists('$(OutDir)module-docs/docs/performance/ValueObject-Benchmarks.md') Or !Exists('$(OutDir)module-docs/.claude/rules/csharp-style.md')"
            Text="The module documentation was not copied to $(OutDir)module-docs; DocumentationExamplesTests cannot run without it." />
   </Target>
 

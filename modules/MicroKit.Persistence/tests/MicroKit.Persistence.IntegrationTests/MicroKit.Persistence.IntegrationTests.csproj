@@ -10,6 +10,11 @@
   <ItemGroup>
     <!-- Same-module, IsPackable=false — unconditional ProjectReferences (no CIReleaseBuild pattern needed) -->
     <ProjectReference Include="..\..\src\MicroKit.Persistence.EntityFrameworkCore\MicroKit.Persistence.EntityFrameworkCore.csproj" />
+    <!-- Cross-module, test-only: the aggregates, events and actors these tests persist come from
+         MicroKit.Domain directly. Unconditional, so a CIReleaseBuild=true build still compiles them
+         against the Domain source instead of the published package that Persistence.Abstractions
+         resolves in that mode. -->
+    <ProjectReference Include="..\..\..\MicroKit.Domain\src\MicroKit.Domain\MicroKit.Domain.csproj" />
   </ItemGroup>
   <!-- SQLitePCLRaw.lib.e_sqlite3 2.1.11 has a known vulnerability (GHSA-2m69-gcr7-jv3q).
        This is a transitive test-only dependency of Microsoft.EntityFrameworkCore.Sqlite;

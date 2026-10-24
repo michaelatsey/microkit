@@ -1,4 +1,5 @@
 using System.Text.Json;
+using System.Text.Json.Serialization;
 using MicroKit.Domain.Events;
 using MicroKit.Domain.Exceptions;
 using MicroKit.Domain.ValueObjects.Common;
@@ -108,7 +109,8 @@ public sealed class JsonRoundTripTests
             ? """{"amount":10,"currency":"ABC"}"""
             : """{"Amount":10,"Currency":"ABC"}""";
 
-        Should.Throw<DomainException>(() => JsonSerializer.Deserialize<Money>(json, For(options)));
+        Should.Throw<JsonException>(() => JsonSerializer.Deserialize<Money>(json, For(options)))
+            .InnerException.ShouldBeOfType<DomainException>();
     }
 
     [Theory]
@@ -119,7 +121,8 @@ public sealed class JsonRoundTripTests
             ? """{"amount":1.5,"currency":"JPY"}"""
             : """{"Amount":1.5,"Currency":"JPY"}""";
 
-        Should.Throw<DomainException>(() => JsonSerializer.Deserialize<Money>(json, For(options)));
+        var ex = Should.Throw<JsonException>(() => JsonSerializer.Deserialize<Money>(json, For(options)));
+        ex.InnerException.ShouldBeOfType<DomainException>();
     }
 
     [Fact]
@@ -131,14 +134,69 @@ public sealed class JsonRoundTripTests
     [Fact]
     public void Currency_UnknownCode_FailsOnDeserialization()
     {
-        Should.Throw<DomainException>(() => JsonSerializer.Deserialize<Currency>("\"ABC\""));
+        Should.Throw<JsonException>(() => JsonSerializer.Deserialize<Currency>("\"ABC\""))
+            .InnerException.ShouldBeOfType<DomainException>();
     }
 
     [Fact]
     public void Actor_UnknownReservedValue_FailsOnDeserialization()
     {
-        Should.Throw<DomainException>(() => JsonSerializer.Deserialize<Actor>("\"$root\""));
+        Should.Throw<JsonException>(() => JsonSerializer.Deserialize<Actor>("\"$root\""))
+            .InnerException.ShouldBeOfType<DomainException>();
     }
+
+    [Fact]
+    public void Money_InvalidContent_ReportsTheJsonPath()
+    {
+        var ex = Should.Throw<JsonException>(
+            () => JsonSerializer.Deserialize<Holder>("""{"Total":{"Amount":1.5,"Currency":"JPY"}}"""));
+
+        ex.Path.ShouldBe("$.Total");
+    }
+
+    [Theory]
+    [MemberData(nameof(Options))]
+    public void CurrencyAndActor_RoundTripAsDictionaryKeys(string options)
+    {
+        var totals = new Dictionary<Currency, Money>
+        {
+            [Currency.FromCode("EUR")] = new(10.50m, Currency.FromCode("EUR")),
+            [Currency.FromCode("XOF")] = new(1500m, Currency.FromCode("XOF")),
+        };
+        var byActor = new Dictionary<Actor, int> { [Actor.System] = 1, [new Actor("user-1")] = 2 };
+
+        RoundTrip(totals, options).ShouldBe(totals, ignoreOrder: true);
+        var actors = RoundTrip(byActor, options);
+        actors[Actor.System].ShouldBe(1);
+        actors[new Actor("user-1")].ShouldBe(2);
+    }
+
+    [Fact]
+    public void Currency_Default_FailsOnSerialization()
+    {
+        Should.Throw<JsonException>(() => JsonSerializer.Serialize(default(Currency)));
+    }
+
+    [Fact]
+    public void Money_WriteAsString_WritesTheAmountAsAString()
+    {
+        var options = new JsonSerializerOptions { NumberHandling = JsonNumberHandling.WriteAsString | JsonNumberHandling.AllowReadingFromString };
+        var money = new Money(10.50m, Currency.FromCode("EUR"));
+
+        var json = JsonSerializer.Serialize(money, options);
+
+        json.ShouldBe("""{"Amount":"10.50","Currency":"EUR"}""");
+        JsonSerializer.Deserialize<Money>(json, options).ShouldBe(money);
+    }
+
+    [Fact]
+    public void Money_QuotedAmountWithExponent_IsRead()
+    {
+        JsonSerializer.Deserialize<Money>("""{"Amount":"1E2","Currency":"EUR"}""", JsonSerializerOptions.Web)!
+            .Amount.ShouldBe(100m);
+    }
+
+    public sealed record Holder(Money Total);
 
     public sealed record OrderPlaced(Money Total, Actor PlacedBy, Actor Customer, DateTimeOffset OccurredAt)
         : DomainEvent(OccurredAt);
