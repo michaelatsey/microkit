@@ -155,6 +155,16 @@ public sealed class PublishedDocumentationTests
     }
 
     [Fact]
+    public void Email_Summary_DoesNotPromiseCaseInsensitiveEquality()
+    {
+        // Equality is invariant lowercasing, not case folding (ADR-004 D5).
+        var doc = Member("T:MicroKit.Domain.ValueObjects.Common.Email");
+
+        doc.ShouldNotContain("Provides case-insensitive equality");
+        doc.ShouldContain("lowercased with the invariant culture");
+    }
+
+    [Fact]
     public void Actor_DoesNotPromiseThatAnActorCannotPassForAnother()
     {
         Member("T:MicroKit.Domain.ValueObjects.Common.Actor").ShouldNotContain("nor pass for another one");

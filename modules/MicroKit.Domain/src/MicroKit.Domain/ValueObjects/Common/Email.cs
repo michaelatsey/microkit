@@ -6,7 +6,7 @@ namespace MicroKit.Domain.ValueObjects.Common;
 
 /// <summary>
 /// Represents an email address with lightweight format validation and normalization.
-/// Provides case-insensitive equality and normalized storage.
+/// Stores and compares the address normalized to NFC and lowercased with the invariant culture.
 /// </summary>
 /// <remarks>
 /// <para>
@@ -111,10 +111,10 @@ public sealed record Email(string Value) : IValueObject
 
         if (!ContainsOnly(localPart, LocalPartSymbols))
             throw new DomainException(
-                "Email local part can contain only letters, digits and the characters ! # $ % & ' * + - / = ? ^ _ ` { | } ~ .");
+                "Email local part can contain only letters, digits, combining marks and the characters ! # $ % & ' * + - / = ? ^ _ ` { | } ~ .");
 
         if (!ContainsOnly(domainPart, DomainSymbols))
-            throw new DomainException("Email domain can contain only letters, digits, '-' and '.'.");
+            throw new DomainException("Email domain can contain only letters, digits, combining marks, '-' and '.'.");
 
         // Normalize to lowercase for consistent storage and comparison
         return trimmed.ToLowerInvariant().Normalize();

@@ -75,6 +75,14 @@ public sealed class EmailTests
         Should.Throw<DomainException>(() => new Email(email));
     }
 
+    [Theory]
+    [InlineData("a;b@example.com", "Email local part can contain only letters, digits, combining marks and the characters ! # $ % & ' * + - / = ? ^ _ ` { | } ~ .")]
+    [InlineData("a@exa_mple.com", "Email domain can contain only letters, digits, combining marks, '-' and '.'.")]
+    public void Constructor_CharacterOutsideTheAllowedSets_NamesWhatIsAllowed(string email, string message)
+    {
+        Should.Throw<DomainException>(() => new Email(email)).Message.ShouldBe(message);
+    }
+
     [Fact]
     public void Constructor_DecomposedAccent_IsNormalizedToNfcAndEqualsThePrecomposedForm()
     {
