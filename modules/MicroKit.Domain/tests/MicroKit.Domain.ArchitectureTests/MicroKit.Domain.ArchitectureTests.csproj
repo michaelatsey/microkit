@@ -27,4 +27,15 @@
     <ProjectReference Include="../../src/MicroKit.Domain/MicroKit.Domain.csproj" />
   </ItemGroup>
 
+  <!-- PublishedDocumentationTests read MicroKit.Domain.xml next to the test assembly. Copy the
+       referenced project's documentation file explicitly, and fail the build if it is missing. -->
+  <PropertyGroup>
+    <AllowedReferenceRelatedFileExtensions>$(AllowedReferenceRelatedFileExtensions);.xml</AllowedReferenceRelatedFileExtensions>
+  </PropertyGroup>
+
+  <Target Name="RequireDomainDocumentationFile" AfterTargets="CopyFilesToOutputDirectory">
+    <Error Condition="!Exists('$(OutDir)MicroKit.Domain.xml')"
+           Text="MicroKit.Domain.xml is missing from $(OutDir); PublishedDocumentationTests cannot run without it." />
+  </Target>
+
 </Project>

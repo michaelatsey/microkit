@@ -50,10 +50,13 @@ public sealed class DomainArchitectureTests
     public void Domain_DeclaresNoPersistenceContract()
     {
         // MicroKit.Persistence.Abstractions owns repositories and the unit of work (ADR-003 D1).
-        var types = Types.InAssembly(DomainAssembly).GetTypes().ToArray();
+        // The names are read with Cecil, never resolved to runtime types: a coverage collector
+        // injects types into the instrumented assembly that reflection cannot resolve.
+        using var module = ModuleDefinition.ReadModule(DomainAssembly.Location);
+        var names = module.GetTypes().Select(t => t.FullName).ToArray();
 
-        types.ShouldNotBeEmpty();
-        types.Select(t => t.FullName!)
+        names.ShouldContain(typeof(Entity<>).FullName!);
+        names
             .Where(name => name.StartsWith("MicroKit.Domain.Repositories", StringComparison.Ordinal)
                            || name.Contains(".IRepository", StringComparison.Ordinal)
                            || name.Contains(".IReadRepository", StringComparison.Ordinal)
