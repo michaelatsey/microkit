@@ -14,16 +14,16 @@ You run fast. Your job is binary: **PASS** or **BLOCK** with a clear reason.
 ### MicroKit.Domain (single package)
 Allowed:
 - BCL types only — no external NuGet packages required
-- `Microsoft.Extensions.DependencyInjection.Abstractions` (if DI helpers are needed — confirm in `.csproj`)
 
 Forbidden:
 - Any other MicroKit module — Domain is Level 0 (foundation)
-- Any framework-specific packages (ASP.NET Core, EF Core, MediatR, etc.)
+- Any framework-specific packages (ASP.NET Core, EF Core, MediatR, `Microsoft.Extensions.DependencyInjection*`, etc.)
+  — `tests/MicroKit.Domain.ArchitectureTests` enforces this on the built assembly
 - Any persistence packages (`EntityFrameworkCore`, `Npgsql`, etc.)
-- `IUnitOfWork` from any source — it was moved to `MicroKit.Persistence.Abstractions` (ADR-001)
+- Any repository or unit-of-work contract in `src/` — `MicroKit.Persistence.Abstractions` owns them (ADR-003 D1)
 
 ### NuGet Package Management
-- All versions must be in `build/Directory.Packages.props` — never in `.csproj`
+- All versions must be in the root `Directory.Packages.props` — never in `.csproj`
 - No `Version` attribute on `<PackageReference>` in any `.csproj`
 - `FluentAssertions` is **banned** everywhere (commercial license) — flag any reference immediately
 

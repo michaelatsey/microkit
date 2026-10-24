@@ -22,15 +22,15 @@ readonly record struct       ← value objects simples (Percentage, identifiants
 
 ### Identifiants
 ```
-IEntityId             ← contrat commun
-EntityId<T>           ← strongly-typed ID (record struct)
-GuidId                ← shortcut Guid-based ID
+IEntityId             ← marqueur de contrainte, sans membre (ADR-003 D2)
+EntityId<T>           ← base abstract record d'ID Guid, rejette Guid.Empty
+GuidId                ← readonly record struct Guid ; New() en UUID v7
 ```
 
 ### Événements de domaine
 ```
 IDomainEvent          ← contrat minimal (OccurredAt, EventId)
-DomainEvent           ← base abstraite avec métadonnées
+DomainEvent           ← abstract record DomainEvent(DateTimeOffset OccurredAt), EventId en UUID v7
 ```
 
 ### Specifications
@@ -42,11 +42,10 @@ OrSpecification<T>
 NotSpecification<T>
 ```
 
-### Repository abstractions
+### Repositories
 ```
-IRepository<T, TId>         ← CRUD de base
-IReadRepository<T, TId>     ← lecture seule
-IUnitOfWork                 ← transaction abstraction
+Aucun dans ce module (ADR-003 D1) : MicroKit.Persistence.Abstractions porte
+IRepository<TAggregate> et IUnitOfWork.
 ```
 
 ### Domain Services
@@ -63,7 +62,7 @@ EntityNotFoundException<T>(TId id)
 
 ### Règles métier
 ```
-IBusinessRule               ← contrat (IsBroken, Message)
+IBusinessRule               ← contrat (IsBroken, Message, Code)
 BusinessRule                ← base abstraite
 ```
 
@@ -84,9 +83,9 @@ public abstract class AggregateRoot<TId> : Entity<TId>
     protected void RaiseDomainEvent(IDomainEvent domainEvent)
         => _domainEvents.Add(domainEvent);
 
-    public IReadOnlyList<IDomainEvent> PopDomainEvents()
+    public IReadOnlyList<IDomainEvent> DrainDomainEvents()
     {
-        var events = _domainEvents.ToList();
+        var events = _domainEvents.ToArray();
         _domainEvents.Clear();
         return events;
     }
@@ -98,8 +97,10 @@ public abstract class AggregateRoot<TId> : Entity<TId>
 // Identité + égalité par ID
 public abstract class Entity<TId> where TId : IEntityId
 {
-    public TId Id { get; protected set; }
-    // Equals/GetHashCode basés sur Id
+    public TId Id { get; protected init; }
+    // Le constructeur rejette un Id null et default(TId)
+    // Equals : Id égaux ET un type d'exécution assignable à l'autre (proxies EF Core)
+    // GetHashCode basé sur Id
 }
 ```
 
@@ -141,10 +142,10 @@ public readonly record struct OrderId(Guid Value) : IEntityId
     public override string ToString() => Value.ToString();
 }
 
-// Ou via le type générique fourni
-public readonly record struct UserId : IEntityId
+// Ou via la base générique fournie (record classe, rejette Guid.Empty)
+public sealed record UserId : EntityId<UserId>
 {
-    // utilise EntityId<UserId> helper
+    public UserId(Guid value) : base(value) { }
 }
 ```
 
@@ -152,7 +153,7 @@ public readonly record struct UserId : IEntityId
 ```csharp
 // Violation d'invariant — throw légitime dans le domaine
 public sealed class BusinessRuleViolationException(IBusinessRule rule)
-    : DomainException($"Business rule '{rule.GetType().Name}' was violated: {rule.Message}");
+    : DomainException($"Business rule '{rule.Code}' was violated: {rule.Message}");  // expose Code
 
 // Usage dans un agrégat
 protected void CheckRule(IBusinessRule rule)
@@ -170,7 +171,6 @@ protected void CheckRule(IBusinessRule rule)
 ```
 ✅ Invariants et règles métier (IBusinessRule)
 ✅ DomainEvents (faits passés immuables)
-✅ Abstractions de repository (interfaces uniquement)
 ✅ Abstractions IDomainService (marker interface)
 ✅ Exceptions de domaine (violations d'invariants)
 ✅ Specifications (logique de sélection/filtrage)
@@ -179,7 +179,7 @@ protected void CheckRule(IBusinessRule rule)
 
 ### Ce qui N'APPARTIENT PAS à Domain
 ```
-❌ Implémentation des repositories (appartient à Persistence)
+❌ Contrats et implémentations de repository / unit of work (appartiennent à Persistence)
 ❌ Logique d'envoi d'emails, SMS (appartient à Application)
 ❌ Accès base de données (appartient à Infrastructure)
 ❌ Dépendances NuGet tierces (sauf abstractions pures)
@@ -193,10 +193,10 @@ protected void CheckRule(IBusinessRule rule)
 public sealed record OrderCreatedEvent(
     OrderId OrderId,
     Guid CustomerId,
-    DateTimeOffset OccurredAt) : DomainEvent;
+    DateTimeOffset OccurredAt) : DomainEvent(OccurredAt);
 
 // ✅ ValueObject immuable — record sealed recommandé
-public sealed record Money(decimal Amount, string Currency) : ValueObject
+public sealed record Money(decimal Amount, string Currency) : IValueObject
 {
     public static Money Zero(string currency) => new(0, currency);
     public Money Add(Money other)
@@ -227,35 +227,41 @@ MicroKit.Domain                ← tout (pas de split Abstractions pour ce modul
 src/MicroKit.Domain/
 ├── Aggregates/
 │   ├── AggregateRoot.cs
-│   └── Entity.cs
+│   ├── AuditableAggregateRoot.cs
+│   ├── AuditableEntity.cs
+│   ├── Entity.cs
+│   ├── IAggregateRoot.cs
+│   └── IAuditableEntity.cs
 ├── Events/
+│   ├── DomainEvent.cs
 │   ├── IDomainEvent.cs
-│   └── DomainEvent.cs
+│   ├── IDomainEventsProvider.cs
+│   ├── IEvent.cs
+│   └── IHasDomainEvents.cs
 ├── Exceptions/
-│   ├── DomainException.cs
 │   ├── BusinessRuleViolationException.cs
+│   ├── DomainException.cs
 │   └── EntityNotFoundException.cs
 ├── Identifiers/
-│   ├── IEntityId.cs
 │   ├── EntityId.cs
-│   └── GuidId.cs
-├── Repositories/
-│   ├── IRepository.cs
-│   ├── IReadRepository.cs
-│   └── IUnitOfWork.cs
+│   ├── GuidId.cs
+│   └── IEntityId.cs
 ├── Rules/
-│   ├── IBusinessRule.cs
-│   └── BusinessRule.cs
+│   ├── BusinessRule.cs
+│   └── IBusinessRule.cs
 ├── Services/
 │   └── IDomainService.cs
 ├── Specifications/
-│   ├── ISpecification.cs
-│   ├── Specification.cs
 │   ├── AndSpecification.cs
+│   ├── ISpecification.cs
+│   ├── NotSpecification.cs
 │   ├── OrSpecification.cs
-│   └── NotSpecification.cs
+│   ├── ReplaceExpressionVisitor.cs
+│   └── Specification.cs
 ├── ValueObjects/
-│   └── ValueObject.cs
+│   ├── IValueObject.cs
+│   └── Common/          ← Actor, Address, Currency, DateRange, Email, FullName,
+│                           Money, Percentage, PhoneNumber
 └── GlobalUsings.cs
 ```
 
