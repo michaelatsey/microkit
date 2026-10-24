@@ -125,8 +125,9 @@ public abstract class AuditableEntity<TId> : Entity<TId>, IAuditableEntity
     /// <para>
     /// Auditing wraps the mutation instead of following it. The instant and the actor are validated
     /// first, before anything changes; then <paramref name="mutation"/> runs; only if it returns are
-    /// <see cref="UpdatedAt"/> and <see cref="UpdatedBy"/> set. If it throws, the audit fields keep
-    /// their previous values and the exception propagates.
+    /// <see cref="UpdatedAt"/> and <see cref="UpdatedBy"/> set. If it throws, the audit fields are
+    /// restored to the values they had before it ran, even if a nested <c>Mutate</c> on this object
+    /// succeeded inside it, and the exception propagates.
     /// </para>
     /// <para>
     /// The limit: a mutation that throws halfway keeps the field changes it made before throwing,
@@ -164,7 +165,16 @@ public abstract class AuditableEntity<TId> : Entity<TId>, IAuditableEntity
     {
         var instant = AuditRules.Modification(at, by, mutation, CreatedAt, UpdatedAt);
 
-        mutation();
+        var (previousAt, previousBy) = (UpdatedAt, UpdatedBy);
+        try
+        {
+            mutation();
+        }
+        catch
+        {
+            (UpdatedAt, UpdatedBy) = (previousAt, previousBy);
+            throw;
+        }
 
         if (AuditRules.Supersedes(instant, UpdatedAt))
         {

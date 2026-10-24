@@ -272,6 +272,23 @@ public sealed class AuditRulesTests
 
     [Theory]
     [MemberData(nameof(Bases))]
+    public void Mutate_ThrowingMutation_UndoesTheStampOfANestedSuccessfulMutate(string kind)
+    {
+        var subject = AuditedSubject.Create(kind, CreatedAt, Creator);
+        subject.Run(At, Updater, () => { });
+
+        Should.Throw<InvalidOperationException>(() => subject.Run(At.AddMinutes(1), Creator, () =>
+        {
+            subject.Run(At.AddMinutes(2), Actor.System, () => { });
+            throw new InvalidOperationException("rule broken");
+        }));
+
+        subject.UpdatedAt.ShouldBe(At);
+        subject.UpdatedBy.ShouldBe(Updater);
+    }
+
+    [Theory]
+    [MemberData(nameof(Bases))]
     public void Mutate_NestedEarlierModification_IsSupersededByTheOuterOne(string kind)
     {
         var subject = AuditedSubject.Create(kind, CreatedAt, Creator);

@@ -122,8 +122,9 @@ public abstract class AuditableAggregateRoot<TId> : AggregateRoot<TId>, IAuditab
     /// <para>
     /// Auditing wraps the mutation instead of following it. The instant and the actor are validated
     /// first, before anything changes; then <paramref name="mutation"/> runs; only if it returns are
-    /// <see cref="UpdatedAt"/> and <see cref="UpdatedBy"/> set. If it throws, the audit fields keep
-    /// their previous values and the exception propagates.
+    /// <see cref="UpdatedAt"/> and <see cref="UpdatedBy"/> set. If it throws, the audit fields are
+    /// restored to the values they had before it ran, even if a nested <c>Mutate</c> on this object
+    /// succeeded inside it, and the exception propagates.
     /// </para>
     /// <para>
     /// Domain events raised inside a <paramref name="mutation"/> that throws are removed, so a
@@ -166,6 +167,7 @@ public abstract class AuditableAggregateRoot<TId> : AggregateRoot<TId>, IAuditab
     {
         var instant = AuditRules.Modification(at, by, mutation, CreatedAt, UpdatedAt);
 
+        var (previousAt, previousBy) = (UpdatedAt, UpdatedBy);
         var raisedEventCount = RaisedEventCount;
         try
         {
@@ -173,6 +175,7 @@ public abstract class AuditableAggregateRoot<TId> : AggregateRoot<TId>, IAuditab
         }
         catch
         {
+            (UpdatedAt, UpdatedBy) = (previousAt, previousBy);
             RemoveEventsRaisedSince(raisedEventCount);
             throw;
         }
