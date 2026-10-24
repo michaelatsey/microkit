@@ -140,6 +140,29 @@ so it accepted those by accident, not by design.
 - *`System.Net.Mail.MailAddress`.* It parses a display name and an address, not a bare address, so
   it accepts input this type must reject.
 
+#### D6 — `PhoneNumber` validates what it keeps
+
+**Decision.** `PhoneNumber` keeps the ASCII digits, a leading `+` and one extension marker `x`
+(an `X` is stored as `x`). Spaces and `- . ( ) /` are formatting and are removed; any other
+character is rejected. A `+` anywhere but first, a second marker or an empty extension is rejected.
+The 7 to 15 digits of ITU-T E.164 are counted before the extension only.
+
+**Reasoning.** The type dropped every character it did not keep, so
+`"call me at 0612345678 tomorrow"` was a valid number, and `char.IsDigit` let non-ASCII digits
+through, which no dialler or E.164 consumer accepts. Its own message said a `+` was allowed only at
+the beginning, but the check ran only when the number started with one. `"1234567x8x9"` passed with
+two markers. Extension digits counted toward the E.164 maximum, which applies to the number alone,
+so a valid number with an extension could be rejected. `X12` and `x12` were stored differently and
+compared unequal. Each is an incorrect behaviour, which the rule allows a break to remove; counting
+the extension apart only accepts more.
+
+**Rejected alternatives.**
+- *Recognise spelled-out markers such as `ext.`.* New parsing rules for one input shape the type
+  never documented; `x` stays the one marker.
+- *Keep dropping unknown characters.* It is the defect.
+- *A full numbering-plan validation (libphonenumber).* A third-party dependency, which the module
+  forbids.
+
 ## Consequences
 
 - A built-in actor serializes with any options: `Actor.System` is written `"$system"`.

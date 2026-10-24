@@ -8,8 +8,25 @@ namespace MicroKit.Domain.ValueObjects.Common;
 /// Provides basic validation while preserving international format flexibility.
 /// </summary>
 /// <param name="Value">The phone number value</param>
+/// <remarks>
+/// <para>
+/// The normalized value keeps the ASCII digits, an optional leading <c>+</c>, and an optional
+/// extension introduced by <c>x</c> or <c>X</c>, stored as <c>x</c>: <c>+33 (0)6 12-34-56-78 X 12</c>
+/// becomes <c>+330612345678x12</c>. Spaces and the formatting characters <c>-</c>, <c>.</c>,
+/// <c>(</c>, <c>)</c> and <c>/</c> are removed; any other character, a letter or a non-ASCII digit
+/// included, is rejected.
+/// </para>
+/// <para>
+/// The number before the extension has 7 to 15 digits, the ITU-T E.164 maximum; the extension has
+/// at least one digit and does not count toward that maximum (ADR-004 D6).
+/// </para>
+/// </remarks>
 public sealed record PhoneNumber(string Value) : IValueObject
 {
+    private const int MinDigits = 7;
+    private const int MaxDigits = 15;
+    private const string FormattingCharacters = "-.()/";
+
     /// <summary>
     /// Gets the normalized phone number value.
     /// </summary>
@@ -26,45 +43,43 @@ public sealed record PhoneNumber(string Value) : IValueObject
         if (string.IsNullOrWhiteSpace(phoneNumber))
             throw new DomainException("Phone number cannot be null or empty.");
 
-        var trimmed = phoneNumber.Trim();
+        // Keep the digits, the '+' and the extension marker; drop the formatting; reject the rest.
+        var buffer = new char[phoneNumber.Length];
+        var length = 0;
+        foreach (var c in phoneNumber.Trim())
+        {
+            if (char.IsAsciiDigit(c) || c == '+')
+                buffer[length++] = c;
+            else if (c is 'x' or 'X')
+                buffer[length++] = 'x';
+            else if (!(char.IsWhiteSpace(c) && !char.IsControl(c)) && !FormattingCharacters.Contains(c))
+                throw new DomainException(
+                    "Phone number can contain only digits, a leading '+', an extension marker 'x', spaces and the characters - . ( ) /.");
+        }
 
-        // Remove common formatting characters but preserve the + for international numbers
-        var cleaned = new string(trimmed.Where(c => char.IsDigit(c) || c == '+' || c == 'x' || c == 'X').ToArray());
+        var cleaned = new string(buffer, 0, length);
 
-        if (string.IsNullOrEmpty(cleaned))
+        if (!cleaned.Any(char.IsAsciiDigit))
             throw new DomainException("Phone number must contain at least one digit.");
 
-        // Basic length validation (international numbers can be 7-15 digits according to ITU-T E.164)
-        var digitCount = cleaned.Count(char.IsDigit);
-        if (digitCount < 7)
-            throw new DomainException("Phone number must contain at least 7 digits.");
+        if (cleaned.LastIndexOf('+') > 0)
+            throw new DomainException("Phone number can contain only one '+' symbol at the beginning.");
 
-        if (digitCount > 15)
-            throw new DomainException("Phone number cannot contain more than 15 digits.");
+        var extensionIndex = cleaned.IndexOf('x');
+        if (extensionIndex >= 0 && cleaned.IndexOf('x', extensionIndex + 1) >= 0)
+            throw new DomainException("Phone number can contain only one extension marker 'x'.");
 
-        // International number validation
-        if (cleaned.StartsWith('+'))
-        {
-            if (cleaned.Count(c => c == '+') > 1)
-                throw new DomainException("Phone number can contain only one '+' symbol at the beginning.");
+        var mainPart = extensionIndex < 0 ? cleaned : cleaned[..extensionIndex];
+        if (extensionIndex >= 0 && extensionIndex == cleaned.Length - 1)
+            throw new DomainException("Phone number extension must contain at least one digit.");
 
-            if (cleaned.Length == 1) // Just a '+' with no digits
-                throw new DomainException("International phone number must contain digits after '+'.");
-        }
+        // ITU-T E.164: at most 15 digits for the number itself; an extension is not part of it.
+        var digitCount = mainPart.Count(char.IsAsciiDigit);
+        if (digitCount < MinDigits)
+            throw new DomainException($"Phone number must contain at least {MinDigits} digits before any extension.");
 
-        // Extension validation (if present)
-        if (cleaned.Contains('x') || cleaned.Contains('X'))
-        {
-            var extensionIndex = Math.Max(cleaned.LastIndexOf('x'), cleaned.LastIndexOf('X'));
-            var mainPart = cleaned.Substring(0, extensionIndex);
-            var extensionPart = cleaned.Substring(extensionIndex + 1);
-
-            if (string.IsNullOrEmpty(extensionPart) || !extensionPart.All(char.IsDigit))
-                throw new DomainException("Phone number extension must contain only digits.");
-
-            if (mainPart.Count(char.IsDigit) < 7)
-                throw new DomainException("Phone number main part must contain at least 7 digits.");
-        }
+        if (digitCount > MaxDigits)
+            throw new DomainException($"Phone number cannot contain more than {MaxDigits} digits before any extension.");
 
         return cleaned;
     }
