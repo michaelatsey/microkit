@@ -13,7 +13,12 @@ public abstract class Entity<TId> : IEquatable<Entity<TId>>
     /// <summary>
     /// Gets the unique identifier of this entity.
     /// </summary>
-    public TId Id { get; protected init; }
+    /// <remarks>
+    /// Set once, by the constructor that guards it. The accessor is private so that no derived
+    /// type can assign an identifier the guard would reject; EF Core writes it through the
+    /// backing field when it materialises an entity.
+    /// </remarks>
+    public TId Id { get; private init; }
 
     /// <summary>
     /// Initializes a new instance of the entity with the specified identifier.

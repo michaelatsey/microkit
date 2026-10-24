@@ -1,6 +1,7 @@
 using System.Reflection;
 using MicroKit.Domain.Aggregates;
 using MicroKit.Domain.Events;
+using MicroKit.Domain.Identifiers;
 using MicroKit.Domain.ValueObjects;
 using Mono.Cecil;
 using NetArchTest.Rules;
@@ -61,6 +62,24 @@ public sealed class DomainArchitectureTests
                            || name.Contains(".IRepository", StringComparison.Ordinal)
                            || name.Contains(".IReadRepository", StringComparison.Ordinal)
                            || name.Contains(".IUnitOfWork", StringComparison.Ordinal))
+            .ShouldBeEmpty();
+    }
+
+    [Fact]
+    public void GuardedMembers_HavePrivateSetters()
+    {
+        // A derived type must not be able to overwrite what the constructors guard (#166).
+        System.Reflection.PropertyInfo[] properties =
+        [
+            typeof(Entity<GuidId>).GetProperty(nameof(Entity<GuidId>.Id))!,
+            typeof(AuditableEntity<GuidId>).GetProperty(nameof(IAuditableEntity.CreatedAt))!,
+            typeof(AuditableEntity<GuidId>).GetProperty(nameof(IAuditableEntity.CreatedBy))!,
+            typeof(AuditableAggregateRoot<GuidId>).GetProperty(nameof(IAuditableEntity.CreatedAt))!,
+            typeof(AuditableAggregateRoot<GuidId>).GetProperty(nameof(IAuditableEntity.CreatedBy))!,
+        ];
+
+        properties.Where(p => p.SetMethod is not { IsPrivate: true })
+            .Select(p => $"{p.DeclaringType!.Name}.{p.Name}")
             .ShouldBeEmpty();
     }
 

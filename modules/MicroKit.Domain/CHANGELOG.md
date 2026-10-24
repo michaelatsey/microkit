@@ -28,6 +28,9 @@ Settles the public surface before `2.0.0` (#160). Every item under **Breaking** 
   `string?` (D5; #116).
 - `UpdatedAt` and `UpdatedBy` are `private set`; derived types call
   `Touch(DateTimeOffset, Actor)` (D5; #113).
+- `Entity<TId>.Id`, `CreatedAt` and `CreatedBy` are `private init`: a derived type can no longer
+  assign them after the guarded constructor ran. EF Core still materialises them through their
+  backing fields (#166).
 - `DomainEvent` is `abstract record DomainEvent(DateTimeOffset OccurredAt)`: `OccurredAt` has no
   default and concrete events forward it positionally (D4; #115).
 - `DomainEvent.EventId` defaults to `Guid.CreateVersion7()` instead of `Guid.NewGuid()` (D6; #114).

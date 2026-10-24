@@ -82,10 +82,10 @@ public abstract class AuditableEntity<TId> : Entity<TId>, IAuditableEntity
     }
 
     /// <inheritdoc />
-    public DateTimeOffset CreatedAt { get; protected init; }
+    public DateTimeOffset CreatedAt { get; private init; }
 
     /// <inheritdoc />
-    public Actor CreatedBy { get; protected init; }
+    public Actor CreatedBy { get; private init; }
 
     /// <inheritdoc />
     public DateTimeOffset? UpdatedAt { get; private set; }
