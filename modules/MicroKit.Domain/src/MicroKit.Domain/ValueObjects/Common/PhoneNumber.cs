@@ -10,10 +10,11 @@ namespace MicroKit.Domain.ValueObjects.Common;
 /// <param name="Value">The phone number value</param>
 /// <remarks>
 /// <para>
-/// The normalized value keeps the ASCII digits, an optional leading <c>+</c>, and an optional
-/// extension introduced by <c>x</c> or <c>X</c>, stored as <c>x</c>: <c>+33 6 12-34-56-78 X 12</c>
-/// becomes <c>+33612345678x12</c>. Spaces and the formatting characters <c>-</c>, <c>.</c>,
-/// <c>(</c>, <c>)</c> and <c>/</c> are removed; any other character, a letter or a non-ASCII digit
+/// The normalized value keeps the digits, an optional leading <c>+</c>, and an optional extension
+/// introduced by <c>x</c>, <c>ext</c> or <c>extension</c> in any case, stored as <c>x</c>:
+/// <c>+33 6 12-34-56-78 ext. 12</c> becomes <c>+33612345678x12</c>. A decimal digit of another
+/// script is stored as its ASCII digit. White space and the formatting characters <c>-</c>,
+/// <c>.</c>, <c>(</c>, <c>)</c> and <c>/</c> are removed; any other character, another letter
 /// included, is rejected.
 /// </para>
 /// <para>
@@ -33,6 +34,9 @@ public sealed record PhoneNumber(string Value) : IValueObject
     private const int MaxExtensionDigits = 10;
     private const string FormattingCharacters = "-.()/";
 
+    // Longest first, so "extension" is not read as "ext" followed by "ension".
+    private static readonly string[] ExtensionWords = ["extension", "ext"];
+
     /// <summary>
     /// Gets the normalized phone number value.
     /// </summary>
@@ -50,17 +54,27 @@ public sealed record PhoneNumber(string Value) : IValueObject
             throw new DomainException("Phone number cannot be null or empty.");
 
         // Keep the digits, the '+' and the extension marker; drop the formatting; reject the rest.
-        var buffer = new char[phoneNumber.Length];
+        // Only digits, '+' and 'x' reach the value, so dropped white space cannot carry a line break.
+        var text = phoneNumber.Trim();
+        var buffer = new char[text.Length];
         var length = 0;
-        foreach (var c in phoneNumber.Trim())
+        for (var i = 0; i < text.Length; i++)
         {
-            if (char.IsAsciiDigit(c) || c == '+')
-                buffer[length++] = c;
+            var c = text[i];
+            if (char.IsDigit(c))
+                buffer[length++] = (char)('0' + (int)char.GetNumericValue(c));
+            else if (c == '+')
+                buffer[length++] = '+';
             else if (c is 'x' or 'X')
                 buffer[length++] = 'x';
-            else if (!(char.IsWhiteSpace(c) && !char.IsControl(c)) && !FormattingCharacters.Contains(c))
+            else if (ExtensionWordAt(text, i) is { } word)
+            {
+                buffer[length++] = 'x';
+                i += word.Length - 1;
+            }
+            else if (!char.IsWhiteSpace(c) && !FormattingCharacters.Contains(c))
                 throw new DomainException(
-                    "Phone number can contain only digits, a leading '+', an extension marker 'x', spaces and the characters - . ( ) /.");
+                    "Phone number can contain only digits, a leading '+', an extension marker ('x', 'ext' or 'extension'), white space and the characters - . ( ) /.");
         }
 
         var cleaned = new string(buffer, 0, length);
@@ -91,6 +105,22 @@ public sealed record PhoneNumber(string Value) : IValueObject
             throw new DomainException($"Phone number cannot contain more than {MaxDigits} digits before any extension.");
 
         return cleaned;
+    }
+
+    /// <summary>
+    /// Returns the extension word starting at <paramref name="index"/>, compared without case, or
+    /// <see langword="null"/>.
+    /// </summary>
+    private static string? ExtensionWordAt(string text, int index)
+    {
+        foreach (var word in ExtensionWords)
+        {
+            if (string.Compare(text, index, word, 0, word.Length, StringComparison.OrdinalIgnoreCase) == 0
+                && index + word.Length <= text.Length)
+                return word;
+        }
+
+        return null;
     }
 
     /// <summary>

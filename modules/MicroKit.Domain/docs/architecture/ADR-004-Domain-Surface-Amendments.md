@@ -150,27 +150,33 @@ closes the class of defect, where a deny-list of white space only closed one ins
 
 #### D6 — `PhoneNumber` validates what it keeps
 
-**Decision.** `PhoneNumber` keeps the ASCII digits, a leading `+` and one extension marker `x`
-(an `X` is stored as `x`). Spaces and `- . ( ) /` are formatting and are removed; any other
+**Decision.** `PhoneNumber` keeps the digits, a leading `+` and one extension marker, stored as `x`.
+A decimal digit of another script is stored as its ASCII digit. The marker is `x`, `ext` or
+`extension`, in any case. White space and `- . ( ) /` are formatting and are removed; any other
 character is rejected. A `+` anywhere but first, a second marker or an empty extension is rejected.
 The 7 to 15 digits of ITU-T E.164 are counted before the extension only; the extension has 1 to
 10 digits.
 
 **Reasoning.** The type dropped every character it did not keep, so
-`"call me at 0612345678 tomorrow"` was a valid number, and `char.IsDigit` let non-ASCII digits
-through, which no dialler or E.164 consumer accepts. Its own message said a `+` was allowed only at
-the beginning, but the check ran only when the number started with one. `"1234567x8x9"` passed with
-two markers. Extension digits counted toward the E.164 maximum, which applies to the number alone,
-so a valid number with an extension could be rejected. `X12` and `x12` were stored differently and
-compared unequal. Each is an incorrect behaviour, which the rule allows a break to remove. Counting
-the extension apart from the E.164 digits removed the only bound on it, so the extension gets its
-own: E.164 does not define extensions, and 10 digits covers private branch exchanges while keeping
-a value under 30 characters.
+`"call me at 0612345678 tomorrow"` was a valid number, and non-ASCII digits were stored as such,
+which no dialler or E.164 consumer accepts. Its own message said a `+` was allowed only at the
+beginning, but the check ran only when the number started with one. `"1234567x8x9"` passed with two
+markers. Extension digits counted toward the E.164 maximum, which applies to the number alone, so a
+valid number with an extension could be rejected. `X12` and `x12` were stored differently and
+compared unequal. Each is an incorrect behaviour, which the rule allows a break to remove.
+
+The break is kept to those behaviours. The inputs the old rules turned into a well-formed number
+still are: `ext.` and `extension` were read as `x` because their other letters were dropped, so they
+are now recognised as markers; white space is still formatting, line breaks included, since only
+digits, `+` and `x` reach the value; a non-ASCII digit is converted instead of rejected. Counting the
+extension apart from the E.164 digits removed the only bound on it, so the extension gets its own:
+E.164 does not define extensions, and 10 digits covers private branch exchanges while keeping a
+value under 30 characters.
 
 **Rejected alternatives.**
-- *Recognise spelled-out markers such as `ext.`.* New parsing rules for one input shape the type
-  never documented; `x` stays the one marker.
 - *Keep dropping unknown characters.* It is the defect.
+- *Reject `ext.` and non-ASCII digits.* Breaks inputs the type handled correctly, which the rule
+  does not allow.
 - *A full numbering-plan validation (libphonenumber).* A third-party dependency, which the module
   forbids.
 
@@ -257,10 +263,13 @@ annotation keeps a non-null argument's result non-null for the compiler.
   when it reads it back, unless `TrustedActorJsonConverter` is registered on those options. That
   registration belongs to the store's module, as #174 does for Messaging.
 - A value persisted before D5, D6 or D8 that the new rules reject (an `Email` with white space or a
-  comma, a `PhoneNumber` with a letter, a second `x` or an inner `+`, an `Actor` with a control
+  comma, a `PhoneNumber` with a letter other than a marker, a second marker or an inner `+`, an
+  `Actor` with a control
   character) no longer rehydrates: the value converter or deserializer throws `DomainException` when
-  the row is read. Clean such values in the store before deploying; a `PhoneNumber` stored with `X`
-  rehydrates and reads back with `x`.
+  the row is read. Clean such values in the store before deploying. A `PhoneNumber` stored with `X`
+  or with non-ASCII digits rehydrates and reads back normalized, but the stored text differs from
+  the new `Value` until it is rewritten: a query or a unique index on the column compares the old
+  text, so rewrite those rows too.
 - `Mutate` allocates per call when its lambda captures; no API changes (D2).
 - After a domain method throws, the aggregate instance is discarded, not saved (D3).
 

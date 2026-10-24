@@ -46,16 +46,41 @@ public sealed class PhoneNumberTests
 
     [Theory]
     [InlineData("call me at 0612345678 tomorrow")]
-    [InlineData("555-123-4567 ext. 89")]
     [InlineData("0612345678#")]
-    [InlineData("06\t12345678")]
-    [InlineData("06\n12345678")]
-    [InlineData("٠٦١٢٣٤٥٦٧٨")] // Arabic-Indic digits
-    [InlineData("０６１２３４５６７８")] // full-width digits
+    [InlineData("0612345678 ex 12")]
+    [InlineData("tel:0612345678")]
     public void Constructor_CharacterOtherThanDigitsPlusMarkerOrFormatting_ThrowsDomainException(string input)
     {
         Should.Throw<DomainException>(() => new PhoneNumber(input))
             .Message.ShouldStartWith("Phone number can contain only digits");
+    }
+
+    [Theory]
+    [InlineData("555-123-4567 ext. 89", "5551234567x89")]
+    [InlineData("555-123-4567 EXT 89", "5551234567x89")]
+    [InlineData("555-123-4567 extension 89", "5551234567x89")]
+    [InlineData("555-123-4567 Extension 89", "5551234567x89")]
+    public void Constructor_SpelledOutExtensionMarker_IsStoredAsX(string input, string expected)
+    {
+        new PhoneNumber(input).Value.ShouldBe(expected);
+    }
+
+    [Theory]
+    [InlineData("06\t12345678", "0612345678")]
+    [InlineData("06\n12345678", "0612345678")]
+    [InlineData("06\r\n12 34 56 78", "0612345678")]
+    public void Constructor_AnyWhiteSpace_IsFormatting(string input, string expected)
+    {
+        // Only digits, '+' and 'x' reach the value, so a dropped line break cannot reach it.
+        new PhoneNumber(input).Value.ShouldBe(expected);
+    }
+
+    [Theory]
+    [InlineData("\u0660\u0666\u0661\u0662\u0663\u0664\u0665\u0666\u0667\u0668", "0612345678")] // Arabic-Indic
+    [InlineData("\uFF10\uFF16\uFF11\uFF12\uFF13\uFF14\uFF15\uFF16\uFF17\uFF18", "0612345678")] // full-width
+    public void Constructor_DecimalDigitOfAnotherScript_IsStoredAsAsciiDigit(string input, string expected)
+    {
+        new PhoneNumber(input).Value.ShouldBe(expected);
     }
 
     [Theory]

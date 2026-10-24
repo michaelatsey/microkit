@@ -88,6 +88,7 @@ public sealed class DocumentationExamplesTests
 
         adr.ShouldContain("A value persisted before D5, D6 or D8");
         adr.ShouldContain("no longer rehydrates");
+        adr.ShouldContain("rewrite those rows too");
     }
 
     [Fact]
