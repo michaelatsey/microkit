@@ -55,6 +55,15 @@ Settles the public surface before `2.0.0` (#160). Every item under **Breaking** 
 - `IBusinessRule` gains `string Code`, abstract on `BusinessRule`; every rule implements it.
   `BusinessRuleViolationException` names the rule by `Code` in its message and rejects a rule
   whose `Code` is null or empty (D9).
+- `Email` rejects white space and control characters inside the address, a line break included
+  (ADR-004 D5).
+- `PhoneNumber` rejects characters other than ASCII digits, a leading `+`, one `x` extension
+  marker, spaces and `- . ( ) /`; rejects a `+` after the first character, a second marker and an
+  empty extension; stores `X` as `x`; counts the 7 to 15 E.164 digits before the extension only
+  (ADR-004 D6).
+- `EntityId<T>.ToString()` is sealed: a derived identifier returns its `Guid` value instead of the
+  record's synthesized `OrderId { Value = … }`, and can no longer declare its own `ToString`
+  (ADR-004 D7).
 
 ### Added
 - `Actor` value object, with the built-ins `Actor.System`, `Actor.Anonymous` and
@@ -83,6 +92,8 @@ Settles the public surface before `2.0.0` (#160). Every item under **Breaking** 
 - XML documentation of `AggregateRoot<TId>` and both `Mutate` methods, and the aggregates guide,
   state that after a domain method throws the aggregate instance must be discarded, not saved, and
   that a capturing `Mutate` lambda allocates per call (ADR-004 D2, D3; #182).
+- `Actor.Restore` trims the stored value before matching a built-in actor, so a padded `$system`
+  restores `Actor.System` (ADR-004 D4).
 
 ## [1.0.0-preview.1] — 2026-05-28
 
