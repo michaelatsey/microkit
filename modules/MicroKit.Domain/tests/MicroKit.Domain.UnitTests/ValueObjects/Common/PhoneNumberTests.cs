@@ -48,7 +48,8 @@ public sealed class PhoneNumberTests
     [InlineData("call me at 0612345678 tomorrow")]
     [InlineData("0612345678#")]
     [InlineData("0612345678 ex 12")]
-    [InlineData("tel:0612345678")]
+    [InlineData("+33 6 12\u201334\u201356\u201378")]   // en dash, a typographic dash
+    [InlineData("0612345678 *12")]
     public void Constructor_CharacterOtherThanDigitsPlusMarkerOrFormatting_ThrowsDomainException(string input)
     {
         Should.Throw<DomainException>(() => new PhoneNumber(input))
@@ -60,6 +61,12 @@ public sealed class PhoneNumberTests
     [InlineData("555-123-4567 EXT 89", "5551234567x89")]
     [InlineData("555-123-4567 extension 89", "5551234567x89")]
     [InlineData("555-123-4567 Extension 89", "5551234567x89")]
+    [InlineData("555-123-4567 ext: 89", "5551234567x89")]
+    [InlineData("555-123-4567 Ext#89", "5551234567x89")]
+    [InlineData("555-123-4567 ext=89", "5551234567x89")]
+    [InlineData("555-123-4567 extn. 89", "5551234567x89")]
+    [InlineData("tel:+1-201-555-0123;ext=1234", "+12015550123x1234")]   // RFC 3966
+    [InlineData("TEL:0612345678", "0612345678")]
     public void Constructor_SpelledOutExtensionMarker_IsStoredAsX(string input, string expected)
     {
         new PhoneNumber(input).Value.ShouldBe(expected);
@@ -81,6 +88,14 @@ public sealed class PhoneNumberTests
     public void Constructor_DecimalDigitOfAnotherScript_IsStoredAsAsciiDigit(string input, string expected)
     {
         new PhoneNumber(input).Value.ShouldBe(expected);
+    }
+
+    [Fact]
+    public void Constructor_DecimalDigitOutsideTheBmp_IsStoredAsAsciiDigit()
+    {
+        // U+1D7CE MATHEMATICAL BOLD DIGIT ZERO, a surrogate pair; built in code, since xUnit's
+        // theory-data serialization is not reliable for surrogates.
+        new PhoneNumber(char.ConvertFromUtf32(0x1D7CE) + "612345678").Value.ShouldBe("0612345678");
     }
 
     [Theory]

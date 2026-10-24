@@ -153,11 +153,13 @@ closes the class of defect, where a deny-list of white space only closed one ins
 #### D6 — `PhoneNumber` validates what it keeps
 
 **Decision.** `PhoneNumber` keeps the digits, a leading `+` and one extension marker, stored as `x`.
-A decimal digit of another script is stored as its ASCII digit. The marker is `x`, `ext` or
-`extension`, in any case. White space and `- . ( ) /` are formatting and are removed; any other
-character is rejected. A `+` anywhere but first, a second marker or an empty extension is rejected.
-The 7 to 15 digits of ITU-T E.164 are counted before the extension only; the extension has 1 to
-10 digits.
+A decimal digit of any script, outside the BMP included, is stored as its ASCII digit. The marker is
+`x`, or `ext`, `extn` or `extension` in any case, optionally followed by one of `. : = #`; the
+RFC 3966 forms are read as well, a leading `tel:` dropped and `;ext=` taken as a marker. White space
+and `- . ( ) /` are formatting and are removed. Any other character is rejected, a letter, a `#`
+or `*` outside a marker, or a typographic dash included. A `+` anywhere but first, a second marker
+or an empty extension is rejected. The 7 to 15 digits of ITU-T E.164 are counted before the
+extension only; the extension has 1 to 10 digits.
 
 **Reasoning.** The type dropped every character it did not keep, so
 `"call me at 0612345678 tomorrow"` was a valid number, and non-ASCII digits were stored as such,
@@ -165,20 +167,24 @@ which no dialler or E.164 consumer accepts. Its own message said a `+` was allow
 beginning, but the check ran only when the number started with one. `"1234567x8x9"` passed with two
 markers. Extension digits counted toward the E.164 maximum, which applies to the number alone, so a
 valid number with an extension could be rejected. `X12` and `x12` were stored differently and
-compared unequal. Each is an incorrect behaviour, which the rule allows a break to remove.
+compared unequal. Dropping `#` merged an extension into the number: `"555 123 4567 #12"` became one
+13-digit number. Each is an incorrect behaviour, which the rule allows a break to remove.
 
-The break is kept to those behaviours. The inputs the old rules turned into a well-formed number
-still are: `ext.` and `extension` were read as `x` because their other letters were dropped, so they
-are now recognised as markers; white space is still formatting, line breaks included, since only
-digits, `+` and `x` reach the value; a non-ASCII digit is converted instead of rejected. Counting the
+The break is kept to those behaviours for the common spellings: the extension words and separators
+above, the `tel:` URI form, any white space (only digits, `+` and `x` reach the value, so a dropped
+line break cannot) and the decimal digits of every script still give the number the old rules
+gave. A spelling outside that list, which the old rules accepted only because they dropped its
+letters (`ex.`, `tel;`, an en dash), is rejected, and the type documents the list. Counting the
 extension apart from the E.164 digits removed the only bound on it, so the extension gets its own:
 E.164 does not define extensions, and 10 digits covers private branch exchanges while keeping a
 value under 30 characters.
 
 **Rejected alternatives.**
 - *Keep dropping unknown characters.* It is the defect.
-- *Reject `ext.` and non-ASCII digits.* Breaks inputs the type handled correctly, which the rule
-  does not allow.
+- *Reject every spelled-out marker and non-ASCII digit.* Breaks the common inputs the type handled
+  correctly, which the rule does not allow.
+- *Accept every Unicode dash and punctuation as formatting.* Widens the input without bound; the
+  formatting set stays the documented one.
 - *A full numbering-plan validation (libphonenumber).* A third-party dependency, which the module
   forbids.
 

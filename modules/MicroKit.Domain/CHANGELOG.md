@@ -59,11 +59,13 @@ Settles the public surface before `2.0.0` (#160). Every item under **Breaking** 
   and accepts only letters, digits and the RFC 5322 `atext` symbols in the local part, and
   letters, digits, `-` and `.` in the domain (ADR-004 D5).
 - `PhoneNumber` rejects characters other than digits, a leading `+`, one extension marker (`x`,
-  `ext` or `extension`), white space and `- . ( ) /`; rejects a `+` after the first character, a
-  second marker and an empty extension; stores the marker as `x` and non-ASCII digits as ASCII;
-  counts the 7 to 15 E.164 digits before the extension only (ADR-004 D6).
+  `ext`, `extn` or `extension`, optionally followed by `. : = #`, or RFC 3966 `;ext=`), a leading
+  `tel:`, white space and `- . ( ) /`; rejects a `+` after the first character, a second marker
+  and an empty extension; stores the marker as `x` and every decimal digit as ASCII; counts the 7
+  to 15 E.164 digits before the extension only (ADR-004 D6).
 - `PhoneNumber` extensions have at most 10 digits (ADR-004 D6).
-- `Actor` rejects control and format characters, line breaks included (ADR-004 D8).
+- `Actor` rejects invisible, control and line-breaking characters, and `Email` the same ones, under
+  one shared definition; `Email` is normalized to Unicode NFC (ADR-004 D5, D8).
 - Values persisted before these rules that they reject no longer rehydrate: clean them in the store
   before deploying (ADR-004, Consequences).
 - `EntityId<T>.ToString()` is sealed: a derived identifier returns its `Guid` value instead of the
