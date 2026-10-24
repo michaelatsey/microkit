@@ -8,14 +8,14 @@
 - ✅ Removed unused abstract `ValueObject` class
 - ✅ Added `IValueObject` marker interface for generic constraints  
 - ✅ Documented modern approach in .claude/ rules
-- ✅ Zero breaking changes, all 148 tests pass
+- ✅ Zero breaking changes
 
 ## 📊 Performance Analysis: Records vs Abstract Base Class
 
 | Metric | Abstract ValueObject | sealed record | Improvement |
 |--------|---------------------|---------------|-------------|
-| **Equality operations** | 156 bytes/op | 0 bytes/op | ∞% faster |
-| **Hash code generation** | 96 bytes/op | 0 bytes/op | ∞% faster |
+| **Equality operations** | 156 bytes/op | 0 bytes/op | No allocation |
+| **Hash code generation** | 96 bytes/op | 0 bytes/op | No allocation |
 | **Object creation** | High allocation | Minimal allocation | ~90% less |
 | **JIT optimization** | Poor (virtual calls) | Excellent (inlined) | ~10x better |
 | **AOT compatibility** | ❌ Reflection | ✅ Direct calls | Compatible |
@@ -147,7 +147,7 @@ Creation   | 4.3 ns    | 32 B
 2. **Added**: `IValueObject` marker interface for generic constraints  
 3. **Optimized**: All value objects use appropriate record types
 4. **Documented**: Modern patterns in `.claude/rules/value-objects-2026.md`
-5. **Verified**: All 148 tests pass, 0 breaking changes
+5. **Verified**: 0 breaking changes
 
 ### API Compatibility ✅
 - **Source compatible**: No breaking changes to public API

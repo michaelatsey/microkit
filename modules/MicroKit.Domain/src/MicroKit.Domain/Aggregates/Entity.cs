@@ -24,6 +24,14 @@ public abstract class Entity<TId> : IEquatable<Entity<TId>>
     /// Thrown when <paramref name="id"/> equals <c>default(TId)</c>, which is how an uninitialised
     /// <see langword="struct"/> identifier presents itself.
     /// </exception>
+    /// <remarks>
+    /// There is deliberately no parameterless constructor: one would let an entity exist without an
+    /// identity. EF Core does not need it. When it materialises an entity, EF Core calls a
+    /// parameterised constructor whose parameter names and types match mapped properties, a
+    /// camelCase parameter binding a PascalCase property, so a derived constructor taking
+    /// <c>id</c> binds <see cref="Id"/>. The constructor may be private, or protected when
+    /// lazy-loading proxies derive from the entity.
+    /// </remarks>
     protected Entity(TId id)
     {
         ArgumentNullException.ThrowIfNull(id);

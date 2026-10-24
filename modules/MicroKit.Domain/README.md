@@ -16,7 +16,7 @@ We reject the legacy approach of heavyweight base classes and reflection-heavy e
 - **Records First**: Leverage compiler-generated equality and immutability  
 - **Allocation Conscious**: Minimize heap pressure in hot paths
 - **Immutable by Default**: Mutation through transformation, not state change
-- **NativeAOT Ready**: No reflection, no runtime code generation
+- **NativeAOT Ready**: No reflection; the one compiled expression, `Specification<T>.IsSatisfiedBy`, falls back to the interpreter under NativeAOT
 - **Trimming Safe**: Static analysis friendly, predictable runtime behavior
 - **Clean Architecture Compatible**: Pure domain logic, dependency-free
 
@@ -33,8 +33,7 @@ MicroKit.Domain/
 │   ├── guides/                # Implementation guidance
 │   └── performance/           # Benchmarks & optimization notes
 ├── src/MicroKit.Domain/        # Core domain primitives
-├── tests/                     # Comprehensive test suites
-├── samples/                   # Reference implementations
+├── tests/                     # Unit and architecture tests
 └── benchmarks/               # Performance validation
 ```
 
@@ -47,8 +46,10 @@ MicroKit.Domain/
 - Business rule validation framework
 - Domain event contracts and base types
 - Specification pattern with LINQ expression support
-- Repository abstractions for data access
 - Strongly-typed identifier patterns
+- `Money` and `Currency` held to ISO 4217 minor units, and an `Actor` for audit fields
+
+Persistence contracts (repositories, unit of work) live in `MicroKit.Persistence.Abstractions`.
 
 **Future Extensions** *(Planned)*
 - `MicroKit.Domain.Analyzers`: Roslyn analyzers for architectural enforcement
@@ -85,23 +86,35 @@ public readonly record struct ProductId(Guid Value) : IEntityId
 
 Aggregate roots manage consistency boundaries and coordinate domain events. Events are raised *after* state mutations to represent facts about what has occurred:
 
+The instant of the operation is an input, never read from an ambient clock, and every event the
+operation raises carries it:
+
 ```csharp
+public sealed record OrderPlacedEvent(OrderId OrderId, CustomerId CustomerId, DateTimeOffset OccurredAt)
+    : DomainEvent(OccurredAt);
+
 public sealed class Order : AggregateRoot<OrderId>
 {
-    private Order(OrderId id, CustomerId customerId) : base(id) { }
-    
-    public static Order Place(CustomerId customerId, IReadOnlyList<OrderItem> items)
+    private Order(OrderId id, CustomerId customerId) : base(id) => CustomerId = customerId;
+
+    public CustomerId CustomerId { get; }
+
+    public static Order Place(CustomerId customerId, IReadOnlyList<OrderItem> items, DateTimeOffset now)
     {
         var order = new Order(OrderId.New(), customerId);
-        order.CheckRule(new OrderMustHaveItemsRule(items));
-        
-        // State mutation first
-        order.AddItems(items);
-        
-        // Event after successful mutation
-        order.RaiseDomainEvent(new OrderPlacedEvent(order.Id, customerId, DateTimeOffset.UtcNow));
-        
+        order.PlaceItems(items, now);
         return order;
+    }
+
+    private void PlaceItems(IReadOnlyList<OrderItem> items, DateTimeOffset now)
+    {
+        CheckRule(new OrderMustHaveItemsRule(items));
+
+        // State mutation first
+        AddItems(items);
+
+        // Event after successful mutation
+        RaiseDomainEvent(new OrderPlacedEvent(Id, CustomerId, now));
     }
 }
 ```
@@ -123,9 +136,8 @@ All performance claims are validated through BenchmarkDotNet suites in the `benc
 ## Testing Strategy
 
 - **Unit Tests**: Behavior verification and edge case coverage
-- **Integration Tests**: Cross-boundary interaction validation  
 - **Architecture Tests**: NetArchTest-based constraint enforcement
-- **Performance Tests**: Allocation and timing regression detection
+- **Benchmarks**: Allocation and timing measurements in `benchmarks/`
 
 Architecture tests enforce module boundaries and prevent dependency leakage:
 
@@ -150,20 +162,6 @@ The `.claude/` directory contains structured AI assistance for maintaining archi
 - **Skills**: Refactoring automation and modernization capabilities
 
 This enables rapid development while maintaining architectural discipline and consistency across the codebase.
-
-## Samples & Reference Implementations
-
-The `samples/` directory demonstrates real-world aggregate modeling:
-
-```
-samples/
-├── Ordering/           # E-commerce order management
-├── Financial/          # Money handling patterns  
-├── Identity/           # User and authentication domains
-└── Subscription/       # Recurring billing scenarios
-```
-
-Each sample illustrates tactical pattern application and integration strategies for common business domains.
 
 ## Building & Testing
 

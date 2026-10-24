@@ -29,6 +29,20 @@ public abstract class AuditableEntity<TId> : Entity<TId>, IAuditableEntity
     /// <exception cref="ArgumentNullException">
     /// Thrown when <paramref name="createdBy"/> is <see langword="null"/>.
     /// </exception>
+    /// <remarks>
+    /// <para>
+    /// EF Core binds constructor parameters to mapped properties by name, so a derived constructor
+    /// taking <c>id</c> and <c>createdAt</c> binds <see cref="Entity{TId}.Id"/> and
+    /// <see cref="CreatedAt"/> on materialisation.
+    /// </para>
+    /// <para>
+    /// <see cref="CreatedBy"/> binds the same way only when <see cref="Actor"/> is mapped as a scalar
+    /// through a value converter. Mapped as an owned or complex type, it is not a scalar property
+    /// and EF Core cannot pass it to a constructor; give the derived entity a private constructor
+    /// for materialisation that takes the scalar members only, and let EF Core set
+    /// <see cref="CreatedBy"/> afterwards.
+    /// </para>
+    /// </remarks>
     protected AuditableEntity(TId id, DateTimeOffset createdAt, Actor createdBy)
         : base(id)
     {
@@ -52,6 +66,11 @@ public abstract class AuditableEntity<TId> : Entity<TId>, IAuditableEntity
     /// Thrown when <paramref name="timeProvider"/> or <paramref name="createdBy"/> is
     /// <see langword="null"/>.
     /// </exception>
+    /// <remarks>
+    /// Use this constructor from the factory that creates a new entity. EF Core cannot bind it on
+    /// materialisation: <see cref="TimeProvider"/> is neither a mapped property nor a service EF
+    /// Core injects.
+    /// </remarks>
     protected AuditableEntity(TId id, TimeProvider timeProvider, Actor createdBy)
         : this(
             id,
