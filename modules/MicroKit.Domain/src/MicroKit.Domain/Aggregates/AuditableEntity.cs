@@ -17,6 +17,15 @@ namespace MicroKit.Domain.Aggregates;
 public abstract class AuditableEntity<TId> : Entity<TId>, IAuditableEntity
     where TId : IEntityId
 {
+    // Explicit backing fields: AuditRules.Mutate writes them by reference. EF Core finds them by
+    // the _camelCase convention and materialises through them, as it did the auto-property fields.
+    private DateTimeOffset? _updatedAt;
+    private Actor? _updatedBy;
+
+    // The number of modifications recorded, so AuditRules.Mutate can tell a nested one apart from an
+    // earlier one carrying the same stamp. Not part of the audit trail; not mapped.
+    private int _modifications;
+
     /// <summary>
     /// Initializes a new instance of the <see cref="AuditableEntity{TId}"/> class.
     /// </summary>
@@ -96,15 +105,6 @@ public abstract class AuditableEntity<TId> : Entity<TId>, IAuditableEntity
 
     /// <inheritdoc />
     public Actor CreatedBy { get; private init; }
-
-    // Explicit backing fields: AuditRules.Mutate writes them by reference. EF Core finds them by
-    // the _camelCase convention and materialises through them, as it did the auto-property fields.
-    private DateTimeOffset? _updatedAt;
-    private Actor? _updatedBy;
-
-    // The number of modifications recorded, so AuditRules.Mutate can tell a nested one apart from an
-    // earlier one carrying the same stamp. Not part of the audit trail; not mapped.
-    private int _modifications;
 
     /// <inheritdoc />
     public DateTimeOffset? UpdatedAt { get => _updatedAt; private set => _updatedAt = value; }

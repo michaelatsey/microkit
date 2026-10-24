@@ -76,6 +76,21 @@ public sealed class DocumentationExamplesTests
         adr.ShouldContain("`AuditRules.Mutate`");
     }
 
+    [Theory]
+    [InlineData("AuditableEntity")]
+    [InlineData("AuditableAggregateRoot")]
+    public void AuditableBase_DeclaresItsPrivateFieldsBeforeItsConstructors(string type)
+    {
+        // .claude/rules/csharp-style.md, member ordering: private backing fields, then constructors.
+        var lines = File.ReadAllLines(Path.Combine(AppContext.BaseDirectory, "module-src", type + ".cs"));
+
+        var lastField = Array.FindLastIndex(lines, l => l.StartsWith("    private ", StringComparison.Ordinal) && l.TrimEnd().EndsWith(';'));
+        var firstConstructor = Array.FindIndex(lines, l => l.StartsWith($"    protected {type}(", StringComparison.Ordinal));
+
+        lastField.ShouldBeGreaterThan(-1);
+        firstConstructor.ShouldBeGreaterThan(lastField);
+    }
+
     [Fact]
     public void Documentation_TeachesNoReplacedSurface()
     {
