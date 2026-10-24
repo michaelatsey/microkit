@@ -41,7 +41,7 @@ public sealed record PhoneNumber(string Value) : IValueObject
     private const string TelScheme = "tel:";
 
     // Longest first, so "extension" is not read as "ext" followed by "ension".
-    private static readonly string[] ExtensionWords = ["extension", "extn", "ext"];
+    private static readonly string[] ExtensionWords = ["extension", "extn", "ext", "x"];
 
     /// <summary>
     /// Gets the normalized phone number value.
@@ -74,11 +74,6 @@ public sealed record PhoneNumber(string Value) : IValueObject
             if (c == '+')
             {
                 buffer[length++] = '+';
-                i++;
-            }
-            else if (c is 'x' or 'X')
-            {
-                buffer[length++] = 'x';
                 i++;
             }
             else if (ExtensionMarkerLengthAt(text, i) is > 0 and var markerLength)
@@ -130,9 +125,9 @@ public sealed record PhoneNumber(string Value) : IValueObject
     }
 
     /// <summary>
-    /// Returns the number of characters of a spelled-out extension marker starting at
-    /// <paramref name="index"/>, or 0: an optional <c>;</c> (RFC 3966 <c>;ext=</c>), one of
-    /// <see cref="ExtensionWords"/> in any case, then an optional separator <c>. : = #</c>.
+    /// Returns the number of characters of an extension marker starting at <paramref name="index"/>,
+    /// or 0: an optional <c>;</c> (RFC 3966 <c>;ext=</c>), one of <see cref="ExtensionWords"/> in any
+    /// case, then an optional separator <c>. : = #</c>.
     /// </summary>
     private static int ExtensionMarkerLengthAt(string text, int index)
     {

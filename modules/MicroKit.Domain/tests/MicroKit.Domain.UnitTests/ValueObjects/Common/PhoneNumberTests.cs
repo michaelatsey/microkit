@@ -65,6 +65,9 @@ public sealed class PhoneNumberTests
     [InlineData("555-123-4567 Ext#89", "5551234567x89")]
     [InlineData("555-123-4567 ext=89", "5551234567x89")]
     [InlineData("555-123-4567 extn. 89", "5551234567x89")]
+    [InlineData("555-123-4567 x:89", "5551234567x89")]
+    [InlineData("555-123-4567 X#89", "5551234567x89")]
+    [InlineData("555-123-4567 x=89", "5551234567x89")]
     [InlineData("tel:+1-201-555-0123;ext=1234", "+12015550123x1234")]   // RFC 3966
     [InlineData("TEL:0612345678", "0612345678")]
     public void Constructor_SpelledOutExtensionMarker_IsStoredAsX(string input, string expected)
