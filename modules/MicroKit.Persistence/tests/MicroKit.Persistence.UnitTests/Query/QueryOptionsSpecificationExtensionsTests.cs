@@ -87,13 +87,11 @@ public sealed class QueryOptionsSpecificationExtensionsTests
 
     private sealed class MatchAllSpec : Specification<TestAggregate>
     {
-        public override bool IsSatisfiedBy(TestAggregate candidate) => true;
         public override Expression<Func<TestAggregate, bool>> ToExpression() => _ => true;
     }
 
     private sealed class ActiveOnlySpec : Specification<TestAggregate>
     {
-        public override bool IsSatisfiedBy(TestAggregate candidate) => candidate.Active;
         public override Expression<Func<TestAggregate, bool>> ToExpression() => a => a.Active;
     }
 }

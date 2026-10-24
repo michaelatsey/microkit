@@ -9,11 +9,6 @@ internal sealed class NotSpecification<T> : Specification<T>
         _specification = specification;
     }
 
-    public override bool IsSatisfiedBy(T candidate)
-    {
-        return !_specification.IsSatisfiedBy(candidate);
-    }
-
     public override Expression<Func<T, bool>> ToExpression()
     {
         var expression = _specification.ToExpression();

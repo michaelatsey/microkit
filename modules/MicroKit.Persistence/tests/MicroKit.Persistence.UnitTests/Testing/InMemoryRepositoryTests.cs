@@ -308,9 +308,6 @@ internal sealed class NameContainsSpec : Specification<TestItem>
     private readonly string _term;
     public NameContainsSpec(string term) => _term = term;
 
-    public override bool IsSatisfiedBy(TestItem candidate) =>
-        candidate.Name.Contains(_term, StringComparison.Ordinal);
-
     public override Expression<Func<TestItem, bool>> ToExpression() =>
         item => item.Name.Contains(_term);
 }
