@@ -6,18 +6,11 @@ namespace MicroKit.Domain.Identifiers;
 /// </summary>
 public readonly record struct GuidId(Guid Value) : IEntityId
 {
-    object IEntityId.Value => Value;
-
     /// <summary>
     /// Creates a new identifier with a randomly generated Guid.
     /// </summary>
     /// <returns>A new GuidId with a unique value</returns>
     public static GuidId New() => new(Guid.NewGuid());
-
-    /// <summary>
-    /// Gets an empty identifier.
-    /// </summary>
-    public static GuidId Empty => new(Guid.Empty);
 
     /// <summary>
     /// Creates a new identifier from the specified Guid value.

@@ -106,10 +106,7 @@ public class AuditableAggregateRootTests
 }
 
 // Test implementations
-public sealed record TestAuditableId(Guid Value) : IEntityId
-{
-    object IEntityId.Value => Value;
-}
+public sealed record TestAuditableId(Guid Value) : IEntityId;
 
 public sealed record TestDomainEvent(string Data) : DomainEvent
 {

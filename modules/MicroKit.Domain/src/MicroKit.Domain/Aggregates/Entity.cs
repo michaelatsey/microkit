@@ -20,39 +20,64 @@ public abstract class Entity<TId> : IEquatable<Entity<TId>>
     /// </summary>
     /// <param name="id">The unique identifier for this entity</param>
     /// <exception cref="ArgumentNullException">Thrown when <paramref name="id"/> is null</exception>
+    /// <exception cref="ArgumentException">
+    /// Thrown when <paramref name="id"/> equals <c>default(TId)</c>, which is how an uninitialised
+    /// <see langword="struct"/> identifier presents itself.
+    /// </exception>
     protected Entity(TId id)
     {
-        if (id is null)
-            throw new ArgumentNullException(nameof(id));
+        ArgumentNullException.ThrowIfNull(id);
+
+        if (EqualityComparer<TId>.Default.Equals(id, default!))
+            throw new ArgumentException(
+                "Entity identifier cannot be the default value.", nameof(id));
         Id = id;
     }
 
     /// <summary>
     /// Determines whether the specified object is equal to the current entity.
-    /// Entities are equal if they have the same type and the same identifier.
+    /// Entities are equal if they have the same identifier and one runtime type is assignable
+    /// from the other.
     /// </summary>
     /// <param name="obj">The object to compare with the current entity</param>
     /// <returns>True if the specified object is equal to the current entity; otherwise, false</returns>
-    public override bool Equals(object? obj)
-    {
-        if (obj is not Entity<TId> other || GetType() != other.GetType())
-            return false;
-
-        return Id.Equals(other.Id);
-    }
+    public override bool Equals(object? obj) => Equals(obj as Entity<TId>);
 
     /// <summary>
     /// Determines whether the specified entity is equal to the current entity.
-    /// Entities are equal if they have the same type and the same identifier.
+    /// Entities are equal if they have the same identifier and one runtime type is assignable
+    /// from the other.
     /// </summary>
     /// <param name="other">The entity to compare with the current entity</param>
     /// <returns>True if the specified entity is equal to the current entity; otherwise, false</returns>
+    /// <remarks>
+    /// <para>
+    /// The runtime types are compared by assignability, not exact equality, because an EF Core
+    /// lazy-loading or change-tracking proxy is a runtime subclass of the mapped entity: with
+    /// exact type equality, an entity and its proxy with the same identifier would compare
+    /// unequal. Two unrelated entity types sharing an identifier type stay unequal.
+    /// </para>
+    /// <para>
+    /// The relation is therefore not transitive across sibling subclasses: an <c>A</c> equals a
+    /// <c>B : A</c> and a <c>C : A</c> with the same identifier, while the <c>B</c> and the
+    /// <c>C</c> are unequal.
+    /// </para>
+    /// </remarks>
     public bool Equals(Entity<TId>? other)
     {
-        if (other is null || GetType() != other.GetType())
+        if (other is null)
             return false;
 
-        return Id.Equals(other.Id);
+        if (ReferenceEquals(this, other))
+            return true;
+
+        var thisType = GetType();
+        var otherType = other.GetType();
+
+        if (!thisType.IsAssignableFrom(otherType) && !otherType.IsAssignableFrom(thisType))
+            return false;
+
+        return EqualityComparer<TId>.Default.Equals(Id, other.Id);
     }
 
     /// <summary>

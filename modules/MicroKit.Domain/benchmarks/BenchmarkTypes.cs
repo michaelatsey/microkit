@@ -8,7 +8,6 @@ namespace MicroKit.Domain.Benchmarks;
 // Shared benchmark-specific identifier types
 public readonly record struct BenchmarkCustomerId(Guid Value) : IEntityId
 {
-    object IEntityId.Value => Value;
     public static BenchmarkCustomerId New() => new(Guid.NewGuid());
     public static BenchmarkCustomerId Empty => new(Guid.Empty);
     public override string ToString() => Value.ToString();
@@ -16,7 +15,6 @@ public readonly record struct BenchmarkCustomerId(Guid Value) : IEntityId
 
 public readonly record struct BenchmarkOrderId(Guid Value) : IEntityId
 {
-    object IEntityId.Value => Value;
     public static BenchmarkOrderId New() => new(Guid.NewGuid());
     public static BenchmarkOrderId Empty => new(Guid.Empty);
     public override string ToString() => Value.ToString();
@@ -24,7 +22,6 @@ public readonly record struct BenchmarkOrderId(Guid Value) : IEntityId
 
 public readonly record struct BenchmarkProductId(Guid Value) : IEntityId
 {
-    object IEntityId.Value => Value;
     public static BenchmarkProductId New() => new(Guid.NewGuid());
     public static BenchmarkProductId Empty => new(Guid.Empty);
     public override string ToString() => Value.ToString();

@@ -131,10 +131,7 @@ public class DomainEventsProviderTests
 }
 
 // Test implementations
-public sealed record TestId(Guid Value) : IEntityId
-{
-    object IEntityId.Value => Value;
-}
+public sealed record TestId(Guid Value) : IEntityId;
 
 public sealed record TestDomainEvent(string Data) : DomainEvent;
 
