@@ -152,7 +152,11 @@ sharing one identifier space is a modelling error this rule does not try to repa
   Public construction rejects a leading `$`. `Actor.Restore(string)` reads a stored value back,
   returning the built-in instance for a reserved value and rejecting any other `$` value, so a
   value converter can round-trip every actor.
-- The two auditable classes keep their duplicated audit code.
+- The two auditable classes keep their own audit members, but not their own audit rules: the
+  creation rules (null creator, default instant, offset) and the rules of `Mutate` (actor,
+  mutation, default instant, offset, monotonicity, and its exception message) live once, in the
+  `internal static` class `AuditRules`, which both bases call (#179). The refusal below was of a
+  public component, not of an internal one.
 
 **Reasoning.**
 - A nullable `string` creator meant, indistinguishably, unknown, background job, migration,
@@ -171,7 +175,8 @@ sharing one identifier space is a modelling error this rule does not try to repa
 - *`string?` (status quo).* See above.
 - *A `Guid` user identifier.* Not every identity provider issues GUIDs.
 - *Built-ins without a prefix.* They collide with real identifiers.
-- *A shared audit component.* A public type for fifteen lines.
+- *A shared public audit component.* A public type for fifteen lines. An internal helper adds no
+  surface, so it is kept (#179).
 - *Call `Touch` first, then mutate (#176).* A failed mutation would leave a false modification
   timestamp.
 - *A separate `EnsureCanTouch` check (#176).* Two calls to keep in order, which is the failure

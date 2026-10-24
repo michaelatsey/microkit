@@ -1,4 +1,3 @@
-using System.Globalization;
 using MicroKit.Domain.Identifiers;
 using MicroKit.Domain.ValueObjects.Common;
 
@@ -61,9 +60,7 @@ public abstract class AuditableEntity<TId> : Entity<TId>, IAuditableEntity
     protected AuditableEntity(TId id, DateTimeOffset createdAt, Actor createdBy)
         : base(id)
     {
-        ArgumentNullException.ThrowIfNull(createdBy);
-
-        CreatedAt = UtcInstant.Normalize(createdAt, nameof(createdAt));
+        CreatedAt = AuditRules.Creation(createdAt, createdBy);
         CreatedBy = createdBy;
     }
 
@@ -89,7 +86,7 @@ public abstract class AuditableEntity<TId> : Entity<TId>, IAuditableEntity
     protected AuditableEntity(TId id, TimeProvider timeProvider, Actor createdBy)
         : this(
             id,
-            (timeProvider ?? throw new ArgumentNullException(nameof(timeProvider))).GetUtcNow(),
+            AuditRules.Now(timeProvider),
             createdBy)
     {
     }
@@ -158,16 +155,7 @@ public abstract class AuditableEntity<TId> : Entity<TId>, IAuditableEntity
     /// </example>
     protected void Mutate(DateTimeOffset at, Actor by, Action mutation)
     {
-        ArgumentNullException.ThrowIfNull(by);
-        ArgumentNullException.ThrowIfNull(mutation);
-
-        var instant = UtcInstant.Normalize(at, nameof(at));
-        var bound = UpdatedAt ?? CreatedAt;
-        if (instant < bound)
-            throw new ArgumentOutOfRangeException(
-                nameof(at), at,
-                string.Create(CultureInfo.InvariantCulture,
-                    $"A modification at {instant:O} cannot precede {bound:O}, the {(UpdatedAt is null ? "creation instant" : "previous modification")}."));
+        var instant = AuditRules.Modification(at, by, mutation, CreatedAt, UpdatedAt);
 
         mutation();
 
