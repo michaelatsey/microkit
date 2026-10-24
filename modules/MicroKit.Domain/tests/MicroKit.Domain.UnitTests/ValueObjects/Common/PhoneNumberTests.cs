@@ -10,7 +10,7 @@ public sealed class PhoneNumberTests
     [Theory]
     [InlineData("0612345678", "0612345678")]
     [InlineData("+33 6 12 34 56 78", "+33612345678")]
-    [InlineData("+33 (0)6 12-34-56-78", "+330612345678")]
+    [InlineData("+33 (0)6 12-34-56-78", "+330612345678")]   // documented limit: the trunk 0 is kept
     [InlineData("06.12.34.56.78", "0612345678")]
     [InlineData("555/123 4567", "5551234567")]
     [InlineData("  +1 555 123 4567  ", "+15551234567")]

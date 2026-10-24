@@ -11,10 +11,15 @@ namespace MicroKit.Domain.ValueObjects.Common;
 /// <remarks>
 /// <para>
 /// The normalized value keeps the ASCII digits, an optional leading <c>+</c>, and an optional
-/// extension introduced by <c>x</c> or <c>X</c>, stored as <c>x</c>: <c>+33 (0)6 12-34-56-78 X 12</c>
-/// becomes <c>+330612345678x12</c>. Spaces and the formatting characters <c>-</c>, <c>.</c>,
+/// extension introduced by <c>x</c> or <c>X</c>, stored as <c>x</c>: <c>+33 6 12-34-56-78 X 12</c>
+/// becomes <c>+33612345678x12</c>. Spaces and the formatting characters <c>-</c>, <c>.</c>,
 /// <c>(</c>, <c>)</c> and <c>/</c> are removed; any other character, a letter or a non-ASCII digit
 /// included, is rejected.
+/// </para>
+/// <para>
+/// The digits are kept as written: no national trunk prefix is removed. <c>+33 (0)6 12 34 56 78</c>
+/// becomes <c>+330612345678</c>, which is not dialable and is not equal to
+/// <c>+33612345678</c>. Remove a trunk prefix written after a country code before building the value.
 /// </para>
 /// <para>
 /// The number before the extension has 7 to 15 digits, the ITU-T E.164 maximum; the extension has

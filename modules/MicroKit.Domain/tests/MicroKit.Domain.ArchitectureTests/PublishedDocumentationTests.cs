@@ -123,6 +123,16 @@ public sealed class PublishedDocumentationTests
         Member(member).ShouldContain("<exception cref=\"T:System.OverflowException\">");
     }
 
+    [Fact]
+    public void PhoneNumber_StatesThatATrunkPrefixIsKept()
+    {
+        // The example must not present a number with its trunk 0 after the country code as the norm.
+        var doc = Member("T:MicroKit.Domain.ValueObjects.Common.PhoneNumber");
+
+        doc.ShouldContain("no national trunk prefix is removed");
+        doc.ShouldContain("becomes <c>+33612345678x12</c>");
+    }
+
     // #182, ADR-004 D3: a plain aggregate keeps the events and changes of a method that throws.
     [Theory]
     [InlineData("T:MicroKit.Domain.Aggregates.AggregateRoot`1")]
