@@ -44,6 +44,21 @@ public sealed class PublishedDocumentationTests
         doc.ShouldContain("private constructor for materialisation");
     }
 
+    private const string AggregateMutate =
+        "M:MicroKit.Domain.Aggregates.AuditableAggregateRoot`1.Mutate(System.DateTimeOffset,MicroKit.Domain.ValueObjects.Common.Actor,System.Action)";
+
+    [Fact]
+    public void AggregateMutate_StatesTheEventRemovalOnce()
+    {
+        var doc = Member(AggregateMutate);
+
+        doc.ShouldContain("Domain events raised inside a");
+        Count(doc, "removed").ShouldBe(1);
+    }
+
+    private static int Count(string text, string word) =>
+        text.Split(word, StringSplitOptions.None).Length - 1;
+
     private static string Member(string name)
     {
         var member = Documentation.Descendants("member")

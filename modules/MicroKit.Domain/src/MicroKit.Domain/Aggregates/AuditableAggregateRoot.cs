@@ -123,7 +123,7 @@ public abstract class AuditableAggregateRoot<TId> : AggregateRoot<TId>, IAuditab
     /// Auditing wraps the mutation instead of following it. The instant and the actor are validated
     /// first, before anything changes; then <paramref name="mutation"/> runs; only if it returns are
     /// <see cref="UpdatedAt"/> and <see cref="UpdatedBy"/> set. If it throws, the audit fields keep
-    /// their previous values and the exception propagates. A domain event raised inside it is removed.
+    /// their previous values and the exception propagates.
     /// </para>
     /// <para>
     /// Domain events raised inside a <paramref name="mutation"/> that throws are removed, so a
