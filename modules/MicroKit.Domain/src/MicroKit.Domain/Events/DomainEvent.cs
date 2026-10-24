@@ -26,10 +26,13 @@ namespace MicroKit.Domain.Events;
 /// </para>
 /// <para>
 /// With default <c>System.Text.Json</c> options, a built-in <see cref="ValueObjects.Common.Actor"/>
-/// does not round-trip: the type-level converter treats JSON as untrusted and refuses the reserved
-/// prefix on write and on read, so serializing such an event throws. Until the Messaging outbox can register
-/// <see cref="ValueObjects.Common.Json.TrustedActorJsonConverter"/> (#174), an event that must
-/// record a built-in actor carries the actor's value as a string.
+/// does not round-trip. The type-level converter is asymmetric by design (ADR-004 D1): it writes
+/// every actor, so serializing such an event succeeds, but it treats JSON as untrusted and rejects
+/// the reserved prefix on read, so the event cannot be read back without
+/// <see cref="ValueObjects.Common.Json.TrustedActorJsonConverter"/> registered. Until the Messaging
+/// outbox can register that converter (#174), an event that must record a built-in actor carries
+/// the actor's <see cref="ValueObjects.Common.Actor.Value"/> as a string, which the consumer turns
+/// back into the actor with <see cref="ValueObjects.Common.Actor.Restore(string)"/>.
 /// </para>
 /// <para>
 /// An event produced by a <see langword="with"/> expression is a different fact, so it receives a

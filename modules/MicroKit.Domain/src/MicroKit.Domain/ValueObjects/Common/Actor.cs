@@ -25,19 +25,21 @@ namespace MicroKit.Domain.ValueObjects.Common;
 /// user whose identifier happens to be <c>system</c>.
 /// </para>
 /// <para>
-/// <c>System.Text.Json</c> writes an actor as its identifier, a JSON string. With default options it
-/// reads it back through the public constructor: JSON is treated as untrusted, so a value with the
-/// reserved prefix fails as a <see cref="System.Text.Json.JsonException"/>. A built-in actor does
-/// <b>not</b> round-trip: the default converter refuses it on write as well as on read, so the
-/// failure happens when it is serialized, inside the business transaction, not when it is read
-/// back. Storage the application wrote itself (an outbox, an event store, a cache)
-/// opts into rehydrating built-in actors by registering
+/// <c>System.Text.Json</c> handles an actor asymmetrically, by design (ADR-004 D1). It writes every
+/// actor, built-in ones included, as its identifier, a JSON string, also as a dictionary key, so an
+/// HTTP response, a log or a cache written with default options never fails on an actor. With
+/// default options it reads the identifier back through the public constructor: JSON is treated as
+/// untrusted, so a value with the reserved prefix fails as a
+/// <see cref="System.Text.Json.JsonException"/>. A built-in actor written with default options
+/// therefore <b>cannot be read back</b> with them. Storage the application wrote itself (an outbox,
+/// an event store, a cache) reads built-in actors back by registering
 /// <see cref="Json.TrustedActorJsonConverter"/> in <c>JsonSerializerOptions.Converters</c>.
 /// </para>
 /// <para>
 /// Until the Messaging outbox can register that converter (#174), an event that must carry a
-/// built-in actor should carry the actor's <see cref="Value"/> as a string, and rebuild the actor
-/// with <see cref="Restore(string)"/> where it is consumed.
+/// built-in actor carries the actor's <see cref="Value"/> as a string, and the consumer rebuilds the
+/// actor with <see cref="Restore(string)"/>. Nothing stops an event from carrying the
+/// <see cref="Actor"/> itself: it is written, and fails only when the outbox reads it back.
 /// </para>
 /// </remarks>
 [JsonConverter(typeof(ActorJsonConverter))]
@@ -116,8 +118,9 @@ public sealed record Actor : IValueObject
     /// constructor, which rejects the reserved prefix.
     /// </para>
     /// <para>
-    /// The default <c>System.Text.Json</c> converter of <see cref="Actor"/> does not call this
-    /// method, so a built-in actor does not round-trip with default options.
+    /// The default <c>System.Text.Json</c> converter of <see cref="Actor"/> writes a built-in actor
+    /// but does not call this method when reading, so a built-in actor does not round-trip with
+    /// default options.
     /// <see cref="Json.TrustedActorJsonConverter"/> calls it, under the same rule: register that
     /// converter only for storage the application wrote itself, never for a request body.
     /// </para>
