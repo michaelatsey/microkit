@@ -5,8 +5,7 @@ namespace MicroKit.Domain.Events;
 /// </summary>
 /// <remarks>
 /// This is the canonical event root. Specialized event contracts derive from it:
-/// <c>IDomainEvent</c> for facts raised by aggregates, <c>IIntegrationEvent</c>
-/// for messages crossing service boundaries, and <c>IApplicationEvent</c> for
-/// application-level facts.
+/// <see cref="IDomainEvent"/> for facts raised by aggregates, and <c>IIntegrationEvent</c>
+/// (MicroKit.Messaging) for messages crossing service boundaries.
 /// </remarks>
 public interface IEvent;

@@ -23,9 +23,9 @@ public class AggregateBenchmarks
         _customerId = BenchmarkCustomerId.New();
         _orderItems = new List<BenchmarkOrderItemRequest>
         {
-            new(BenchmarkProductId.New(), 2, new Money(29.99m, "USD")),
-            new(BenchmarkProductId.New(), 1, new Money(45.00m, "USD")),
-            new(BenchmarkProductId.New(), 3, new Money(12.50m, "USD"))
+            new(BenchmarkProductId.New(), 2, new Money(29.99m, BenchmarkCurrencies.Usd)),
+            new(BenchmarkProductId.New(), 1, new Money(45.00m, BenchmarkCurrencies.Usd)),
+            new(BenchmarkProductId.New(), 3, new Money(12.50m, BenchmarkCurrencies.Usd))
         };
     }
 
@@ -70,7 +70,7 @@ public class AggregateBenchmarks
         // Add more items (generates events)
         for (int i = 0; i < 5; i++)
         {
-            order.AddItem(BenchmarkProductId.New(), 1, new Money(10.00m, "USD"));
+            order.AddItem(BenchmarkProductId.New(), 1, new Money(10.00m, BenchmarkCurrencies.Usd));
         }
 
         // Ship order (generates event)
@@ -101,7 +101,7 @@ public sealed class TestOrder : AggregateRoot<BenchmarkOrderId>
     public IReadOnlyList<OrderItem> Items => _items.AsReadOnly();
 
     public Money TotalAmount => _items.Count == 0
-        ? Money.Zero("USD")
+        ? Money.Zero(BenchmarkCurrencies.Usd)
         : _items.Select(i => i.TotalPrice).Aggregate((a, b) => a.Add(b));
 
     public static TestOrder Create(BenchmarkOrderId id, BenchmarkCustomerId customerId)
@@ -119,7 +119,7 @@ public sealed class TestOrder : AggregateRoot<BenchmarkOrderId>
         }
 
         order.Status = OrderStatus.Placed;
-        order.RaiseDomainEvent(new OrderPlacedEvent(order.Id, customerId, order.TotalAmount));
+        order.RaiseDomainEvent(new OrderPlacedEvent(order.Id, customerId, order.TotalAmount, DateTimeOffset.UtcNow));
 
         return order;
     }
@@ -129,7 +129,7 @@ public sealed class TestOrder : AggregateRoot<BenchmarkOrderId>
         var item = new OrderItem(productId, quantity, unitPrice);
         _items.Add(item);
 
-        RaiseDomainEvent(new OrderItemAddedEvent(Id, productId, quantity, unitPrice));
+        RaiseDomainEvent(new OrderItemAddedEvent(Id, productId, quantity, unitPrice, DateTimeOffset.UtcNow));
     }
 
     public void Ship(TrackingNumber trackingNumber)
@@ -137,7 +137,7 @@ public sealed class TestOrder : AggregateRoot<BenchmarkOrderId>
         Status = OrderStatus.Shipped;
         ShippedAt = DateTimeOffset.UtcNow;
 
-        RaiseDomainEvent(new OrderShippedEvent(Id, trackingNumber));
+        RaiseDomainEvent(new OrderShippedEvent(Id, trackingNumber, ShippedAt.Value));
     }
 }
 
@@ -153,6 +153,6 @@ public sealed class OrderItem
     public BenchmarkProductId ProductId { get; }
     public int Quantity { get; }
     public Money UnitPrice { get; }
-    public Money TotalPrice => UnitPrice.Multiply(Quantity);
+    public Money TotalPrice => UnitPrice.Multiply(Quantity, MidpointRounding.ToEven);
 }
 

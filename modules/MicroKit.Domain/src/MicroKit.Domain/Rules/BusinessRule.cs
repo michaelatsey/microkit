@@ -2,7 +2,7 @@ namespace MicroKit.Domain.Rules;
 
 /// <summary>
 /// Abstract base class for business rules.
-/// Provides common equality semantics and rule name extraction.
+/// Provides equality semantics based on the rule type and its equality components.
 /// </summary>
 public abstract class BusinessRule : IBusinessRule
 {
@@ -16,6 +16,15 @@ public abstract class BusinessRule : IBusinessRule
     /// Gets the message that explains why this rule was broken.
     /// </summary>
     public abstract string Message { get; }
+
+    /// <summary>
+    /// Gets the stable, machine-readable code that identifies this rule.
+    /// </summary>
+    /// <remarks>
+    /// Abstract with no default: a code derived from the type name would change silently when the
+    /// type is renamed, breaking every consumer that persisted or mapped it.
+    /// </remarks>
+    public abstract string Code { get; }
 
     /// <summary>
     /// Determines whether the specified object is equal to the current business rule.

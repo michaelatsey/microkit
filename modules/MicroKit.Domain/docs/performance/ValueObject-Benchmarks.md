@@ -58,15 +58,17 @@ public sealed class LegacyMoney : ValueObject
 ### Modern Sealed Record
 
 ```csharp
-public sealed record Money(decimal Amount, string Currency) : IValueObject
+// The shipped Money holds a Currency (ISO 4217 code and minor unit) and rejects an amount
+// finer than the minor unit
+public sealed record Money(decimal Amount, Currency Currency) : IValueObject
 {
-    public Money
-    {
-        if (Amount < 0) throw new DomainException("Amount cannot be negative");
-        ArgumentException.ThrowIfNullOrWhiteSpace(Currency);
-    }
+    public Currency Currency { get; } = ValidateCurrency(Currency);
+    public decimal Amount { get; } = ValidateAmount(Amount, Currency);
 }
 ```
+
+> The figures below were measured before #160, when `Money` held a `string` currency. The code
+> on this page shows the current shape; the figures have not been re-measured since.
 
 ## Benchmark Results
 
@@ -128,9 +130,9 @@ Total: 96 bytes per hash code generation
 // Compiler-generated equality (simplified)
 public override bool Equals(object? obj)
 {
-    return obj is Money other 
-        && Amount == other.Amount 
-        && string.Equals(Currency, other.Currency, StringComparison.Ordinal);
+    return obj is Money other
+        && Amount == other.Amount
+        && Currency == other.Currency;   // Currency is a readonly record struct
 }
 
 // Compiler-generated hash code
@@ -211,7 +213,7 @@ public sealed class LegacyCustomerId : ValueObject
 // Modern approach  
 public readonly record struct CustomerId(Guid Value) : IEntityId
 {
-    public static CustomerId New() => new(Guid.NewGuid());
+    public static CustomerId New() => new(Guid.CreateVersion7());
 }
 ```
 
@@ -231,18 +233,21 @@ public readonly record struct CustomerId(Guid Value) : IEntityId
 ### Aggregate with Multiple Value Objects
 
 ```csharp
+private static readonly Currency Usd = Currency.FromCode("USD");
+private static readonly DateTimeOffset Now = new(2026, 10, 24, 9, 0, 0, TimeSpan.Zero);
+
 [Benchmark]
 public Order CreateComplexOrder()
 {
     var customerId = CustomerId.New();
     var items = new[]
     {
-        new OrderItemRequest(ProductId.New(), 2, new Money(29.99m, "USD")),
-        new OrderItemRequest(ProductId.New(), 1, new Money(45.00m, "USD")),
-        new OrderItemRequest(ProductId.New(), 3, new Money(12.50m, "USD"))
+        new OrderItemRequest(ProductId.New(), 2, new Money(29.99m, Usd)),
+        new OrderItemRequest(ProductId.New(), 1, new Money(45.00m, Usd)),
+        new OrderItemRequest(ProductId.New(), 3, new Money(12.50m, Usd))
     };
-    
-    return Order.Place(customerId, items);
+
+    return Order.Place(customerId, items, Now);
 }
 ```
 
@@ -318,6 +323,8 @@ All benchmarks are available in `benchmarks/MicroKit.Domain.Benchmarks/ValueObje
 [SimpleJob(RuntimeMoniker.Net80)]
 public class ValueObjectBenchmarks
 {
+    private static readonly Currency Usd = Currency.FromCode("USD");
+
     private readonly LegacyMoney _legacyMoney1;
     private readonly LegacyMoney _legacyMoney2;
     private readonly Money _modernMoney1;
@@ -327,8 +334,8 @@ public class ValueObjectBenchmarks
     {
         _legacyMoney1 = new LegacyMoney(100.50m, "USD");
         _legacyMoney2 = new LegacyMoney(100.50m, "USD");
-        _modernMoney1 = new Money(100.50m, "USD");
-        _modernMoney2 = new Money(100.50m, "USD");
+        _modernMoney1 = new Money(100.50m, Usd);
+        _modernMoney2 = new Money(100.50m, Usd);
     }
 
     [Benchmark(Baseline = true)]

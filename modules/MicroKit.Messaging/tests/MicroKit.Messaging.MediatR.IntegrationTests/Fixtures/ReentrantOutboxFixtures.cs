@@ -10,7 +10,7 @@ namespace MicroKit.Messaging.MediatR.IntegrationTests.Fixtures;
 // handler count.
 
 /// <summary>The domain fact, raised by the command and staged as a Notification row.</summary>
-internal sealed record WidgetShippedEvent(Guid WidgetId) : DomainEvent;
+internal sealed record WidgetShippedEvent(Guid WidgetId, DateTimeOffset OccurredAt) : DomainEvent(OccurredAt);
 
 internal sealed class WidgetShippedNotification(WidgetShippedEvent domainEvent)
     : DomainEventNotification<WidgetShippedEvent>(domainEvent);
@@ -69,7 +69,7 @@ internal sealed class ShipWidgetHandler(IE2EWriter writer)
     public ValueTask<Result<Guid>> Handle(ShipWidgetCommand command, CancellationToken ct = default)
     {
         var aggregate = new E2EAggregate { Name = command.Name };
-        aggregate.Raise(new WidgetShippedEvent(aggregate.Id));
+        aggregate.Raise(new WidgetShippedEvent(aggregate.Id, DateTimeOffset.UtcNow));
         writer.Stage(aggregate);
         return new(Success(aggregate.Id));
     }

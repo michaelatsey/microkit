@@ -4,8 +4,6 @@
   </Folder>
   <Folder Name="/tests/">
     <Project Path="tests/MicroKit.Domain.ArchitectureTests/MicroKit.Domain.ArchitectureTests.csproj" />
-    <Project Path="tests/MicroKit.Domain.IntegrationTests/MicroKit.Domain.IntegrationTests.csproj" />
-    <Project Path="tests/MicroKit.Domain.PerformanceTests/MicroKit.Domain.PerformanceTests.csproj" />
     <Project Path="tests/MicroKit.Domain.UnitTests/MicroKit.Domain.UnitTests.csproj" />
   </Folder>
 </Solution>

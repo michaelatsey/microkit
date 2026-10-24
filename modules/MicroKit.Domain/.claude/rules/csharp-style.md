@@ -6,22 +6,22 @@
 ```csharp
 // ✅ Tout type concret = sealed
 public sealed class OrderMustHaveItemsRule : BusinessRule { }
-public sealed record Money(decimal Amount, string Currency);
-public sealed record OrderPlacedEvent(...) : DomainEvent;
+public sealed record Money(decimal Amount, Currency Currency) : IValueObject;
+public sealed record OrderPlacedEvent(OrderId OrderId, DateTimeOffset OccurredAt) : DomainEvent(OccurredAt);
 
 // ✅ Abstractions = abstract (non sealed)
 public abstract class AggregateRoot<TId> { }
-public abstract class ValueObject { }
+public abstract record DomainEvent(DateTimeOffset OccurredAt) : IDomainEvent { }
 public abstract class BusinessRule : IBusinessRule { }
 ```
 
 ### IDs — readonly record struct
 ```csharp
 // ✅ Toujours readonly record struct pour les IDs
+// ✅ UUID v7 (ordonné dans le temps) ; pas de fabrique Empty : Entity<TId> rejette default(TId)
 public readonly record struct OrderId(Guid Value) : IEntityId
 {
-    public static OrderId New() => new(Guid.NewGuid());
-    public static OrderId Empty => new(Guid.Empty);
+    public static OrderId New() => new(Guid.CreateVersion7());
     public static OrderId From(Guid value) => new(value);
     public override string ToString() => Value.ToString();
 }
@@ -30,34 +30,38 @@ public readonly record struct OrderId(Guid Value) : IEntityId
 ### DomainEvents — sealed record avec DateTimeOffset
 ```csharp
 // ✅ Toujours sealed record
-// ✅ Toujours OccurredAt en DateTimeOffset (jamais DateTime)
+// ✅ Toujours OccurredAt en DateTimeOffset (jamais DateTime), dernier paramètre, transmis à la base
 // ✅ Toujours l'ID de l'agrégat concerné en premier paramètre
 public sealed record OrderShippedEvent(
     OrderId OrderId,
     TrackingNumber Tracking,
-    DateTimeOffset OccurredAt) : DomainEvent;
+    DateTimeOffset OccurredAt) : DomainEvent(OccurredAt);
 ```
 
 ### Constructeurs d'agrégats — private + factory method
 ```csharp
 // ✅ Constructeur private pour forcer l'usage de la factory
-private Order(OrderId id, CustomerId customerId) : base(id)
+// ✅ L'instant est une entrée de l'opération, jamais une horloge ambiante
+private Order(OrderId id, CustomerId customerId, DateTimeOffset createdAt) : base(id)
 {
     CustomerId = customerId;
     Status = OrderStatus.Draft;
-    CreatedAt = DateTimeOffset.UtcNow;
+    CreatedAt = createdAt;
 }
 
 // ✅ Factory method qui valide et raise l'event de création
-public static Order Place(CustomerId customerId, IReadOnlyList<OrderItemRequest> items)
+public static Order Place(CustomerId customerId, IReadOnlyList<OrderItemRequest> items, DateTimeOffset now)
 {
-    ArgumentNullException.ThrowIfNull(customerId);
-    var order = new Order(OrderId.New(), customerId);
-    order.CheckRule(new OrderMustHaveItemsRule(items));
+    ArgumentNullException.ThrowIfNull(items);
+    var order = new Order(OrderId.New(), customerId, now);
+    order.CheckRule(new OrderMustHaveItemsRule(items.Count));
     // ajouter les items...
-    order.RaiseDomainEvent(new OrderPlacedEvent(order.Id, customerId, DateTimeOffset.UtcNow));
+    order.RaiseDomainEvent(new OrderPlacedEvent(order.Id, now));
     return order;
 }
+
+// ✅ Agrégat audité : TimeProvider et Actor à la création, chaque mutation enveloppée dans Mutate(at, by, () => …)
+private Invoice(InvoiceId id, TimeProvider clock, Actor createdBy) : base(id, clock, createdBy) { }
 ```
 
 ### Collections dans les agrégats

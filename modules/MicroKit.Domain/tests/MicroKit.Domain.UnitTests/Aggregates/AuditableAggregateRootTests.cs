@@ -1,138 +1,59 @@
 using MicroKit.Domain.Aggregates;
 using MicroKit.Domain.Events;
 using MicroKit.Domain.Identifiers;
+using MicroKit.Domain.ValueObjects.Common;
 using Shouldly;
 using Xunit;
 
 namespace MicroKit.Domain.UnitTests.Aggregates;
 
-public class AuditableAggregateRootTests
+// What is specific to the aggregate base. The audit rules both bases share run in AuditRulesTests.
+public sealed class AuditableAggregateRootTests
 {
-    [Fact]
-    public void Constructor_ShouldSetCreatedAt()
-    {
-        // Arrange
-        var id = new TestAuditableId(Guid.NewGuid());
-        var beforeCreation = DateTimeOffset.UtcNow.AddMilliseconds(-100);
-
-        // Act
-        var aggregate = new TestAuditableAggregateRoot(id);
-        var afterCreation = DateTimeOffset.UtcNow.AddMilliseconds(100);
-
-        // Assert
-        aggregate.CreatedAt.ShouldBeInRange(beforeCreation, afterCreation);
-        aggregate.UpdatedAt.ShouldBeNull();
-        aggregate.CreatedBy.ShouldBeNull();
-        aggregate.UpdatedBy.ShouldBeNull();
-    }
+    private static readonly DateTimeOffset CreatedAt = new(2026, 10, 24, 9, 0, 0, TimeSpan.Zero);
+    private static readonly Actor Creator = new("user-123");
 
     [Fact]
     public void Constructor_ShouldImplementIAuditableEntity()
     {
-        // Arrange & Act
-        var aggregate = new TestAuditableAggregateRoot(new TestAuditableId(Guid.NewGuid()));
+        var aggregate = new TestAuditableAggregateRoot(NewId(), CreatedAt, Creator);
 
-        // Assert
         aggregate.ShouldBeAssignableTo<IAuditableEntity>();
-    }
-
-    [Fact]
-    public void Constructor_ShouldInheritFromAggregateRoot()
-    {
-        // Arrange & Act
-        var aggregate = new TestAuditableAggregateRoot(new TestAuditableId(Guid.NewGuid()));
-
-        // Assert
         aggregate.ShouldBeAssignableTo<AggregateRoot<TestAuditableId>>();
     }
 
     [Fact]
     public void Constructor_ShouldSetId()
     {
-        // Arrange
-        var id = new TestAuditableId(Guid.NewGuid());
+        var id = NewId();
 
-        // Act
-        var aggregate = new TestAuditableAggregateRoot(id);
-
-        // Assert
-        aggregate.Id.ShouldBe(id);
+        new TestAuditableAggregateRoot(id, CreatedAt, Creator).Id.ShouldBe(id);
     }
 
     [Fact]
-    public void Constructor_ShouldMaintainDomainEventFunctionality()
+    public void RaiseDomainEvent_StoresTheEventAsSupplied()
     {
-        // Arrange
-        var id = new TestAuditableId(Guid.NewGuid());
-        var aggregate = new TestAuditableAggregateRoot(id);
+        var aggregate = new TestAuditableAggregateRoot(NewId(), CreatedAt, Creator);
+        var domainEvent = new TestAuditableEvent("Test", CreatedAt);
 
-        // Act
-        aggregate.TestRaiseEvent(new TestDomainEvent("Test"));
+        aggregate.TestRaiseEvent(domainEvent);
 
-        // Assert
-        aggregate.DomainEvents.Count.ShouldBe(1);
+        aggregate.DomainEvents.ShouldBe([domainEvent]);
+        aggregate.DomainEvents[0].OccurredAt.ShouldBe(CreatedAt);
     }
 
-    [Fact]
-    public void SetUpdatedInfo_ShouldUpdateAuditFields()
-    {
-        // Arrange
-        var id = new TestAuditableId(Guid.NewGuid());
-        var aggregate = new TestAuditableAggregateRoot(id);
-        var beforeUpdate = DateTimeOffset.UtcNow;
-
-        // Act
-        aggregate.SetUpdated("user123");
-        var afterUpdate = DateTimeOffset.UtcNow.AddMilliseconds(100);
-
-        // Assert
-        aggregate.UpdatedAt.ShouldNotBeNull();
-        aggregate.UpdatedAt!.Value.ShouldBeInRange(beforeUpdate, afterUpdate);
-        aggregate.UpdatedBy.ShouldBe("user123");
-    }
-
-    [Fact]
-    public void SetCreatedBy_ShouldSetCreatedByField()
-    {
-        // Arrange
-        var id = new TestAuditableId(Guid.NewGuid());
-
-        // Act
-        var aggregate = new TestAuditableAggregateRoot(id, "user456");
-
-        // Assert
-        aggregate.CreatedBy.ShouldBe("user456");
-    }
+    private static TestAuditableId NewId() => new(Guid.CreateVersion7());
 }
 
 // Test implementations
-public sealed record TestAuditableId(Guid Value) : IEntityId
+public sealed record TestAuditableId(Guid Value) : IEntityId;
+
+public sealed record TestAuditableEvent(string Data, DateTimeOffset OccurredAt) : DomainEvent(OccurredAt);
+
+public sealed class TestAuditableAggregateRoot : AuditableAggregateRoot<TestAuditableId>
 {
-    object IEntityId.Value => Value;
-}
+    public TestAuditableAggregateRoot(TestAuditableId id, DateTimeOffset createdAt, Actor createdBy)
+        : base(id, createdAt, createdBy) { }
 
-public sealed record TestDomainEvent(string Data) : DomainEvent
-{
-    public string Data { get; } = Data;
-}
-
-public class TestAuditableAggregateRoot : AuditableAggregateRoot<TestAuditableId>
-{
-    public TestAuditableAggregateRoot(TestAuditableId id) : base(id) { }
-
-    internal TestAuditableAggregateRoot(TestAuditableId id, string createdBy) : base(id)
-    {
-        CreatedBy = createdBy;
-    }
-
-    public void TestRaiseEvent(IDomainEvent domainEvent)
-    {
-        RaiseDomainEvent(domainEvent);
-    }
-
-    public void SetUpdated(string updatedBy)
-    {
-        UpdatedAt = DateTimeOffset.UtcNow;
-        UpdatedBy = updatedBy;
-    }
+    public void TestRaiseEvent(IDomainEvent domainEvent) => RaiseDomainEvent(domainEvent);
 }

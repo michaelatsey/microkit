@@ -15,7 +15,7 @@ public sealed class DomainEventNotificationTests
     [Fact]
     public void Constructor_StoresDomainEvent()
     {
-        var evt = new UserRegisteredEvent(Guid.NewGuid(), "user@example.com");
+        var evt = new UserRegisteredEvent(Guid.NewGuid(), "user@example.com", DateTimeOffset.UtcNow);
         var notification = new UserRegisteredNotification(evt);
 
         notification.DomainEvent.ShouldBe(evt);
@@ -24,7 +24,7 @@ public sealed class DomainEventNotificationTests
     [Fact]
     public void DomainEventProperty_ReturnsSameReferencePassedToConstructor()
     {
-        var evt = new UserRegisteredEvent(Guid.NewGuid(), "user@example.com");
+        var evt = new UserRegisteredEvent(Guid.NewGuid(), "user@example.com", DateTimeOffset.UtcNow);
         var notificationA = new UserRegisteredNotification(evt);
         var notificationB = new UserRegisteredNotification(evt);
 
@@ -35,7 +35,7 @@ public sealed class DomainEventNotificationTests
     [Fact]
     public void Notification_ImplementsIDomainEventNotification()
     {
-        var evt = new UserRegisteredEvent(Guid.NewGuid(), "user@example.com");
+        var evt = new UserRegisteredEvent(Guid.NewGuid(), "user@example.com", DateTimeOffset.UtcNow);
         var notification = new UserRegisteredNotification(evt);
 
         notification.ShouldBeAssignableTo<IDomainEventNotification<UserRegisteredEvent>>();
@@ -44,7 +44,7 @@ public sealed class DomainEventNotificationTests
 
     // ── Private fixtures ──────────────────────────────────────────────────
 
-    private sealed record UserRegisteredEvent(Guid UserId, string Email) : DomainEvent;
+    private sealed record UserRegisteredEvent(Guid UserId, string Email, DateTimeOffset OccurredAt) : DomainEvent(OccurredAt);
 
     private sealed class UserRegisteredNotification(UserRegisteredEvent domainEvent)
         : DomainEventNotification<UserRegisteredEvent>(domainEvent);

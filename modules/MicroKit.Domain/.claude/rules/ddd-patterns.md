@@ -20,21 +20,22 @@ ISpecification<T>        ← critère de sélection, composable
 ```csharp
 // ✅ Constructeur private — factory method obligatoire
 private Order(OrderId id, CustomerId customerId) : base(id) { }
-public static Order Place(CustomerId customerId, IEnumerable<OrderItem> items)
+// ✅ L'instant de l'opération est un paramètre, jamais une horloge ambiante
+public static Order Place(CustomerId customerId, IEnumerable<OrderItem> items, DateTimeOffset now)
 {
     var order = new Order(OrderId.New(), customerId);
     order.CheckRule(new OrderMustHaveItemsRule(items));
-    order.RaiseDomainEvent(new OrderPlacedEvent(order.Id, DateTimeOffset.UtcNow));
+    order.RaiseDomainEvent(new OrderPlacedEvent(order.Id, customerId, now));
     return order;
 }
 
 // ✅ RaiseDomainEvent APRÈS mutation d'état
-public void Ship(TrackingNumber tracking)
+public void Ship(TrackingNumber tracking, DateTimeOffset now)
 {
     CheckRule(new OrderCanBeShippedRule(Status));
     Status = OrderStatus.Shipped;           // mutation d'abord
     TrackingNumber = tracking;
-    RaiseDomainEvent(new OrderShippedEvent(Id, tracking, DateTimeOffset.UtcNow)); // event après
+    RaiseDomainEvent(new OrderShippedEvent(Id, tracking, now)); // event après
 }
 
 // ❌ Accès direct aux entités enfants depuis l'extérieur
@@ -45,11 +46,14 @@ order.AddItem(productId, quantity);   // méthode sur l'agrégat
 
 ### Entity
 ```csharp
-// ✅ Égalité par ID
+// ✅ Égalité par ID, et un type d'exécution assignable à l'autre (admet les proxies EF Core)
+// ✅ Le constructeur rejette un ID null et default(TId)
 public abstract class Entity<TId> where TId : IEntityId
 {
     public TId Id { get; protected init; }  // init-only
-    public override bool Equals(object? obj) => obj is Entity<TId> other && Id.Equals(other.Id);
+    public bool Equals(Entity<TId>? other) => other is not null
+        && (GetType().IsAssignableFrom(other.GetType()) || other.GetType().IsAssignableFrom(GetType()))
+        && EqualityComparer<TId>.Default.Equals(Id, other.Id);
     public override int GetHashCode() => Id.GetHashCode();
 }
 
@@ -61,6 +65,7 @@ public DateTimeOffset CreatedAt { get; init; }
 ### ValueObject (2026 Modern Approach)
 ```csharp
 // ✅ sealed record pour value objects complexes
+// Exemple de motif : le Money livré (ValueObjects/Common/Money.cs) tient un Currency ISO 4217
 public sealed record Money(decimal Amount, string Currency) : IValueObject
 {
     // Validation dans le constructeur
@@ -94,11 +99,11 @@ public readonly record struct Percentage(decimal Value) : IValueObject
 
 ### DomainEvent
 ```csharp
-// ✅ sealed record — toujours
+// ✅ sealed record — toujours ; OccurredAt positionnel, transmis à la base
 public sealed record OrderPlacedEvent(
     OrderId OrderId,
     CustomerId CustomerId,
-    DateTimeOffset OccurredAt) : DomainEvent;
+    DateTimeOffset OccurredAt) : DomainEvent(OccurredAt);
 
 // ❌ class mutable
 public class OrderPlacedEvent { public Guid OrderId { get; set; } } // ❌
@@ -113,6 +118,7 @@ public sealed class OrderMustHaveItemsRule(IEnumerable<OrderItem> items) : Busin
 {
     public override bool IsBroken() => !items.Any();
     public override string Message => "An order must contain at least one item.";
+    public override string Code => "order.must-have-items"; // ✅ code stable, jamais dérivé du nom du type
 }
 
 // ✅ Utilisation dans l'agrégat
@@ -128,8 +134,7 @@ protected void CheckRule(IBusinessRule rule)
 // ✅ readonly record struct — value semantics, 0 allocation
 public readonly record struct OrderId(Guid Value) : IEntityId
 {
-    public static OrderId New() => new(Guid.NewGuid());
-    public static OrderId Empty => new(Guid.Empty);
+    public static OrderId New() => new(Guid.CreateVersion7());
     public static OrderId From(Guid value) => new(value);
     public override string ToString() => Value.ToString();
 }
@@ -143,10 +148,11 @@ public void AssignTo(UserId userId) { }
 ## Anti-patterns stricts
 
 ```
-❌ Agrégat qui appelle un service (IEmailService, IRepository)
+❌ Agrégat qui appelle un service (IEmailService, un repository de MicroKit.Persistence.Abstractions)
+❌ Contrat de repository ou de unit of work dans MicroKit.Domain (ADR-003 D1 — Persistence.Abstractions les porte)
 ❌ DomainEvent avec setter ou propriété mutable
 ❌ ValueObject avec identité (Guid dans un VO = Entity mal classé)
 ❌ Logique d'application dans le domaine (orchestration, workflow)
 ❌ Exception d'infrastructure (HttpRequestException, SqlException) dans le domaine
-❌ Accès à DateTime.Now directement — passer par paramètre ou IDateTimeProvider
+❌ Accès à DateTime.Now / DateTimeOffset.UtcNow directement — passer l'instant par paramètre ou un TimeProvider
 ```

@@ -70,7 +70,7 @@ internal sealed class CancellableHandler : ICommandHandler<CancellableCommand, R
 
 // ── Domain events: single handler (ItemCreated) ───────────────────────────
 
-internal sealed record ItemCreatedEvent(Guid ItemId) : DomainEvent;
+internal sealed record ItemCreatedEvent(Guid ItemId, DateTimeOffset OccurredAt) : DomainEvent(OccurredAt);
 
 internal sealed class ItemCreatedNotification(ItemCreatedEvent domainEvent)
     : DomainEventNotification<ItemCreatedEvent>(domainEvent);
@@ -87,7 +87,7 @@ internal sealed class RecordItemCreatedHandler(DomainEventLog log)
 
 // ── Domain events: two handlers = fan-out (OrderPlaced) ───────────────────
 
-internal sealed record OrderPlacedEvent(Guid OrderId) : DomainEvent;
+internal sealed record OrderPlacedEvent(Guid OrderId, DateTimeOffset OccurredAt) : DomainEvent(OccurredAt);
 
 internal sealed class OrderPlacedNotification(OrderPlacedEvent domainEvent)
     : DomainEventNotification<OrderPlacedEvent>(domainEvent);
@@ -192,7 +192,7 @@ internal sealed class CacheableDoubleHandler(AttemptCounter counter)
 // exists so that case is testable distinctly from ItemCreatedEvent/OrderPlacedEvent, both of which
 // DO map to a notification and therefore require a sink (ADR-MEDIATR-015).
 
-internal sealed record HandlerOnlyEvent(Guid Id) : DomainEvent;
+internal sealed record HandlerOnlyEvent(Guid Id, DateTimeOffset OccurredAt) : DomainEvent(OccurredAt);
 
 internal sealed class RecordHandlerOnlyHandler(DomainEventLog log)
     : IDomainEventHandler<HandlerOnlyEvent>
@@ -206,7 +206,7 @@ internal sealed class RecordHandlerOnlyHandler(DomainEventLog log)
 
 // ── Domain event with no handler (for dispatch-time error test) ───────────
 
-internal sealed record UnregisteredEvent(Guid Id) : DomainEvent;
+internal sealed record UnregisteredEvent(Guid Id, DateTimeOffset OccurredAt) : DomainEvent(OccurredAt);
 
 // ── Shared domain event log (singleton in DI) ─────────────────────────────
 

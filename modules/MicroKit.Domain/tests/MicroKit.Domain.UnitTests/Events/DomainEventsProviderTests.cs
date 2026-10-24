@@ -6,8 +6,10 @@ using Xunit;
 
 namespace MicroKit.Domain.UnitTests.Events;
 
-public class DomainEventsProviderTests
+public sealed class DomainEventsProviderTests
 {
+    private static readonly DateTimeOffset OccurredAt = new(2026, 10, 24, 9, 0, 0, TimeSpan.Zero);
+
     [Fact]
     public void DomainEvents_Initially_ShouldBeEmpty()
     {
@@ -23,7 +25,7 @@ public class DomainEventsProviderTests
     {
         // Arrange
         var aggregate = new TestAggregateRoot(new TestId(Guid.NewGuid()));
-        var domainEvent = new TestDomainEvent("Test Data");
+        var domainEvent = new TestDomainEvent("Test Data", OccurredAt);
 
         // Act
         aggregate.RaiseEvent(domainEvent);
@@ -38,9 +40,9 @@ public class DomainEventsProviderTests
     {
         // Arrange
         var aggregate = new TestAggregateRoot(new TestId(Guid.NewGuid()));
-        var event1 = new TestDomainEvent("Event 1");
-        var event2 = new TestDomainEvent("Event 2");
-        var event3 = new TestDomainEvent("Event 3");
+        var event1 = new TestDomainEvent("Event 1", OccurredAt);
+        var event2 = new TestDomainEvent("Event 2", OccurredAt);
+        var event3 = new TestDomainEvent("Event 3", OccurredAt);
 
         // Act
         aggregate.RaiseEvent(event1);
@@ -73,8 +75,8 @@ public class DomainEventsProviderTests
     {
         // Arrange
         var aggregate = new TestAggregateRoot(new TestId(Guid.NewGuid()));
-        var event1 = new TestDomainEvent("Event 1");
-        var event2 = new TestDomainEvent("Event 2");
+        var event1 = new TestDomainEvent("Event 1", OccurredAt);
+        var event2 = new TestDomainEvent("Event 2", OccurredAt);
 
         aggregate.RaiseEvent(event1);
         aggregate.RaiseEvent(event2);
@@ -94,7 +96,7 @@ public class DomainEventsProviderTests
     {
         // Arrange
         var aggregate = new TestAggregateRoot(new TestId(Guid.NewGuid()));
-        var domainEvent = new TestDomainEvent("Test Data");
+        var domainEvent = new TestDomainEvent("Test Data", OccurredAt);
 
         aggregate.RaiseEvent(domainEvent);
         aggregate.DrainDomainEvents(); // First drain
@@ -112,7 +114,7 @@ public class DomainEventsProviderTests
     {
         // Arrange
         var aggregate = new TestAggregateRoot(new TestId(Guid.NewGuid()));
-        var domainEvent = new TestDomainEvent("Test Data");
+        var domainEvent = new TestDomainEvent("Test Data", OccurredAt);
 
         aggregate.RaiseEvent(domainEvent);
 
@@ -125,18 +127,15 @@ public class DomainEventsProviderTests
         // Verify that even if cast to IList, modifications would throw
         if (events is IList<IDomainEvent> list)
         {
-            Should.Throw<NotSupportedException>(() => list.Add(new TestDomainEvent("Should fail")));
+            Should.Throw<NotSupportedException>(() => list.Add(new TestDomainEvent("Should fail", OccurredAt)));
         }
     }
 }
 
 // Test implementations
-public sealed record TestId(Guid Value) : IEntityId
-{
-    object IEntityId.Value => Value;
-}
+public sealed record TestId(Guid Value) : IEntityId;
 
-public sealed record TestDomainEvent(string Data) : DomainEvent;
+public sealed record TestDomainEvent(string Data, DateTimeOffset OccurredAt) : DomainEvent(OccurredAt);
 
 public class TestAggregateRoot : AggregateRoot<TestId>
 {

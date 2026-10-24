@@ -10,10 +10,11 @@ namespace MicroKit.Domain.Aggregates;
 /// Manages domain events and serves as consistency boundary.
 /// </summary>
 /// <typeparam name="TId">The strongly-typed identifier type</typeparam>
-public abstract class AggregateRoot<TId> : Entity<TId>, IDomainEventsProvider, IAggregateRoot
+public abstract class AggregateRoot<TId> : Entity<TId>, IDomainEventsProvider, IAggregateRoot, IEventJournal
     where TId : IEntityId
 {
     private readonly List<IDomainEvent> _domainEvents = [];
+    private int _raisedEventCount;
 
     /// <summary>
     /// Initializes a new instance of the <see cref="AggregateRoot{TId}"/> class.
@@ -29,14 +30,25 @@ public abstract class AggregateRoot<TId> : Entity<TId>, IDomainEventsProvider, I
         _domainEvents.Count == 0 ? Array.Empty<IDomainEvent>() : _domainEvents.AsReadOnly();
 
     /// <summary>
-    /// Raises a domain event. Should be called AFTER state mutations.
-    /// Events represent facts about what has already happened.
+    /// Raises a domain event. Call AFTER state mutations — events are facts about what has
+    /// already happened.
     /// </summary>
-    /// <param name="domainEvent">The event that occurred</param>
+    /// <param name="domainEvent">The event that occurred.</param>
+    /// <exception cref="ArgumentNullException">
+    /// Thrown when <paramref name="domainEvent"/> is <see langword="null"/>.
+    /// </exception>
+    /// <remarks>
+    /// The event is stored exactly as supplied: the aggregate never rewrites a fact it was
+    /// handed. Timestamping is the caller's responsibility, and the compiler enforces it: an event
+    /// deriving from <see cref="DomainEvent"/> passes its instant through the positional
+    /// <c>OccurredAt</c> parameter of the base record, which has no default. Pass the same instant
+    /// to every event raised within one business operation.
+    /// </remarks>
     protected void RaiseDomainEvent(IDomainEvent domainEvent)
     {
         ArgumentNullException.ThrowIfNull(domainEvent);
         _domainEvents.Add(domainEvent);
+        _raisedEventCount++;
     }
 
     /// <summary>
@@ -60,6 +72,28 @@ public abstract class AggregateRoot<TId> : Entity<TId>, IDomainEventsProvider, I
         var events = _domainEvents.ToArray();
         _domainEvents.Clear();
         return events;
+    }
+
+    /// <inheritdoc />
+    int IEventJournal.RaisedEventCount => _raisedEventCount;
+
+    /// <summary>
+    /// Removes the domain events raised since <see cref="IEventJournal.RaisedEventCount"/> read
+    /// <paramref name="raisedEventCount"/>, so that an operation that failed publishes none of the
+    /// facts it raised.
+    /// </summary>
+    /// <param name="raisedEventCount">The value of <see cref="IEventJournal.RaisedEventCount"/> taken before the operation.</param>
+    /// <remarks>
+    /// The events raised since then are the last ones of the list, because raising appends and
+    /// draining empties it. If the operation drained events, only the ones it raised after the
+    /// drain are still there to remove. The removed events are uncounted, so a rollback nested in
+    /// another one leaves the outer rollback only the events the outer operation itself raised.
+    /// </remarks>
+    void IEventJournal.RemoveEventsRaisedSince(int raisedEventCount)
+    {
+        var removable = Math.Min(_raisedEventCount - raisedEventCount, _domainEvents.Count);
+        _domainEvents.RemoveRange(_domainEvents.Count - removable, removable);
+        _raisedEventCount -= removable;
     }
 
     /// <summary>

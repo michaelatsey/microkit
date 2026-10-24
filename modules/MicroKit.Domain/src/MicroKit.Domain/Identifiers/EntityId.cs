@@ -25,8 +25,6 @@ public abstract record EntityId<T> : IEntityId where T : EntityId<T>
         Value = value;
     }
 
-    object IEntityId.Value => Value;
-
     /// <summary>
     /// Returns a string representation of this identifier.
     /// </summary>

@@ -7,7 +7,7 @@ namespace MicroKit.Messaging.MediatR.IntegrationTests.Fixtures;
 // a conflict. Every fixture in this assembly is registered in every container.
 
 /// <summary>The first-level fact, raised by the command.</summary>
-internal sealed record WidgetInspectedEvent(Guid WidgetId) : DomainEvent;
+internal sealed record WidgetInspectedEvent(Guid WidgetId, DateTimeOffset OccurredAt) : DomainEvent(OccurredAt);
 
 internal sealed class WidgetInspectedNotification(WidgetInspectedEvent domainEvent)
     : DomainEventNotification<WidgetInspectedEvent>(domainEvent);
@@ -16,7 +16,7 @@ internal sealed class WidgetInspectedNotification(WidgetInspectedEvent domainEve
 /// The second-level fact, raised by a notification handler on the outbox processing path — i.e.
 /// AFTER the command's transaction has committed. This is the cascade.
 /// </summary>
-internal sealed record WidgetArchivedEvent(Guid WidgetId) : DomainEvent;
+internal sealed record WidgetArchivedEvent(Guid WidgetId, DateTimeOffset OccurredAt) : DomainEvent(OccurredAt);
 
 internal sealed class WidgetArchivedNotification(WidgetArchivedEvent domainEvent)
     : DomainEventNotification<WidgetArchivedEvent>(domainEvent);
@@ -43,7 +43,7 @@ internal sealed class ArchiveWidgetOnInspectionHandler(
         // IServiceScopeFactory. EfDomainEventsProvider drains
         // ChangeTracker.Entries<IHasDomainEvents>() on THIS context.
         var archived = new E2EAggregate { Name = "archived" };
-        archived.Raise(new WidgetArchivedEvent(archived.Id));
+        archived.Raise(new WidgetArchivedEvent(archived.Id, DateTimeOffset.UtcNow));
         writer.Stage(archived);
 
         return Task.CompletedTask;
@@ -74,7 +74,7 @@ internal sealed class InspectWidgetHandler(IE2EWriter writer)
     public ValueTask<Result<Guid>> Handle(InspectWidgetCommand command, CancellationToken ct = default)
     {
         var aggregate = new E2EAggregate { Name = command.Name };
-        aggregate.Raise(new WidgetInspectedEvent(aggregate.Id));
+        aggregate.Raise(new WidgetInspectedEvent(aggregate.Id, DateTimeOffset.UtcNow));
         writer.Stage(aggregate);
         return new(Success(aggregate.Id));
     }

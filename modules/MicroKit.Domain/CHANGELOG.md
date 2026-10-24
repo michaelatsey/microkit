@@ -5,6 +5,81 @@ All notable changes to this project will be documented in this file.
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)
 Versioning: [Semantic Versioning](https://semver.org/)
 
+## [Unreleased]
+
+Settles the public surface before `2.0.0` (#160). Every item under **Breaking** is a break on
+`preview.*` (ADR-GLOBAL-002 D10); the reasoning is in
+`docs/architecture/ADR-003-Domain-Surface-Before-Stable.md`.
+
+### Breaking
+- `IRepository<T, TId>`, `IReadRepository<T, TId>` and `IUnitOfWork` are removed with the
+  `MicroKit.Domain.Repositories` namespace. Use `MicroKit.Persistence.Abstractions` (D1; #117,
+  #118, #119).
+- `IEntityId` loses `object Value` and becomes a marker; identifier types drop their explicit
+  `IEntityId.Value` implementation (D2).
+- `GuidId.Empty` is removed (D2).
+- `Entity<TId>` throws `ArgumentException` for an identifier equal to `default(TId)` (D2; #111).
+- `Entity<TId>` equality admits a runtime subclass with the same identifier, such as an EF Core
+  proxy, instead of requiring the exact same type (D3).
+- `AuditableEntity<TId>` and `AuditableAggregateRoot<TId>` lose their `(TId id)` constructor. They
+  take `(id, DateTimeOffset createdAt, Actor createdBy)` or `(id, TimeProvider, Actor createdBy)`
+  (D4; #112).
+- `IAuditableEntity.CreatedBy` is a non-null `Actor`, and `UpdatedBy` an `Actor?`, instead of
+  `string?` (D5; #116).
+- `UpdatedAt` and `UpdatedBy` are `private set`; derived types wrap each state change in
+  `Mutate(DateTimeOffset at, Actor by, Action mutation)` (D5; #113). `Mutate` replaced
+  `Touch(DateTimeOffset, Actor)`: it validates before the mutation runs, sets the audit fields
+  only if the mutation returns, and on an aggregate removes the events a throwing mutation raised
+  (#176).
+- `Entity<TId>.Id`, `CreatedAt` and `CreatedBy` are `private init`: a derived type can no longer
+  assign them after the guarded constructor ran. EF Core still materialises them through their
+  backing fields (#166).
+- `DomainEvent` is `abstract record DomainEvent(DateTimeOffset OccurredAt)`: `OccurredAt` has no
+  default and concrete events forward it positionally (D4; #115).
+- Instants entering the domain (`CreatedAt`, `Mutate`'s `at`, `OccurredAt` including
+  through `with`) are normalised to offset zero; `default(DateTimeOffset)` throws
+  `ArgumentOutOfRangeException`, and so does a `Mutate` earlier than `CreatedAt` (#165) or than
+  the current `UpdatedAt`: `UpdatedAt` never decreases (#171).
+- `DomainEvent.EventId` defaults to `Guid.CreateVersion7()` instead of `Guid.NewGuid()` (D6; #114).
+- `GuidId.New()` returns a UUID version 7 (D6).
+- A `with` expression on a `DomainEvent` assigns a new `EventId`; only an explicit
+  `EventId = …` initializer preserves one, and `Guid.Empty` throws `ArgumentException` (#164).
+- `Money` holds a `Currency` instead of a `string`, rejects unknown ISO 4217 codes and amounts
+  finer than the minor unit; `Money.Zero` takes a `Currency` (D7).
+- `Money.Multiply(decimal)` becomes `Multiply(decimal, MidpointRounding)` and rounds to the minor
+  unit; the `*` operators are removed (D7).
+- `Money.ToString()` formats with the invariant culture and the currency's minor unit instead of
+  `F2` in the current culture (D7).
+- `Specification<T>.IsSatisfiedBy` is no longer abstract and cannot be overridden; it evaluates
+  `ToExpression()`. Derived specifications remove their `IsSatisfiedBy` override (D8).
+- `IBusinessRule` gains `string Code`, abstract on `BusinessRule`; every rule implements it.
+  `BusinessRuleViolationException` names the rule by `Code` in its message and rejects a rule
+  whose `Code` is null or empty (D9).
+
+### Added
+- `Actor` value object, with the built-ins `Actor.System`, `Actor.Anonymous` and
+  `Actor.Migration` (`$system`, `$anonymous`, `$migration`), and `Actor.Restore` to read a stored
+  value back (D5).
+- `Currency` value type, from the active codes of ISO 4217 List One (D7).
+- `Money.Allocate(params int[] ratios)` (D7).
+- `Money`, `Currency` and `Actor` round-trip through `System.Text.Json` with default options:
+  `Currency` and `Actor` as strings, `Money` as `{ "Amount": …, "Currency": "EUR" }` (#167). A
+  built-in actor does not: with default options, JSON is untrusted and a `$` value throws
+  `JsonException` on read (#170) and on write (#175).
+- `TrustedActorJsonConverter`, to register in `JsonSerializerOptions.Converters` for storage the
+  application wrote itself; it rehydrates built-in actors through `Actor.Restore` (#170).
+- `BusinessRuleViolationException.Code` (D9).
+- Architecture tests: no MicroKit, EF Core, ASP.NET Core or DI dependency; sealed value objects;
+  record domain events (D10).
+
+### Removed
+- The empty `MicroKit.Domain.IntegrationTests` and `MicroKit.Domain.PerformanceTests` projects,
+  and the README-only `samples/` directories (D10).
+
+### Fixed
+- XML documentation of the `Entity` and `Auditable*` constructors explains EF Core constructor
+  binding (#121); `IEvent` no longer cites the rejected `IApplicationEvent` (#153) (D11).
+
 ## [1.0.0-preview.1] — 2026-05-28
 
 ### Added

@@ -11,11 +11,6 @@ internal sealed class AndSpecification<T> : Specification<T>
         _right = right;
     }
 
-    public override bool IsSatisfiedBy(T candidate)
-    {
-        return _left.IsSatisfiedBy(candidate) && _right.IsSatisfiedBy(candidate);
-    }
-
     public override Expression<Func<T, bool>> ToExpression()
     {
         var leftExpression = _left.ToExpression();

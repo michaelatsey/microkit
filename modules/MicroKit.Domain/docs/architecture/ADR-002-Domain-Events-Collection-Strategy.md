@@ -1,5 +1,8 @@
 # ADR-002: Domain Events Collection Strategy
 
+> **Note.** The code samples in this ADR predate #160 and no longer match the package surface.
+> ADR-003 (`ADR-003-Domain-Surface-Before-Stable.md`) records the current one.
+
 ## Status
 **Accepted** - Implemented in MicroKit.Domain v1.0
 

@@ -6,18 +6,18 @@ namespace MicroKit.Domain.Identifiers;
 /// </summary>
 public readonly record struct GuidId(Guid Value) : IEntityId
 {
-    object IEntityId.Value => Value;
-
     /// <summary>
-    /// Creates a new identifier with a randomly generated Guid.
+    /// Creates a new identifier with a time-ordered (UUID version 7) value.
     /// </summary>
     /// <returns>A new GuidId with a unique value</returns>
-    public static GuidId New() => new(Guid.NewGuid());
-
-    /// <summary>
-    /// Gets an empty identifier.
-    /// </summary>
-    public static GuidId Empty => new(Guid.Empty);
+    /// <remarks>
+    /// A version 7 value from <see cref="Guid.CreateVersion7()"/> keeps a primary-key index
+    /// compact where the database compares the value as a byte sequence, as PostgreSQL does for
+    /// <c>uuid</c>. SQL Server orders <c>uniqueidentifier</c> by a different byte order, so the
+    /// value is not sequential there, though no worse than a random version 4 one. EF Core's
+    /// <c>SequentialGuidValueGenerator</c> does not run for a key the domain assigned.
+    /// </remarks>
+    public static GuidId New() => new(Guid.CreateVersion7());
 
     /// <summary>
     /// Creates a new identifier from the specified Guid value.

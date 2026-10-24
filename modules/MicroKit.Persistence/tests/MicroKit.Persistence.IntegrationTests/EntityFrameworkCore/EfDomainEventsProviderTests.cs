@@ -15,9 +15,9 @@ public sealed class EfDomainEventsProviderTests
         using var context = CreateContext();
         var first = new TestAggregate();
         var second = new TestAggregate();
-        first.Raise(new TestEvent("first-a"));
-        first.Raise(new TestEvent("first-b"));
-        second.Raise(new TestEvent("second-a"));
+        first.Raise(new TestEvent("first-a", DateTimeOffset.UtcNow));
+        first.Raise(new TestEvent("first-b", DateTimeOffset.UtcNow));
+        second.Raise(new TestEvent("second-a", DateTimeOffset.UtcNow));
         context.Add(first);
         context.Add(second);
         var sut = new EfDomainEventsProvider<TestDbContext>(context);
@@ -47,7 +47,7 @@ public sealed class EfDomainEventsProviderTests
     {
         using var context = CreateContext();
         var aggregate = new TestAggregate();
-        aggregate.Raise(new TestEvent("only-one"));
+        aggregate.Raise(new TestEvent("only-one", DateTimeOffset.UtcNow));
         context.Add(aggregate);
         context.Add(new TestEntityWithoutEvents());
         context.Add(new TestAggregate());
@@ -64,9 +64,9 @@ public sealed class EfDomainEventsProviderTests
     {
         using var context = CreateContext();
         var aggregate = new TestAggregate();
-        aggregate.Raise(new TestEvent("drainable"));
+        aggregate.Raise(new TestEvent("drainable", DateTimeOffset.UtcNow));
         var exposeOnly = new TestExposeOnly();
-        exposeOnly.Raise(new TestEvent("not-drainable"));
+        exposeOnly.Raise(new TestEvent("not-drainable", DateTimeOffset.UtcNow));
         context.Add(aggregate);
         context.Add(exposeOnly);
         var sut = new EfDomainEventsProvider<TestDbContext>(context);
@@ -87,7 +87,7 @@ public sealed class EfDomainEventsProviderTests
     {
         using var context = CreateContext();
         var aggregate = new TestAggregate();
-        aggregate.Raise(new TestEvent("once"));
+        aggregate.Raise(new TestEvent("once", DateTimeOffset.UtcNow));
         context.Add(aggregate);
         var sut = new EfDomainEventsProvider<TestDbContext>(context);
 
@@ -103,7 +103,7 @@ public sealed class EfDomainEventsProviderTests
     {
         using var context = CreateContext();
         var aggregate = new TestAggregate();
-        aggregate.Raise(new TestEvent("kept"));
+        aggregate.Raise(new TestEvent("kept", DateTimeOffset.UtcNow));
         context.Add(aggregate);
         var sut = new EfDomainEventsProvider<TestDbContext>(context);
 
@@ -143,7 +143,7 @@ public sealed class EfDomainEventsProviderTests
     }
 }
 
-public sealed record TestEvent(string Name) : DomainEvent;
+public sealed record TestEvent(string Name, DateTimeOffset OccurredAt) : DomainEvent(OccurredAt);
 
 /// <summary>Stands in for an aggregate: exposes events and can drain them.</summary>
 public sealed class TestAggregate : IDomainEventsProvider

@@ -4,7 +4,7 @@
     <TargetFramework>net10.0</TargetFramework>
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
-    <Description>DDD primitives for .NET 10 — AggregateRoot, Entity, ValueObject, DomainEvent, Specifications, Repository abstractions.</Description>
+    <Description>DDD primitives for .NET 10 — AggregateRoot, Entity, value objects, DomainEvent, Specifications, business rules, strongly-typed identifiers.</Description>
     <PackageTags>microkit;ddd;domain;aggregateroot;valueobject;dotnet</PackageTags>
   </PropertyGroup>
 

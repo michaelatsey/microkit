@@ -21,8 +21,7 @@ ses BusinessRules et son test skeleton.
 ```csharp
 public readonly record struct {Name}Id(Guid Value) : IEntityId
 {
-    public static {Name}Id New() => new(Guid.NewGuid());
-    public static {Name}Id Empty => new(Guid.Empty);
+    public static {Name}Id New() => new(Guid.CreateVersion7());
     public static {Name}Id From(Guid value) => new(value);
     public override string ToString() => Value.ToString();
 }
@@ -56,6 +55,7 @@ public sealed class {RuleName} : BusinessRule
     // contexte nécessaire pour évaluer la règle
     public override bool IsBroken() => /* condition */;
     public override string Message => "...";
+    public override string Code => "{name}.{rule}";   // code stable, jamais dérivé du nom du type
 }
 ```
 
@@ -63,7 +63,7 @@ public sealed class {RuleName} : BusinessRule
 ```csharp
 public sealed record {EventName}Event(
     {Name}Id {Name}Id,
-    DateTimeOffset OccurredAt) : DomainEvent;
+    DateTimeOffset OccurredAt) : DomainEvent(OccurredAt);
 ```
 
 ### Test skeleton

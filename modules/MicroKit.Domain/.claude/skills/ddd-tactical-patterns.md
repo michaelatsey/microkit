@@ -70,26 +70,20 @@ Quand NE PAS utiliser IDomainService ?
   → La logique nécessite de l'infrastructure → Application Service
 ```
 
-## Pattern: Repository abstraction dans Domain
+## Pattern: Repositories hors du Domain
 
-```csharp
-// ✅ Interface dans Domain — implémentation dans Infrastructure
-public interface IOrderRepository : IRepository<Order, OrderId>
-{
-    // Méthodes de requête spécifiques au domaine
-    Task<IReadOnlyList<Order>> FindPendingOrdersAsync(CustomerId customerId, CancellationToken ct = default);
-}
+```
+MicroKit.Domain ne déclare aucun repository ni unit of work (ADR-003 D1).
+Les contrats de persistance vivent dans MicroKit.Persistence.Abstractions :
+  IRepository<TAggregate>   (AddAsync, UpdateAsync, DeleteAsync, CommitAsync)
+  IUnitOfWork               (CommitAsync, DiscardChanges)
 
-// ✅ Utilisation dans Application Service (pas dans le domaine)
-public sealed class ShipOrderHandler(IOrderRepository orders, IUnitOfWork uow)
-{
-    public async ValueTask Handle(ShipOrderCommand cmd, CancellationToken ct)
-    {
-        var order = await orders.GetByIdAsync(cmd.OrderId, ct);
-        order.Ship(cmd.TrackingNumber);
-        await uow.SaveChangesAsync(ct);
-    }
-}
+Le domaine fournit ce que ces contrats manipulent :
+  AggregateRoot<TId> / IAggregateRoot   ← contrainte générique côté Persistence
+  ISpecification<T>                      ← critère de requête, traduit par l'évaluateur EF Core
+
+Un agrégat n'appelle jamais un repository : c'est la couche Application qui charge,
+appelle la méthode de domaine, puis commite.
 ```
 
 ## Pattern: Exceptions vs Result dans Domain
