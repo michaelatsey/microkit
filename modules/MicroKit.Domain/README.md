@@ -78,7 +78,7 @@ public sealed record Money(decimal Amount, string Currency) : IValueObject
 // Simple identifiers: Stack-allocated, copy-efficient  
 public readonly record struct ProductId(Guid Value) : IEntityId
 {
-    public static ProductId New() => new(Guid.NewGuid());
+    public static ProductId New() => new(Guid.CreateVersion7());
 }
 ```
 

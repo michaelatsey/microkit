@@ -138,7 +138,7 @@ public readonly record struct Percentage(decimal Value) : IValueObject
 // Strongly-typed
 public readonly record struct OrderId(Guid Value) : IEntityId
 {
-    public static OrderId New() => new(Guid.NewGuid());
+    public static OrderId New() => new(Guid.CreateVersion7());
     public override string ToString() => Value.ToString();
 }
 

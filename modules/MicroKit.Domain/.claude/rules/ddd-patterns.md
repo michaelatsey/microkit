@@ -134,7 +134,7 @@ protected void CheckRule(IBusinessRule rule)
 // ✅ readonly record struct — value semantics, 0 allocation
 public readonly record struct OrderId(Guid Value) : IEntityId
 {
-    public static OrderId New() => new(Guid.NewGuid());
+    public static OrderId New() => new(Guid.CreateVersion7());
     public static OrderId From(Guid value) => new(value);
     public override string ToString() => Value.ToString();
 }

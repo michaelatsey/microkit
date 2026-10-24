@@ -34,8 +34,8 @@ You are a senior DDD reviewer specialized in domain purity. You block violations
 
 ### Events
 - `RaiseDomainEvent()` called AFTER state mutation (not before)
-- `OccurredAt` = `DateTimeOffset.UtcNow` (never DateTime)
-- `EventId` = `Guid.NewGuid()` generated at creation
+- `OccurredAt` is the positional parameter of `DomainEvent`, passed by the operation (never a clock read, never DateTime); one instant per operation
+- `EventId` is the base default (UUID v7); never assigned except to preserve an identity on replay
 
 ## Feedback format
 - BLOCKING: violation + file + line + fix

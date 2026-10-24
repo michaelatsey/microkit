@@ -8,7 +8,7 @@ tools: Read, Grep, Glob, Write, Edit
 You are a test generation specialist for DDD primitives. You generate exhaustive tests without infrastructure — pure domain, all in-memory.
 
 ## Stack
-xUnit + FluentAssertions + NetArchTest (architecture tests)
+xUnit + Shouldly + NetArchTest (architecture tests)
 
 ## Required test cases by type
 
@@ -47,4 +47,4 @@ xUnit + FluentAssertions + NetArchTest (architecture tests)
 - No mocks — domain is pure, everything in memory
 - Naming: `MethodName_Scenario_ExpectedBehavior`
 - Use builders/fakers for complex entities
-- Never fix DateTimeOffset.UtcNow in tests — use IDateTimeProvider fake if needed
+- Pass fixed instants; drive auditable types with `FakeTimeProvider` (`Microsoft.Extensions.TimeProvider.Testing`) and assert exact values

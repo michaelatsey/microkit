@@ -79,10 +79,7 @@ using MicroKit.Domain.Identifiers;
 /// <param name="Value">The unique identifier value</param>
 public readonly record struct {Name}(Guid Value) : IEntityId
 {
-    object IEntityId.Value => Value;
-
-    public static {Name} New() => new(Guid.NewGuid());
-    public static {Name} Empty => new(Guid.Empty);
+    public static {Name} New() => new(Guid.CreateVersion7());
     public static {Name} From(Guid value) => new(value);
 
     public override string ToString() => Value.ToString();
