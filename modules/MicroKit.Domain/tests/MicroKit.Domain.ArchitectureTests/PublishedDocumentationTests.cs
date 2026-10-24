@@ -133,6 +133,25 @@ public sealed class PublishedDocumentationTests
         doc.ShouldContain("becomes <c>+33612345678x12</c>");
     }
 
+    // ADR-004 D5, D8: the text rules state what they do not check, so they promise nothing more.
+    [Theory]
+    [InlineData("T:MicroKit.Domain.UnicodeText", "not a spoofing detector")]
+    [InlineData("T:MicroKit.Domain.UnicodeText", "should run the same .NET version")]
+    [InlineData("T:MicroKit.Domain.ValueObjects.Common.Actor", "Identifiers are compared ordinally")]
+    [InlineData("T:MicroKit.Domain.ValueObjects.Common.Email", "not full Unicode case folding")]
+    [InlineData("T:MicroKit.Domain.ValueObjects.Common.Email", "count UTF-16 code units")]
+    [InlineData("T:MicroKit.Domain.ValueObjects.Common.Email", "zero-width joiner and non-joiner")]
+    public void TextRules_StateTheirLimits(string member, string limit)
+    {
+        Member(member).ShouldContain(limit);
+    }
+
+    [Fact]
+    public void Actor_DoesNotPromiseThatAnActorCannotPassForAnother()
+    {
+        Member("T:MicroKit.Domain.ValueObjects.Common.Actor").ShouldNotContain("nor pass for another one");
+    }
+
     // #182, ADR-004 D3: a plain aggregate keeps the events and changes of a method that throws.
     [Theory]
     [InlineData("T:MicroKit.Domain.Aggregates.AggregateRoot`1")]

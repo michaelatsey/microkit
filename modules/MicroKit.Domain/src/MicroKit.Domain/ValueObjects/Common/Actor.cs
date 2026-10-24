@@ -19,8 +19,13 @@ namespace MicroKit.Domain.ValueObjects.Common;
 /// An invisible, control or line-breaking character is rejected: a control or format character, a
 /// line or paragraph separator, a default-ignorable character such as a variation selector or a
 /// Hangul filler, an unassigned code point or an unpaired surrogate. An actor read from a token claim
-/// or a header therefore cannot forge a line in an audit log nor pass for another one, and always
-/// reads back as itself (ADR-004 D8).
+/// or a header therefore cannot forge a line in an audit log, and always reads back as itself
+/// (ADR-004 D8).
+/// </para>
+/// <para>
+/// Identifiers are compared ordinally, as issued: an identity provider's identifier is opaque, so it
+/// is never normalized. Look-alike identifiers, with another kind of space, a letter from another
+/// script or a decomposed accent, are different actors; the type does not detect them.
 /// </para>
 /// <para>
 /// Prefer the built-in instances (<see cref="System"/>, <see cref="Anonymous"/>,

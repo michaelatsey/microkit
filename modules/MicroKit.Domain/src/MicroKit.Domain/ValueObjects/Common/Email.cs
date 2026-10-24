@@ -30,6 +30,14 @@ namespace MicroKit.Domain.ValueObjects.Common;
 /// <para>
 /// The validation is lexical. It does not check the length or the hyphens of a domain label, and it
 /// does not detect look-alike letters from different scripts, as with any internationalized address.
+/// The zero-width joiner and non-joiner (U+200D, U+200C) are refused as invisible characters, so an
+/// address whose spelling needs them, in Persian or some Indic scripts, is rejected.
+/// </para>
+/// <para>
+/// Equality compares the address lowercased with the invariant culture, a simple case mapping, not
+/// full Unicode case folding: a Greek final sigma stays distinct from σ. The 64-character local part
+/// and 254-character address limits count UTF-16 code units; a server that counts the octets of
+/// UTF-8 (RFC 6531) may refuse a long non-ASCII address this type accepts.
 /// </para>
 /// </remarks>
 /// <param name="Value">The email address value</param>

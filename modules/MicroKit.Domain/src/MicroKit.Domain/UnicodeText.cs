@@ -16,9 +16,16 @@ namespace MicroKit.Domain;
 /// character would look identical, and a line break would let a value forge a line in a log.
 /// </para>
 /// <para>
+/// It is a lexical guard against invisible and line-breaking characters, not a spoofing detector.
+/// Look-alikes stay accepted: a space other than U+0020 (U+00A0, U+3000), a letter from another
+/// script that resembles a Latin one, a combining mark on a symbol, a text in another normalization
+/// form.
+/// </para>
+/// <para>
 /// The categories come from the Unicode data of the running .NET version. An unassigned code point is
-/// refused, so a later version assigning it can only make the rule accept more, never reject a value
-/// accepted today.
+/// refused, so a later version assigning it can only make the rule accept more on that runtime; the
+/// reverse holds too, and a value a newer runtime accepted can be refused by an older one. Hosts that
+/// read the same store should run the same .NET version.
 /// </para>
 /// </remarks>
 internal static class UnicodeText
@@ -45,7 +52,7 @@ internal static class UnicodeText
     }
 
     /// <summary>
-    /// Whether <paramref name="text"/> holds only code points that are visible or a plain space.
+    /// Whether <paramref name="text"/> holds no code point that <see cref="IsRefused"/> refuses.
     /// </summary>
     internal static bool IsVisible(string text)
     {

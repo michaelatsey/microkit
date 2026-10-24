@@ -101,6 +101,7 @@ public sealed class EmailTests
     [InlineData("a\u3164b@example.com")]      // Hangul filler, an invisible letter (Lo)
     [InlineData("a\u17B4b@example.com")]      // Khmer inherent vowel, invisible (Mn)
     [InlineData("a\u00ADb@example.com")]      // soft hyphen
+    [InlineData("\u0645\u06CC\u200C\u062E\u0648\u0627\u0645@example.com")]   // ZWNJ, a documented limit
     public void Constructor_InvisibleVariantSelector_ThrowsDomainException(string email)
     {
         Should.Throw<DomainException>(() => new Email(email));

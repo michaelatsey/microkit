@@ -130,8 +130,12 @@ RFC 5322 `atext` symbols plus the dot; the domain accepts letters, digits, combi
 the dot. A code point `UnicodeText` refuses (D8) is excluded even when it is a letter or a mark,
 such as a Hangul filler or a variation selector. Any other character is rejected. The address is
 normalized to Unicode NFC first, so a decomposed accent and its precomposed form give equal values.
-The validation stays lexical: domain label lengths and hyphens, and look-alike letters from
-different scripts, are documented as not checked.
+The validation stays lexical, and documents what it does not check: domain label lengths and
+hyphens, look-alike letters from different scripts, full case folding (equality uses invariant
+lowercasing), and lengths in octets (the limits count UTF-16 code units). The zero-width joiner and
+non-joiner are refused with the other invisible characters, so an address needing them (Persian,
+some Indic spellings) is rejected: IDNA2008 allows them only in joining contexts (CONTEXTJ), a rule
+out of proportion here, and allowing them everywhere would let two addresses look identical.
 
 **Reasoning.** The validation checked the `@`, the dots and the lengths only, so
 `"victim@example.com\r\nBcc: attacker@example.org"` was a valid `Email`. An application that puts an
@@ -222,7 +226,10 @@ break; an invisible character, format or default-ignorable, made two actors look
 unpaired surrogate is written by `System.Text.Json` as U+FFFD, so the actor read back was not the
 one written. An unassigned code point is refused so that a later Unicode version can only make the
 rule accept more: a version assigning it as a format character cannot make a stored actor fail to
-rehydrate.
+rehydrate. The rule is a lexical guard, not a spoofing detector: look-alikes (another space, a
+letter from another script, an unnormalized form) stay accepted and are documented as such, since an
+identity provider's identifier is opaque and is never normalized. Hosts reading one store should run
+one .NET version, since a newer runtime's Unicode data can accept what an older one refuses.
 No identity provider issues identifiers with such characters, so the break only removes an unsafe
 behaviour.
 
