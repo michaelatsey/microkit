@@ -21,7 +21,9 @@ public abstract class AuditableEntity<TId> : Entity<TId>, IAuditableEntity
     /// Initializes a new instance of the <see cref="AuditableEntity{TId}"/> class.
     /// </summary>
     /// <param name="id">The strongly-typed identifier for this entity.</param>
-    /// <param name="createdAt">The instant this entity was created, in UTC.</param>
+    /// <param name="createdAt">
+    /// The instant this entity was created. Stored at offset zero; any offset is accepted.
+    /// </param>
     /// <param name="createdBy">
     /// The actor creating this entity. Use <see cref="Actor.System"/> when the action has
     /// no user in context, rather than leaving the creator unattributed.
@@ -29,7 +31,16 @@ public abstract class AuditableEntity<TId> : Entity<TId>, IAuditableEntity
     /// <exception cref="ArgumentNullException">
     /// Thrown when <paramref name="createdBy"/> is <see langword="null"/>.
     /// </exception>
+    /// <exception cref="ArgumentOutOfRangeException">
+    /// Thrown when <paramref name="createdAt"/> is <c>default(DateTimeOffset)</c>.
+    /// </exception>
     /// <remarks>
+    /// <para>
+    /// Every instant entering an auditable type is normalised to offset zero with
+    /// <see cref="DateTimeOffset.ToUniversalTime"/>: the instant is preserved, only its
+    /// representation changes, so <c>DateTimeOffset.Now</c> is accepted. <c>default(DateTimeOffset)</c>
+    /// is rejected.
+    /// </para>
     /// <para>
     /// EF Core binds constructor parameters to mapped properties by name, so a derived constructor
     /// taking <c>id</c> and <c>createdAt</c> binds <see cref="Entity{TId}.Id"/> and
@@ -50,7 +61,7 @@ public abstract class AuditableEntity<TId> : Entity<TId>, IAuditableEntity
     {
         ArgumentNullException.ThrowIfNull(createdBy);
 
-        CreatedAt = createdAt;
+        CreatedAt = UtcInstant.Normalize(createdAt, nameof(createdAt));
         CreatedBy = createdBy;
     }
 
@@ -97,10 +108,16 @@ public abstract class AuditableEntity<TId> : Entity<TId>, IAuditableEntity
     /// Records that this entity was modified, updating <see cref="UpdatedAt"/> and
     /// <see cref="UpdatedBy"/> together.
     /// </summary>
-    /// <param name="updatedAt">The instant of the modification, in UTC.</param>
+    /// <param name="updatedAt">
+    /// The instant of the modification. Stored at offset zero; any offset is accepted.
+    /// </param>
     /// <param name="updatedBy">The actor performing the modification.</param>
     /// <exception cref="ArgumentNullException">
     /// Thrown when <paramref name="updatedBy"/> is <see langword="null"/>.
+    /// </exception>
+    /// <exception cref="ArgumentOutOfRangeException">
+    /// Thrown when <paramref name="updatedAt"/> is <c>default(DateTimeOffset)</c> or precedes
+    /// <see cref="CreatedAt"/>. An instant equal to it is accepted.
     /// </exception>
     /// <remarks>
     /// Call this at the end of every state-mutating method. Routing both fields through a
@@ -112,7 +129,12 @@ public abstract class AuditableEntity<TId> : Entity<TId>, IAuditableEntity
     {
         ArgumentNullException.ThrowIfNull(updatedBy);
 
-        UpdatedAt = updatedAt;
+        var instant = UtcInstant.Normalize(updatedAt, nameof(updatedAt));
+        if (instant < CreatedAt)
+            throw new ArgumentOutOfRangeException(
+                nameof(updatedAt), updatedAt, "A modification cannot precede the creation instant.");
+
+        UpdatedAt = instant;
         UpdatedBy = updatedBy;
     }
 }

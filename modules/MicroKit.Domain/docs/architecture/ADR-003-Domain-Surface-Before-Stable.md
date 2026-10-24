@@ -95,6 +95,10 @@ sharing one identifier space is a modelling error this rule does not try to repa
 - `DomainEvent` becomes `abstract record DomainEvent(DateTimeOffset OccurredAt)`, with no
   default.
 - No `DateTimeOffset.UtcNow` remains under `src/`.
+- Every instant entering the domain (`CreatedAt`, `UpdatedAt` through `Touch`, and `OccurredAt`
+  on construction and through `with`) is normalised to offset zero with `ToUniversalTime()`, and
+  `default(DateTimeOffset)` is rejected with `ArgumentOutOfRangeException`. `Touch` rejects an
+  instant earlier than `CreatedAt`; an equal one is accepted (#165).
 
 **Reasoning.**
 - Reading `DateTimeOffset.UtcNow` in a constructor hides a dependency: tests can only assert a
@@ -105,6 +109,11 @@ sharing one identifier space is a modelling error this rule does not try to repa
   event it raises.
 - A positional parameter with no default moves the omission to the compiler and keeps a
   concrete event to one line.
+- Once the instant is an input, its representation is the caller's. Normalising preserves the
+  instant and only changes the offset, so a correct `DateTimeOffset.Now` stays correct, and a
+  provider that stores offset zero only, such as Npgsql for `timestamptz`, accepts it.
+  `default(DateTimeOffset)` is an instant that was never set, not a real one, and a modification
+  before the creation is an audit trail that cannot be true (#165).
 
 **Rejected alternatives.**
 - *A domain `IClock` abstraction.* `TimeProvider` has been in the BCL since .NET 8, with
@@ -112,6 +121,8 @@ sharing one identifier space is a modelling error this rule does not try to repa
 - *A `required init` `OccurredAt` member.* Positional events would have to repeat it in an
   object initializer at every construction site.
 - *Stamp events at dispatch.* The instant would record dispatch, not the business fact.
+- *Reject a non-zero offset.* Turns a correct `DateTimeOffset.Now` into an error, with no gain
+  over normalising (#165).
 
 ### D5 — The creator is an `Actor`, and audit fields have one point of passage
 

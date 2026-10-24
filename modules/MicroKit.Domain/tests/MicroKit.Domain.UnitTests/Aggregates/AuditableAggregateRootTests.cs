@@ -12,6 +12,7 @@ public sealed class AuditableAggregateRootTests
 {
     private static readonly DateTimeOffset CreatedAt = new(2026, 10, 24, 9, 0, 0, TimeSpan.Zero);
     private static readonly Actor Creator = new("user-123");
+    private static readonly DateTimeOffset PlusTwo = new(2026, 10, 24, 11, 0, 0, TimeSpan.FromHours(2));
 
     [Fact]
     public void Constructor_ExplicitInstant_SetsCreationFields()
@@ -81,6 +82,70 @@ public sealed class AuditableAggregateRootTests
 
         aggregate.UpdatedAt.ShouldBeNull();
         aggregate.UpdatedBy.ShouldBeNull();
+    }
+
+    [Fact]
+    public void Constructor_NonZeroOffset_IsStoredAtOffsetZero()
+    {
+        var sut = new TestAuditableAggregateRoot(NewId(), PlusTwo, Creator);
+
+        sut.CreatedAt.Offset.ShouldBe(TimeSpan.Zero);
+        sut.CreatedAt.UtcDateTime.ShouldBe(PlusTwo.UtcDateTime);
+    }
+
+    [Fact]
+    public void Constructor_DefaultInstant_ThrowsArgumentOutOfRangeException()
+    {
+        var ex = Should.Throw<ArgumentOutOfRangeException>(() => new TestAuditableAggregateRoot(NewId(), default(DateTimeOffset), Creator));
+
+        ex.ParamName.ShouldBe("createdAt");
+    }
+
+    [Fact]
+    public void Touch_NonZeroOffset_IsStoredAtOffsetZero()
+    {
+        var sut = new TestAuditableAggregateRoot(NewId(), CreatedAt, Creator);
+        var later = CreatedAt.AddMinutes(5).ToOffset(TimeSpan.FromHours(2));
+
+        sut.Rename(later, Creator);
+
+        sut.UpdatedAt!.Value.Offset.ShouldBe(TimeSpan.Zero);
+        sut.UpdatedAt.Value.UtcDateTime.ShouldBe(later.UtcDateTime);
+    }
+
+    [Fact]
+    public void Touch_DefaultInstant_ThrowsArgumentOutOfRangeException()
+    {
+        var sut = new TestAuditableAggregateRoot(NewId(), CreatedAt, Creator);
+
+        var ex = Should.Throw<ArgumentOutOfRangeException>(() => sut.Rename(default, Creator));
+
+        ex.ParamName.ShouldBe("updatedAt");
+        sut.UpdatedAt.ShouldBeNull();
+    }
+
+    [Fact]
+    public void Touch_BeforeCreatedAt_ThrowsArgumentOutOfRangeException()
+    {
+        var sut = new TestAuditableAggregateRoot(NewId(), CreatedAt, Creator);
+
+        var ex = Should.Throw<ArgumentOutOfRangeException>(
+            () => sut.Rename(CreatedAt.AddTicks(-1), Creator));
+
+        ex.ParamName.ShouldBe("updatedAt");
+        sut.UpdatedAt.ShouldBeNull();
+        sut.UpdatedBy.ShouldBeNull();
+    }
+
+    [Fact]
+    public void Touch_EqualToCreatedAt_IsAccepted()
+    {
+        var sut = new TestAuditableAggregateRoot(NewId(), CreatedAt, Creator);
+
+        // The same instant in another offset is equal, not earlier.
+        sut.Rename(CreatedAt.ToOffset(TimeSpan.FromHours(-5)), Creator);
+
+        sut.UpdatedAt.ShouldBe(CreatedAt);
     }
 
     [Fact]

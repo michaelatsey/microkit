@@ -6,8 +6,8 @@ namespace MicroKit.Domain.Events;
 /// this base.
 /// </summary>
 /// <param name="OccurredAt">
-/// The instant the business fact occurred, in UTC. Pass the same value to every event raised
-/// within one business operation so consumers can group and order them reliably.
+/// The instant the business fact occurred. Pass the same value to every event raised within one
+/// business operation so consumers can group and order them reliably.
 /// </param>
 /// <remarks>
 /// <para>
@@ -43,6 +43,24 @@ namespace MicroKit.Domain.Events;
 /// </example>
 public abstract record DomainEvent(DateTimeOffset OccurredAt) : IDomainEvent
 {
+    /// <summary>
+    /// Gets the instant the business fact occurred, at offset zero.
+    /// </summary>
+    /// <remarks>
+    /// The instant is normalised to offset zero with <see cref="DateTimeOffset.ToUniversalTime"/>
+    /// on construction and through a <see langword="with"/> expression: the instant is preserved,
+    /// only its representation changes. <c>default(DateTimeOffset)</c> is rejected with
+    /// <see cref="ArgumentOutOfRangeException"/> on both paths.
+    /// </remarks>
+    /// <exception cref="ArgumentOutOfRangeException">
+    /// Thrown when the instant is <c>default(DateTimeOffset)</c>.
+    /// </exception>
+    public DateTimeOffset OccurredAt
+    {
+        get;
+        init => field = UtcInstant.Normalize(value, nameof(OccurredAt));
+    } = UtcInstant.Normalize(OccurredAt, nameof(OccurredAt));
+
     /// <summary>
     /// Gets the unique, time-ordered identifier for this domain event.
     /// </summary>

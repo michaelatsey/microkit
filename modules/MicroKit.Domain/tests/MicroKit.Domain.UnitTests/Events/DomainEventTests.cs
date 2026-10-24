@@ -38,6 +38,44 @@ public sealed class DomainEventTests
     }
 
     [Fact]
+    public void OccurredAt_NonZeroOffset_IsStoredAtOffsetZero()
+    {
+        var plusTwo = OccurredAt.ToOffset(TimeSpan.FromHours(2));
+
+        var evt = new SampleEvent("a", plusTwo);
+
+        evt.OccurredAt.Offset.ShouldBe(TimeSpan.Zero);
+        evt.OccurredAt.UtcDateTime.ShouldBe(plusTwo.UtcDateTime);
+    }
+
+    [Fact]
+    public void OccurredAt_NonZeroOffsetThroughWith_IsStoredAtOffsetZero()
+    {
+        var later = OccurredAt.AddMinutes(1).ToOffset(TimeSpan.FromHours(2));
+
+        var evt = new SampleEvent("a", OccurredAt) with { OccurredAt = later };
+
+        evt.OccurredAt.Offset.ShouldBe(TimeSpan.Zero);
+        evt.OccurredAt.UtcDateTime.ShouldBe(later.UtcDateTime);
+    }
+
+    [Fact]
+    public void OccurredAt_Default_ThrowsArgumentOutOfRangeException()
+    {
+        Should.Throw<ArgumentOutOfRangeException>(() => new SampleEvent("a", default))
+            .ParamName.ShouldBe("OccurredAt");
+    }
+
+    [Fact]
+    public void OccurredAt_DefaultThroughWith_ThrowsArgumentOutOfRangeException()
+    {
+        var evt = new SampleEvent("a", OccurredAt);
+
+        Should.Throw<ArgumentOutOfRangeException>(() => evt with { OccurredAt = default })
+            .ParamName.ShouldBe("OccurredAt");
+    }
+
+    [Fact]
     public void GuidIdNew_IsAVersion7Guid()
     {
         GuidId.New().Value.Version.ShouldBe(7);
