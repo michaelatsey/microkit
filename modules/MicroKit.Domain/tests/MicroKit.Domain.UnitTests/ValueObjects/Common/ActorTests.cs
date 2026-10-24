@@ -87,6 +87,29 @@ public sealed class ActorTests
         Actor.Restore(stored).ShouldBeSameAs(Actor.System);
     }
 
+    [Theory]
+    [InlineData("alice\nINFO forged audit line")]
+    [InlineData("alice\r\nbob")]
+    [InlineData("alice\tbob")]
+    [InlineData("alice\u0000")]
+    [InlineData("ali\u200Bce")]   // zero-width space
+    [InlineData("alice\u202E")]   // right-to-left override
+    public void Constructor_ControlOrFormatCharacter_ThrowsDomainException(string value)
+    {
+        Should.Throw<DomainException>(() => new Actor(value))
+            .Message.ShouldBe("Actor identifier cannot contain a control or format character.");
+        Should.Throw<DomainException>(() => Actor.Restore(value));
+    }
+
+    [Theory]
+    [InlineData("service account")]
+    [InlineData("auth0|5f7c8ec7c33c6c004bbafe82")]
+    [InlineData("Jos\u00E9")]
+    public void Constructor_PrintableIdentifier_IsAccepted(string value)
+    {
+        new Actor(value).Value.ShouldBe(value);
+    }
+
     [Fact]
     public void Restore_Null_ThrowsDomainException()
     {

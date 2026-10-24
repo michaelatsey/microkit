@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Text.Json.Serialization;
 using MicroKit.Domain.Exceptions;
 using MicroKit.Domain.ValueObjects.Common.Json;
@@ -11,7 +12,9 @@ namespace MicroKit.Domain.ValueObjects.Common;
 /// <para>
 /// The underlying value is an opaque <see cref="string"/> so that identifiers issued by any
 /// identity provider fit without conversion: an OIDC <c>sub</c>, an Entra object id, a
-/// Keycloak user id, a service-account name, or a plain GUID rendered as text.
+/// Keycloak user id, a service-account name, or a plain GUID rendered as text. A control character,
+/// a line break included, or an invisible format character is rejected, so an actor read from a
+/// token claim or a header cannot forge a line in an audit log (ADR-004 D8).
 /// </para>
 /// <para>
 /// Prefer the built-in instances (<see cref="System"/>, <see cref="Anonymous"/>,
@@ -61,8 +64,8 @@ public sealed record Actor : IValueObject
     /// </summary>
     /// <param name="value">The actor identifier. Leading and trailing white space is removed.</param>
     /// <exception cref="DomainException">
-    /// Thrown when the identifier is empty, exceeds <see cref="MaxLength"/>, or starts with
-    /// <see cref="ReservedPrefix"/>.
+    /// Thrown when the identifier is empty, exceeds <see cref="MaxLength"/>, starts with
+    /// <see cref="ReservedPrefix"/>, or contains a control or format character.
     /// </exception>
     public Actor(string value) : this(value, allowReserved: false) { }
 
@@ -107,8 +110,8 @@ public sealed record Actor : IValueObject
     /// constructor.
     /// </returns>
     /// <exception cref="DomainException">
-    /// Thrown when the identifier is empty, too long, or starts with <see cref="ReservedPrefix"/>
-    /// without being a built-in actor.
+    /// Thrown when the identifier is empty, too long, contains a control or format character, or
+    /// starts with <see cref="ReservedPrefix"/> without being a built-in actor.
     /// </exception>
     /// <remarks>
     /// <para>
@@ -145,8 +148,9 @@ public sealed record Actor : IValueObject
     /// <param name="allowReserved">Whether the identifier may start with <see cref="ReservedPrefix"/>.</param>
     /// <returns>The trimmed identifier.</returns>
     /// <exception cref="DomainException">
-    /// Thrown when the identifier is empty, exceeds <see cref="MaxLength"/>, or starts with
-    /// <see cref="ReservedPrefix"/> while <paramref name="allowReserved"/> is false.
+    /// Thrown when the identifier is empty, exceeds <see cref="MaxLength"/>, contains a control or
+    /// format character, or starts with <see cref="ReservedPrefix"/> while
+    /// <paramref name="allowReserved"/> is false.
     /// </exception>
     private static string Validate(string raw, bool allowReserved)
     {
@@ -157,6 +161,9 @@ public sealed record Actor : IValueObject
 
         if (trimmed.Length > MaxLength)
             throw new DomainException($"Actor identifier cannot exceed {MaxLength} characters.");
+
+        if (trimmed.Any(c => char.IsControl(c) || CharUnicodeInfo.GetUnicodeCategory(c) == UnicodeCategory.Format))
+            throw new DomainException("Actor identifier cannot contain a control or format character.");
 
         if (!allowReserved && trimmed[0] == ReservedPrefix)
             throw new DomainException(

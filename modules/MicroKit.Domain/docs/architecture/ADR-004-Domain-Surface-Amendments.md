@@ -185,6 +185,23 @@ to remove an incorrect behaviour.
   every consumer who does not read it.
 - *Format the identifier in `EntityNotFoundException`.* Fixes one caller out of all.
 
+#### D8 — `Actor` rejects control and format characters
+
+**Decision.** An actor identifier, built by the constructor or by `Actor.Restore`, rejects a control
+character (Unicode category Cc, line breaks included) or a format character (Cf, such as U+200B or
+U+202E) with a `DomainException`.
+
+**Reasoning.** An actor is built from a token claim or a header and ends up in audit fields and in
+the log lines built from them. `"alice\nINFO forged audit line"` was a valid actor, so a caller
+could forge a line in an audit log; an invisible format character made two actors look identical.
+No identity provider issues identifiers with such characters, so the break only removes an unsafe
+behaviour.
+
+**Rejected alternatives.**
+- *Strip the characters.* Two different inputs would become the same actor.
+- *Restrict actors to ASCII.* Identifiers such as service-account display names may be non-ASCII;
+  only the invisible and control characters are unsafe.
+
 ## Consequences
 
 - A built-in actor serializes with any options: `Actor.System` is written `"$system"`.
