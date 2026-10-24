@@ -62,7 +62,7 @@ Settles the public surface before `2.0.0` (#160). Every item under **Breaking** 
 - `Money`, `Currency` and `Actor` round-trip through `System.Text.Json` with default options:
   `Currency` and `Actor` as strings, `Money` as `{ "Amount": …, "Currency": "EUR" }` (#167). A
   built-in actor does not: with default options, JSON is untrusted and a `$` value throws
-  `JsonException` (#170).
+  `JsonException` on read (#170) and on write (#175).
 - `TrustedActorJsonConverter`, to register in `JsonSerializerOptions.Converters` for storage the
   application wrote itself; it rehydrates built-in actors through `Actor.Restore` (#170).
 - `BusinessRuleViolationException.Code` (D9).

@@ -84,9 +84,21 @@ public sealed class JsonRoundTripTests
 
     [Theory]
     [MemberData(nameof(Options))]
-    public void Actor_BuiltIn_DoesNotRoundTripWithTheDefaultConverter(string options)
+    public void Actor_BuiltIn_WithTheDefaultConverter_FailsOnWrite(string options)
     {
-        Should.Throw<JsonException>(() => RoundTrip(Actor.System, options));
+        var ex = Should.Throw<JsonException>(() => JsonSerializer.Serialize(Actor.System, For(options)));
+
+        ex.Message.ShouldContain(nameof(TrustedActorJsonConverter));
+    }
+
+    [Theory]
+    [MemberData(nameof(Options))]
+    public void Actor_BuiltInAsDictionaryKey_WithTheDefaultConverter_FailsOnWrite(string options)
+    {
+        var byActor = new Dictionary<Actor, int> { [Actor.System] = 1 };
+
+        Should.Throw<JsonException>(() => JsonSerializer.Serialize(byActor, For(options)))
+            .Message.ShouldContain(nameof(TrustedActorJsonConverter));
     }
 
     [Theory]
@@ -152,7 +164,9 @@ public sealed class JsonRoundTripTests
     {
         var archived = new OrderArchived(Actor.System, new DateTimeOffset(2026, 10, 24, 9, 0, 0, TimeSpan.Zero));
 
-        Should.Throw<JsonException>(() => RoundTrip(archived, options));
+        // Refused when written, inside the business transaction, not when read back later.
+        Should.Throw<JsonException>(() => JsonSerializer.Serialize(archived, For(options)))
+            .Message.ShouldContain(nameof(TrustedActorJsonConverter));
 
         var read = RoundTrip(archived, Trusted(options));
         read.ArchivedBy.ShouldBeSameAs(Actor.System);
@@ -226,7 +240,7 @@ public sealed class JsonRoundTripTests
 
         RoundTrip(totals, options).ShouldBe(totals, ignoreOrder: true);
         RoundTrip(byActor, options).ShouldBe(byActor, ignoreOrder: true);
-        Should.Throw<JsonException>(() => RoundTrip(byTrustedActor, options));
+        Should.Throw<JsonException>(() => JsonSerializer.Serialize(byTrustedActor, For(options)));
 
         var trusted = RoundTrip(byTrustedActor, Trusted(options));
         trusted[Actor.System].ShouldBe(1);

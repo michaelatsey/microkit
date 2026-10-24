@@ -235,6 +235,12 @@ storage the application wrote itself: the public `TrustedActorJsonConverter` rea
 precedence over a type-level `[JsonConverter]`. Until the Messaging outbox can register it (#174),
 an event that must record a built-in actor carries the actor's value as a string.
 
+What the default converter writes, it can read (#175). It refuses to write a built-in actor, as a
+value or as a dictionary key, with a `JsonException` naming `TrustedActorJsonConverter`, so a value
+that cannot cross the untrusted path fails when it is serialized, inside the business transaction,
+never when an outbox processor reads it back as a poison message. `TrustedActorJsonConverter`
+keeps writing every actor.
+
 #167 first read every `Actor` through `Actor.Restore`. That made a request body bound by ASP.NET
 Core able to name `$system` and be recorded as the application itself, with only an XML remark
 standing in the way.

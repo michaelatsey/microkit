@@ -21,9 +21,9 @@ namespace MicroKit.Domain.ValueObjects.Common.Json;
 /// would record a caller's action as the application's.
 /// </para>
 /// <para>
-/// Writing is the same as with default options: the actor's identifier, a JSON string. An invalid
-/// identifier fails as a <see cref="JsonException"/> whose inner exception is the
-/// <see cref="DomainException"/>.
+/// It writes every actor, built-in ones included, as its identifier, a JSON string; the default
+/// converter refuses to write a built-in actor. An invalid identifier read back fails as a
+/// <see cref="JsonException"/> whose inner exception is the <see cref="DomainException"/>.
 /// </para>
 /// </remarks>
 /// <example>

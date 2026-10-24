@@ -27,8 +27,10 @@ namespace MicroKit.Domain.ValueObjects.Common;
 /// <para>
 /// <c>System.Text.Json</c> writes an actor as its identifier, a JSON string. With default options it
 /// reads it back through the public constructor: JSON is treated as untrusted, so a value with the
-/// reserved prefix fails as a <see cref="System.Text.Json.JsonException"/> and a built-in actor does
-/// <b>not</b> round-trip. Storage the application wrote itself (an outbox, an event store, a cache)
+/// reserved prefix fails as a <see cref="System.Text.Json.JsonException"/>. A built-in actor does
+/// <b>not</b> round-trip: the default converter refuses it on write as well as on read, so the
+/// failure happens when it is serialized, inside the business transaction, not when it is read
+/// back. Storage the application wrote itself (an outbox, an event store, a cache)
 /// opts into rehydrating built-in actors by registering
 /// <see cref="Json.TrustedActorJsonConverter"/> in <c>JsonSerializerOptions.Converters</c>.
 /// </para>
