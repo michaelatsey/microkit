@@ -51,8 +51,8 @@ internal static class AuditRules
     /// <remarks>
     /// Validates before anything changes; runs <paramref name="mutation"/>; if it throws, restores
     /// both audit fields to their values before it ran and removes the events it raised, then
-    /// rethrows; otherwise records the modification, unless a nested one already recorded a later
-    /// instant. The fields are written through <see langword="ref"/>, so a nested modification of
+    /// rethrows; otherwise records the modification, unless a nested one already recorded a stamp at
+    /// or after its instant. The fields are written through <see langword="ref"/>, so a nested modification of
     /// the same object writes the same storage this call reads back.
     /// </remarks>
     internal static void Mutate(
@@ -79,7 +79,8 @@ internal static class AuditRules
             throw;
         }
 
-        if (Supersedes(instant, updatedAt))
+        var nestedRecorded = updatedAt != previousAt || !ReferenceEquals(updatedBy, previousBy);
+        if (Supersedes(instant, updatedAt, nestedRecorded))
         {
             updatedAt = instant;
             updatedBy = by;
@@ -123,11 +124,12 @@ internal static class AuditRules
     /// </summary>
     /// <param name="instant">The instant of the modification, validated before its mutation ran.</param>
     /// <param name="updatedAt">The modification instant recorded now, after the mutation ran.</param>
+    /// <param name="nestedRecorded">Whether a nested modification of the same object recorded a stamp during the mutation.</param>
     /// <returns>
-    /// <see langword="false"/> when a nested modification of the same object, run inside the
-    /// mutation, already recorded a later instant: overwriting it would make the recorded instant
-    /// decrease.
+    /// <see langword="false"/> when a nested modification recorded a stamp at or after
+    /// <paramref name="instant"/>: overwriting a later one would make the recorded instant decrease,
+    /// and overwriting an equal one would credit the wrong actor with the last change.
     /// </returns>
-    private static bool Supersedes(DateTimeOffset instant, DateTimeOffset? updatedAt) =>
-        updatedAt is null || instant >= updatedAt.Value;
+    private static bool Supersedes(DateTimeOffset instant, DateTimeOffset? updatedAt, bool nestedRecorded) =>
+        !nestedRecorded || instant > updatedAt!.Value;
 }

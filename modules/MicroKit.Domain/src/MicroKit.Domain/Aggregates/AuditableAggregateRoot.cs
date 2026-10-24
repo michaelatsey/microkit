@@ -145,8 +145,9 @@ public abstract class AuditableAggregateRoot<TId> : AggregateRoot<TId>, IAuditab
     /// </para>
     /// <para>
     /// A nested <c>Mutate</c> on the same object, run inside <paramref name="mutation"/>, may record a
-    /// later instant than this call's. That later stamp is kept: this call does not overwrite it with
-    /// its own earlier instant.
+    /// stamp at or after this call's instant. That stamp is kept: this call does not overwrite it with
+    /// an earlier instant, nor credit an equal one to its own actor. A nested stamp earlier than this
+    /// call's instant is superseded.
     /// </para>
     /// <para>
     /// <see cref="UpdatedAt"/> never decreases. An instant earlier than the current one is rejected
