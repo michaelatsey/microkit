@@ -69,4 +69,17 @@ internal static class AuditRules
 
         return instant;
     }
+
+    /// <summary>
+    /// Whether a modification that has just succeeded becomes the recorded one.
+    /// </summary>
+    /// <param name="instant">The instant of the modification, validated before its mutation ran.</param>
+    /// <param name="updatedAt">The modification instant recorded now, after the mutation ran.</param>
+    /// <returns>
+    /// <see langword="false"/> when a nested modification of the same object, run inside the
+    /// mutation, already recorded a later instant: overwriting it would make the recorded instant
+    /// decrease.
+    /// </returns>
+    internal static bool Supersedes(DateTimeOffset instant, DateTimeOffset? updatedAt) =>
+        updatedAt is null || instant >= updatedAt.Value;
 }

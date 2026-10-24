@@ -134,6 +134,11 @@ public abstract class AuditableEntity<TId> : Entity<TId>, IAuditableEntity
     /// invalid change throws while nothing has changed.
     /// </para>
     /// <para>
+    /// A nested <c>Mutate</c> on the same object, run inside <paramref name="mutation"/>, may record a
+    /// later instant than this call's. That later stamp is kept: this call does not overwrite it with
+    /// its own earlier instant.
+    /// </para>
+    /// <para>
     /// <see cref="UpdatedAt"/> never decreases. An instant earlier than the current one is rejected
     /// rather than clamped: clamping would record the actor against an instant that is not when the
     /// change happened, and would hide a skewed clock instead of surfacing it. The accepted cost: when
@@ -159,7 +164,10 @@ public abstract class AuditableEntity<TId> : Entity<TId>, IAuditableEntity
 
         mutation();
 
-        UpdatedAt = instant;
-        UpdatedBy = by;
+        if (AuditRules.Supersedes(instant, UpdatedAt))
+        {
+            UpdatedAt = instant;
+            UpdatedBy = by;
+        }
     }
 }

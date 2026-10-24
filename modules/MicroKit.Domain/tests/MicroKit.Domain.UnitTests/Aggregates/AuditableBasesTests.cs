@@ -255,6 +255,33 @@ public sealed class AuditableBasesTests
         subject.UpdatedBy.ShouldBe(Actor.System);
     }
 
+    [Theory]
+    [MemberData(nameof(Bases))]
+    public void Mutate_NestedLaterModification_IsNotOverwrittenByTheOuterOne(string kind)
+    {
+        var subject = AuditedSubject.Create(kind, CreatedAt, Creator);
+        var at1005 = At.AddMinutes(5);
+
+        subject.Run(At, Creator, () => subject.Run(at1005, Updater, () => { }));
+
+        subject.UpdatedAt.ShouldBe(at1005);
+        subject.UpdatedBy.ShouldBe(Updater);
+        Should.Throw<ArgumentOutOfRangeException>(() => subject.Run(at1005.AddTicks(-1), Creator, () => { }));
+    }
+
+    [Theory]
+    [MemberData(nameof(Bases))]
+    public void Mutate_NestedEarlierModification_IsSupersededByTheOuterOne(string kind)
+    {
+        var subject = AuditedSubject.Create(kind, CreatedAt, Creator);
+        var at1005 = At.AddMinutes(5);
+
+        subject.Run(at1005, Creator, () => subject.Run(At, Updater, () => { }));
+
+        subject.UpdatedAt.ShouldBe(at1005);
+        subject.UpdatedBy.ShouldBe(Creator);
+    }
+
     [Fact]
     public void UpdateFields_AreSetOnlyThroughMutate()
     {
