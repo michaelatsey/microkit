@@ -110,6 +110,15 @@ public sealed class PhoneNumberTests
     }
 
     [Fact]
+    public void Constructor_ExtensionOfMoreThanTenDigits_ThrowsDomainException()
+    {
+        new PhoneNumber("5551234567x1234567890").Value.ShouldBe("5551234567x1234567890");
+
+        Should.Throw<DomainException>(() => new PhoneNumber("5551234567x12345678901"))
+            .Message.ShouldBe("Phone number extension cannot contain more than 10 digits.");
+    }
+
+    [Fact]
     public void Constructor_ExtensionDigits_DoNotCountTowardTheE164Maximum()
     {
         // 11 digits for the number, 5 for the extension: 16 in all, valid.

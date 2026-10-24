@@ -18,13 +18,14 @@ namespace MicroKit.Domain.ValueObjects.Common;
 /// </para>
 /// <para>
 /// The number before the extension has 7 to 15 digits, the ITU-T E.164 maximum; the extension has
-/// at least one digit and does not count toward that maximum (ADR-004 D6).
+/// 1 to 10 digits and does not count toward that maximum (ADR-004 D6).
 /// </para>
 /// </remarks>
 public sealed record PhoneNumber(string Value) : IValueObject
 {
     private const int MinDigits = 7;
     private const int MaxDigits = 15;
+    private const int MaxExtensionDigits = 10;
     private const string FormattingCharacters = "-.()/";
 
     /// <summary>
@@ -72,6 +73,9 @@ public sealed record PhoneNumber(string Value) : IValueObject
         var mainPart = extensionIndex < 0 ? cleaned : cleaned[..extensionIndex];
         if (extensionIndex >= 0 && extensionIndex == cleaned.Length - 1)
             throw new DomainException("Phone number extension must contain at least one digit.");
+
+        if (extensionIndex >= 0 && cleaned.Length - extensionIndex - 1 > MaxExtensionDigits)
+            throw new DomainException($"Phone number extension cannot contain more than {MaxExtensionDigits} digits.");
 
         // ITU-T E.164: at most 15 digits for the number itself; an extension is not part of it.
         var digitCount = mainPart.Count(char.IsAsciiDigit);

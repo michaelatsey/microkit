@@ -150,7 +150,8 @@ closes the class of defect, where a deny-list of white space only closed one ins
 **Decision.** `PhoneNumber` keeps the ASCII digits, a leading `+` and one extension marker `x`
 (an `X` is stored as `x`). Spaces and `- . ( ) /` are formatting and are removed; any other
 character is rejected. A `+` anywhere but first, a second marker or an empty extension is rejected.
-The 7 to 15 digits of ITU-T E.164 are counted before the extension only.
+The 7 to 15 digits of ITU-T E.164 are counted before the extension only; the extension has 1 to
+10 digits.
 
 **Reasoning.** The type dropped every character it did not keep, so
 `"call me at 0612345678 tomorrow"` was a valid number, and `char.IsDigit` let non-ASCII digits
@@ -158,8 +159,10 @@ through, which no dialler or E.164 consumer accepts. Its own message said a `+` 
 the beginning, but the check ran only when the number started with one. `"1234567x8x9"` passed with
 two markers. Extension digits counted toward the E.164 maximum, which applies to the number alone,
 so a valid number with an extension could be rejected. `X12` and `x12` were stored differently and
-compared unequal. Each is an incorrect behaviour, which the rule allows a break to remove; counting
-the extension apart only accepts more.
+compared unequal. Each is an incorrect behaviour, which the rule allows a break to remove. Counting
+the extension apart from the E.164 digits removed the only bound on it, so the extension gets its
+own: E.164 does not define extensions, and 10 digits covers private branch exchanges while keeping
+a value under 30 characters.
 
 **Rejected alternatives.**
 - *Recognise spelled-out markers such as `ext.`.* New parsing rules for one input shape the type
