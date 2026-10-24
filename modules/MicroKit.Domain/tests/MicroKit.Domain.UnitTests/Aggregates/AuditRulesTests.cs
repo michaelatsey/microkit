@@ -357,6 +357,45 @@ public sealed class AuditRulesTests
     }
 
     [Fact]
+    public void Mutate_NestedThrowingMutation_RemovesOnlyTheEventsEachLevelRaised()
+    {
+        var aggregate = new AuditedAggregate(new GuidId(Guid.CreateVersion7()), CreatedAt, Creator);
+        aggregate.RenameAndRaise("pending", At);
+        var pending = aggregate.DomainEvents.ShouldHaveSingleItem();
+
+        Should.Throw<InvalidOperationException>(() => aggregate.Run(At.AddMinutes(1), Updater, () =>
+        {
+            aggregate.Raise(new Renamed("outer", At.AddMinutes(1)));
+            aggregate.Run(At.AddMinutes(2), Updater, () =>
+            {
+                aggregate.Raise(new Renamed("inner", At.AddMinutes(2)));
+                throw new InvalidOperationException("inner rule broken");
+            });
+        }));
+
+        aggregate.DomainEvents.ShouldBe([pending]);
+    }
+
+    [Fact]
+    public void Mutate_InnerRollbackCaughtByTheOuterMutation_KeepsTheOuterEvents()
+    {
+        var aggregate = new AuditedAggregate(new GuidId(Guid.CreateVersion7()), CreatedAt, Creator);
+        aggregate.RenameAndRaise("pending", At);
+
+        aggregate.Run(At.AddMinutes(1), Updater, () =>
+        {
+            aggregate.Raise(new Renamed("outer", At.AddMinutes(1)));
+            Should.Throw<InvalidOperationException>(() => aggregate.Run(At.AddMinutes(2), Updater, () =>
+            {
+                aggregate.Raise(new Renamed("inner", At.AddMinutes(2)));
+                throw new InvalidOperationException("inner rule broken");
+            }));
+        });
+
+        aggregate.DomainEvents.Select(e => ((Renamed)e).Name).ShouldBe(["pending", "outer"]);
+    }
+
+    [Fact]
     public void Mutate_SuccessfulMutation_KeepsTheEventsItRaised()
     {
         var aggregate = new AuditedAggregate(new GuidId(Guid.CreateVersion7()), CreatedAt, Creator);

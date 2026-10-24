@@ -75,7 +75,8 @@ public abstract class AggregateRoot<TId> : Entity<TId>, IDomainEventsProvider, I
     }
 
     /// <summary>
-    /// Gets the number of domain events ever raised by this aggregate, drained or not.
+    /// Gets the number of domain events raised by this aggregate and not removed by
+    /// <see cref="RemoveEventsRaisedSince"/>, drained or not.
     /// </summary>
     internal int RaisedEventCount => _raisedEventCount;
 
@@ -88,12 +89,14 @@ public abstract class AggregateRoot<TId> : Entity<TId>, IDomainEventsProvider, I
     /// <remarks>
     /// The events raised since then are the last ones of the list, because raising appends and
     /// draining empties it. If the operation drained events, only the ones it raised after the
-    /// drain are still there to remove.
+    /// drain are still there to remove. The removed events are uncounted, so a rollback nested in
+    /// another one leaves the outer rollback only the events the outer operation itself raised.
     /// </remarks>
     internal void RemoveEventsRaisedSince(int raisedEventCount)
     {
         var removable = Math.Min(_raisedEventCount - raisedEventCount, _domainEvents.Count);
         _domainEvents.RemoveRange(_domainEvents.Count - removable, removable);
+        _raisedEventCount -= removable;
     }
 
     /// <summary>
