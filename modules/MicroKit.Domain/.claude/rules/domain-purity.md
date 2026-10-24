@@ -37,17 +37,23 @@ using System.Linq.Expressions;
 using System.Diagnostics.CodeAnalysis;
 using System.Runtime.CompilerServices;
 using System.Text.RegularExpressions; // si nécessaire pour VO validation
-using System.Text.Json;               // uniquement dans ValueObjects/Common/Json/ (convertisseurs internes)
+using System.Text.Json;               // uniquement dans ValueObjects/Common/Json/ (convertisseurs)
 using System.Text.Json.Serialization; // [JsonConverter] sur Money, Currency, Actor
 ```
 
-> **Pourquoi `System.Text.Json` est autorisé (#167, ADR-003 D7).** Les value objects du module
-> doivent faire l'aller-retour JSON avec les options par défaut : un événement de domaine qui porte
-> un `Money` ou un `Actor` passe par l'outbox. `System.Text.Json` fait partie du framework partagé,
-> donc aucun package n'est ajouté. Seuls des `[JsonConverter]` et des convertisseurs `internal`
-> sont permis, plus un seul type public : `TrustedActorJsonConverter` (#170), l'opt-in explicite
-> qui réhydrate les acteurs intégrés depuis un stockage de confiance. Aucune autre API de
-> sérialisation.
+> **Pourquoi `System.Text.Json` est autorisé (#167, ADR-003 D7).** Un événement de domaine passe
+> par l'outbox : ses value objects doivent faire l'aller-retour JSON. `System.Text.Json` fait partie
+> du framework partagé, donc aucun package n'est ajouté.
+>
+> - `Money`, `Currency` et un `Actor` utilisateur font l'aller-retour avec les options par défaut.
+> - Un acteur intégré (`$system`, `$anonymous`, `$migration`) **ne** le fait **pas** : le
+>   convertisseur par défaut le refuse à l'écriture (#175) et à la lecture (#170). Il faut
+>   enregistrer `TrustedActorJsonConverter` dans les `JsonSerializerOptions.Converters` du stockage
+>   que l'application a écrit elle-même (outbox, event store, cache), jamais pour un corps de
+>   requête.
+>
+> Seuls des `[JsonConverter]` et des convertisseurs `internal` sont permis, plus un seul type public :
+> `TrustedActorJsonConverter` (#170), cet opt-in explicite. Aucune autre API de sérialisation.
 
 ## Triggers de violation (code review bloquant)
 ```

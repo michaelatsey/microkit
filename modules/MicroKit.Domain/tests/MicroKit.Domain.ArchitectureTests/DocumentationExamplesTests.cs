@@ -41,6 +41,19 @@ public sealed class DocumentationExamplesTests
     }
 
     [Fact]
+    public void PurityRule_SaysABuiltInActorNeedsTheTrustedConverter()
+    {
+        // #177: the rule must not claim that every Actor round-trips with default options.
+        var rule = File.ReadAllText(Path.Combine(Root, ".claude", "rules", "domain-purity.md"));
+
+        rule.ShouldContain("`Money`, `Currency` et un `Actor` utilisateur font l'aller-retour avec les options par défaut.");
+        rule.ShouldContain("**ne** le fait **pas**");
+        rule.ShouldContain("le refuse à l'écriture (#175) et à la lecture (#170)");
+        rule.ShouldContain("enregistrer `TrustedActorJsonConverter`");
+        rule.ShouldNotContain("un `Money` ou un `Actor` passe par l'outbox");
+    }
+
+    [Fact]
     public void Documentation_TeachesNoReplacedSurface()
     {
         var offenders =
