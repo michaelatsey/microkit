@@ -53,7 +53,7 @@ public sealed class PhoneNumberTests
     public void Constructor_CharacterOtherThanDigitsPlusMarkerOrFormatting_ThrowsDomainException(string input)
     {
         Should.Throw<DomainException>(() => new PhoneNumber(input))
-            .Message.ShouldStartWith("Phone number can contain only digits");
+            .Message.ShouldStartWith("Phone number contains a character that is not a digit");
     }
 
     [Theory]
@@ -71,6 +71,16 @@ public sealed class PhoneNumberTests
     [InlineData("tel:+1-201-555-0123;ext=1234", "+12015550123x1234")]   // RFC 3966
     [InlineData("TEL:0612345678", "0612345678")]
     public void Constructor_SpelledOutExtensionMarker_IsStoredAsX(string input, string expected)
+    {
+        new PhoneNumber(input).Value.ShouldBe(expected);
+    }
+
+    [Theory]
+    [InlineData("\u202A+33 6 12 34 56 78\u202C", "+33612345678")]   // LRE ... PDF, from a right-to-left interface
+    [InlineData("\u200E+33 6 12 34 56 78", "+33612345678")]          // left-to-right mark
+    [InlineData("\uFF0B\uFF18\uFF11 \uFF13\uFF0D\uFF11\uFF12\uFF13\uFF14\uFF0D\uFF15\uFF16\uFF17\uFF18", "+81312345678")]   // full-width plus, digits and hyphens
+    [InlineData("\uFF08555\uFF09 123-4567 \uFF45\uFF58\uFF54 12", "5551234567x12")]   // full-width parentheses and "ext"
+    public void Constructor_FormatCharacterOrFullWidthForm_IsReadAsFormattingOrAscii(string input, string expected)
     {
         new PhoneNumber(input).Value.ShouldBe(expected);
     }

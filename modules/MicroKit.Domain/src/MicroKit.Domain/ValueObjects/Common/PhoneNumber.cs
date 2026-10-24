@@ -16,9 +16,11 @@ namespace MicroKit.Domain.ValueObjects.Common;
 /// extension marker is <c>x</c>, or <c>ext</c>, <c>extn</c> or <c>extension</c> in any case,
 /// optionally followed by one of <c>. : = #</c>. The RFC 3966 forms are read too: a leading
 /// <c>tel:</c> is dropped and <c>;ext=</c> is a marker. A decimal digit of any script is stored as
-/// its ASCII digit. White space and the formatting characters <c>-</c>, <c>.</c>, <c>(</c>,
-/// <c>)</c> and <c>/</c> are removed. Any other character is rejected: another letter, a <c>#</c>
-/// or <c>*</c> outside a marker, a typographic dash.
+/// its ASCII digit, and a full-width form, such as <c>＋</c> or <c>－</c>, is read as its ASCII
+/// character. White space, the formatting characters <c>-</c>, <c>.</c>, <c>(</c>, <c>)</c> and
+/// <c>/</c>, and invisible format characters, such as the direction marks a right-to-left interface
+/// adds, are removed. Any other character is rejected: another letter, a <c>#</c> or <c>*</c>
+/// outside a marker, a typographic dash.
 /// </para>
 /// <para>
 /// The digits are kept as written: no national trunk prefix is removed. <c>+33 (0)6 12 34 56 78</c>
@@ -61,7 +63,7 @@ public sealed record PhoneNumber(string Value) : IValueObject
 
         // Keep the digits, the '+' and the extension marker; drop the formatting; reject the rest.
         // Only digits, '+' and 'x' reach the value, so dropped white space cannot carry a line break.
-        var text = phoneNumber.Trim();
+        var text = ToHalfwidth(phoneNumber.Trim());
         if (text.StartsWith(TelScheme, StringComparison.OrdinalIgnoreCase))
             text = text[TelScheme.Length..];
 
@@ -87,11 +89,12 @@ public sealed record PhoneNumber(string Value) : IValueObject
                 buffer[length++] = (char)('0' + CharUnicodeInfo.GetDecimalDigitValue(text, i));
                 i += width;
             }
-            else if (char.IsWhiteSpace(c) || FormattingCharacters.Contains(c))
+            else if (char.IsWhiteSpace(c) || FormattingCharacters.Contains(c)
+                || CharUnicodeInfo.GetUnicodeCategory(c) == UnicodeCategory.Format)
                 i++;
             else
                 throw new DomainException(
-                    "Phone number can contain only digits, a leading '+', an extension marker ('x', 'ext', 'extn' or 'extension'), white space and the characters - . ( ) /.");
+                    "Phone number contains a character that is not a digit, a leading '+' or 'tel:', an extension marker or formatting; the PhoneNumber remarks list them.");
         }
 
         var cleaned = new string(buffer, 0, length);
@@ -122,6 +125,22 @@ public sealed record PhoneNumber(string Value) : IValueObject
             throw new DomainException($"Phone number cannot contain more than {MaxDigits} digits before any extension.");
 
         return cleaned;
+    }
+
+    /// <summary>
+    /// Returns <paramref name="text"/> with each full-width ASCII form (U+FF01 to U+FF5E), as a
+    /// Japanese or Chinese input method types it, replaced by its ASCII character.
+    /// </summary>
+    private static string ToHalfwidth(string text)
+    {
+        var chars = text.ToCharArray();
+        for (var i = 0; i < chars.Length; i++)
+        {
+            if (chars[i] is >= '\uFF01' and <= '\uFF5E')
+                chars[i] = (char)(chars[i] - 0xFEE0);
+        }
+
+        return new string(chars);
     }
 
     /// <summary>
