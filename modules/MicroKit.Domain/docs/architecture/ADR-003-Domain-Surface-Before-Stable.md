@@ -142,12 +142,17 @@ sharing one identifier space is a modelling error this rule does not try to repa
   `protected void Mutate(DateTimeOffset at, Actor by, Action mutation)`, which replaced
   `Touch(DateTimeOffset, Actor)` (#176). Auditing wraps the mutation instead of following it:
   `Mutate` validates `at` (default, offset, monotonicity) and `by` before anything changes, then
-  runs `mutation`, and sets `UpdatedAt` and `UpdatedBy` only if it returns. On
-  `AuditableAggregateRoot<TId>`, domain events raised inside a mutation that throws are removed,
-  through an `internal` member of `AggregateRoot<TId>` that truncates its event list to the count
-  taken before the mutation ran; nothing new is public. The limit: a mutation that throws
-  halfway keeps its partial field changes, so business rules are checked (`CheckRule`) before the
-  first assignment inside it.
+  runs `mutation`, and sets `UpdatedAt` and `UpdatedBy` only if it returns. If it throws, both
+  audit fields are restored to their values before it ran, even when a nested `Mutate` on the
+  same object succeeded inside it. On `AuditableAggregateRoot<TId>`, domain events raised inside a
+  mutation that throws are removed through an `internal` event journal (`IEventJournal`, which
+  `AggregateRoot<TId>` implements explicitly): it counts the events raised and removes the ones
+  raised since the count was taken before the mutation, which stays right across a drain inside
+  the mutation and across a rollback nested in another. Nothing new is public. A stamp a nested
+  `Mutate` records at or after the outer instant is kept. The whole sequence lives once, in
+  `AuditRules.Mutate`. The limit: a mutation that throws halfway keeps its partial field changes,
+  on this object and on any other, so business rules are checked (`CheckRule`) before the first
+  assignment inside it.
 - The built-in actors carry the reserved prefix `$`: `$system`, `$anonymous`, `$migration`.
   Public construction rejects a leading `$`. `Actor.Restore(string)` reads a stored value back,
   returning the built-in instance for a reserved value and rejecting any other `$` value, so a

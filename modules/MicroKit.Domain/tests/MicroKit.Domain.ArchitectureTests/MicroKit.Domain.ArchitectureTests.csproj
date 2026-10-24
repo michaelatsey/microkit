@@ -47,10 +47,12 @@
     <None Include="../../docs/performance/**/*.md" Link="module-docs/docs/performance/%(RecursiveDir)%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" />
     <None Include="../../.claude/**/*.md" Link="module-docs/.claude/%(RecursiveDir)%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" />
     <None Include="../../README.md" Link="module-docs/README.md" CopyToOutputDirectory="PreserveNewest" />
+    <!-- Outside module-docs/: the ADR quotes the replaced surface on purpose. -->
+    <None Include="../../docs/architecture/ADR-003-Domain-Surface-Before-Stable.md" Link="module-adr/ADR-003-Domain-Surface-Before-Stable.md" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 
   <Target Name="RequireModuleDocumentation" AfterTargets="CopyFilesToOutputDirectory">
-    <Error Condition="!Exists('$(OutDir)module-docs/README.md') Or !Exists('$(OutDir)module-docs/docs/guides/Implementing-Aggregates.md') Or !Exists('$(OutDir)module-docs/docs/performance/ValueObject-Benchmarks.md') Or !Exists('$(OutDir)module-docs/.claude/rules/csharp-style.md')"
+    <Error Condition="!Exists('$(OutDir)module-docs/README.md') Or !Exists('$(OutDir)module-docs/docs/guides/Implementing-Aggregates.md') Or !Exists('$(OutDir)module-docs/docs/performance/ValueObject-Benchmarks.md') Or !Exists('$(OutDir)module-docs/.claude/rules/csharp-style.md') Or !Exists('$(OutDir)module-adr/ADR-003-Domain-Surface-Before-Stable.md')"
            Text="The module documentation was not copied to $(OutDir)module-docs; DocumentationExamplesTests cannot run without it." />
   </Target>
 

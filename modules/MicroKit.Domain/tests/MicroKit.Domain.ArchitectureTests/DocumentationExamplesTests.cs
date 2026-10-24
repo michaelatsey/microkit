@@ -64,6 +64,17 @@ public sealed class DocumentationExamplesTests
     }
 
     [Fact]
+    public void Adr003_DescribesTheShippedEventRollback()
+    {
+        var adr = File.ReadAllText(Path.Combine(AppContext.BaseDirectory, "module-adr", "ADR-003-Domain-Surface-Before-Stable.md"));
+
+        adr.ShouldNotContain("truncates its event list to the count");
+        adr.ShouldContain("`IEventJournal`");
+        adr.ShouldContain("across a drain inside");
+        adr.ShouldContain("`AuditRules.Mutate`");
+    }
+
+    [Fact]
     public void Documentation_TeachesNoReplacedSurface()
     {
         var offenders =
