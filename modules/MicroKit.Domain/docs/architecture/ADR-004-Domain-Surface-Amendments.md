@@ -163,6 +163,23 @@ the extension apart only accepts more.
 - *A full numbering-plan validation (libphonenumber).* A third-party dependency, which the module
   forbids.
 
+#### D7 — `EntityId<T>.ToString` is sealed
+
+**Decision.** `EntityId<T>.ToString()` is `sealed override`, so every derived identifier returns its
+`Guid` value, as the member documents.
+
+**Reasoning.** The C# compiler synthesizes `ToString` in each derived record unless the base
+declares it `sealed`. Every identifier deriving from `EntityId<T>` therefore printed
+`OrderId { Value = … }`, against the documented "string representation of the underlying Guid
+value", and `EntityNotFoundException` messages carried that text. Sealing is the language's own
+remedy. It breaks only a derived record that declares its own `ToString`, a break the rule allows
+to remove an incorrect behaviour.
+
+**Rejected alternatives.**
+- *Document the limit and let each identifier override `ToString`.* The default stays wrong for
+  every consumer who does not read it.
+- *Format the identifier in `EntityNotFoundException`.* Fixes one caller out of all.
+
 ## Consequences
 
 - A built-in actor serializes with any options: `Actor.System` is written `"$system"`.

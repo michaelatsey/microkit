@@ -23,6 +23,15 @@ public sealed class EntityIdTests
     }
 
     [Fact]
+    public void ToString_OfADerivedIdentifier_IsTheGuidValue()
+    {
+        // A derived record would otherwise synthesize "CustomerId { Value = … }".
+        var value = Guid.CreateVersion7();
+
+        new CustomerId(value).ToString().ShouldBe(value.ToString());
+    }
+
+    [Fact]
     public void Equality_IsByValueWithinOneIdentifierType()
     {
         var value = Guid.CreateVersion7();

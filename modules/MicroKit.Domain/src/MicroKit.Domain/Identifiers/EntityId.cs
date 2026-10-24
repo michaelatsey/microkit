@@ -29,5 +29,9 @@ public abstract record EntityId<T> : IEntityId where T : EntityId<T>
     /// Returns a string representation of this identifier.
     /// </summary>
     /// <returns>The string representation of the underlying Guid value</returns>
-    public override string ToString() => Value.ToString();
+    /// <remarks>
+    /// Sealed: without it, the compiler gives every derived record its own <c>ToString</c>, which
+    /// prints <c>OrderId { Value = … }</c> instead of the value (ADR-004 D7).
+    /// </remarks>
+    public sealed override string ToString() => Value.ToString();
 }
