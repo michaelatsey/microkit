@@ -53,6 +53,19 @@ public sealed class DocumentationExamplesTests
     }
 
     [Fact]
+    public void PurityRule_ListsEveryNamespaceTheSourcesImport()
+    {
+        var rule = File.ReadAllText(Path.Combine(Root, ".claude", "rules", "domain-purity.md"));
+        var usings = File.ReadAllLines(Path.Combine(AppContext.BaseDirectory, "module-src", "usings.txt"))
+            .Select(line => line.Replace("global ", string.Empty, StringComparison.Ordinal))
+            .Distinct()
+            .ToArray();
+
+        usings.ShouldContain("using System.Globalization;");
+        usings.Where(directive => !rule.Contains(directive, StringComparison.Ordinal)).ShouldBeEmpty();
+    }
+
+    [Fact]
     public void PurityRule_SaysABuiltInActorNeedsTheTrustedConverter()
     {
         // #177: the rule must not claim that every Actor round-trips with default options.

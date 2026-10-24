@@ -64,6 +64,16 @@
     <WriteLinesToFile File="$(OutDir)module-src/files.txt"
                       Lines="@(DomainSourceFile->'%(Filename)')"
                       Overwrite="true" WriteOnlyWhenDifferent="true" />
+    <!-- Their using directives, for the namespaces the purity rule allows. -->
+    <ReadLinesFromFile File="%(DomainSourceFile.FullPath)">
+      <Output TaskParameter="Lines" ItemName="DomainSourceLine" />
+    </ReadLinesFromFile>
+    <ItemGroup>
+      <DomainUsing Include="@(DomainSourceLine)" Condition="$([System.Text.RegularExpressions.Regex]::IsMatch('%(Identity)', '^(global )?using System[A-Za-z.]*;$'))" />
+    </ItemGroup>
+    <WriteLinesToFile File="$(OutDir)module-src/usings.txt"
+                      Lines="@(DomainUsing->Distinct())"
+                      Overwrite="true" WriteOnlyWhenDifferent="true" />
   </Target>
 
   <Target Name="RequireModuleDocumentation" AfterTargets="CopyFilesToOutputDirectory">

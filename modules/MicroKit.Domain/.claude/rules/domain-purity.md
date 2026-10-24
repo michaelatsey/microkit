@@ -31,9 +31,12 @@ using System.Net.Http;
 // ✅ Runtime .NET uniquement
 using System;
 using System.Collections.Generic;
+using System.Collections.Frozen;      // table ISO 4217 de Currency
 using System.Collections.Immutable;
+using System.Globalization;           // CultureInfo invariante, catégories Unicode (UnicodeText)
 using System.Linq;
 using System.Linq.Expressions;
+using System.Diagnostics;
 using System.Diagnostics.CodeAnalysis;
 using System.Runtime.CompilerServices;
 using System.Text.RegularExpressions; // si nécessaire pour VO validation
