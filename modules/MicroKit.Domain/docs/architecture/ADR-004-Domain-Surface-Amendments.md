@@ -202,6 +202,24 @@ behaviour.
 - *Restrict actors to ASCII.* Identifiers such as service-account display names may be non-ASCII;
   only the invisible and control characters are unsafe.
 
+#### D9 — `Actor.MaxLength` stays 200, as a documented limit
+
+**Decision.** `Actor.MaxLength` stays `200`. The `Actor` remarks, which said an OIDC `sub` fits
+without conversion, now state that OpenID Connect allows a `sub` of up to 255 characters and that a
+longer identifier is rejected.
+
+**Reasoning.** OpenID Connect Core 1.0 §2 caps `sub` at 255 ASCII characters, so a conformant
+identifier of 201 to 255 characters was rejected while the documentation promised it would fit.
+`MaxLength` is a `public const`: its value is compiled into every caller, such as a column sized
+from it, so raising it would let values longer than those columns into the domain. The rule prefers
+a documented limit to that break.
+
+**Rejected alternatives.**
+- *Raise `MaxLength` to 255.* Consumers that sized a column from the compiled constant would
+  overflow it.
+- *Turn `MaxLength` into a `static readonly` field.* A binary break for every caller, for the same
+  outcome.
+
 ## Consequences
 
 - A built-in actor serializes with any options: `Actor.System` is written `"$system"`.

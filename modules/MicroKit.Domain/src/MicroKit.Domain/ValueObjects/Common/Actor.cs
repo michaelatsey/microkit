@@ -12,7 +12,9 @@ namespace MicroKit.Domain.ValueObjects.Common;
 /// <para>
 /// The underlying value is an opaque <see cref="string"/> so that identifiers issued by any
 /// identity provider fit without conversion: an OIDC <c>sub</c>, an Entra object id, a
-/// Keycloak user id, a service-account name, or a plain GUID rendered as text. A control character,
+/// Keycloak user id, a service-account name, or a plain GUID rendered as text. The limit is
+/// <see cref="MaxLength"/> characters: OpenID Connect allows a <c>sub</c> of up to 255, so a
+/// provider issuing longer ones needs a shorter identifier mapped to it (ADR-004 D9). A control character,
 /// a line break included, or an invisible format character is rejected, so an actor read from a
 /// token claim or a header cannot forge a line in an audit log (ADR-004 D8).
 /// </para>
@@ -52,6 +54,11 @@ public sealed record Actor : IValueObject
     /// <summary>
     /// The maximum supported length of an actor identifier.
     /// </summary>
+    /// <remarks>
+    /// Shorter than the 255 characters OpenID Connect allows for a <c>sub</c>: a longer identifier is
+    /// rejected. The value is compiled into callers that size a column from it, so it does not grow
+    /// before a major version (ADR-004 D9).
+    /// </remarks>
     public const int MaxLength = 200;
 
     /// <summary>

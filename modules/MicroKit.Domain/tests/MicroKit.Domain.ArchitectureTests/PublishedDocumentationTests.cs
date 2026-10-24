@@ -90,6 +90,18 @@ public sealed class PublishedDocumentationTests
         doc.ShouldContain("reads with");
     }
 
+    // ADR-004 D9: an OIDC sub may be longer than MaxLength; the documentation must not claim it fits.
+    [Theory]
+    [InlineData("T:MicroKit.Domain.ValueObjects.Common.Actor")]
+    [InlineData("F:MicroKit.Domain.ValueObjects.Common.Actor.MaxLength")]
+    public void Actor_StatesTheOidcSubjectLengthLimit(string member)
+    {
+        var doc = Member(member);
+
+        doc.ShouldContain("255");
+        doc.ShouldContain("ADR-004 D9");
+    }
+
     // #182, ADR-004 D3: a plain aggregate keeps the events and changes of a method that throws.
     [Theory]
     [InlineData("T:MicroKit.Domain.Aggregates.AggregateRoot`1")]
