@@ -25,6 +25,13 @@ namespace MicroKit.Domain.Events;
 /// identity, which is what makes downstream deduplication work.
 /// </para>
 /// <para>
+/// With default <c>System.Text.Json</c> options, a built-in <see cref="ValueObjects.Common.Actor"/>
+/// does not round-trip: the type-level converter treats JSON as untrusted and rejects the reserved
+/// prefix. Until the Messaging outbox can register
+/// <see cref="ValueObjects.Common.Json.TrustedActorJsonConverter"/> (#174), an event that must
+/// record a built-in actor carries the actor's value as a string.
+/// </para>
+/// <para>
 /// An event produced by a <see langword="with"/> expression is a different fact, so it receives a
 /// new <see cref="EventId"/>; only an explicit initializer, <c>with { EventId = original.EventId }</c>
 /// or <c>new X(…) { EventId = id }</c>, preserves one. Otherwise deduplication keyed on the

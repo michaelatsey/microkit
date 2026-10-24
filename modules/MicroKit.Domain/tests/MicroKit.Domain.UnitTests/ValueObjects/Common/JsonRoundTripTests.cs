@@ -3,6 +3,7 @@ using System.Text.Json.Serialization;
 using MicroKit.Domain.Events;
 using MicroKit.Domain.Exceptions;
 using MicroKit.Domain.ValueObjects.Common;
+using MicroKit.Domain.ValueObjects.Common.Json;
 using Shouldly;
 using Xunit;
 
@@ -23,8 +24,13 @@ public sealed class JsonRoundTripTests
         _ => throw new ArgumentOutOfRangeException(nameof(options)),
     };
 
-    private static T RoundTrip<T>(T value, string options) =>
-        JsonSerializer.Deserialize<T>(JsonSerializer.Serialize(value, For(options)), For(options))!;
+    private static JsonSerializerOptions Trusted(string options) =>
+        new(For(options)) { Converters = { new TrustedActorJsonConverter() } };
+
+    private static T RoundTrip<T>(T value, string options) => RoundTrip(value, For(options));
+
+    private static T RoundTrip<T>(T value, JsonSerializerOptions options) =>
+        JsonSerializer.Deserialize<T>(JsonSerializer.Serialize(value, options), options)!;
 
     [Theory]
     [InlineData("default", 10.50, "EUR")]
@@ -66,9 +72,47 @@ public sealed class JsonRoundTripTests
 
     [Theory]
     [MemberData(nameof(Options))]
-    public void Actor_BuiltIn_RoundTripsToTheBuiltIn(string options)
+    public void Actor_ReservedValue_ThroughTheDefaultConverter_ThrowsJsonExceptionWithAPath(string options)
     {
-        RoundTrip(Actor.System, options).ShouldBeSameAs(Actor.System);
+        var json = options == "web" ? """{"by":"$system"}""" : """{"By":"$system"}""";
+
+        var ex = Should.Throw<JsonException>(() => JsonSerializer.Deserialize<ActorHolder>(json, For(options)));
+
+        ex.Path.ShouldBe(options == "web" ? "$.by" : "$.By");
+        ex.InnerException.ShouldBeOfType<DomainException>();
+    }
+
+    [Theory]
+    [MemberData(nameof(Options))]
+    public void Actor_BuiltIn_DoesNotRoundTripWithTheDefaultConverter(string options)
+    {
+        Should.Throw<JsonException>(() => RoundTrip(Actor.System, options));
+    }
+
+    [Theory]
+    [MemberData(nameof(Options))]
+    public void Actor_BuiltIn_WithTheTrustedConverter_RoundTripsToTheSameInstance(string options)
+    {
+        JsonSerializer.Serialize(Actor.System, Trusted(options)).ShouldBe("\"$system\"");
+        RoundTrip(Actor.System, Trusted(options)).ShouldBeSameAs(Actor.System);
+        RoundTrip(Actor.Migration, Trusted(options)).ShouldBeSameAs(Actor.Migration);
+    }
+
+    [Theory]
+    [MemberData(nameof(Options))]
+    public void Actor_User_WithTheTrustedConverter_RoundTrips(string options)
+    {
+        var actor = new Actor("user-123");
+
+        RoundTrip(actor, Trusted(options)).ShouldBe(actor);
+    }
+
+    [Theory]
+    [MemberData(nameof(Options))]
+    public void Actor_UnknownReservedValue_WithTheTrustedConverter_FailsOnDeserialization(string options)
+    {
+        Should.Throw<JsonException>(() => JsonSerializer.Deserialize<Actor>("\"$root\"", Trusted(options)))
+            .InnerException.ShouldBeOfType<DomainException>();
     }
 
     [Theory]
@@ -83,22 +127,36 @@ public sealed class JsonRoundTripTests
 
     [Theory]
     [MemberData(nameof(Options))]
-    public void DomainEvent_CarryingMoneyAndActors_RoundTrips(string options)
+    public void DomainEvent_CarryingMoneyAUserActorAndABuiltInActorValue_RoundTrips(string options)
     {
+        // A built-in actor travels as its value until the outbox can register the trusted converter (#174).
         var placed = new OrderPlaced(
             new Money(99.99m, Currency.FromCode("EUR")),
-            Actor.System,
+            Actor.System.Value,
             new Actor("user-123"),
             new DateTimeOffset(2026, 10, 24, 9, 0, 0, TimeSpan.Zero));
 
         var read = RoundTrip(placed, options);
 
         read.Total.ShouldBe(placed.Total);
-        read.PlacedBy.ShouldBeSameAs(Actor.System);
+        Actor.Restore(read.PlacedBy).ShouldBeSameAs(Actor.System);
         read.Customer.ShouldBe(placed.Customer);
         read.OccurredAt.ShouldBe(placed.OccurredAt);
         read.EventId.ShouldBe(placed.EventId);
         read.ShouldBe(placed);
+    }
+
+    [Theory]
+    [MemberData(nameof(Options))]
+    public void DomainEvent_CarryingABuiltInActor_RoundTripsOnlyWithTheTrustedConverter(string options)
+    {
+        var archived = new OrderArchived(Actor.System, new DateTimeOffset(2026, 10, 24, 9, 0, 0, TimeSpan.Zero));
+
+        Should.Throw<JsonException>(() => RoundTrip(archived, options));
+
+        var read = RoundTrip(archived, Trusted(options));
+        read.ArchivedBy.ShouldBeSameAs(Actor.System);
+        read.ShouldBe(archived);
     }
 
     [Theory]
@@ -163,12 +221,16 @@ public sealed class JsonRoundTripTests
             [Currency.FromCode("EUR")] = new(10.50m, Currency.FromCode("EUR")),
             [Currency.FromCode("XOF")] = new(1500m, Currency.FromCode("XOF")),
         };
-        var byActor = new Dictionary<Actor, int> { [Actor.System] = 1, [new Actor("user-1")] = 2 };
+        var byActor = new Dictionary<Actor, int> { [new Actor("user-1")] = 1, [new Actor("user-2")] = 2 };
+        var byTrustedActor = new Dictionary<Actor, int> { [Actor.System] = 1, [new Actor("user-1")] = 2 };
 
         RoundTrip(totals, options).ShouldBe(totals, ignoreOrder: true);
-        var actors = RoundTrip(byActor, options);
-        actors[Actor.System].ShouldBe(1);
-        actors[new Actor("user-1")].ShouldBe(2);
+        RoundTrip(byActor, options).ShouldBe(byActor, ignoreOrder: true);
+        Should.Throw<JsonException>(() => RoundTrip(byTrustedActor, options));
+
+        var trusted = RoundTrip(byTrustedActor, Trusted(options));
+        trusted[Actor.System].ShouldBe(1);
+        trusted[new Actor("user-1")].ShouldBe(2);
     }
 
     [Fact]
@@ -198,7 +260,11 @@ public sealed class JsonRoundTripTests
 
     public sealed record Holder(Money Total);
 
-    public sealed record OrderPlaced(Money Total, Actor PlacedBy, Actor Customer, DateTimeOffset OccurredAt)
+    public sealed record ActorHolder(Actor By);
+
+    public sealed record OrderPlaced(Money Total, string PlacedBy, Actor Customer, DateTimeOffset OccurredAt)
         : DomainEvent(OccurredAt);
+
+    public sealed record OrderArchived(Actor ArchivedBy, DateTimeOffset OccurredAt) : DomainEvent(OccurredAt);
 }
 #pragma warning restore IL2026

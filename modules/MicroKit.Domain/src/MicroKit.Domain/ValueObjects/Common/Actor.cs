@@ -25,11 +25,17 @@ namespace MicroKit.Domain.ValueObjects.Common;
 /// user whose identifier happens to be <c>system</c>.
 /// </para>
 /// <para>
-/// <c>System.Text.Json</c> writes an actor as its identifier, a JSON string, and reads it back
-/// through <see cref="Restore(string)"/>, so a stored built-in actor round-trips. JSON carrying an
-/// actor must therefore come from trusted storage the application wrote, such as an outbox
-/// payload, never from a request body: a payload naming <c>$system</c> would be read as the
-/// built-in actor.
+/// <c>System.Text.Json</c> writes an actor as its identifier, a JSON string. With default options it
+/// reads it back through the public constructor: JSON is treated as untrusted, so a value with the
+/// reserved prefix fails as a <see cref="System.Text.Json.JsonException"/> and a built-in actor does
+/// <b>not</b> round-trip. Storage the application wrote itself (an outbox, an event store, a cache)
+/// opts into rehydrating built-in actors by registering
+/// <see cref="Json.TrustedActorJsonConverter"/> in <c>JsonSerializerOptions.Converters</c>.
+/// </para>
+/// <para>
+/// Until the Messaging outbox can register that converter (#174), an event that must carry a
+/// built-in actor should carry the actor's <see cref="Value"/> as a string, and rebuild the actor
+/// with <see cref="Restore(string)"/> where it is consumed.
 /// </para>
 /// </remarks>
 [JsonConverter(typeof(ActorJsonConverter))]
@@ -108,9 +114,10 @@ public sealed record Actor : IValueObject
     /// constructor, which rejects the reserved prefix.
     /// </para>
     /// <para>
-    /// The <c>System.Text.Json</c> converter of <see cref="Actor"/> calls this method, so the same
-    /// rule applies to JSON: deserialize an actor only from trusted storage, never from a request
-    /// body.
+    /// The default <c>System.Text.Json</c> converter of <see cref="Actor"/> does not call this
+    /// method, so a built-in actor does not round-trip with default options.
+    /// <see cref="Json.TrustedActorJsonConverter"/> calls it, under the same rule: register that
+    /// converter only for storage the application wrote itself, never for a request body.
     /// </para>
     /// </remarks>
     public static Actor Restore(string value) => value switch

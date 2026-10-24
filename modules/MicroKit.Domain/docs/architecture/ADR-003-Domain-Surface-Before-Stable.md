@@ -212,15 +212,29 @@ with `ArgumentException` (#164).
 **JSON (#167).** `MicroKit.Domain` makes its own value objects round-trip with default
 `System.Text.Json` options, through `[JsonConverter]` attributes and internal converters:
 `Currency` as its code, read back through `Currency.FromCode`; `Actor` as its value, read back
-through `Actor.Restore`; `Money` as `{ "Amount": …, "Currency": "EUR" }`, with names following
-`PropertyNamingPolicy` and `IsZero` not serialized. Without them, a domain event carrying a `Money`
-or a built-in `Actor` could be written to the outbox and never read back. `System.Text.Json` is
-part of the shared framework, so no package is added. JSON carrying an `Actor` must come from
-trusted storage, never from a request body, since it can name a built-in actor.
+through the public constructor; `Money` as `{ "Amount": …, "Currency": "EUR" }`, with names
+following `PropertyNamingPolicy` and `IsZero` not serialized. Without them, a domain event carrying
+a `Money` could be written to the outbox and never read back. `System.Text.Json` is part of the
+shared framework, so no package is added.
+
+**JSON and the built-in actors (#170, superseding the `Actor` part of #167).** The default path is
+the safe one. JSON reaching `Actor` through its type-level converter is untrusted, so a value with
+the reserved `$` prefix fails as a `JsonException` carrying the JSON path, and a built-in actor does
+not round-trip with default options. Rehydrating a built-in actor is an explicit opt-in for
+storage the application wrote itself: the public `TrustedActorJsonConverter` reads through
+`Actor.Restore`, and is registered only in `JsonSerializerOptions.Converters`, which takes
+precedence over a type-level `[JsonConverter]`. Until the Messaging outbox can register it (#174),
+an event that must record a built-in actor carries the actor's value as a string.
+
+#167 first read every `Actor` through `Actor.Restore`. That made a request body bound by ASP.NET
+Core able to name `$system` and be recorded as the application itself, with only an XML remark
+standing in the way.
 
 **Rejected alternatives.**
 - *A separate `MicroKit.Domain.SystemTextJson` package.* A new publishable id for three
   converters (#167).
+- *Keep `Actor.Restore` behind the type-level converter, guarded by documentation.* Every JSON
+  payload, a request body included, could then name a built-in actor (#170).
 - *Register the converters in the Messaging serializer.* A cross-module edge for a Domain defect
   (#167).
 - *Derive the minor unit from `RegionInfo` or `NumberFormatInfo`.* The result depends on the

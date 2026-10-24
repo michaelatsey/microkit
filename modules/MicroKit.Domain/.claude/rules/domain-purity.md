@@ -45,7 +45,9 @@ using System.Text.Json.Serialization; // [JsonConverter] sur Money, Currency, Ac
 > doivent faire l'aller-retour JSON avec les options par défaut : un événement de domaine qui porte
 > un `Money` ou un `Actor` passe par l'outbox. `System.Text.Json` fait partie du framework partagé,
 > donc aucun package n'est ajouté. Seuls des `[JsonConverter]` et des convertisseurs `internal`
-> sont permis — aucune autre API de sérialisation, aucun type public de sérialisation.
+> sont permis, plus un seul type public : `TrustedActorJsonConverter` (#170), l'opt-in explicite
+> qui réhydrate les acteurs intégrés depuis un stockage de confiance. Aucune autre API de
+> sérialisation.
 
 ## Triggers de violation (code review bloquant)
 ```
