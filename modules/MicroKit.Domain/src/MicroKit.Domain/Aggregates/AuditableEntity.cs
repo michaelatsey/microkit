@@ -117,23 +117,34 @@ public abstract class AuditableEntity<TId> : Entity<TId>, IAuditableEntity
     /// Thrown when <paramref name="updatedBy"/> is <see langword="null"/>.
     /// </exception>
     /// <exception cref="ArgumentOutOfRangeException">
-    /// Thrown when <paramref name="updatedAt"/> is <c>default(DateTimeOffset)</c> or precedes
-    /// <see cref="CreatedAt"/>. An instant equal to it is accepted.
+    /// Thrown when <paramref name="updatedAt"/> is <c>default(DateTimeOffset)</c>, or precedes the
+    /// current <see cref="UpdatedAt"/>, or <see cref="CreatedAt"/> when there was no update yet. An
+    /// instant equal to it is accepted.
     /// </exception>
     /// <remarks>
+    /// <para>
     /// Call this at the end of every state-mutating method. Routing both fields through a
     /// single member is what prevents them from drifting apart: with independent setters it
     /// is possible to update the timestamp and forget the actor, producing an audit trail
     /// that records when something changed but not who changed it.
+    /// </para>
+    /// <para>
+    /// <see cref="UpdatedAt"/> never decreases. An instant earlier than the current one is rejected
+    /// rather than clamped: clamping would record the actor against an instant that is not when the
+    /// change happened, and would hide a skewed clock instead of surfacing it. The accepted cost: a
+    /// host whose nodes' clocks disagree by more than its own update cadence gets this exception at
+    /// the faulty write, not a silent drift.
+    /// </para>
     /// </remarks>
     protected void Touch(DateTimeOffset updatedAt, Actor updatedBy)
     {
         ArgumentNullException.ThrowIfNull(updatedBy);
 
         var instant = UtcInstant.Normalize(updatedAt, nameof(updatedAt));
-        if (instant < CreatedAt)
+        if (instant < (UpdatedAt ?? CreatedAt))
             throw new ArgumentOutOfRangeException(
-                nameof(updatedAt), updatedAt, "A modification cannot precede the creation instant.");
+                nameof(updatedAt), updatedAt,
+                "A modification cannot precede the previous modification, or the creation instant when there is none.");
 
         UpdatedAt = instant;
         UpdatedBy = updatedBy;

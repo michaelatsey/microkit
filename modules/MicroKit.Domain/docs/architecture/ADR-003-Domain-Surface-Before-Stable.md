@@ -98,7 +98,11 @@ sharing one identifier space is a modelling error this rule does not try to repa
 - Every instant entering the domain (`CreatedAt`, `UpdatedAt` through `Touch`, and `OccurredAt`
   on construction and through `with`) is normalised to offset zero with `ToUniversalTime()`, and
   `default(DateTimeOffset)` is rejected with `ArgumentOutOfRangeException`. `Touch` rejects an
-  instant earlier than `CreatedAt`; an equal one is accepted (#165). Values EF Core materialises
+  instant earlier than `CreatedAt`; an equal one is accepted (#165).
+- `UpdatedAt` never decreases: `Touch` rejects an instant earlier than the current `UpdatedAt`, or
+  than `CreatedAt` when the entity was never updated, with `ArgumentOutOfRangeException`; an equal
+  instant is accepted (#171). The accepted cost: a host whose nodes' clocks disagree beyond its
+  own update cadence gets an exception at the faulty write, not a silent drift. Values EF Core materialises
   through the backing fields bypass the rule; database column mapping is outside this decision.
 
 **Reasoning.**
@@ -124,6 +128,9 @@ sharing one identifier space is a modelling error this rule does not try to repa
 - *Stamp events at dispatch.* The instant would record dispatch, not the business fact.
 - *Reject a non-zero offset.* Turns a correct `DateTimeOffset.Now` into an error, with no gain
   over normalising (#165).
+- *Clamp a backward `Touch` to the current `UpdatedAt`.* It would record an actor against an
+  instant that is not when the change happened, and hide the skewed clock instead of surfacing
+  it (#171).
 
 ### D5 — The creator is an `Actor`, and audit fields have one point of passage
 

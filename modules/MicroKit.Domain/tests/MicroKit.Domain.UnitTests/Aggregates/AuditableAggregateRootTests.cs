@@ -138,6 +138,49 @@ public sealed class AuditableAggregateRootTests
     }
 
     [Fact]
+    public void Touch_EarlierThanThePreviousUpdate_ThrowsAndLeavesFieldsUnchanged()
+    {
+        var sut = new TestAuditableAggregateRoot(NewId(), CreatedAt, Creator);
+        var at1005 = new DateTimeOffset(2026, 10, 24, 10, 5, 0, TimeSpan.Zero);
+        var updater = new Actor("user-456");
+        sut.Rename(at1005, updater);
+
+        var ex = Should.Throw<ArgumentOutOfRangeException>(
+            () => sut.Rename(new DateTimeOffset(2026, 10, 24, 10, 1, 0, TimeSpan.Zero), Creator));
+
+        ex.ParamName.ShouldBe("updatedAt");
+        sut.UpdatedAt.ShouldBe(at1005);
+        sut.UpdatedBy.ShouldBe(updater);
+    }
+
+    [Fact]
+    public void Touch_SameInstantTwice_IsAccepted()
+    {
+        var sut = new TestAuditableAggregateRoot(NewId(), CreatedAt, Creator);
+        var at1005 = new DateTimeOffset(2026, 10, 24, 10, 5, 0, TimeSpan.Zero);
+
+        sut.Rename(at1005, Creator);
+        sut.Rename(at1005, Actor.System);
+
+        sut.UpdatedAt.ShouldBe(at1005);
+        sut.UpdatedBy.ShouldBe(Actor.System);
+    }
+
+    [Fact]
+    public void Touch_EqualToThePreviousUpdateInAnotherOffset_IsAccepted()
+    {
+        var sut = new TestAuditableAggregateRoot(NewId(), CreatedAt, Creator);
+        var at1005 = new DateTimeOffset(2026, 10, 24, 10, 5, 0, TimeSpan.Zero);
+        sut.Rename(at1005, Creator);
+
+        sut.Rename(at1005.ToOffset(TimeSpan.FromHours(2)), Actor.System);
+
+        sut.UpdatedAt.ShouldBe(at1005);
+        sut.UpdatedAt!.Value.Offset.ShouldBe(TimeSpan.Zero);
+        sut.UpdatedBy.ShouldBe(Actor.System);
+    }
+
+    [Fact]
     public void Touch_EqualToCreatedAt_IsAccepted()
     {
         var sut = new TestAuditableAggregateRoot(NewId(), CreatedAt, Creator);

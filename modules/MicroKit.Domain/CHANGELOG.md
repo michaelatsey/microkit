@@ -35,7 +35,8 @@ Settles the public surface before `2.0.0` (#160). Every item under **Breaking** 
   default and concrete events forward it positionally (D4; #115).
 - Instants entering the domain (`CreatedAt`, `Touch`'s `updatedAt`, `OccurredAt` including
   through `with`) are normalised to offset zero; `default(DateTimeOffset)` throws
-  `ArgumentOutOfRangeException`, and so does a `Touch` earlier than `CreatedAt` (#165).
+  `ArgumentOutOfRangeException`, and so does a `Touch` earlier than `CreatedAt` (#165) or than
+  the current `UpdatedAt`: `UpdatedAt` never decreases (#171).
 - `DomainEvent.EventId` defaults to `Guid.CreateVersion7()` instead of `Guid.NewGuid()` (D6; #114).
 - `GuidId.New()` returns a UUID version 7 (D6).
 - A `with` expression on a `DomainEvent` assigns a new `EventId`; only an explicit
