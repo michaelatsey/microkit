@@ -99,6 +99,10 @@ public abstract class AuditableAggregateRoot<TId> : AggregateRoot<TId>, IAuditab
     private DateTimeOffset? _updatedAt;
     private Actor? _updatedBy;
 
+    // The number of modifications recorded, so AuditRules.Mutate can tell a nested one apart from an
+    // earlier one carrying the same stamp. Not part of the audit trail; not mapped.
+    private int _modifications;
+
     /// <inheritdoc />
     public DateTimeOffset? UpdatedAt { get => _updatedAt; private set => _updatedAt = value; }
 
@@ -170,5 +174,5 @@ public abstract class AuditableAggregateRoot<TId> : AggregateRoot<TId>, IAuditab
     /// </code>
     /// </example>
     protected void Mutate(DateTimeOffset at, Actor by, Action mutation) =>
-        AuditRules.Mutate(at, by, mutation, CreatedAt, ref _updatedAt, ref _updatedBy, journal: this);
+        AuditRules.Mutate(at, by, mutation, CreatedAt, ref _updatedAt, ref _updatedBy, ref _modifications, journal: this);
 }

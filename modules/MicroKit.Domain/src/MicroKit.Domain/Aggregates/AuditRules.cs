@@ -47,6 +47,10 @@ internal static class AuditRules
     /// <param name="createdAt">The creation instant of the audited object.</param>
     /// <param name="updatedAt">The audited object's modification-instant field.</param>
     /// <param name="updatedBy">The audited object's modifying-actor field.</param>
+    /// <param name="modifications">
+    /// The audited object's count of recorded modifications, which tells a nested modification
+    /// apart from an earlier one even when both carry the same instant and the same actor.
+    /// </param>
     /// <param name="journal">The aggregate's events, or <see langword="null"/> for an entity.</param>
     /// <remarks>
     /// Validates before anything changes; runs <paramref name="mutation"/>; if it throws, restores
@@ -62,11 +66,12 @@ internal static class AuditRules
         DateTimeOffset createdAt,
         ref DateTimeOffset? updatedAt,
         ref Actor? updatedBy,
+        ref int modifications,
         IEventJournal? journal)
     {
         var instant = Modification(at, by, mutation, createdAt, updatedAt);
 
-        var (previousAt, previousBy) = (updatedAt, updatedBy);
+        var (previousAt, previousBy, previousModifications) = (updatedAt, updatedBy, modifications);
         var raisedEventCount = journal?.RaisedEventCount ?? 0;
         try
         {
@@ -74,16 +79,17 @@ internal static class AuditRules
         }
         catch
         {
-            (updatedAt, updatedBy) = (previousAt, previousBy);
+            (updatedAt, updatedBy, modifications) = (previousAt, previousBy, previousModifications);
             journal?.RemoveEventsRaisedSince(raisedEventCount);
             throw;
         }
 
-        var nestedRecorded = updatedAt != previousAt || !ReferenceEquals(updatedBy, previousBy);
+        var nestedRecorded = modifications != previousModifications;
         if (Supersedes(instant, updatedAt, nestedRecorded))
         {
             updatedAt = instant;
             updatedBy = by;
+            modifications++;
         }
     }
 

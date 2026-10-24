@@ -301,6 +301,20 @@ public sealed class AuditRulesTests
 
     [Theory]
     [MemberData(nameof(Bases))]
+    public void Mutate_NestedModificationRepeatingTheCurrentStamp_KeepsTheNestedActor(string kind)
+    {
+        var subject = AuditedSubject.Create(kind, CreatedAt, Creator);
+        subject.Run(At, Actor.System, () => { });
+
+        // The nested call writes the stamp already there: same instant, same singleton actor.
+        subject.Run(At, Creator, () => subject.Run(At, Actor.System, () => { }));
+
+        subject.UpdatedAt.ShouldBe(At);
+        subject.UpdatedBy.ShouldBe(Actor.System);
+    }
+
+    [Theory]
+    [MemberData(nameof(Bases))]
     public void Mutate_NestedEarlierModification_IsSupersededByTheOuterOne(string kind)
     {
         var subject = AuditedSubject.Create(kind, CreatedAt, Creator);
