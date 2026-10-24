@@ -5,7 +5,7 @@ using Xunit;
 
 namespace MicroKit.Domain.UnitTests.ValueObjects.Common;
 
-public class MoneyTests
+public sealed class MoneyTests
 {
     private static readonly Currency Usd = Currency.FromCode("USD");
     private static readonly Currency Eur = Currency.FromCode("EUR");

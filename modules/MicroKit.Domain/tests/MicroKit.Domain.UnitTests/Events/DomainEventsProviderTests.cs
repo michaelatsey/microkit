@@ -6,7 +6,7 @@ using Xunit;
 
 namespace MicroKit.Domain.UnitTests.Events;
 
-public class DomainEventsProviderTests
+public sealed class DomainEventsProviderTests
 {
     private static readonly DateTimeOffset OccurredAt = new(2026, 10, 24, 9, 0, 0, TimeSpan.Zero);
 

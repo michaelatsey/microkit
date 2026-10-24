@@ -5,7 +5,7 @@ using Xunit;
 
 namespace MicroKit.Domain.UnitTests.ValueObjects.Common;
 
-public class DateRangeTests
+public sealed class DateRangeTests
 {
     private readonly DateTimeOffset _baseDate = new(2024, 1, 1, 10, 0, 0, TimeSpan.Zero);
 

@@ -5,7 +5,7 @@ using Xunit;
 
 namespace MicroKit.Domain.UnitTests.ValueObjects.Common;
 
-public class PercentageTests
+public sealed class PercentageTests
 {
     [Theory]
     [InlineData(0)]
