@@ -96,7 +96,11 @@ public sealed record Actor : IValueObject
     /// Restores an actor from an identifier read back from storage or a message, built-in actors
     /// included.
     /// </summary>
-    /// <param name="value">The stored identifier, as <see cref="Value"/> returned it.</param>
+    /// <param name="value">
+    /// The stored identifier, as <see cref="Value"/> returned it. Leading and trailing white space is
+    /// removed first, as the constructor removes it, so a value read back from a padded column restores
+    /// the same actor.
+    /// </param>
     /// <returns>
     /// The built-in instance when <paramref name="value"/> is the value of <see cref="System"/>,
     /// <see cref="Anonymous"/> or <see cref="Migration"/>; otherwise a new actor built by the public
@@ -126,12 +130,12 @@ public sealed record Actor : IValueObject
     /// converter only for storage the application wrote itself, never for a request body.
     /// </para>
     /// </remarks>
-    public static Actor Restore(string value) => value switch
+    public static Actor Restore(string value) => (value ?? string.Empty).Trim() switch
     {
         "$system" => System,
         "$anonymous" => Anonymous,
         "$migration" => Migration,
-        _ => new Actor(value),
+        _ => new Actor(value ?? string.Empty),
     };
 
     /// <summary>

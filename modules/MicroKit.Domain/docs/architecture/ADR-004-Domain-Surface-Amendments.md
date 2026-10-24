@@ -99,6 +99,28 @@ must be discarded, not saved.
 - *Snapshot and restore the whole aggregate.* Needs a copy of arbitrary derived state, which the
   base class cannot make.
 
+### Decisions taken during the review of this branch
+
+The rule applied: keep the published surface stable, preferring an additive change or a documented
+limit over a break; break only to remove an incorrect or unsafe behaviour; follow ADR-003, this ADR
+and the official .NET and EF Core guidance.
+
+#### D4 — `Actor.Restore` trims before matching the built-in actors
+
+**Decision.** `Actor.Restore` removes leading and trailing white space before it compares the value
+with the built-in identifiers, as the public constructor does before validating. `" $system "`
+restores `Actor.System`; `" alice "` restores `alice`, as before.
+
+**Reasoning.** The constructor trimmed a user value, so a padded user value already restored, while
+a padded built-in value fell through to the constructor and was rejected for its `$` prefix. A
+fixed-width column (`char`, `nchar`) pads what it stores, so a value converter reading one back
+failed on every built-in actor. The change is additive: it only accepts inputs that threw.
+
+**Rejected alternatives.**
+- *Document that the value must be passed unpadded.* Leaves the two arms of the same method
+  normalising differently.
+- *Trim in the value converter.* Every consumer would have to know it.
+
 ## Consequences
 
 - A built-in actor serializes with any options: `Actor.System` is written `"$system"`.

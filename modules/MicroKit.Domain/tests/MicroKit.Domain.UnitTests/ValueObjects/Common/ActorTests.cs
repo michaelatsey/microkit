@@ -77,6 +77,28 @@ public sealed class ActorTests
         Actor.Restore(Actor.Migration.Value).ShouldBeSameAs(Actor.Migration);
     }
 
+    [Theory]
+    [InlineData("$system   ")]
+    [InlineData("  $system")]
+    [InlineData("\t$system\r\n")]
+    public void Restore_PaddedBuiltInValue_ReturnsTheBuiltIn(string stored)
+    {
+        // A fixed-width column pads the stored value; the constructor trims a user value the same way.
+        Actor.Restore(stored).ShouldBeSameAs(Actor.System);
+    }
+
+    [Fact]
+    public void Restore_Null_ThrowsDomainException()
+    {
+        Should.Throw<DomainException>(() => Actor.Restore(null!));
+    }
+
+    [Fact]
+    public void Restore_PaddedUserValue_ReturnsTheTrimmedActor()
+    {
+        Actor.Restore("alice   ").ShouldBe(new Actor("alice"));
+    }
+
     [Fact]
     public void Restore_UserValue_RoundTrips()
     {
