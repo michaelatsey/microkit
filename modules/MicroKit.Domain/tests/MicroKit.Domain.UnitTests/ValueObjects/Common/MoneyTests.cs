@@ -7,212 +7,237 @@ namespace MicroKit.Domain.UnitTests.ValueObjects.Common;
 
 public class MoneyTests
 {
+    private static readonly Currency Usd = Currency.FromCode("USD");
+    private static readonly Currency Eur = Currency.FromCode("EUR");
+
+    private static Money M(decimal amount, string code) => new(amount, Currency.FromCode(code));
+
     [Theory]
     [InlineData(100.50, "USD")]
     [InlineData(0, "EUR")]
     [InlineData(-50, "GBP")]
+    [InlineData(1500, "XOF")]
+    [InlineData(1.234, "TND")]
     public void Constructor_ValidParameters_ShouldCreateInstance(decimal amount, string currency)
     {
         // Act
-        var money = new Money(amount, currency);
+        var money = M(amount, currency);
 
         // Assert
         money.Amount.ShouldBe(amount);
-        money.Currency.ShouldBe(currency.ToUpperInvariant());
+        money.Currency.Code.ShouldBe(currency);
     }
 
     [Theory]
-    [InlineData("")]
-    [InlineData("  ")]
-    [InlineData(null)]
-    public void Constructor_InvalidCurrency_ShouldThrowDomainException(string? currency)
+    [InlineData(0.105, "EUR")]
+    [InlineData(1.5, "JPY")]
+    [InlineData(1.5, "XOF")]
+    [InlineData(1.2345, "KWD")]
+    [InlineData(-0.001, "USD")]
+    public void Constructor_ExcessScale_ShouldThrowDomainException(decimal amount, string currency)
     {
-        // Act & Assert
-        var ex = Should.Throw<DomainException>(() => new Money(100, currency!));
-        ex.Message.ShouldBe("Currency code cannot be null or empty.");
+        Should.Throw<DomainException>(() => M(amount, currency));
     }
 
-    [Theory]
-    [InlineData("US")]
-    [InlineData("USDA")]
-    [InlineData("12")]
-    [InlineData("U1D")]
-    public void Constructor_InvalidCurrencyFormat_ShouldThrowDomainException(string currency)
+    [Fact]
+    public void Constructor_TrailingZerosWithinTheMinorUnit_AreAccepted()
     {
-        // Act & Assert
-        Should.Throw<DomainException>(() => new Money(100, currency));
+        M(1.500m, "EUR").ShouldBe(M(1.5m, "EUR"));
     }
 
-    [Theory]
-    [InlineData("usd", "USD")]
-    [InlineData("eur", "EUR")]
-    [InlineData(" GBP ", "GBP")]
-    public void Constructor_CurrencyNormalization_ShouldNormalizeCurrency(string input, string expected)
+    [Fact]
+    public void Constructor_DefaultCurrency_ShouldThrowArgumentException()
     {
-        // Act
-        var money = new Money(100, input);
-
-        // Assert
-        money.Currency.ShouldBe(expected);
+        Should.Throw<ArgumentException>(() => new Money(1, default));
     }
 
     [Fact]
     public void IsZero_WhenAmountIsZero_ShouldReturnTrue()
     {
-        // Arrange
-        var money = new Money(0, "USD");
-
-        // Act & Assert
-        money.IsZero.ShouldBeTrue();
+        M(0, "USD").IsZero.ShouldBeTrue();
     }
 
     [Fact]
     public void IsZero_WhenAmountIsNotZero_ShouldReturnFalse()
     {
-        // Arrange
-        var money = new Money(100, "USD");
-
-        // Act & Assert
-        money.IsZero.ShouldBeFalse();
+        M(100, "USD").IsZero.ShouldBeFalse();
     }
 
     [Fact]
     public void Zero_ShouldReturnZeroAmountWithSpecifiedCurrency()
     {
         // Act
-        var money = Money.Zero("EUR");
+        var money = Money.Zero(Eur);
 
         // Assert
         money.Amount.ShouldBe(0);
-        money.Currency.ShouldBe("EUR");
+        money.Currency.ShouldBe(Eur);
         money.IsZero.ShouldBeTrue();
     }
 
     [Fact]
     public void Add_SameCurrency_ShouldReturnSum()
     {
-        // Arrange
-        var money1 = new Money(100, "USD");
-        var money2 = new Money(50, "USD");
-
         // Act
-        var result = money1.Add(money2);
+        var result = M(100, "USD").Add(M(50, "USD"));
 
         // Assert
         result.Amount.ShouldBe(150);
-        result.Currency.ShouldBe("USD");
+        result.Currency.ShouldBe(Usd);
     }
 
     [Fact]
     public void Add_DifferentCurrency_ShouldThrowDomainException()
     {
-        // Arrange
-        var money1 = new Money(100, "USD");
-        var money2 = new Money(50, "EUR");
-
-        // Act & Assert
-        var ex = Should.Throw<DomainException>(() => money1.Add(money2));
+        var ex = Should.Throw<DomainException>(() => M(100, "USD").Add(M(50, "EUR")));
         ex.Message.ShouldBe("Cannot perform operation on different currencies: USD and EUR.");
     }
 
     [Fact]
     public void Add_CaseInsensitiveCurrency_ShouldWork()
     {
-        // Arrange
-        var money1 = new Money(100, "USD");
-        var money2 = new Money(50, "usd");
+        var result = M(100, "USD").Add(M(50, "usd"));
 
-        // Act
-        var result = money1.Add(money2);
-
-        // Assert
         result.Amount.ShouldBe(150);
-        result.Currency.ShouldBe("USD");
+        result.Currency.ShouldBe(Usd);
     }
 
     [Fact]
     public void Subtract_SameCurrency_ShouldReturnDifference()
     {
-        // Arrange
-        var money1 = new Money(100, "USD");
-        var money2 = new Money(30, "USD");
+        var result = M(100, "USD").Subtract(M(30, "USD"));
 
-        // Act
-        var result = money1.Subtract(money2);
-
-        // Assert
         result.Amount.ShouldBe(70);
-        result.Currency.ShouldBe("USD");
+        result.Currency.ShouldBe(Usd);
     }
 
     [Fact]
     public void Multiply_ShouldReturnProduct()
     {
-        // Arrange
-        var money = new Money(100, "USD");
+        var result = M(100, "USD").Multiply(1.5m, MidpointRounding.ToEven);
 
-        // Act
-        var result = money.Multiply(1.5m);
-
-        // Assert
         result.Amount.ShouldBe(150);
-        result.Currency.ShouldBe("USD");
+        result.Currency.ShouldBe(Usd);
+    }
+
+    [Theory]
+    [InlineData(MidpointRounding.ToEven, 0.12)]
+    [InlineData(MidpointRounding.AwayFromZero, 0.13)]
+    [InlineData(MidpointRounding.ToZero, 0.12)]
+    public void Multiply_RoundsToTheMinorUnitWithTheStatedMode(MidpointRounding rounding, decimal expected)
+    {
+        // 0.25 * 0.5 = 0.125, halfway between two cents
+        M(0.25m, "EUR").Multiply(0.5m, rounding).Amount.ShouldBe(expected);
+    }
+
+    [Fact]
+    public void Multiply_ZeroMinorUnit_RoundsToWholeUnits()
+    {
+        M(1001, "XOF").Multiply(0.5m, MidpointRounding.AwayFromZero).Amount.ShouldBe(501);
+    }
+
+    [Fact]
+    public void Allocate_EqualRatios_GivesTheRemainderToTheFirstShares()
+    {
+        var shares = M(0.10m, "EUR").Allocate(1, 1, 1);
+
+        shares.Select(s => s.Amount).ShouldBe([0.04m, 0.03m, 0.03m]);
+    }
+
+    [Fact]
+    public void Allocate_SumsExactlyToTheOriginal()
+    {
+        var original = M(100.00m, "EUR");
+
+        var shares = original.Allocate(3, 7, 11);
+
+        shares.Aggregate((a, b) => a + b).ShouldBe(original);
+        shares.ShouldAllBe(s => s.Currency == original.Currency);
+    }
+
+    [Fact]
+    public void Allocate_UnequalRatios_SplitsProportionally()
+    {
+        M(5, "XOF").Allocate(3, 7).Select(s => s.Amount).ShouldBe([2m, 3m]);
+    }
+
+    [Fact]
+    public void Allocate_ZeroRatio_NeverReceivesARemainder()
+    {
+        M(0.03m, "EUR").Allocate(0, 1, 1).Select(s => s.Amount).ShouldBe([0m, 0.02m, 0.01m]);
+    }
+
+    [Fact]
+    public void Allocate_NegativeAmount_SplitsSymmetrically()
+    {
+        M(-0.10m, "EUR").Allocate(1, 1, 1).Select(s => s.Amount).ShouldBe([-0.04m, -0.03m, -0.03m]);
+    }
+
+    [Fact]
+    public void Allocate_ThreeDecimalCurrency_UsesItsMinorUnit()
+    {
+        M(1.000m, "TND").Allocate(1, 1, 1).Select(s => s.Amount).ShouldBe([0.334m, 0.333m, 0.333m]);
+    }
+
+    [Theory]
+    [InlineData(new int[0])]
+    [InlineData(new[] { 1, -1 })]
+    [InlineData(new[] { 0, 0 })]
+    public void Allocate_InvalidRatios_ThrowsArgumentException(int[] ratios)
+    {
+        Should.Throw<ArgumentException>(() => M(1, "EUR").Allocate(ratios));
+    }
+
+    [Fact]
+    public void Allocate_NullRatios_ThrowsArgumentNullException()
+    {
+        Should.Throw<ArgumentNullException>(() => M(1, "EUR").Allocate(null!));
     }
 
     [Fact]
     public void OperatorAdd_ShouldWorkLikeAddMethod()
     {
-        // Arrange
-        var money1 = new Money(100, "USD");
-        var money2 = new Money(50, "USD");
+        var money1 = M(100, "USD");
+        var money2 = M(50, "USD");
 
-        // Act
-        var result = money1 + money2;
-
-        // Assert
-        result.ShouldBe(money1.Add(money2));
+        (money1 + money2).ShouldBe(money1.Add(money2));
     }
 
     [Fact]
     public void OperatorSubtract_ShouldWorkLikeSubtractMethod()
     {
-        // Arrange
-        var money1 = new Money(100, "USD");
-        var money2 = new Money(30, "USD");
+        var money1 = M(100, "USD");
+        var money2 = M(30, "USD");
 
-        // Act
-        var result = money1 - money2;
+        (money1 - money2).ShouldBe(money1.Subtract(money2));
+    }
 
-        // Assert
-        result.ShouldBe(money1.Subtract(money2));
+    [Theory]
+    [InlineData(123.45, "USD", "123.45 USD")]
+    [InlineData(1500, "XOF", "1500 XOF")]
+    [InlineData(1500, "JPY", "1500 JPY")]
+    [InlineData(1.5, "TND", "1.500 TND")]
+    [InlineData(2, "KWD", "2.000 KWD")]
+    [InlineData(-0.5, "EUR", "-0.50 EUR")]
+    public void ToString_UsesTheInvariantCultureAndTheMinorUnit(decimal amount, string currency, string expected)
+    {
+        M(amount, currency).ToString().ShouldBe(expected);
     }
 
     [Fact]
-    public void OperatorMultiply_ShouldWorkLikeMultiplyMethod()
+    public void ToString_IgnoresTheCurrentCulture()
     {
-        // Arrange
-        var money = new Money(100, "USD");
+        var previous = Thread.CurrentThread.CurrentCulture;
+        try
+        {
+            Thread.CurrentThread.CurrentCulture = new System.Globalization.CultureInfo("fr-FR");
 
-        // Act
-        var result1 = money * 1.5m;
-        var result2 = 1.5m * money;
-
-        // Assert
-        result1.ShouldBe(money.Multiply(1.5m));
-        result2.ShouldBe(money.Multiply(1.5m));
-    }
-
-    [Fact]
-    public void ToString_ShouldReturnFormattedString()
-    {
-        // Arrange
-        var money = new Money(123.45m, "USD");
-
-        // Act
-        var result = money.ToString();
-
-        // Assert
-        result.ShouldBe("123.45 USD");
+            M(1234.5m, "EUR").ToString().ShouldBe("1234.50 EUR");
+        }
+        finally
+        {
+            Thread.CurrentThread.CurrentCulture = previous;
+        }
     }
 
     [Theory]
@@ -223,8 +248,8 @@ public class MoneyTests
     public void Equality_ShouldWorkCorrectly(decimal amount1, string currency1, decimal amount2, string currency2, bool expected)
     {
         // Arrange
-        var money1 = new Money(amount1, currency1);
-        var money2 = new Money(amount2, currency2);
+        var money1 = M(amount1, currency1);
+        var money2 = M(amount2, currency2);
 
         // Act & Assert
         money1.Equals(money2).ShouldBe(expected);
@@ -235,42 +260,24 @@ public class MoneyTests
     [Fact]
     public void GetHashCode_EqualObjects_ShouldHaveSameHashCode()
     {
-        // Arrange
-        var money1 = new Money(100, "USD");
-        var money2 = new Money(100, "usd");
-
-        // Act & Assert
-        money1.GetHashCode().ShouldBe(money2.GetHashCode());
+        M(100, "USD").GetHashCode().ShouldBe(M(100, "usd").GetHashCode());
     }
 
     [Fact]
     public void GetHashCode_DifferentObjects_ShouldHaveDifferentHashCodes()
     {
-        // Arrange
-        var money1 = new Money(100, "USD");
-        var money2 = new Money(100, "EUR");
-
-        // Act & Assert
-        money1.GetHashCode().ShouldNotBe(money2.GetHashCode());
+        M(100, "USD").GetHashCode().ShouldNotBe(M(100, "EUR").GetHashCode());
     }
 
     [Fact]
     public void Add_WithNull_ShouldThrowArgumentNullException()
     {
-        // Arrange
-        var money = new Money(100, "USD");
-
-        // Act & Assert
-        Should.Throw<ArgumentNullException>(() => money.Add(null!));
+        Should.Throw<ArgumentNullException>(() => M(100, "USD").Add(null!));
     }
 
     [Fact]
     public void Subtract_WithNull_ShouldThrowArgumentNullException()
     {
-        // Arrange
-        var money = new Money(100, "USD");
-
-        // Act & Assert
-        Should.Throw<ArgumentNullException>(() => money.Subtract(null!));
+        Should.Throw<ArgumentNullException>(() => M(100, "USD").Subtract(null!));
     }
 }
