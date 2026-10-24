@@ -73,6 +73,19 @@ public abstract class AggregateRoot<TId> : Entity<TId>, IDomainEventsProvider, I
     }
 
     /// <summary>
+    /// Gets the number of domain events raised and not yet drained.
+    /// </summary>
+    internal int DomainEventCount => _domainEvents.Count;
+
+    /// <summary>
+    /// Removes the domain events raised after the first <paramref name="count"/>, so that an
+    /// operation that failed publishes none of the facts it raised.
+    /// </summary>
+    /// <param name="count">The number of events to keep, as read from <see cref="DomainEventCount"/>.</param>
+    internal void TruncateDomainEvents(int count) =>
+        _domainEvents.RemoveRange(count, _domainEvents.Count - count);
+
+    /// <summary>
     /// Validates a business rule and throws if it's violated.
     /// Centralizes rule checking logic across the aggregate.
     /// </summary>

@@ -9,7 +9,8 @@ namespace MicroKit.Domain.Aggregates;
 /// <remarks>
 /// The members are read-only. <see cref="AuditableEntity{TId}"/> and
 /// <see cref="AuditableAggregateRoot{TId}"/> set the creation fields in their constructors and the
-/// update fields through <c>Touch</c>; no audit value is set by the persistence layer.
+/// update fields through <c>Mutate</c>, once a state change has succeeded; no audit value is set
+/// by the persistence layer.
 /// </remarks>
 public interface IAuditableEntity
 {

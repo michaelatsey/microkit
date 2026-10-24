@@ -12,7 +12,7 @@ namespace MicroKit.Domain.Aggregates;
 /// <remarks>
 /// The creation fields are set once, by the constructor, from an explicit instant or a
 /// <see cref="TimeProvider"/> and an <see cref="Actor"/>. The update fields change only through
-/// <c>Touch</c>, which the derived aggregate calls from each state-mutating method. No audit value
+/// <c>Mutate</c>, which wraps each state-mutating method. No audit value
 /// is read from an ambient clock or an ambient security context.
 /// </remarks>
 public abstract class AuditableAggregateRoot<TId> : AggregateRoot<TId>, IAuditableEntity
@@ -37,7 +37,7 @@ public abstract class AuditableAggregateRoot<TId> : AggregateRoot<TId>, IAuditab
     /// </exception>
     /// <remarks>
     /// <para>
-    /// Every instant passed to a constructor or to <c>Touch</c> is normalised to offset zero with
+    /// Every instant passed to a constructor or to <c>Mutate</c> is normalised to offset zero with
     /// <see cref="DateTimeOffset.ToUniversalTime"/>: the instant is preserved, only its
     /// representation changes, so <c>DateTimeOffset.Now</c> is accepted. <c>default(DateTimeOffset)</c>
     /// is rejected. A value EF Core materialises through the backing field bypasses the rule and is
@@ -105,26 +105,38 @@ public abstract class AuditableAggregateRoot<TId> : AggregateRoot<TId>, IAuditab
     public Actor? UpdatedBy { get; private set; }
 
     /// <summary>
-    /// Records that this aggregate was modified, updating <see cref="UpdatedAt"/> and
-    /// <see cref="UpdatedBy"/> together.
+    /// Applies a state change to this aggregate and records it, updating <see cref="UpdatedAt"/> and
+    /// <see cref="UpdatedBy"/> together once the change has succeeded.
     /// </summary>
-    /// <param name="updatedAt">
+    /// <param name="at">
     /// The instant of the modification. Stored at offset zero; any offset is accepted.
     /// </param>
-    /// <param name="updatedBy">The actor performing the modification.</param>
+    /// <param name="by">The actor performing the modification.</param>
+    /// <param name="mutation">The state change, run once the instant and the actor are validated.</param>
     /// <exception cref="ArgumentNullException">
-    /// Thrown when <paramref name="updatedBy"/> is <see langword="null"/>.
+    /// Thrown when <paramref name="by"/> or <paramref name="mutation"/> is <see langword="null"/>.
+    /// Nothing has changed.
     /// </exception>
     /// <exception cref="ArgumentOutOfRangeException">
-    /// Thrown when <paramref name="updatedAt"/> is <c>default(DateTimeOffset)</c>, or precedes the
-    /// current <see cref="UpdatedAt"/>, or <see cref="CreatedAt"/> when there was no update yet. An
-    /// instant equal to it is accepted.
+    /// Thrown when <paramref name="at"/> is <c>default(DateTimeOffset)</c>, or precedes the current
+    /// <see cref="UpdatedAt"/>, or <see cref="CreatedAt"/> when there was no update yet. An instant
+    /// equal to it is accepted. Nothing has changed: the mutation has not run.
     /// </exception>
     /// <remarks>
     /// <para>
-    /// Call this at the end of every state-mutating method. Routing all updates through a
-    /// single member is what prevents the two audit fields from drifting apart — a plain
-    /// setter on each one makes it possible to update the timestamp and forget the actor.
+    /// Auditing wraps the mutation instead of following it. The instant and the actor are validated
+    /// first, before anything changes; then <paramref name="mutation"/> runs; only if it returns are
+    /// <see cref="UpdatedAt"/> and <see cref="UpdatedBy"/> set. If it throws, the audit fields keep
+    /// their previous values and the exception propagates. A domain event raised inside it is removed.
+    /// </para>
+    /// <para>
+    /// Domain events raised inside a <paramref name="mutation"/> that throws are removed, so a
+    /// failed operation publishes no fact.
+    /// </para>
+    /// <para>
+    /// The limit: a mutation that throws halfway keeps the field changes it made before throwing.
+    /// Check the business rules (<c>CheckRule</c>) at the start of the mutation, before its first
+    /// assignment, so that a broken rule throws while nothing has changed.
     /// </para>
     /// <para>
     /// <see cref="UpdatedAt"/> never decreases. An instant earlier than the current one is rejected
@@ -136,19 +148,41 @@ public abstract class AuditableAggregateRoot<TId> : AggregateRoot<TId>, IAuditab
     /// time passes the instant it recorded.
     /// </para>
     /// </remarks>
-    protected void Touch(DateTimeOffset updatedAt, Actor updatedBy)
+    /// <example>
+    /// <code>
+    /// public void Rename(string name, DateTimeOffset now, Actor actor) =>
+    ///     Mutate(now, actor, () =>
+    ///     {
+    ///         CheckRule(new NameMustNotBeEmptyRule(name)); // rules first, before any assignment
+    ///         Name = name;
+    ///     });
+    /// </code>
+    /// </example>
+    protected void Mutate(DateTimeOffset at, Actor by, Action mutation)
     {
-        ArgumentNullException.ThrowIfNull(updatedBy);
+        ArgumentNullException.ThrowIfNull(by);
+        ArgumentNullException.ThrowIfNull(mutation);
 
-        var instant = UtcInstant.Normalize(updatedAt, nameof(updatedAt));
+        var instant = UtcInstant.Normalize(at, nameof(at));
         var bound = UpdatedAt ?? CreatedAt;
         if (instant < bound)
             throw new ArgumentOutOfRangeException(
-                nameof(updatedAt), updatedAt,
+                nameof(at), at,
                 string.Create(CultureInfo.InvariantCulture,
                     $"A modification at {instant:O} cannot precede {bound:O}, the {(UpdatedAt is null ? "creation instant" : "previous modification")}."));
 
+        var eventCount = DomainEventCount;
+        try
+        {
+            mutation();
+        }
+        catch
+        {
+            TruncateDomainEvents(eventCount);
+            throw;
+        }
+
         UpdatedAt = instant;
-        UpdatedBy = updatedBy;
+        UpdatedBy = by;
     }
 }

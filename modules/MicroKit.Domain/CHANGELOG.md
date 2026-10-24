@@ -26,16 +26,19 @@ Settles the public surface before `2.0.0` (#160). Every item under **Breaking** 
   (D4; #112).
 - `IAuditableEntity.CreatedBy` is a non-null `Actor`, and `UpdatedBy` an `Actor?`, instead of
   `string?` (D5; #116).
-- `UpdatedAt` and `UpdatedBy` are `private set`; derived types call
-  `Touch(DateTimeOffset, Actor)` (D5; #113).
+- `UpdatedAt` and `UpdatedBy` are `private set`; derived types wrap each state change in
+  `Mutate(DateTimeOffset at, Actor by, Action mutation)` (D5; #113). `Mutate` replaced
+  `Touch(DateTimeOffset, Actor)`: it validates before the mutation runs, sets the audit fields
+  only if the mutation returns, and on an aggregate removes the events a throwing mutation raised
+  (#176).
 - `Entity<TId>.Id`, `CreatedAt` and `CreatedBy` are `private init`: a derived type can no longer
   assign them after the guarded constructor ran. EF Core still materialises them through their
   backing fields (#166).
 - `DomainEvent` is `abstract record DomainEvent(DateTimeOffset OccurredAt)`: `OccurredAt` has no
   default and concrete events forward it positionally (D4; #115).
-- Instants entering the domain (`CreatedAt`, `Touch`'s `updatedAt`, `OccurredAt` including
+- Instants entering the domain (`CreatedAt`, `Mutate`'s `at`, `OccurredAt` including
   through `with`) are normalised to offset zero; `default(DateTimeOffset)` throws
-  `ArgumentOutOfRangeException`, and so does a `Touch` earlier than `CreatedAt` (#165) or than
+  `ArgumentOutOfRangeException`, and so does a `Mutate` earlier than `CreatedAt` (#165) or than
   the current `UpdatedAt`: `UpdatedAt` never decreases (#171).
 - `DomainEvent.EventId` defaults to `Guid.CreateVersion7()` instead of `Guid.NewGuid()` (D6; #114).
 - `GuidId.New()` returns a UUID version 7 (D6).

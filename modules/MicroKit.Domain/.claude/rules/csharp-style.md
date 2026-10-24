@@ -60,7 +60,7 @@ public static Order Place(CustomerId customerId, IReadOnlyList<OrderItemRequest>
     return order;
 }
 
-// ✅ Agrégat audité : TimeProvider et Actor à la création, Touch à chaque mutation
+// ✅ Agrégat audité : TimeProvider et Actor à la création, chaque mutation enveloppée dans Mutate(at, by, () => …)
 private Invoice(InvoiceId id, TimeProvider clock, Actor createdBy) : base(id, clock, createdBy) { }
 ```
 

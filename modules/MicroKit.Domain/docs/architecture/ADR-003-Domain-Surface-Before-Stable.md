@@ -95,12 +95,12 @@ sharing one identifier space is a modelling error this rule does not try to repa
 - `DomainEvent` becomes `abstract record DomainEvent(DateTimeOffset OccurredAt)`, with no
   default.
 - No `DateTimeOffset.UtcNow` remains under `src/`.
-- Every instant entering the domain (`CreatedAt`, `UpdatedAt` through `Touch`, and `OccurredAt`
+- Every instant entering the domain (`CreatedAt`, `UpdatedAt` through `Mutate`, and `OccurredAt`
   on construction and through `with`) is normalised to offset zero with `ToUniversalTime()`, and
-  `default(DateTimeOffset)` is rejected with `ArgumentOutOfRangeException`. `Touch` rejects an
+  `default(DateTimeOffset)` is rejected with `ArgumentOutOfRangeException`. `Mutate` rejects an
   instant earlier than `CreatedAt`; an equal one is accepted (#165). Values EF Core materialises
   through the backing fields bypass the rule; database column mapping is outside this decision.
-- `UpdatedAt` never decreases: `Touch` rejects an instant earlier than the current `UpdatedAt`, or
+- `UpdatedAt` never decreases: `Mutate` rejects an instant earlier than the current `UpdatedAt`, or
   than `CreatedAt` when the entity was never updated, with `ArgumentOutOfRangeException`; an equal
   instant is accepted (#171). The accepted cost: when a host's nodes' clocks disagree beyond its
   own update cadence, the skew surfaces as an exception, not a silent drift. A node whose clock is
@@ -130,7 +130,7 @@ sharing one identifier space is a modelling error this rule does not try to repa
 - *Stamp events at dispatch.* The instant would record dispatch, not the business fact.
 - *Reject a non-zero offset.* Turns a correct `DateTimeOffset.Now` into an error, with no gain
   over normalising (#165).
-- *Clamp a backward `Touch` to the current `UpdatedAt`.* It would record an actor against an
+- *Clamp a backward modification to the current `UpdatedAt`.* It would record an actor against an
   instant that is not when the change happened, and hide the skewed clock instead of surfacing
   it (#171).
 
@@ -139,7 +139,15 @@ sharing one identifier space is a modelling error this rule does not try to repa
 **Decision.**
 - `CreatedBy` becomes a non-null `Actor`. `UpdatedBy` is `Actor?`, null until the first update.
 - `UpdatedAt` and `UpdatedBy` are `private set` and change only through
-  `protected void Touch(DateTimeOffset, Actor)`.
+  `protected void Mutate(DateTimeOffset at, Actor by, Action mutation)`, which replaced
+  `Touch(DateTimeOffset, Actor)` (#176). Auditing wraps the mutation instead of following it:
+  `Mutate` validates `at` (default, offset, monotonicity) and `by` before anything changes, then
+  runs `mutation`, and sets `UpdatedAt` and `UpdatedBy` only if it returns. On
+  `AuditableAggregateRoot<TId>`, domain events raised inside a mutation that throws are removed,
+  through an `internal` member of `AggregateRoot<TId>` that truncates its event list to the count
+  taken before the mutation ran; nothing new is public. The limit: a mutation that throws
+  halfway keeps its partial field changes, so business rules are checked (`CheckRule`) before the
+  first assignment inside it.
 - The built-in actors carry the reserved prefix `$`: `$system`, `$anonymous`, `$migration`.
   Public construction rejects a leading `$`. `Actor.Restore(string)` reads a stored value back,
   returning the built-in instance for a reserved value and rejecting any other `$` value, so a
@@ -164,6 +172,11 @@ sharing one identifier space is a modelling error this rule does not try to repa
 - *A `Guid` user identifier.* Not every identity provider issues GUIDs.
 - *Built-ins without a prefix.* They collide with real identifiers.
 - *A shared audit component.* A public type for fifteen lines.
+- *Call `Touch` first, then mutate (#176).* A failed mutation would leave a false modification
+  timestamp.
+- *A separate `EnsureCanTouch` check (#176).* Two calls to keep in order, which is the failure
+  #176 reported: with `Touch` at the end of the method, a rejected instant left the mutation in
+  place.
 
 ### D6 — GUIDs are time-ordered
 
@@ -313,8 +326,8 @@ Consumers migrate as follows:
 
 - Persistence contracts come from `MicroKit.Persistence.Abstractions`.
 - Identifier types drop their `object IEntityId.Value` implementation.
-- Auditable types pass a creation instant or a `TimeProvider`, and an `Actor`; mutations call
-  `Touch`.
+- Auditable types pass a creation instant or a `TimeProvider`, and an `Actor`; mutations are
+  wrapped in `Mutate(at, by, () => …)`.
 - Concrete events declare `OccurredAt` positionally and forward it to `DomainEvent`.
 - Specifications implement `ToExpression` only.
 - Business rules implement `Code`.

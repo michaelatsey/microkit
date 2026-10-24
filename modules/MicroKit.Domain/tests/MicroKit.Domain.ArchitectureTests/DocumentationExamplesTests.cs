@@ -16,6 +16,7 @@ public sealed class DocumentationExamplesTests
         "FluentAssertions",
         "=> new(Guid.Empty)",
         "IReadOnlyCollection<IDomainEvent>",
+        "Touch(",
     ];
 
     // Lines that name a replaced or forbidden API in order to forbid it. Each entry is a

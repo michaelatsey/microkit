@@ -102,11 +102,8 @@ public sealed class Ledger : AuditableAggregateRoot<LedgerId>
     public static Ledger Open(LedgerId id, string name, DateTimeOffset createdAt, Actor createdBy) =>
         new(id, name, createdAt, createdBy, true);
 
-    public void Rename(string name, DateTimeOffset now, Actor actor)
-    {
-        Name = name;
-        Touch(now, actor);
-    }
+    public void Rename(string name, DateTimeOffset now, Actor actor) =>
+        Mutate(now, actor, () => Name = name);
 }
 
 public sealed class LedgerDbContext(DbContextOptions<LedgerDbContext> options) : DbContext(options)

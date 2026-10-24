@@ -64,7 +64,7 @@ public sealed class Customer : AggregateRoot<CustomerId>
 
 ### Auditable Aggregate
 
-`AuditableAggregateRoot<TId>` records who created and last changed the aggregate. The creation fields come from the constructor; the update fields change only through `Touch`, which sets both together.
+`AuditableAggregateRoot<TId>` records who created and last changed the aggregate. The creation fields come from the constructor; the update fields change only through `Mutate`, which validates the instant and the actor, runs the change, and sets both fields together only if the change succeeded.
 
 ```csharp
 public sealed class Invoice : AuditableAggregateRoot<InvoiceId>
@@ -80,11 +80,15 @@ public sealed class Invoice : AuditableAggregateRoot<InvoiceId>
     public static Invoice Issue(Money total, TimeProvider clock, Actor createdBy) =>
         new(InvoiceId.New(), total, clock, createdBy);
 
-    public void Adjust(Money total, DateTimeOffset now, Actor actor)
-    {
-        Total = total;
-        Touch(now, actor);   // UpdatedAt and UpdatedBy, together
-    }
+    // Mutate validates `now` and `actor` before anything changes, runs the lambda, and sets
+    // UpdatedAt and UpdatedBy only if it returns. Check rules first, before any assignment:
+    // a lambda that throws halfway keeps the changes it already made.
+    public void Adjust(Money total, DateTimeOffset now, Actor actor) =>
+        Mutate(now, actor, () =>
+        {
+            CheckRule(new InvoiceTotalMustBePositiveRule(total));
+            Total = total;
+        });
 }
 
 // A background job has no user in context: it acts as Actor.System

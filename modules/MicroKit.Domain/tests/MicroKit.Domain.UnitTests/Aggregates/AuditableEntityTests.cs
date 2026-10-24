@@ -54,7 +54,7 @@ public sealed class AuditableEntityTests
     }
 
     [Fact]
-    public void Touch_SetsUpdatedAtAndUpdatedByTogether()
+    public void Mutate_SetsUpdatedAtAndUpdatedByTogether()
     {
         var entity = new TestAuditableEntity(GuidId.New(), CreatedAt, Creator);
         var updatedAt = CreatedAt.AddMinutes(5);
@@ -83,7 +83,7 @@ public sealed class AuditableEntityTests
     }
 
     [Fact]
-    public void Touch_NonZeroOffset_IsStoredAtOffsetZero()
+    public void Mutate_NonZeroOffset_IsStoredAtOffsetZero()
     {
         var sut = new TestAuditableEntity(GuidId.New(), CreatedAt, Creator);
         var later = CreatedAt.AddMinutes(5).ToOffset(TimeSpan.FromHours(2));
@@ -95,31 +95,31 @@ public sealed class AuditableEntityTests
     }
 
     [Fact]
-    public void Touch_DefaultInstant_ThrowsArgumentOutOfRangeException()
+    public void Mutate_DefaultInstant_ThrowsArgumentOutOfRangeException()
     {
         var sut = new TestAuditableEntity(GuidId.New(), CreatedAt, Creator);
 
         var ex = Should.Throw<ArgumentOutOfRangeException>(() => sut.Change(default, Creator));
 
-        ex.ParamName.ShouldBe("updatedAt");
+        ex.ParamName.ShouldBe("at");
         sut.UpdatedAt.ShouldBeNull();
     }
 
     [Fact]
-    public void Touch_BeforeCreatedAt_ThrowsArgumentOutOfRangeException()
+    public void Mutate_BeforeCreatedAt_ThrowsArgumentOutOfRangeException()
     {
         var sut = new TestAuditableEntity(GuidId.New(), CreatedAt, Creator);
 
         var ex = Should.Throw<ArgumentOutOfRangeException>(
             () => sut.Change(CreatedAt.AddTicks(-1), Creator));
 
-        ex.ParamName.ShouldBe("updatedAt");
+        ex.ParamName.ShouldBe("at");
         sut.UpdatedAt.ShouldBeNull();
         sut.UpdatedBy.ShouldBeNull();
     }
 
     [Fact]
-    public void Touch_EarlierThanThePreviousUpdate_ThrowsAndLeavesFieldsUnchanged()
+    public void Mutate_EarlierThanThePreviousUpdate_ThrowsAndLeavesFieldsUnchanged()
     {
         var sut = new TestAuditableEntity(GuidId.New(), CreatedAt, Creator);
         var at1005 = new DateTimeOffset(2026, 10, 24, 10, 5, 0, TimeSpan.Zero);
@@ -129,14 +129,14 @@ public sealed class AuditableEntityTests
         var ex = Should.Throw<ArgumentOutOfRangeException>(
             () => sut.Change(new DateTimeOffset(2026, 10, 24, 10, 1, 0, TimeSpan.Zero), Creator));
 
-        ex.ParamName.ShouldBe("updatedAt");
+        ex.ParamName.ShouldBe("at");
         ex.Message.ShouldContain("cannot precede 2026-10-24T10:05:00.0000000+00:00, the previous modification");
         sut.UpdatedAt.ShouldBe(at1005);
         sut.UpdatedBy.ShouldBe(updater);
     }
 
     [Fact]
-    public void Touch_SameInstantTwice_IsAccepted()
+    public void Mutate_SameInstantTwice_IsAccepted()
     {
         var sut = new TestAuditableEntity(GuidId.New(), CreatedAt, Creator);
         var at1005 = new DateTimeOffset(2026, 10, 24, 10, 5, 0, TimeSpan.Zero);
@@ -149,7 +149,7 @@ public sealed class AuditableEntityTests
     }
 
     [Fact]
-    public void Touch_EqualToThePreviousUpdateInAnotherOffset_IsAccepted()
+    public void Mutate_EqualToThePreviousUpdateInAnotherOffset_IsAccepted()
     {
         var sut = new TestAuditableEntity(GuidId.New(), CreatedAt, Creator);
         var at1005 = new DateTimeOffset(2026, 10, 24, 10, 5, 0, TimeSpan.Zero);
@@ -163,7 +163,7 @@ public sealed class AuditableEntityTests
     }
 
     [Fact]
-    public void Touch_EqualToCreatedAt_IsAccepted()
+    public void Mutate_EqualToCreatedAt_IsAccepted()
     {
         var sut = new TestAuditableEntity(GuidId.New(), CreatedAt, Creator);
 
@@ -174,7 +174,7 @@ public sealed class AuditableEntityTests
     }
 
     [Fact]
-    public void Touch_NullActor_ThrowsAndLeavesFieldsUnchanged()
+    public void Mutate_NullActor_ThrowsAndLeavesFieldsUnchanged()
     {
         var entity = new TestAuditableEntity(GuidId.New(), CreatedAt, Creator);
 
@@ -193,5 +193,5 @@ internal sealed class TestAuditableEntity : AuditableEntity<GuidId>
     public TestAuditableEntity(GuidId id, TimeProvider timeProvider, Actor createdBy)
         : base(id, timeProvider, createdBy) { }
 
-    public void Change(DateTimeOffset now, Actor actor) => Touch(now, actor);
+    public void Change(DateTimeOffset now, Actor actor) => Mutate(now, actor, () => { });
 }

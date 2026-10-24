@@ -59,7 +59,7 @@ public sealed class AuditableAggregateRootTests
     }
 
     [Fact]
-    public void Touch_SetsUpdatedAtAndUpdatedByTogether()
+    public void Mutate_SetsUpdatedAtAndUpdatedByTogether()
     {
         var aggregate = new TestAuditableAggregateRoot(NewId(), CreatedAt, Creator);
         var updatedAt = CreatedAt.AddMinutes(5);
@@ -74,7 +74,7 @@ public sealed class AuditableAggregateRootTests
     }
 
     [Fact]
-    public void Touch_NullActor_ThrowsAndLeavesFieldsUnchanged()
+    public void Mutate_NullActor_ThrowsAndLeavesFieldsUnchanged()
     {
         var aggregate = new TestAuditableAggregateRoot(NewId(), CreatedAt, Creator);
 
@@ -102,7 +102,7 @@ public sealed class AuditableAggregateRootTests
     }
 
     [Fact]
-    public void Touch_NonZeroOffset_IsStoredAtOffsetZero()
+    public void Mutate_NonZeroOffset_IsStoredAtOffsetZero()
     {
         var sut = new TestAuditableAggregateRoot(NewId(), CreatedAt, Creator);
         var later = CreatedAt.AddMinutes(5).ToOffset(TimeSpan.FromHours(2));
@@ -114,31 +114,31 @@ public sealed class AuditableAggregateRootTests
     }
 
     [Fact]
-    public void Touch_DefaultInstant_ThrowsArgumentOutOfRangeException()
+    public void Mutate_DefaultInstant_ThrowsArgumentOutOfRangeException()
     {
         var sut = new TestAuditableAggregateRoot(NewId(), CreatedAt, Creator);
 
         var ex = Should.Throw<ArgumentOutOfRangeException>(() => sut.Rename(default, Creator));
 
-        ex.ParamName.ShouldBe("updatedAt");
+        ex.ParamName.ShouldBe("at");
         sut.UpdatedAt.ShouldBeNull();
     }
 
     [Fact]
-    public void Touch_BeforeCreatedAt_ThrowsArgumentOutOfRangeException()
+    public void Mutate_BeforeCreatedAt_ThrowsArgumentOutOfRangeException()
     {
         var sut = new TestAuditableAggregateRoot(NewId(), CreatedAt, Creator);
 
         var ex = Should.Throw<ArgumentOutOfRangeException>(
             () => sut.Rename(CreatedAt.AddTicks(-1), Creator));
 
-        ex.ParamName.ShouldBe("updatedAt");
+        ex.ParamName.ShouldBe("at");
         sut.UpdatedAt.ShouldBeNull();
         sut.UpdatedBy.ShouldBeNull();
     }
 
     [Fact]
-    public void Touch_EarlierThanThePreviousUpdate_ThrowsAndLeavesFieldsUnchanged()
+    public void Mutate_EarlierThanThePreviousUpdate_ThrowsAndLeavesFieldsUnchanged()
     {
         var sut = new TestAuditableAggregateRoot(NewId(), CreatedAt, Creator);
         var at1005 = new DateTimeOffset(2026, 10, 24, 10, 5, 0, TimeSpan.Zero);
@@ -148,14 +148,14 @@ public sealed class AuditableAggregateRootTests
         var ex = Should.Throw<ArgumentOutOfRangeException>(
             () => sut.Rename(new DateTimeOffset(2026, 10, 24, 10, 1, 0, TimeSpan.Zero), Creator));
 
-        ex.ParamName.ShouldBe("updatedAt");
+        ex.ParamName.ShouldBe("at");
         ex.Message.ShouldContain("cannot precede 2026-10-24T10:05:00.0000000+00:00, the previous modification");
         sut.UpdatedAt.ShouldBe(at1005);
         sut.UpdatedBy.ShouldBe(updater);
     }
 
     [Fact]
-    public void Touch_SameInstantTwice_IsAccepted()
+    public void Mutate_SameInstantTwice_IsAccepted()
     {
         var sut = new TestAuditableAggregateRoot(NewId(), CreatedAt, Creator);
         var at1005 = new DateTimeOffset(2026, 10, 24, 10, 5, 0, TimeSpan.Zero);
@@ -168,7 +168,7 @@ public sealed class AuditableAggregateRootTests
     }
 
     [Fact]
-    public void Touch_EqualToThePreviousUpdateInAnotherOffset_IsAccepted()
+    public void Mutate_EqualToThePreviousUpdateInAnotherOffset_IsAccepted()
     {
         var sut = new TestAuditableAggregateRoot(NewId(), CreatedAt, Creator);
         var at1005 = new DateTimeOffset(2026, 10, 24, 10, 5, 0, TimeSpan.Zero);
@@ -182,7 +182,7 @@ public sealed class AuditableAggregateRootTests
     }
 
     [Fact]
-    public void Touch_EqualToCreatedAt_IsAccepted()
+    public void Mutate_EqualToCreatedAt_IsAccepted()
     {
         var sut = new TestAuditableAggregateRoot(NewId(), CreatedAt, Creator);
 
@@ -222,7 +222,7 @@ public sealed class AuditableAggregateRootTests
     }
 
     [Fact]
-    public void UpdateFields_AreSetOnlyThroughTouch()
+    public void UpdateFields_AreSetOnlyThroughMutate()
     {
         System.Reflection.PropertyInfo[] properties =
         [
@@ -232,7 +232,7 @@ public sealed class AuditableAggregateRootTests
             typeof(AuditableEntity<GuidId>).GetProperty(nameof(IAuditableEntity.UpdatedBy))!,
         ];
 
-        // A private setter leaves Touch as the only way a derived type can change the field.
+        // A private setter leaves Mutate as the only way a derived type can change the field.
         properties.ShouldAllBe(p => p.SetMethod!.IsPrivate);
     }
 
@@ -254,5 +254,5 @@ public sealed class TestAuditableAggregateRoot : AuditableAggregateRoot<TestAudi
 
     public void TestRaiseEvent(IDomainEvent domainEvent) => RaiseDomainEvent(domainEvent);
 
-    public void Rename(DateTimeOffset now, Actor actor) => Touch(now, actor);
+    public void Rename(DateTimeOffset now, Actor actor) => Mutate(now, actor, () => { });
 }
