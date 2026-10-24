@@ -57,7 +57,7 @@ IDomainService              ← marker interface
 ```
 DomainException             ← base de toutes les exceptions domaine
 BusinessRuleViolationException(IBusinessRule rule)
-EntityNotFoundException<T>(TId id)
+EntityNotFoundException<TEntity, TId>(TId entityId)
 ```
 
 ### Règles métier
@@ -228,11 +228,13 @@ MicroKit.Domain                ← tout (pas de split Abstractions pour ce modul
 src/MicroKit.Domain/
 ├── Aggregates/
 │   ├── AggregateRoot.cs
+│   ├── AuditRules.cs            ← internal : règles d'audit partagées (ADR-003 D5)
 │   ├── AuditableAggregateRoot.cs
 │   ├── AuditableEntity.cs
 │   ├── Entity.cs
 │   ├── IAggregateRoot.cs
-│   └── IAuditableEntity.cs
+│   ├── IAuditableEntity.cs
+│   └── IEventJournal.cs         ← internal : retrait des events d'un Mutate qui échoue
 ├── Events/
 │   ├── DomainEvent.cs
 │   ├── IDomainEvent.cs
@@ -262,8 +264,11 @@ src/MicroKit.Domain/
 ├── ValueObjects/
 │   ├── IValueObject.cs
 │   └── Common/          ← Actor, Address, Currency, DateRange, Email, FullName,
-│                           Money, Percentage, PhoneNumber
-└── GlobalUsings.cs
+│       │                   Money, Percentage, PhoneNumber
+│       └── Json/        ← ActorJsonConverter, CurrencyJsonConverter, MoneyJsonConverter
+│                           (internal), TrustedActorJsonConverter (public, ADR-004 D1)
+├── GlobalUsings.cs
+└── UtcInstant.cs        ← internal : offset zéro, jamais default (instants d'audit et d'events)
 ```
 
 ---

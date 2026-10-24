@@ -42,6 +42,17 @@ public sealed class DocumentationExamplesTests
     }
 
     [Fact]
+    public void ModuleBrain_NamesEverySourceFileAndTheNotFoundExceptionSignature()
+    {
+        var brain = File.ReadAllText(Path.Combine(Root, ".claude", "CLAUDE.md"));
+        var sources = File.ReadAllLines(Path.Combine(AppContext.BaseDirectory, "module-src", "files.txt"));
+
+        sources.ShouldNotBeEmpty();
+        sources.Where(name => !brain.Contains(name, StringComparison.Ordinal)).ShouldBeEmpty();
+        brain.ShouldContain("EntityNotFoundException<TEntity, TId>(TId entityId)");
+    }
+
+    [Fact]
     public void PurityRule_SaysABuiltInActorNeedsTheTrustedConverter()
     {
         // #177: the rule must not claim that every Actor round-trips with default options.
