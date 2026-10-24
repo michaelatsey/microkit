@@ -69,7 +69,7 @@
       <Output TaskParameter="Lines" ItemName="DomainSourceLine" />
     </ReadLinesFromFile>
     <ItemGroup>
-      <DomainUsing Include="@(DomainSourceLine)" Condition="$([System.Text.RegularExpressions.Regex]::IsMatch('%(Identity)', '^(global )?using System[A-Za-z.]*;$'))" />
+      <DomainUsing Include="@(DomainSourceLine)" Condition="$([System.Text.RegularExpressions.Regex]::IsMatch('%(Identity)', '^\s*(global\s+)?using\s+(static\s+)?(\w+\s*=\s*)?System[\w.]*\s*;'))" />
     </ItemGroup>
     <WriteLinesToFile File="$(OutDir)module-src/usings.txt"
                       Lines="@(DomainUsing->Distinct())"

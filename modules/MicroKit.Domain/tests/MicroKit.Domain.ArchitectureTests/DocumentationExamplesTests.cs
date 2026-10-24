@@ -54,17 +54,32 @@ public sealed class DocumentationExamplesTests
         brain.ShouldContain("EntityNotFoundException<TEntity, TId>(TId entityId)");
     }
 
+    private static readonly Regex UsingDirective =
+        new(@"^\s*(?:global\s+)?using\s+(?:static\s+)?(?:\w+\s*=\s*)?(?<name>System[\w.]*)\s*;");
+
+    [Theory]
+    [InlineData("using System.Globalization;", "System.Globalization")]
+    [InlineData("    global using System.Diagnostics; // comment", "System.Diagnostics")]
+    [InlineData("using static System.Net.Http.HttpMethod;", "System.Net.Http.HttpMethod")]
+    [InlineData("using Http = System.Net.Http;", "System.Net.Http")]
+    public void UsingDirective_AnyForm_YieldsItsNamespace(string line, string name)
+    {
+        UsingDirective.Match(line).Groups["name"].Value.ShouldBe(name);
+    }
+
     [Fact]
     public void PurityRule_ListsEveryNamespaceTheSourcesImport()
     {
+        // The build extracts every System using directive, global, static, aliased or indented.
         var rule = File.ReadAllText(Path.Combine(Root, ".claude", "rules", "domain-purity.md"));
-        var usings = File.ReadAllLines(Path.Combine(AppContext.BaseDirectory, "module-src", "usings.txt"))
-            .Select(line => line.Replace("global ", string.Empty, StringComparison.Ordinal))
+        var namespaces = File.ReadAllLines(Path.Combine(AppContext.BaseDirectory, "module-src", "usings.txt"))
+            .Select(line => UsingDirective.Match(line).Groups["name"].Value)
             .Distinct()
             .ToArray();
 
-        usings.ShouldContain("using System.Globalization;");
-        usings.Where(directive => !rule.Contains(directive, StringComparison.Ordinal)).ShouldBeEmpty();
+        namespaces.ShouldContain("System.Globalization");
+        namespaces.ShouldNotContain(string.Empty);
+        namespaces.Where(name => !rule.Contains($"using {name};", StringComparison.Ordinal)).ShouldBeEmpty();
     }
 
     [Fact]
