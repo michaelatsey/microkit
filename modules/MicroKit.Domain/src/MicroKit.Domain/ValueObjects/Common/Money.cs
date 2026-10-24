@@ -21,8 +21,9 @@ namespace MicroKit.Domain.ValueObjects.Common;
 /// <para>
 /// Construction throws <see cref="DomainException"/> for an amount finer than the minor unit, a
 /// domain rule, and <see cref="ArgumentException"/> for <c>default(Currency)</c>, a programming
-/// error. Operations throw <see cref="DomainException"/> for mismatched currencies and
-/// <see cref="ArgumentException"/> for invalid arguments.
+/// error. Operations throw <see cref="DomainException"/> for mismatched currencies,
+/// <see cref="ArgumentException"/> for invalid arguments, and <see cref="OverflowException"/> when a
+/// result exceeds the range of <see cref="decimal"/>.
 /// </para>
 /// <para>
 /// <c>System.Text.Json</c> writes <c>{ "Amount": 10.50, "Currency": "EUR" }</c>, with property names
@@ -62,6 +63,7 @@ public sealed record Money(decimal Amount, Currency Currency) : IValueObject
     /// <param name="other">The monetary amount to add</param>
     /// <returns>A new Money instance representing the sum</returns>
     /// <exception cref="DomainException">Thrown when currencies do not match</exception>
+    /// <exception cref="OverflowException">Thrown when the sum exceeds the range of <see cref="decimal"/>.</exception>
     public Money Add(Money other)
     {
         ArgumentNullException.ThrowIfNull(other);
@@ -75,6 +77,7 @@ public sealed record Money(decimal Amount, Currency Currency) : IValueObject
     /// <param name="other">The monetary amount to subtract</param>
     /// <returns>A new Money instance representing the difference</returns>
     /// <exception cref="DomainException">Thrown when currencies do not match</exception>
+    /// <exception cref="OverflowException">Thrown when the difference exceeds the range of <see cref="decimal"/>.</exception>
     public Money Subtract(Money other)
     {
         ArgumentNullException.ThrowIfNull(other);
@@ -92,6 +95,7 @@ public sealed record Money(decimal Amount, Currency Currency) : IValueObject
     /// line, a tax and an interest computation round differently, and the choice is the caller's.
     /// </param>
     /// <returns>A new Money instance representing the rounded product</returns>
+    /// <exception cref="OverflowException">Thrown when the product exceeds the range of <see cref="decimal"/>.</exception>
     public Money Multiply(decimal factor, MidpointRounding rounding)
     {
         return new Money(Math.Round(Amount * factor, Currency.MinorUnit, rounding), Currency);

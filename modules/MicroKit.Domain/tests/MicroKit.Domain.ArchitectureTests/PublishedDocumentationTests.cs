@@ -113,6 +113,16 @@ public sealed class PublishedDocumentationTests
         doc.ShouldContain("DateRange");
     }
 
+    [Theory]
+    [InlineData("M:MicroKit.Domain.ValueObjects.Common.Money.Add(MicroKit.Domain.ValueObjects.Common.Money)")]
+    [InlineData("M:MicroKit.Domain.ValueObjects.Common.Money.Subtract(MicroKit.Domain.ValueObjects.Common.Money)")]
+    [InlineData("M:MicroKit.Domain.ValueObjects.Common.Money.Multiply(System.Decimal,System.MidpointRounding)")]
+    [InlineData("M:MicroKit.Domain.ValueObjects.Common.Money.Allocate(System.Int32[])")]
+    public void MoneyArithmetic_DocumentsItsOverflow(string member)
+    {
+        Member(member).ShouldContain("<exception cref=\"T:System.OverflowException\">");
+    }
+
     // #182, ADR-004 D3: a plain aggregate keeps the events and changes of a method that throws.
     [Theory]
     [InlineData("T:MicroKit.Domain.Aggregates.AggregateRoot`1")]
