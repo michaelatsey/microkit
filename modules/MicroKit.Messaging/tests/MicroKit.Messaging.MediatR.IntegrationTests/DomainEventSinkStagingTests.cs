@@ -61,7 +61,7 @@ public sealed class DomainEventSinkStagingTests
         // WidgetArchivedEvent on a newly tracked aggregate while it runs.
         var aggregateId = Guid.NewGuid();
         await scope.ServiceProvider.GetRequiredService<IPublisher>()
-            .Publish(new WidgetInspectedNotification(new WidgetInspectedEvent(aggregateId)));
+            .Publish(new WidgetInspectedNotification(new WidgetInspectedEvent(aggregateId, DateTimeOffset.UtcNow)));
 
         recorder.For<ArchiveWidgetOnInspectionHandler>().Count.ShouldBe(1);
 

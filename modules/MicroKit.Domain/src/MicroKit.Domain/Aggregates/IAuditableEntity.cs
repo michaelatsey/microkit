@@ -1,3 +1,5 @@
+using MicroKit.Domain.ValueObjects.Common;
+
 namespace MicroKit.Domain.Aggregates;
 
 /// <summary>
@@ -17,20 +19,21 @@ public interface IAuditableEntity
     DateTimeOffset CreatedAt { get; }
 
     /// <summary>
+    /// Gets the actor that created this entity.
+    /// Never <see langword="null"/> — use <see cref="Actor.System"/> for actions with
+    /// no user in context.
+    /// </summary>
+    Actor CreatedBy { get; }
+
+    /// <summary>
     /// Gets when this entity was last updated in UTC.
     /// Null if the entity has never been updated since creation.
     /// </summary>
     DateTimeOffset? UpdatedAt { get; }
 
     /// <summary>
-    /// Gets the identifier of the user who created this entity.
-    /// Null if the creator is unknown or not tracked.
+    /// Gets the actor that last updated this entity.
+    /// <see langword="null"/> when the entity has never been updated since creation.
     /// </summary>
-    string? CreatedBy { get; }
-
-    /// <summary>
-    /// Gets the identifier of the user who last updated this entity.
-    /// Null if the last updater is unknown or not tracked.
-    /// </summary>
-    string? UpdatedBy { get; }
+    Actor? UpdatedBy { get; }
 }

@@ -119,7 +119,7 @@ public sealed class TestOrder : AggregateRoot<BenchmarkOrderId>
         }
 
         order.Status = OrderStatus.Placed;
-        order.RaiseDomainEvent(new OrderPlacedEvent(order.Id, customerId, order.TotalAmount));
+        order.RaiseDomainEvent(new OrderPlacedEvent(order.Id, customerId, order.TotalAmount, DateTimeOffset.UtcNow));
 
         return order;
     }
@@ -129,7 +129,7 @@ public sealed class TestOrder : AggregateRoot<BenchmarkOrderId>
         var item = new OrderItem(productId, quantity, unitPrice);
         _items.Add(item);
 
-        RaiseDomainEvent(new OrderItemAddedEvent(Id, productId, quantity, unitPrice));
+        RaiseDomainEvent(new OrderItemAddedEvent(Id, productId, quantity, unitPrice, DateTimeOffset.UtcNow));
     }
 
     public void Ship(TrackingNumber trackingNumber)
@@ -137,7 +137,7 @@ public sealed class TestOrder : AggregateRoot<BenchmarkOrderId>
         Status = OrderStatus.Shipped;
         ShippedAt = DateTimeOffset.UtcNow;
 
-        RaiseDomainEvent(new OrderShippedEvent(Id, trackingNumber));
+        RaiseDomainEvent(new OrderShippedEvent(Id, trackingNumber, ShippedAt.Value));
     }
 }
 

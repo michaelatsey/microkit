@@ -164,7 +164,7 @@ public sealed class DomainEventDispatchCompositionTests
         var log = new DomainEventLog();
         using var provider = BuildWithFixtures(log);
         using var scope = provider.CreateScope();
-        Raise(scope, new HandlerOnlyEvent(Guid.NewGuid()));
+        Raise(scope, new HandlerOnlyEvent(Guid.NewGuid(), DateTimeOffset.UtcNow));
 
         await Dispatcher(scope).DispatchEventsAsync();
 
@@ -181,7 +181,7 @@ public sealed class DomainEventDispatchCompositionTests
         var sink = new RecordingSink(log);
         using var provider = BuildWithFixtures(log, Contribute(sink));
         using var scope = provider.CreateScope();
-        Raise(scope, new HandlerOnlyEvent(Guid.NewGuid()), new HandlerOnlyEvent(Guid.NewGuid()));
+        Raise(scope, new HandlerOnlyEvent(Guid.NewGuid(), DateTimeOffset.UtcNow), new HandlerOnlyEvent(Guid.NewGuid(), DateTimeOffset.UtcNow));
 
         await Dispatcher(scope).DispatchEventsAsync();
 
@@ -214,7 +214,7 @@ public sealed class DomainEventDispatchCompositionTests
         var log = new DomainEventLog();
         using var provider = BuildWithFixtures(log, Contribute(new ThrowingSink()));
         using var scope = provider.CreateScope();
-        Raise(scope, new HandlerOnlyEvent(Guid.NewGuid()));
+        Raise(scope, new HandlerOnlyEvent(Guid.NewGuid(), DateTimeOffset.UtcNow));
 
         var ex = await Should.ThrowAsync<InvalidOperationException>(
             async () => await Dispatcher(scope).DispatchEventsAsync());
@@ -235,7 +235,7 @@ public sealed class DomainEventDispatchCompositionTests
         using var provider = BuildWithFixtures(
             log, Contribute(new FirstSink(calls), new SecondSink(calls)));
         using var scope = provider.CreateScope();
-        Raise(scope, new HandlerOnlyEvent(Guid.NewGuid()), new HandlerOnlyEvent(Guid.NewGuid()));
+        Raise(scope, new HandlerOnlyEvent(Guid.NewGuid(), DateTimeOffset.UtcNow), new HandlerOnlyEvent(Guid.NewGuid(), DateTimeOffset.UtcNow));
 
         await Dispatcher(scope).DispatchEventsAsync();
 
@@ -260,7 +260,7 @@ public sealed class DomainEventDispatchCompositionTests
         var log = new DomainEventLog();
         using var provider = BuildWithFixtures(log);
         using var scope = provider.CreateScope();
-        Raise(scope, new ItemCreatedEvent(Guid.NewGuid()));
+        Raise(scope, new ItemCreatedEvent(Guid.NewGuid(), DateTimeOffset.UtcNow));
 
         var ex = await Should.ThrowAsync<InvalidOperationException>(
             async () => await Dispatcher(scope).DispatchEventsAsync());
@@ -280,7 +280,7 @@ public sealed class DomainEventDispatchCompositionTests
         var log = new DomainEventLog();
         using var provider = BuildWithFixtures(log);
         using var scope = provider.CreateScope();
-        Raise(scope, new HandlerOnlyEvent(Guid.NewGuid()));
+        Raise(scope, new HandlerOnlyEvent(Guid.NewGuid(), DateTimeOffset.UtcNow));
 
         await Should.NotThrowAsync(async () => await Dispatcher(scope).DispatchEventsAsync());
     }
@@ -292,7 +292,7 @@ public sealed class DomainEventDispatchCompositionTests
         var sink = new RecordingSink(log);
         using var provider = BuildWithFixtures(log, Contribute(sink));
         using var scope = provider.CreateScope();
-        Raise(scope, new ItemCreatedEvent(Guid.NewGuid()));
+        Raise(scope, new ItemCreatedEvent(Guid.NewGuid(), DateTimeOffset.UtcNow));
 
         await Dispatcher(scope).DispatchEventsAsync();
 

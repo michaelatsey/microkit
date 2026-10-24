@@ -20,7 +20,7 @@ internal sealed class EfE2EWriter(E2EDbContext context) : IE2EWriter
 }
 
 /// <summary>The fact. One per scenario — ADR-MEDIATR-005 allows exactly one notification per event type.</summary>
-internal sealed record WidgetCreatedEvent(Guid WidgetId, string Name) : DomainEvent;
+internal sealed record WidgetCreatedEvent(Guid WidgetId, string Name, DateTimeOffset OccurredAt) : DomainEvent(OccurredAt);
 
 /// <summary>
 /// The outbox payload wrapper. The public constructor taking exactly <see cref="WidgetCreatedEvent"/>
@@ -55,7 +55,7 @@ internal sealed class CreateWidgetHandler(IE2EWriter writer)
     public ValueTask<Result<Guid>> Handle(CreateWidgetCommand command, CancellationToken ct = default)
     {
         var aggregate = new E2EAggregate { Name = command.Name };
-        aggregate.Raise(new WidgetCreatedEvent(aggregate.Id, command.Name));
+        aggregate.Raise(new WidgetCreatedEvent(aggregate.Id, command.Name, DateTimeOffset.UtcNow));
 
         // Stage only — TransactionBehavior drains the event and flushes both the aggregate and the
         // outbox row it produces, in one SaveChangesAsync inside the open transaction.

@@ -29,7 +29,7 @@ public sealed class DomainEventHandlerDispatcherTests
         var log = provider.GetRequiredService<DomainEventLog>();
         var itemId = Guid.NewGuid();
 
-        await dispatcher.DispatchAsync(new ItemCreatedEvent(itemId));
+        await dispatcher.DispatchAsync(new ItemCreatedEvent(itemId, DateTimeOffset.UtcNow));
 
         log.ItemCreatedIds.Count.ShouldBe(1);
         log.ItemCreatedIds[0].ShouldBe(itemId);
@@ -43,7 +43,7 @@ public sealed class DomainEventHandlerDispatcherTests
         var dispatcher = scope.ServiceProvider.GetRequiredService<IDomainEventHandlerDispatcher>();
         var log = provider.GetRequiredService<DomainEventLog>();
 
-        await dispatcher.DispatchAsync(new OrderPlacedEvent(Guid.NewGuid()));
+        await dispatcher.DispatchAsync(new OrderPlacedEvent(Guid.NewGuid(), DateTimeOffset.UtcNow));
 
         log.OrderPlacedInvocations.ShouldBe(2);
     }
@@ -56,6 +56,6 @@ public sealed class DomainEventHandlerDispatcherTests
         var dispatcher = scope.ServiceProvider.GetRequiredService<IDomainEventHandlerDispatcher>();
 
         await Should.NotThrowAsync(async () =>
-            await dispatcher.DispatchAsync(new UnregisteredEvent(Guid.NewGuid())));
+            await dispatcher.DispatchAsync(new UnregisteredEvent(Guid.NewGuid(), DateTimeOffset.UtcNow)));
     }
 }

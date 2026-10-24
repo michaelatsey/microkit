@@ -29,10 +29,20 @@ public abstract class AggregateRoot<TId> : Entity<TId>, IDomainEventsProvider, I
         _domainEvents.Count == 0 ? Array.Empty<IDomainEvent>() : _domainEvents.AsReadOnly();
 
     /// <summary>
-    /// Raises a domain event. Should be called AFTER state mutations.
-    /// Events represent facts about what has already happened.
+    /// Raises a domain event. Call AFTER state mutations — events are facts about what has
+    /// already happened.
     /// </summary>
-    /// <param name="domainEvent">The event that occurred</param>
+    /// <param name="domainEvent">The event that occurred.</param>
+    /// <exception cref="ArgumentNullException">
+    /// Thrown when <paramref name="domainEvent"/> is <see langword="null"/>.
+    /// </exception>
+    /// <remarks>
+    /// The event is stored exactly as supplied: the aggregate never rewrites a fact it was
+    /// handed. Timestamping is the caller's responsibility, and the compiler enforces it: an event
+    /// deriving from <see cref="DomainEvent"/> passes its instant through the positional
+    /// <c>OccurredAt</c> parameter of the base record, which has no default. Pass the same instant
+    /// to every event raised within one business operation.
+    /// </remarks>
     protected void RaiseDomainEvent(IDomainEvent domainEvent)
     {
         ArgumentNullException.ThrowIfNull(domainEvent);

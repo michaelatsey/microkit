@@ -31,27 +31,27 @@ public class DomainEventBenchmarks
         _amount = new Money(100.50m, "USD");
         _timestamp = DateTimeOffset.UtcNow;
 
-        _event1 = new OrderPlacedEvent(_orderId, _customerId, _amount);
-        _event2 = new OrderPlacedEvent(_orderId, _customerId, _amount);
-        _eventDifferent = new OrderPlacedEvent(BenchmarkOrderId.New(), _customerId, _amount);
+        _event1 = new OrderPlacedEvent(_orderId, _customerId, _amount, _timestamp);
+        _event2 = new OrderPlacedEvent(_orderId, _customerId, _amount, _timestamp);
+        _eventDifferent = new OrderPlacedEvent(BenchmarkOrderId.New(), _customerId, _amount, _timestamp);
 
         _eventCollection = new List<IDomainEvent>();
         for (int i = 0; i < 100; i++)
         {
-            _eventCollection.Add(new OrderPlacedEvent(BenchmarkOrderId.New(), _customerId, _amount));
+            _eventCollection.Add(new OrderPlacedEvent(BenchmarkOrderId.New(), _customerId, _amount, _timestamp));
         }
     }
 
     [Benchmark(Description = "Create Order Placed Event")]
     public OrderPlacedEvent CreateOrderPlacedEvent()
     {
-        return new OrderPlacedEvent(_orderId, _customerId, _amount);
+        return new OrderPlacedEvent(_orderId, _customerId, _amount, _timestamp);
     }
 
     [Benchmark(Description = "Create Customer Registered Event")]
     public CustomerRegisteredEvent CreateCustomerRegisteredEvent()
     {
-        return new CustomerRegisteredEvent(_customerId, new Email("test@example.com"));
+        return new CustomerRegisteredEvent(_customerId, new Email("test@example.com"), _timestamp);
     }
 
     [Benchmark(Description = "Event Equality (True)")]
@@ -79,7 +79,7 @@ public class DomainEventBenchmarks
 
         for (int i = 0; i < 10; i++)
         {
-            events.Add(new OrderPlacedEvent(BenchmarkOrderId.New(), _customerId, _amount));
+            events.Add(new OrderPlacedEvent(BenchmarkOrderId.New(), _customerId, _amount, _timestamp));
         }
 
         return events;

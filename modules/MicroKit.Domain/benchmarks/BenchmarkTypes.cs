@@ -39,31 +39,37 @@ public record BenchmarkOrderItemRequest(BenchmarkProductId ProductId, int Quanti
 public sealed record OrderPlacedEvent(
     BenchmarkOrderId OrderId,
     BenchmarkCustomerId CustomerId,
-    Money TotalAmount) : DomainEvent;
+    Money TotalAmount,
+    DateTimeOffset OccurredAt) : DomainEvent(OccurredAt);
 
 public sealed record OrderItemAddedEvent(
     BenchmarkOrderId OrderId,
     BenchmarkProductId ProductId,
     int Quantity,
-    Money UnitPrice) : DomainEvent;
+    Money UnitPrice,
+    DateTimeOffset OccurredAt) : DomainEvent(OccurredAt);
 
 public sealed record OrderShippedEvent(
     BenchmarkOrderId OrderId,
-    TrackingNumber TrackingNumber) : DomainEvent;
+    TrackingNumber TrackingNumber,
+    DateTimeOffset OccurredAt) : DomainEvent(OccurredAt);
 
 public sealed record CustomerRegisteredEvent(
     BenchmarkCustomerId CustomerId,
-    Email EmailAddress) : DomainEvent;
+    Email EmailAddress,
+    DateTimeOffset OccurredAt) : DomainEvent(OccurredAt);
 
 public sealed record ProductCreatedEvent(
     BenchmarkProductId ProductId,
     string ProductName,
-    Money Price) : DomainEvent;
+    Money Price,
+    DateTimeOffset OccurredAt) : DomainEvent(OccurredAt);
 
 public sealed record InventoryUpdatedEvent(
     BenchmarkProductId ProductId,
     int PreviousQuantity,
-    int NewQuantity) : DomainEvent;
+    int NewQuantity,
+    DateTimeOffset OccurredAt) : DomainEvent(OccurredAt);
 
 // Enums
 public enum OrderStatus { Draft, Placed, Shipped, Delivered, Cancelled }
