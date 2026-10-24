@@ -1,9 +1,14 @@
 namespace MicroKit.Domain;
 
 /// <summary>
-/// The single rule applied to every instant entering the domain: it is stored at offset zero
-/// and is never <c>default(DateTimeOffset)</c>.
+/// The single rule applied to the audit and event instants entering the domain
+/// (<c>CreatedAt</c>, the instant of <c>Mutate</c>, <c>DomainEvent.OccurredAt</c>): each is stored at
+/// offset zero and is never <c>default(DateTimeOffset)</c>.
 /// </summary>
+/// <remarks>
+/// It does not apply to <see cref="ValueObjects.Common.DateRange"/>, which keeps the offset it is
+/// given: <see cref="ValueObjects.Common.DateRange.ForDay"/> builds the day in that offset.
+/// </remarks>
 internal static class UtcInstant
 {
     /// <summary>

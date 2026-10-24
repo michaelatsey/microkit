@@ -102,6 +102,17 @@ public sealed class PublishedDocumentationTests
         doc.ShouldContain("ADR-004 D9");
     }
 
+    [Fact]
+    public void UtcInstant_StatesWhichInstantsItApplies()
+    {
+        // DateRange keeps its offset, so the rule is not applied to "every instant".
+        var doc = Member("T:MicroKit.Domain.UtcInstant");
+
+        doc.ShouldNotContain("every instant entering the domain");
+        doc.ShouldContain("audit and event instants");
+        doc.ShouldContain("DateRange");
+    }
+
     // #182, ADR-004 D3: a plain aggregate keeps the events and changes of a method that throws.
     [Theory]
     [InlineData("T:MicroKit.Domain.Aggregates.AggregateRoot`1")]
