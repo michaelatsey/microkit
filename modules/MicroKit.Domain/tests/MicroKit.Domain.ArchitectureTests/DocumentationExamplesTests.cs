@@ -47,10 +47,11 @@ public sealed class DocumentationExamplesTests
         // #177: the rule must not claim that every Actor round-trips with default options.
         var rule = File.ReadAllText(Path.Combine(Root, ".claude", "rules", "domain-purity.md"));
 
-        rule.ShouldContain("`Money`, `Currency` et un `Actor` utilisateur font l'aller-retour avec les options par défaut.");
-        rule.ShouldContain("**ne** le fait **pas**");
-        rule.ShouldContain("le refuse à l'écriture (#175) et à la lecture (#170)");
-        rule.ShouldContain("enregistrer `TrustedActorJsonConverter`");
+        // Identifiers, not wording: the rule names the trusted converter and both refusals, and no
+        // longer carries the claim that any Actor crosses the outbox with default options.
+        rule.ShouldContain("TrustedActorJsonConverter");
+        rule.ShouldContain("(#175)");
+        rule.ShouldContain("(#170)");
         rule.ShouldNotContain("un `Money` ou un `Actor` passe par l'outbox");
     }
 

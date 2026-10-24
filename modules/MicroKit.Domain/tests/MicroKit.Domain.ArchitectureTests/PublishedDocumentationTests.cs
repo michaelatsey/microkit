@@ -48,12 +48,19 @@ public sealed class PublishedDocumentationTests
         "M:MicroKit.Domain.Aggregates.AuditableAggregateRoot`1.Mutate(System.DateTimeOffset,MicroKit.Domain.ValueObjects.Common.Actor,System.Action)";
 
     [Fact]
-    public void AggregateMutate_StatesTheEventRemovalOnce()
+    public void AggregateMutate_StatesTheEventRemovalInOneParagraph()
     {
-        var doc = Member(AggregateMutate);
+        // Structure, not wording: the general paragraph says nothing of events, and exactly one
+        // paragraph of the remarks is about the events of a failed mutation.
+        var paragraphs = Documentation.Descendants("member")
+            .Single(m => (string?)m.Attribute("name") == AggregateMutate)
+            .Element("remarks")!
+            .Elements("para")
+            .Select(p => p.Value)
+            .ToArray();
 
-        doc.ShouldContain("Domain events raised inside a");
-        Count(doc, "removed").ShouldBe(1);
+        paragraphs[0].ShouldNotContain("event", Case.Insensitive);
+        paragraphs.Count(p => p.Contains("domain events", StringComparison.OrdinalIgnoreCase)).ShouldBe(1);
     }
 
     [Theory]
@@ -68,9 +75,6 @@ public sealed class PublishedDocumentationTests
         doc.ShouldContain("keeps its audit stamp");
         doc.ShouldContain("before mutating any child");
     }
-
-    private static int Count(string text, string word) =>
-        text.Split(word, StringSplitOptions.None).Length - 1;
 
     private static string Member(string name)
     {
