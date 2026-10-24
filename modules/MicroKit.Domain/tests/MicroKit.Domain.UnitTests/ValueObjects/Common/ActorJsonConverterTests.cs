@@ -40,23 +40,54 @@ public sealed class ActorJsonConverterTests
         ex.InnerException.ShouldBeOfType<DomainException>();
     }
 
+    // #181, ADR-004 D1: writing a built-in actor carries no risk, so the default converter writes it.
     [Theory]
     [MemberData(nameof(Options))]
-    public void Actor_BuiltIn_WithTheDefaultConverter_FailsOnWrite(string options)
+    public void Actor_BuiltIn_WithTheDefaultConverter_WritesItsValue(string options)
     {
-        var ex = Should.Throw<JsonException>(() => JsonSerializer.Serialize(Actor.System, For(options)));
-
-        ex.Message.ShouldContain(nameof(TrustedActorJsonConverter));
+        JsonSerializer.Serialize(Actor.System, For(options)).ShouldBe("\"$system\"");
     }
 
     [Theory]
     [MemberData(nameof(Options))]
-    public void Actor_BuiltInAsDictionaryKey_WithTheDefaultConverter_FailsOnWrite(string options)
+    public void Actor_BuiltInAsDictionaryKey_WithTheDefaultConverter_WritesItsValue(string options)
     {
         var byActor = new Dictionary<Actor, int> { [Actor.System] = 1 };
 
-        Should.Throw<JsonException>(() => JsonSerializer.Serialize(byActor, For(options)))
-            .Message.ShouldContain(nameof(TrustedActorJsonConverter));
+        JsonSerializer.Serialize(byActor, For(options)).ShouldBe("""{"$system":1}""");
+    }
+
+    [Theory]
+    [MemberData(nameof(Options))]
+    public void Record_CarryingABuiltInActor_WithTheDefaultConverter_WritesItsValue(string options)
+    {
+        var json = JsonSerializer.Serialize(new AuditSnapshot(Actor.System), For(options));
+
+        json.ShouldBe(options == "web" ? """{"updatedBy":"$system"}""" : """{"UpdatedBy":"$system"}""");
+    }
+
+    [Theory]
+    [MemberData(nameof(Options))]
+    public void Record_CarryingABuiltInActor_WrittenWithTheDefaultConverter_CannotBeReadBack(string options)
+    {
+        var json = JsonSerializer.Serialize(new AuditSnapshot(Actor.System), For(options));
+
+        var ex = Should.Throw<JsonException>(() => JsonSerializer.Deserialize<AuditSnapshot>(json, For(options)));
+
+        ex.Path.ShouldBe(options == "web" ? "$.updatedBy" : "$.UpdatedBy");
+        ex.InnerException.ShouldBeOfType<DomainException>();
+    }
+
+    [Theory]
+    [MemberData(nameof(Options))]
+    public void Actor_BuiltInAsDictionaryKey_WrittenWithTheDefaultConverter_CannotBeReadBack(string options)
+    {
+        var json = JsonSerializer.Serialize(new Dictionary<Actor, int> { [Actor.System] = 1 }, For(options));
+
+        var ex = Should.Throw<JsonException>(() => JsonSerializer.Deserialize<Dictionary<Actor, int>>(json, For(options)));
+
+        ex.Path.ShouldBe("$.$system");
+        ex.InnerException.ShouldBeOfType<DomainException>();
     }
 
     [Theory]
@@ -100,6 +131,8 @@ public sealed class ActorJsonConverterTests
 #pragma warning restore IL2026
 
 public sealed record ActorHolder(Actor By);
+
+public sealed record AuditSnapshot(Actor UpdatedBy);
 
 public sealed record OrderPlaced(Money Total, string PlacedBy, Actor Customer, DateTimeOffset OccurredAt)
     : DomainEvent(OccurredAt);

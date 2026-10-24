@@ -42,6 +42,25 @@ public sealed class TrustedActorJsonConverterTests
 
     [Theory]
     [MemberData(nameof(Options))]
+    public void Actor_BuiltInAsDictionaryKey_WithTheTrustedConverter_RoundTripsToTheSameInstance(string options)
+    {
+        var byActor = new Dictionary<Actor, int> { [Actor.System] = 1 };
+
+        var read = RoundTrip(byActor, Trusted(options));
+
+        read.Keys.Single().ShouldBeSameAs(Actor.System);
+        read[Actor.System].ShouldBe(1);
+    }
+
+    [Theory]
+    [MemberData(nameof(Options))]
+    public void Record_CarryingABuiltInActor_WithTheTrustedConverter_RoundTripsToTheSameInstance(string options)
+    {
+        RoundTrip(new StoredAuditSnapshot(Actor.System), Trusted(options)).UpdatedBy.ShouldBeSameAs(Actor.System);
+    }
+
+    [Theory]
+    [MemberData(nameof(Options))]
     public void Actor_User_WithTheTrustedConverter_RoundTrips(string options)
     {
         var actor = new Actor("user-123");
@@ -63,9 +82,9 @@ public sealed class TrustedActorJsonConverterTests
     {
         var archived = new OrderArchived(Actor.System, new DateTimeOffset(2026, 10, 24, 9, 0, 0, TimeSpan.Zero));
 
-        // Refused when written, inside the business transaction, not when read back later.
-        Should.Throw<JsonException>(() => JsonSerializer.Serialize(archived, For(options)))
-            .Message.ShouldContain(nameof(TrustedActorJsonConverter));
+        // Written with default options, but readable only with the trusted converter (ADR-004 D1).
+        var json = JsonSerializer.Serialize(archived, For(options));
+        Should.Throw<JsonException>(() => JsonSerializer.Deserialize<OrderArchived>(json, For(options)));
 
         var read = RoundTrip(archived, Trusted(options));
         read.ArchivedBy.ShouldBeSameAs(Actor.System);
@@ -75,3 +94,5 @@ public sealed class TrustedActorJsonConverterTests
 #pragma warning restore IL2026
 
 public sealed record OrderArchived(Actor ArchivedBy, DateTimeOffset OccurredAt) : DomainEvent(OccurredAt);
+
+public sealed record StoredAuditSnapshot(Actor UpdatedBy);

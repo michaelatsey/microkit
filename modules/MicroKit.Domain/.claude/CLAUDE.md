@@ -57,7 +57,7 @@ IDomainService              ← marker interface
 ```
 DomainException             ← base de toutes les exceptions domaine
 BusinessRuleViolationException(IBusinessRule rule)
-EntityNotFoundException<T>(TId id)
+EntityNotFoundException<TEntity, TId>(TId entityId)
 ```
 
 ### Règles métier
@@ -228,11 +228,13 @@ MicroKit.Domain                ← tout (pas de split Abstractions pour ce modul
 src/MicroKit.Domain/
 ├── Aggregates/
 │   ├── AggregateRoot.cs
+│   ├── AuditRules.cs            ← internal : règles d'audit partagées (ADR-003 D5)
 │   ├── AuditableAggregateRoot.cs
 │   ├── AuditableEntity.cs
 │   ├── Entity.cs
 │   ├── IAggregateRoot.cs
-│   └── IAuditableEntity.cs
+│   ├── IAuditableEntity.cs
+│   └── IEventJournal.cs         ← internal : retrait des events d'un Mutate qui échoue
 ├── Events/
 │   ├── DomainEvent.cs
 │   ├── IDomainEvent.cs
@@ -261,9 +263,24 @@ src/MicroKit.Domain/
 │   └── Specification.cs
 ├── ValueObjects/
 │   ├── IValueObject.cs
-│   └── Common/          ← Actor, Address, Currency, DateRange, Email, FullName,
-│                           Money, Percentage, PhoneNumber
-└── GlobalUsings.cs
+│   └── Common/
+│       ├── Actor.cs
+│       ├── Address.cs
+│       ├── Currency.cs
+│       ├── DateRange.cs
+│       ├── Email.cs
+│       ├── FullName.cs
+│       ├── Money.cs
+│       ├── Percentage.cs
+│       ├── PhoneNumber.cs
+│       └── Json/
+│           ├── ActorJsonConverter.cs          ← internal
+│           ├── CurrencyJsonConverter.cs       ← internal
+│           ├── MoneyJsonConverter.cs          ← internal
+│           └── TrustedActorJsonConverter.cs   ← public, opt-in (ADR-004 D1)
+├── GlobalUsings.cs
+├── UnicodeText.cs       ← internal : caractères invisibles ou de saut de ligne refusés (Actor, Email)
+└── UtcInstant.cs        ← internal : offset zéro, jamais default (instants d'audit et d'events)
 ```
 
 ---

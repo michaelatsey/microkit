@@ -21,9 +21,11 @@ namespace MicroKit.Domain.ValueObjects.Common.Json;
 /// would record a caller's action as the application's.
 /// </para>
 /// <para>
-/// It writes every actor, built-in ones included, as its identifier, a JSON string; the default
-/// converter refuses to write a built-in actor. An invalid identifier read back fails as a
-/// <see cref="JsonException"/> whose inner exception is the <see cref="DomainException"/>.
+/// It writes every actor, built-in ones included, as its identifier, a JSON string, exactly as the
+/// default converter does: the two differ only when reading (ADR-004 D1). A built-in actor written
+/// with default options cannot be read back without this converter registered. An invalid
+/// identifier read back fails as a <see cref="JsonException"/> whose inner exception is the
+/// <see cref="DomainException"/>.
 /// </para>
 /// </remarks>
 /// <example>

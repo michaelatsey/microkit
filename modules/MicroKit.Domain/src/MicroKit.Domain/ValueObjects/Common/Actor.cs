@@ -11,7 +11,21 @@ namespace MicroKit.Domain.ValueObjects.Common;
 /// <para>
 /// The underlying value is an opaque <see cref="string"/> so that identifiers issued by any
 /// identity provider fit without conversion: an OIDC <c>sub</c>, an Entra object id, a
-/// Keycloak user id, a service-account name, or a plain GUID rendered as text.
+/// Keycloak user id, a service-account name, or a plain GUID rendered as text. The limit is
+/// <see cref="MaxLength"/> characters: OpenID Connect allows a <c>sub</c> of up to 255, so a
+/// provider issuing longer ones needs a shorter identifier mapped to it (ADR-004 D9).
+/// </para>
+/// <para>
+/// An invisible, control or line-breaking character is rejected: a control or format character, a
+/// line or paragraph separator, a default-ignorable character such as a variation selector or a
+/// Hangul filler, an unassigned code point or an unpaired surrogate. An actor read from a token claim
+/// or a header therefore cannot forge a line in an audit log, and always reads back as itself
+/// (ADR-004 D8).
+/// </para>
+/// <para>
+/// Identifiers are compared ordinally, as issued: an identity provider's identifier is opaque, so it
+/// is never normalized. Look-alike identifiers, with another kind of space, a letter from another
+/// script or a decomposed accent, are different actors; the type does not detect them.
 /// </para>
 /// <para>
 /// Prefer the built-in instances (<see cref="System"/>, <see cref="Anonymous"/>,
@@ -25,19 +39,22 @@ namespace MicroKit.Domain.ValueObjects.Common;
 /// user whose identifier happens to be <c>system</c>.
 /// </para>
 /// <para>
-/// <c>System.Text.Json</c> writes an actor as its identifier, a JSON string. With default options it
-/// reads it back through the public constructor: JSON is treated as untrusted, so a value with the
-/// reserved prefix fails as a <see cref="System.Text.Json.JsonException"/>. A built-in actor does
-/// <b>not</b> round-trip: the default converter refuses it on write as well as on read, so the
-/// failure happens when it is serialized, inside the business transaction, not when it is read
-/// back. Storage the application wrote itself (an outbox, an event store, a cache)
-/// opts into rehydrating built-in actors by registering
-/// <see cref="Json.TrustedActorJsonConverter"/> in <c>JsonSerializerOptions.Converters</c>.
+/// <c>System.Text.Json</c> handles an actor asymmetrically, by design (ADR-004 D1). It writes every
+/// actor, built-in ones included, as its identifier, a JSON string, also as a dictionary key, so
+/// writing never fails on an actor. With default options it reads the identifier back through the
+/// public constructor: JSON is treated as untrusted, so a value with the reserved prefix fails as a
+/// <see cref="System.Text.Json.JsonException"/>. A built-in actor written with default options
+/// therefore <b>cannot be read back</b> with them. A path that only writes, such as an HTTP response
+/// or a log, needs nothing. Storage the application writes and reads back itself (an outbox, an
+/// event store, a cache, an idempotency store) must register
+/// <see cref="Json.TrustedActorJsonConverter"/> in the <c>JsonSerializerOptions.Converters</c> it
+/// reads with, or reading a built-in actor back fails.
 /// </para>
 /// <para>
 /// Until the Messaging outbox can register that converter (#174), an event that must carry a
-/// built-in actor should carry the actor's <see cref="Value"/> as a string, and rebuild the actor
-/// with <see cref="Restore(string)"/> where it is consumed.
+/// built-in actor carries the actor's <see cref="Value"/> as a string, and the consumer rebuilds the
+/// actor with <see cref="Restore(string)"/>. Nothing stops an event from carrying the
+/// <see cref="Actor"/> itself: it is written, and fails only when the outbox reads it back.
 /// </para>
 /// </remarks>
 [JsonConverter(typeof(ActorJsonConverter))]
@@ -46,6 +63,11 @@ public sealed record Actor : IValueObject
     /// <summary>
     /// The maximum supported length of an actor identifier.
     /// </summary>
+    /// <remarks>
+    /// Shorter than the 255 characters OpenID Connect allows for a <c>sub</c>: a longer identifier is
+    /// rejected. The value is compiled into callers that size a column from it, so it does not grow
+    /// before a major version (ADR-004 D9).
+    /// </remarks>
     public const int MaxLength = 200;
 
     /// <summary>
@@ -58,8 +80,8 @@ public sealed record Actor : IValueObject
     /// </summary>
     /// <param name="value">The actor identifier. Leading and trailing white space is removed.</param>
     /// <exception cref="DomainException">
-    /// Thrown when the identifier is empty, exceeds <see cref="MaxLength"/>, or starts with
-    /// <see cref="ReservedPrefix"/>.
+    /// Thrown when the identifier is empty, exceeds <see cref="MaxLength"/>, starts with
+    /// <see cref="ReservedPrefix"/>, or contains an invisible, control or line-breaking character.
     /// </exception>
     public Actor(string value) : this(value, allowReserved: false) { }
 
@@ -93,15 +115,20 @@ public sealed record Actor : IValueObject
     /// Restores an actor from an identifier read back from storage or a message, built-in actors
     /// included.
     /// </summary>
-    /// <param name="value">The stored identifier, as <see cref="Value"/> returned it.</param>
+    /// <param name="value">
+    /// The stored identifier, as <see cref="Value"/> returned it. Leading and trailing white space is
+    /// removed first, as the constructor removes it, so a value read back from a padded column restores
+    /// the same actor.
+    /// </param>
     /// <returns>
     /// The built-in instance when <paramref name="value"/> is the value of <see cref="System"/>,
     /// <see cref="Anonymous"/> or <see cref="Migration"/>; otherwise a new actor built by the public
     /// constructor.
     /// </returns>
     /// <exception cref="DomainException">
-    /// Thrown when the identifier is empty, too long, or starts with <see cref="ReservedPrefix"/>
-    /// without being a built-in actor.
+    /// Thrown when the identifier is empty, too long, contains an invisible, control or line-breaking
+    /// character, or
+    /// starts with <see cref="ReservedPrefix"/> without being a built-in actor.
     /// </exception>
     /// <remarks>
     /// <para>
@@ -116,18 +143,19 @@ public sealed record Actor : IValueObject
     /// constructor, which rejects the reserved prefix.
     /// </para>
     /// <para>
-    /// The default <c>System.Text.Json</c> converter of <see cref="Actor"/> does not call this
-    /// method, so a built-in actor does not round-trip with default options.
+    /// The default <c>System.Text.Json</c> converter of <see cref="Actor"/> writes a built-in actor
+    /// but does not call this method when reading, so a built-in actor does not round-trip with
+    /// default options.
     /// <see cref="Json.TrustedActorJsonConverter"/> calls it, under the same rule: register that
     /// converter only for storage the application wrote itself, never for a request body.
     /// </para>
     /// </remarks>
-    public static Actor Restore(string value) => value switch
+    public static Actor Restore(string value) => (value ?? string.Empty).Trim() switch
     {
         "$system" => System,
         "$anonymous" => Anonymous,
         "$migration" => Migration,
-        _ => new Actor(value),
+        _ => new Actor(value ?? string.Empty),
     };
 
     /// <summary>
@@ -137,8 +165,9 @@ public sealed record Actor : IValueObject
     /// <param name="allowReserved">Whether the identifier may start with <see cref="ReservedPrefix"/>.</param>
     /// <returns>The trimmed identifier.</returns>
     /// <exception cref="DomainException">
-    /// Thrown when the identifier is empty, exceeds <see cref="MaxLength"/>, or starts with
-    /// <see cref="ReservedPrefix"/> while <paramref name="allowReserved"/> is false.
+    /// Thrown when the identifier is empty, exceeds <see cref="MaxLength"/>, contains an invisible,
+    /// control or line-breaking character, or starts with <see cref="ReservedPrefix"/> while
+    /// <paramref name="allowReserved"/> is false.
     /// </exception>
     private static string Validate(string raw, bool allowReserved)
     {
@@ -149,6 +178,9 @@ public sealed record Actor : IValueObject
 
         if (trimmed.Length > MaxLength)
             throw new DomainException($"Actor identifier cannot exceed {MaxLength} characters.");
+
+        if (!UnicodeText.IsVisible(trimmed))
+            throw new DomainException("Actor identifier cannot contain an invisible, control or line-breaking character.");
 
         if (!allowReserved && trimmed[0] == ReservedPrefix)
             throw new DomainException(

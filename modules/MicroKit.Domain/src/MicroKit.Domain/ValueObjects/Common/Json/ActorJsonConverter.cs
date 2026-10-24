@@ -5,22 +5,23 @@ using MicroKit.Domain.Exceptions;
 namespace MicroKit.Domain.ValueObjects.Common.Json;
 
 /// <summary>
-/// The default <c>System.Text.Json</c> converter of <see cref="Actor"/>: writes the identifier and
-/// reads it back through the public constructor.
+/// The default <c>System.Text.Json</c> converter of <see cref="Actor"/>: writes the identifier of
+/// every actor and reads it back through the public constructor.
 /// </summary>
 /// <remarks>
 /// <para>
-/// JSON reaching <see cref="Actor"/> through this type-level converter is untrusted, so a value with
-/// the reserved prefix <see cref="Actor.ReservedPrefix"/> fails as a <see cref="JsonException"/>
-/// carrying the JSON path, as any other invalid identifier does.
+/// The converter is asymmetric by design (ADR-004 D1). Writing carries no risk, so it writes every
+/// actor, built-in ones included, as its identifier, a JSON string, and as a dictionary key: a path
+/// that only writes, such as an HTTP response or a log, never fails on an actor.
 /// </para>
 /// <para>
-/// What this converter writes, it can read: it refuses to write a built-in actor too, with a
-/// <see cref="JsonException"/> naming <see cref="TrustedActorJsonConverter"/>. A value that cannot
-/// cross the untrusted path therefore fails when it is written, inside the business transaction,
-/// never later when it is read back. Storage the application wrote itself opts into built-in actors
-/// by registering <see cref="TrustedActorJsonConverter"/>. An actor also works as a dictionary key,
-/// under the same rule.
+/// Reading is where the risk lies. JSON reaching <see cref="Actor"/> through this type-level
+/// converter is untrusted, so a value with the reserved prefix <see cref="Actor.ReservedPrefix"/>
+/// fails as a <see cref="JsonException"/> carrying the JSON path, as any other invalid identifier
+/// does. A built-in actor written with default options therefore cannot be read back with them:
+/// storage the application writes and reads back itself (an outbox, an event store, a cache) reads
+/// it by registering <see cref="TrustedActorJsonConverter"/> in the
+/// <see cref="JsonSerializerOptions.Converters"/> it reads with.
 /// </para>
 /// </remarks>
 internal sealed class ActorJsonConverter : JsonConverter<Actor>
@@ -29,29 +30,13 @@ internal sealed class ActorJsonConverter : JsonConverter<Actor>
         Build(ReadValue(ref reader), static value => new Actor(value));
 
     public override void Write(Utf8JsonWriter writer, Actor value, JsonSerializerOptions options) =>
-        WriteValue(writer, RequireUntrustedSafe(value));
+        WriteValue(writer, value);
 
     public override Actor ReadAsPropertyName(ref Utf8JsonReader reader, Type typeToConvert, JsonSerializerOptions options) =>
         Build(reader.GetString()!, static value => new Actor(value));
 
     public override void WriteAsPropertyName(Utf8JsonWriter writer, Actor value, JsonSerializerOptions options) =>
-        WritePropertyName(writer, RequireUntrustedSafe(value));
-
-    /// <summary>
-    /// Refuses a built-in actor, which this converter could not read back.
-    /// </summary>
-    private static Actor RequireUntrustedSafe(Actor value)
-    {
-        ArgumentNullException.ThrowIfNull(value);
-
-        if (value.Value.StartsWith(Actor.ReservedPrefix))
-            throw new JsonException(
-                $"The built-in actor '{value.Value}' cannot be serialized with the default Actor converter, " +
-                $"which could not read it back. Register {nameof(TrustedActorJsonConverter)} in " +
-                "JsonSerializerOptions.Converters for storage the application wrote itself.");
-
-        return value;
-    }
+        WritePropertyName(writer, value);
 
     /// <summary>Reads the identifier of an actor, a JSON string.</summary>
     internal static string ReadValue(ref Utf8JsonReader reader) =>

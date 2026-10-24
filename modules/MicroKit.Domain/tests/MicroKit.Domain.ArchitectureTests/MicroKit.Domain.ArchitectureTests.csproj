@@ -51,10 +51,33 @@
     <None Include="../../src/MicroKit.Domain/Aggregates/AuditableEntity.cs;../../src/MicroKit.Domain/Aggregates/AuditableAggregateRoot.cs" Link="module-src/%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" />
     <!-- Outside module-docs/: the ADR quotes the replaced surface on purpose. -->
     <None Include="../../docs/architecture/ADR-003-Domain-Surface-Before-Stable.md" Link="module-adr/ADR-003-Domain-Surface-Before-Stable.md" CopyToOutputDirectory="PreserveNewest" />
+    <None Include="../../docs/architecture/ADR-004-Domain-Surface-Amendments.md" Link="module-adr/ADR-004-Domain-Surface-Amendments.md" CopyToOutputDirectory="PreserveNewest" />
+    <None Include="../../docs/architecture/ADR-001-Records-First-Value-Objects.md;../../docs/architecture/ADR-002-Domain-Events-Collection-Strategy.md" Link="module-adr/%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 
+  <!-- The names of the module's source files, for the structure the module brain documents. -->
+  <ItemGroup>
+    <DomainSourceFile Include="../../src/MicroKit.Domain/**/*.cs" Exclude="../../src/MicroKit.Domain/bin/**;../../src/MicroKit.Domain/obj/**" />
+  </ItemGroup>
+
+  <Target Name="ListDomainSources" AfterTargets="CopyFilesToOutputDirectory">
+    <WriteLinesToFile File="$(OutDir)module-src/files.txt"
+                      Lines="@(DomainSourceFile->'%(Filename)')"
+                      Overwrite="true" WriteOnlyWhenDifferent="true" />
+    <!-- Their using directives, for the namespaces the purity rule allows. -->
+    <ReadLinesFromFile File="%(DomainSourceFile.FullPath)">
+      <Output TaskParameter="Lines" ItemName="DomainSourceLine" />
+    </ReadLinesFromFile>
+    <ItemGroup>
+      <DomainUsing Include="@(DomainSourceLine)" Condition="$([System.Text.RegularExpressions.Regex]::IsMatch('%(Identity)', '^\s*(global\s+)?using\s+(static\s+)?(\w+\s*=\s*)?System[\w.]*\s*;'))" />
+    </ItemGroup>
+    <WriteLinesToFile File="$(OutDir)module-src/usings.txt"
+                      Lines="@(DomainUsing->Distinct())"
+                      Overwrite="true" WriteOnlyWhenDifferent="true" />
+  </Target>
+
   <Target Name="RequireModuleDocumentation" AfterTargets="CopyFilesToOutputDirectory">
-    <Error Condition="!Exists('$(OutDir)module-docs/README.md') Or !Exists('$(OutDir)module-docs/docs/guides/Implementing-Aggregates.md') Or !Exists('$(OutDir)module-docs/docs/performance/ValueObject-Benchmarks.md') Or !Exists('$(OutDir)module-docs/.claude/rules/csharp-style.md') Or !Exists('$(OutDir)module-adr/ADR-003-Domain-Surface-Before-Stable.md') Or !Exists('$(OutDir)module-src/AuditableEntity.cs') Or !Exists('$(OutDir)module-src/AuditableAggregateRoot.cs')"
+    <Error Condition="!Exists('$(OutDir)module-docs/README.md') Or !Exists('$(OutDir)module-docs/docs/guides/Implementing-Aggregates.md') Or !Exists('$(OutDir)module-docs/docs/performance/ValueObject-Benchmarks.md') Or !Exists('$(OutDir)module-docs/.claude/rules/csharp-style.md') Or !Exists('$(OutDir)module-adr/ADR-003-Domain-Surface-Before-Stable.md') Or !Exists('$(OutDir)module-adr/ADR-004-Domain-Surface-Amendments.md') Or !Exists('$(OutDir)module-adr/ADR-001-Records-First-Value-Objects.md') Or !Exists('$(OutDir)module-adr/ADR-002-Domain-Events-Collection-Strategy.md') Or !Exists('$(OutDir)module-src/AuditableEntity.cs') Or !Exists('$(OutDir)module-src/AuditableAggregateRoot.cs')"
            Text="The module documentation was not copied to $(OutDir)module-docs; DocumentationExamplesTests cannot run without it." />
   </Target>
 

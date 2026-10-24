@@ -68,7 +68,9 @@ public sealed class CurrencyJsonConverterTests
 
         RoundTrip(totals, options).ShouldBe(totals, ignoreOrder: true);
         RoundTrip(byActor, options).ShouldBe(byActor, ignoreOrder: true);
-        Should.Throw<JsonException>(() => JsonSerializer.Serialize(byTrustedActor, For(options)));
+        // Written with default options, read back only with the trusted converter (ADR-004 D1).
+        var written = JsonSerializer.Serialize(byTrustedActor, For(options));
+        Should.Throw<JsonException>(() => JsonSerializer.Deserialize<Dictionary<Actor, int>>(written, For(options)));
 
         var trusted = RoundTrip(byTrustedActor, Trusted(options));
         trusted[Actor.System].ShouldBe(1);

@@ -12,6 +12,16 @@ public sealed class MoneyTests
 
     private static Money M(decimal amount, string code) => new(amount, Currency.FromCode(code));
 
+    [Fact]
+    public void Arithmetic_ResultBeyondTheDecimalRange_ThrowsOverflowException()
+    {
+        var large = new Money(decimal.MaxValue, Eur);
+
+        Should.Throw<OverflowException>(() => large.Add(large));
+        Should.Throw<OverflowException>(() => new Money(decimal.MinValue, Eur).Subtract(large));
+        Should.Throw<OverflowException>(() => large.Multiply(2m, MidpointRounding.ToEven));
+    }
+
     [Theory]
     [InlineData(100.50, "USD")]
     [InlineData(0, "EUR")]

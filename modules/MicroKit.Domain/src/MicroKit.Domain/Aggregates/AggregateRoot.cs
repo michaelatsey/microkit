@@ -10,6 +10,20 @@ namespace MicroKit.Domain.Aggregates;
 /// Manages domain events and serves as consistency boundary.
 /// </summary>
 /// <typeparam name="TId">The strongly-typed identifier type</typeparam>
+/// <remarks>
+/// <para>
+/// A domain method that throws does not roll back the domain events it raised before throwing,
+/// nor the state it changed: a plain aggregate root keeps both. Only
+/// <see cref="AuditableAggregateRoot{TId}"/>, through its <c>Mutate</c>, removes the events of a
+/// mutation that throws (ADR-004 D3).
+/// </para>
+/// <para>
+/// After a domain method throws, the aggregate instance must be discarded, not saved. Saving it, or
+/// draining its events, would publish facts of an operation that failed. Discard the change set
+/// that tracks it too, not only the reference: an EF Core <c>DbContext</c> committed after the throw
+/// saves the instance anyway. To retry, load the aggregate again.
+/// </para>
+/// </remarks>
 public abstract class AggregateRoot<TId> : Entity<TId>, IDomainEventsProvider, IAggregateRoot, IEventJournal
     where TId : IEntityId
 {
@@ -38,11 +52,18 @@ public abstract class AggregateRoot<TId> : Entity<TId>, IDomainEventsProvider, I
     /// Thrown when <paramref name="domainEvent"/> is <see langword="null"/>.
     /// </exception>
     /// <remarks>
+    /// <para>
     /// The event is stored exactly as supplied: the aggregate never rewrites a fact it was
     /// handed. Timestamping is the caller's responsibility, and the compiler enforces it: an event
     /// deriving from <see cref="DomainEvent"/> passes its instant through the positional
     /// <c>OccurredAt</c> parameter of the base record, which has no default. Pass the same instant
     /// to every event raised within one business operation.
+    /// </para>
+    /// <para>
+    /// The event stays recorded if the calling method throws afterwards: outside the <c>Mutate</c>
+    /// of <see cref="AuditableAggregateRoot{TId}"/>, nothing removes it. After a domain method
+    /// throws, the aggregate instance must be discarded, not saved (ADR-004 D3).
+    /// </para>
     /// </remarks>
     protected void RaiseDomainEvent(IDomainEvent domainEvent)
     {

@@ -105,6 +105,21 @@ var invoice = Invoice.Issue(
     new Money(120.00m, Currency.FromCode("EUR")), TimeProvider.System, Actor.System);
 ```
 
+A `Mutate` lambda that captures a parameter, as `Adjust` does, allocates a closure and a delegate on each call. That cost is negligible next to the I/O that persists the change, so `Mutate` has a single overload (ADR-004 D2).
+
+### When a domain method throws
+
+A domain method that throws leaves the aggregate as it was at the moment of the throw:
+
+- **Plain `AggregateRoot<TId>`:** the domain events raised before the throw stay in `DomainEvents`, and the state changed before the throw stays changed. Nothing rolls them back.
+- **`AuditableAggregateRoot<TId>`:** a `Mutate` whose lambda throws removes the domain events raised inside that lambda and restores `UpdatedAt` and `UpdatedBy`. The field changes the lambda made before the throw stay, and so do the events the method raised outside `Mutate`.
+
+So after a domain method throws, the aggregate instance must be discarded, not saved. Saving it, or draining its events, would publish facts of an operation that failed. Load the aggregate again to retry.
+
+Discarding means the change set too, not only the reference. With EF Core, the `DbContext` still tracks the instance after the throw: committing that context, even for unrelated work in the same scope, saves the failed changes. With MicroKit.Persistence, the unit of work is discarded at the command boundary with `IUnitOfWork.DiscardChanges()`, which MicroKit.MediatR's `TransactionBehavior` calls whenever a command does not commit. Whatever the exception type, a domain or an argument exception, let it propagate to that boundary rather than committing after it.
+
+Checking every rule before the first assignment and the first `RaiseDomainEvent` keeps a broken rule from leaving anything behind; the discard rule covers every other exception (ADR-004 D3).
+
 ## Complex Aggregate Example
 
 ```csharp

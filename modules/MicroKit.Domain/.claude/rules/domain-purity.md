@@ -31,9 +31,12 @@ using System.Net.Http;
 // ✅ Runtime .NET uniquement
 using System;
 using System.Collections.Generic;
+using System.Collections.Frozen;      // table ISO 4217 de Currency
 using System.Collections.Immutable;
+using System.Globalization;           // CultureInfo invariante, catégories Unicode (UnicodeText)
 using System.Linq;
 using System.Linq.Expressions;
+using System.Diagnostics;
 using System.Diagnostics.CodeAnalysis;
 using System.Runtime.CompilerServices;
 using System.Text.RegularExpressions; // si nécessaire pour VO validation
@@ -46,11 +49,15 @@ using System.Text.Json.Serialization; // [JsonConverter] sur Money, Currency, Ac
 > du framework partagé, donc aucun package n'est ajouté.
 >
 > - `Money`, `Currency` et un `Actor` utilisateur font l'aller-retour avec les options par défaut.
-> - Un acteur intégré (`$system`, `$anonymous`, `$migration`) **ne** le fait **pas** : le
->   convertisseur par défaut le refuse à l'écriture (#175) et à la lecture (#170). Il faut
->   enregistrer `TrustedActorJsonConverter` dans les `JsonSerializerOptions.Converters` du stockage
->   que l'application a écrit elle-même (outbox, event store, cache), jamais pour un corps de
->   requête.
+> - Un acteur intégré (`$system`, `$anonymous`, `$migration`) **ne** le fait **pas**. Le
+>   convertisseur par défaut est asymétrique (#181, ADR-004 D1) : il écrit tout acteur, intégrés
+>   compris, mais refuse le préfixe `$` à la lecture (#170). Un acteur intégré écrit avec les
+>   options par défaut ne se relit donc qu'avec `TrustedActorJsonConverter` enregistré dans les
+>   `JsonSerializerOptions.Converters` du stockage que l'application a écrit elle-même (outbox,
+>   event store, cache), jamais pour un corps de requête.
+> - Tant que l'outbox Messaging ne peut pas enregistrer ce convertisseur (#174), un événement qui
+>   doit porter un acteur intégré en porte la `Value` en `string`, que le consommateur relit avec
+>   `Actor.Restore`.
 >
 > Seuls des `[JsonConverter]` et des convertisseurs `internal` sont permis, plus un seul type public :
 > `TrustedActorJsonConverter` (#170), cet opt-in explicite. Aucune autre API de sérialisation.

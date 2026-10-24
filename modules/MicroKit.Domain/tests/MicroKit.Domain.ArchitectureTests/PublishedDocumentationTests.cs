@@ -76,6 +76,137 @@ public sealed class PublishedDocumentationTests
         doc.ShouldContain("before mutating any child");
     }
 
+    // ADR-004 D1: a cache reads back what it wrote, so it is not a path that only writes.
+    [Theory]
+    [InlineData("T:MicroKit.Domain.ValueObjects.Common.Actor")]
+    [InlineData("T:MicroKit.Domain.ValueObjects.Common.Json.ActorJsonConverter")]
+    public void ActorJson_DoesNotPresentACacheAsAWriteOnlyPath(string type)
+    {
+        var doc = Member(type);
+
+        doc.ShouldNotContain("or a cache written with default options never fails");
+        doc.ShouldContain("only writes, such as an HTTP response or a log");
+        doc.ShouldContain("a cache");
+        doc.ShouldContain("reads with");
+    }
+
+    // ADR-004 D9: an OIDC sub may be longer than MaxLength; the documentation must not claim it fits.
+    [Theory]
+    [InlineData("T:MicroKit.Domain.ValueObjects.Common.Actor")]
+    [InlineData("F:MicroKit.Domain.ValueObjects.Common.Actor.MaxLength")]
+    public void Actor_StatesTheOidcSubjectLengthLimit(string member)
+    {
+        var doc = Member(member);
+
+        doc.ShouldContain("255");
+        doc.ShouldContain("ADR-004 D9");
+    }
+
+    [Fact]
+    public void UtcInstant_StatesWhichInstantsItApplies()
+    {
+        // DateRange keeps its offset, so the rule is not applied to "every instant".
+        var doc = Member("T:MicroKit.Domain.UtcInstant");
+
+        doc.ShouldNotContain("every instant entering the domain");
+        doc.ShouldContain("audit and event instants");
+        doc.ShouldContain("DateRange");
+    }
+
+    [Theory]
+    [InlineData("M:MicroKit.Domain.ValueObjects.Common.Money.Add(MicroKit.Domain.ValueObjects.Common.Money)")]
+    [InlineData("M:MicroKit.Domain.ValueObjects.Common.Money.Subtract(MicroKit.Domain.ValueObjects.Common.Money)")]
+    [InlineData("M:MicroKit.Domain.ValueObjects.Common.Money.Multiply(System.Decimal,System.MidpointRounding)")]
+    [InlineData("M:MicroKit.Domain.ValueObjects.Common.Money.Allocate(System.Int32[])")]
+    public void MoneyArithmetic_DocumentsItsOverflow(string member)
+    {
+        Member(member).ShouldContain("<exception cref=\"T:System.OverflowException\">");
+    }
+
+    [Fact]
+    public void PhoneNumber_StatesThatATrunkPrefixIsKept()
+    {
+        // The example must not present a number with its trunk 0 after the country code as the norm.
+        var doc = Member("T:MicroKit.Domain.ValueObjects.Common.PhoneNumber");
+
+        doc.ShouldContain("no national trunk prefix is removed");
+        doc.ShouldContain("becomes <c>+33612345678x12</c>");
+    }
+
+    // ADR-004 D5, D8: the text rules state what they do not check, so they promise nothing more.
+    [Theory]
+    [InlineData("T:MicroKit.Domain.UnicodeText", "not a spoofing detector")]
+    [InlineData("T:MicroKit.Domain.UnicodeText", "should run the same .NET version")]
+    [InlineData("T:MicroKit.Domain.ValueObjects.Common.Actor", "Identifiers are compared ordinally")]
+    [InlineData("T:MicroKit.Domain.ValueObjects.Common.Email", "not full Unicode case folding")]
+    [InlineData("T:MicroKit.Domain.ValueObjects.Common.Email", "count UTF-16 code units")]
+    [InlineData("T:MicroKit.Domain.ValueObjects.Common.Email", "zero-width joiner and non-joiner")]
+    public void TextRules_StateTheirLimits(string member, string limit)
+    {
+        Member(member).ShouldContain(limit);
+    }
+
+    [Theory]
+    [InlineData("M:MicroKit.Domain.ValueObjects.Common.Email.op_Implicit(System.String)~MicroKit.Domain.ValueObjects.Common.Email")]
+    [InlineData("M:MicroKit.Domain.ValueObjects.Common.PhoneNumber.op_Implicit(System.String)~MicroKit.Domain.ValueObjects.Common.PhoneNumber")]
+    public void ConversionFromString_DocumentsItsDomainException(string member)
+    {
+        Member(member).ShouldContain("<exception cref=\"T:MicroKit.Domain.Exceptions.DomainException\">");
+    }
+
+    [Fact]
+    public void Email_Summary_DoesNotPromiseCaseInsensitiveEquality()
+    {
+        // Equality is invariant lowercasing, not case folding (ADR-004 D5).
+        var doc = Member("T:MicroKit.Domain.ValueObjects.Common.Email");
+
+        doc.ShouldNotContain("Provides case-insensitive equality");
+        doc.ShouldContain("lowercased with the invariant culture");
+    }
+
+    [Fact]
+    public void Actor_DoesNotPromiseThatAnActorCannotPassForAnother()
+    {
+        Member("T:MicroKit.Domain.ValueObjects.Common.Actor").ShouldNotContain("nor pass for another one");
+    }
+
+    // #182, ADR-004 D3: a plain aggregate keeps the events and changes of a method that throws.
+    [Theory]
+    [InlineData("T:MicroKit.Domain.Aggregates.AggregateRoot`1")]
+    [InlineData("M:MicroKit.Domain.Aggregates.AggregateRoot`1.RaiseDomainEvent(MicroKit.Domain.Events.IDomainEvent)")]
+    [InlineData("M:MicroKit.Domain.Aggregates.AuditableEntity`1.Mutate(System.DateTimeOffset,MicroKit.Domain.ValueObjects.Common.Actor,System.Action)")]
+    [InlineData(AggregateMutate)]
+    public void AggregateMembers_StateThatAnInstanceIsDiscardedAfterAThrow(string member)
+    {
+        var doc = Member(member);
+
+        doc.ShouldContain("must be discarded, not saved");
+        doc.ShouldContain("ADR-004 D3");
+    }
+
+    [Fact]
+    public void AggregateRoot_StatesThatOnlyMutateRemovesTheEventsOfAFailedOperation()
+    {
+        var doc = Member("T:MicroKit.Domain.Aggregates.AggregateRoot`1");
+
+        doc.ShouldContain("does not roll back the domain events it raised");
+        doc.ShouldContain("AuditableAggregateRoot`1");
+        doc.ShouldContain("Discard the change set that tracks it too");
+    }
+
+    // #182, ADR-004 D2: the closure and delegate a capturing Mutate lambda allocates.
+    [Theory]
+    [InlineData("AuditableEntity`1")]
+    [InlineData("AuditableAggregateRoot`1")]
+    public void Mutate_StatesItsAllocation(string type)
+    {
+        var doc = Member(
+            $"M:MicroKit.Domain.Aggregates.{type}.Mutate(System.DateTimeOffset,MicroKit.Domain.ValueObjects.Common.Actor,System.Action)");
+
+        doc.ShouldContain("allocates a closure and a delegate on each call");
+        doc.ShouldContain("ADR-004 D2");
+    }
+
     private static string Member(string name)
     {
         var member = Documentation.Descendants("member")

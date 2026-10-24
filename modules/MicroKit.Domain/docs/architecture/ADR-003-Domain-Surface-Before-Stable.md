@@ -1,5 +1,7 @@
 # ADR-003: Settle the Domain Surface Before Stable
 
+Superseded in part by [ADR-004](ADR-004-Domain-Surface-Amendments.md).
+
 ## Status
 **Accepted** — implemented by issue #160, before `2.0.0`.
 

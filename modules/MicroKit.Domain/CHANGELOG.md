@@ -55,6 +55,22 @@ Settles the public surface before `2.0.0` (#160). Every item under **Breaking** 
 - `IBusinessRule` gains `string Code`, abstract on `BusinessRule`; every rule implements it.
   `BusinessRuleViolationException` names the rule by `Code` in its message and rejects a rule
   whose `Code` is null or empty (D9).
+- `Email` rejects white space and control characters inside the address, a line break included,
+  and accepts only letters, digits and the RFC 5322 `atext` symbols in the local part, and
+  letters, digits, `-` and `.` in the domain (ADR-004 D5).
+- `PhoneNumber` rejects characters other than digits, a leading `+`, one extension marker (`x`,
+  `ext`, `extn` or `extension`, optionally followed by `. : = #`, or RFC 3966 `;ext=`), a leading
+  `tel:`, white space and `- . ( ) /`; rejects a `+` after the first character, a second marker
+  and an empty extension; stores the marker as `x` and every decimal digit as ASCII; counts the 7
+  to 15 E.164 digits before the extension only (ADR-004 D6).
+- `PhoneNumber` extensions have at most 10 digits (ADR-004 D6).
+- `Actor` rejects invisible, control and line-breaking characters, and `Email` the same ones, under
+  one shared definition; `Email` is normalized to Unicode NFC (ADR-004 D5, D8).
+- Values persisted before these rules that they reject no longer rehydrate: clean them in the store
+  before deploying (ADR-004, Consequences).
+- `EntityId<T>.ToString()` is sealed: a derived identifier returns its `Guid` value instead of the
+  record's synthesized `OrderId { Value = … }`, and can no longer declare its own `ToString`
+  (ADR-004 D7).
 
 ### Added
 - `Actor` value object, with the built-ins `Actor.System`, `Actor.Anonymous` and
@@ -64,8 +80,9 @@ Settles the public surface before `2.0.0` (#160). Every item under **Breaking** 
 - `Money.Allocate(params int[] ratios)` (D7).
 - `Money`, `Currency` and `Actor` round-trip through `System.Text.Json` with default options:
   `Currency` and `Actor` as strings, `Money` as `{ "Amount": …, "Currency": "EUR" }` (#167). A
-  built-in actor does not: with default options, JSON is untrusted and a `$` value throws
-  `JsonException` on read (#170) and on write (#175).
+  built-in actor does not: the default converter writes it (#181, superseding the write refusal
+  of #175), but with default options JSON is untrusted and a `$` value throws `JsonException` on
+  read (#170).
 - `TrustedActorJsonConverter`, to register in `JsonSerializerOptions.Converters` for storage the
   application wrote itself; it rehydrates built-in actors through `Actor.Restore` (#170).
 - `BusinessRuleViolationException.Code` (D9).
@@ -79,6 +96,16 @@ Settles the public surface before `2.0.0` (#160). Every item under **Breaking** 
 ### Fixed
 - XML documentation of the `Entity` and `Auditable*` constructors explains EF Core constructor
   binding (#121); `IEvent` no longer cites the rejected `IApplicationEvent` (#153) (D11).
+- XML documentation of `AggregateRoot<TId>` and both `Mutate` methods, and the aggregates guide,
+  state that after a domain method throws the aggregate instance must be discarded, not saved, and
+  that a capturing `Mutate` lambda allocates per call (ADR-004 D2, D3; #182).
+- `Actor.Restore` trims the stored value before matching a built-in actor, so a padded `$system`
+  restores `Actor.System` (ADR-004 D4).
+- The implicit conversions of a null `Email` or `PhoneNumber` to `string` return `null` instead of
+  throwing `NullReferenceException` (ADR-004 D10).
+- XML documentation: `Actor` states that an OIDC `sub` longer than `MaxLength` is rejected
+  (ADR-004 D9); `Money.Add`, `Subtract` and `Multiply` list their `OverflowException`;
+  `PhoneNumber` states that a trunk prefix is kept.
 
 ## [1.0.0-preview.1] — 2026-05-28
 

@@ -1,3 +1,4 @@
+using System.Text.RegularExpressions;
 using Shouldly;
 
 namespace MicroKit.Domain.ArchitectureTests;
@@ -42,16 +43,58 @@ public sealed class DocumentationExamplesTests
     }
 
     [Fact]
+    public void ModuleBrain_NamesEverySourceFileAndTheNotFoundExceptionSignature()
+    {
+        var brain = File.ReadAllText(Path.Combine(Root, ".claude", "CLAUDE.md"));
+        var sources = File.ReadAllLines(Path.Combine(AppContext.BaseDirectory, "module-src", "files.txt"));
+
+        // A whole file name: "Entity.cs" must not be satisfied by "AuditableEntity.cs".
+        sources.ShouldNotBeEmpty();
+        sources.Where(name => !Regex.IsMatch(brain, $@"(?<![\w.]){Regex.Escape(name)}\.cs\b")).ShouldBeEmpty();
+        brain.ShouldContain("EntityNotFoundException<TEntity, TId>(TId entityId)");
+    }
+
+    private static readonly Regex UsingDirective =
+        new(@"^\s*(?:global\s+)?using\s+(?:static\s+)?(?:\w+\s*=\s*)?(?<name>System[\w.]*)\s*;");
+
+    [Theory]
+    [InlineData("using System.Globalization;", "System.Globalization")]
+    [InlineData("    global using System.Diagnostics; // comment", "System.Diagnostics")]
+    [InlineData("using static System.Net.Http.HttpMethod;", "System.Net.Http.HttpMethod")]
+    [InlineData("using Http = System.Net.Http;", "System.Net.Http")]
+    public void UsingDirective_AnyForm_YieldsItsNamespace(string line, string name)
+    {
+        UsingDirective.Match(line).Groups["name"].Value.ShouldBe(name);
+    }
+
+    [Fact]
+    public void PurityRule_ListsEveryNamespaceTheSourcesImport()
+    {
+        // The build extracts every System using directive, global, static, aliased or indented.
+        var rule = File.ReadAllText(Path.Combine(Root, ".claude", "rules", "domain-purity.md"));
+        var namespaces = File.ReadAllLines(Path.Combine(AppContext.BaseDirectory, "module-src", "usings.txt"))
+            .Select(line => UsingDirective.Match(line).Groups["name"].Value)
+            .Distinct()
+            .ToArray();
+
+        namespaces.ShouldContain("System.Globalization");
+        namespaces.ShouldNotContain(string.Empty);
+        namespaces.Where(name => !rule.Contains($"using {name};", StringComparison.Ordinal)).ShouldBeEmpty();
+    }
+
+    [Fact]
     public void PurityRule_SaysABuiltInActorNeedsTheTrustedConverter()
     {
         // #177: the rule must not claim that every Actor round-trips with default options.
         var rule = File.ReadAllText(Path.Combine(Root, ".claude", "rules", "domain-purity.md"));
 
-        // Identifiers, not wording: the rule names the trusted converter and both refusals, and no
-        // longer carries the claim that any Actor crosses the outbox with default options.
+        // Identifiers, not wording: the rule names the trusted converter, the read refusal and the
+        // asymmetric decision that replaced the write refusal of #175 (#181), and no longer carries
+        // the claim that any Actor crosses the outbox with default options.
         rule.ShouldContain("TrustedActorJsonConverter");
-        rule.ShouldContain("(#175)");
         rule.ShouldContain("(#170)");
+        rule.ShouldContain("ADR-004 D1");
+        rule.ShouldNotContain("(#175)");
         rule.ShouldNotContain("un `Money` ou un `Actor` passe par l'outbox");
     }
 
@@ -62,6 +105,54 @@ public sealed class DocumentationExamplesTests
 
         guide.ShouldContain("CheckRule(new InvoiceTotalMustBePositiveRule(total));");
         guide.ShouldContain("public sealed class InvoiceTotalMustBePositiveRule(Money total) : BusinessRule");
+    }
+
+    [Fact]
+    public void Guide_StatesThatAnAggregateIsDiscardedAfterADomainMethodThrows()
+    {
+        // #182, ADR-004 D2 and D3.
+        var guide = File.ReadAllText(Path.Combine(Root, "docs", "guides", "Implementing-Aggregates.md"));
+
+        guide.ShouldContain("### When a domain method throws");
+        guide.ShouldContain("the aggregate instance must be discarded, not saved");
+        guide.ShouldContain("Discarding means the change set too, not only the reference");
+        guide.ShouldContain("IUnitOfWork.DiscardChanges()");
+        guide.ShouldContain("the events the method raised outside `Mutate`");
+        guide.ShouldNotContain("catch (DomainException)");
+        guide.ShouldContain("allocates a closure and a delegate on each call");
+    }
+
+    [Fact]
+    public void Adr004_StatesWhatHappensToValuesPersistedBeforeTheStricterRules()
+    {
+        var adr = File.ReadAllText(Path.Combine(AppContext.BaseDirectory, "module-adr", "ADR-004-Domain-Surface-Amendments.md"));
+
+        adr.ShouldContain("A value persisted before D5, D6 or D8");
+        adr.ShouldContain("no longer rehydrates");
+        adr.ShouldContain("rewrite those rows too");
+    }
+
+    [Fact]
+    public void Adr004_GivesAnAccurateAccountOfCachesAnd180()
+    {
+        // CachingBehavior handles queries, not commands; and a cache reads back what it wrote.
+        var adr = File.ReadAllText(Path.Combine(AppContext.BaseDirectory, "module-adr", "ADR-004-Domain-Surface-Amendments.md"));
+
+        adr.ShouldNotContain("idempotency and caching behaviours threw after the command");
+        adr.ShouldNotContain("a cache entry is written by the application and read, if ever");
+        adr.ShouldContain("its caching behaviour failed every query");
+        adr.ShouldContain("idempotency store and caching behaviour, now writes a response carrying a built-in actor and fails");
+    }
+
+    [Theory]
+    [InlineData("ADR-001-Records-First-Value-Objects.md")]
+    [InlineData("ADR-002-Domain-Events-Collection-Strategy.md")]
+    public void SupersededAdr_PointsToEveryAdrRecordingTheCurrentSurface(string file)
+    {
+        var note = string.Join(' ', File.ReadLines(Path.Combine(AppContext.BaseDirectory, "module-adr", file)).Take(6));
+
+        note.ShouldContain("ADR-003-Domain-Surface-Before-Stable.md");
+        note.ShouldContain("ADR-004-Domain-Surface-Amendments.md");
     }
 
     [Fact]
