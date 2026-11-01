@@ -20,10 +20,16 @@ Les dossiers ne créent pas de namespace : tous les types du cœur sont dans `Mi
 ### Record structs (value objects immuables)
 ```csharp
 // ✅ Pour les types valeur sans héritage polymorphique
-public readonly record struct ErrorCode(string Value)
+public readonly record struct ErrorCode(string Value) : IComparable<ErrorCode>
 {
-    public static ErrorCode From(string value) => new(value);
+    public static ErrorCode From(string value)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(value);
+        return new(value);
+    }
+
     public static implicit operator string(ErrorCode code) => code.Value;
+    public int CompareTo(ErrorCode other) => StringComparer.Ordinal.Compare(Value, other.Value);
     public override string ToString() => Value;
 }
 ```
@@ -54,11 +60,11 @@ public sealed class DatabaseExceptionMapper(ILogger<DatabaseExceptionMapper> log
 {
     public IError Map(Exception ex)
     {
-        logger.LogError(ex, "Database call failed");
-        return new DatabaseError(ex);
+        logger.DatabaseCallFailed(ex); // méthode [LoggerMessage], déclarée dans rules/no-exceptions-flow.md
+        return new DatabaseError();
     }
 }
-// Usage : Result<User>.Try(() => repository.Load(id), mapper.Map)
+// Usage : Result<User> user = Result<User>.Try(() => repository.Load(id), mapper.Map);
 ```
 
 ### Validation des arguments
@@ -76,7 +82,7 @@ public static ErrorCode From(string value)
 ### readonly
 ```csharp
 // ✅ Tout champ non modifié après construction
-private readonly IReadOnlyList<IError> _errors;
+private readonly ImmutableArray<IError> _errors;
 ```
 
 ### in parameter modifier
@@ -98,8 +104,8 @@ public override string ToString() => "()"; // Unit
 
 ### Pattern matching (préféré au casting)
 ```csharp
-// ✅
-if (result is { IsSuccess: true, Value: var value }) { }
+// ✅ L'ordre d'évaluation des sous-patterns n'est pas garanti : pas de .Value dans un pattern
+if (result.TryGetValue(out var value)) { }
 
 // ❌
 if (result.IsSuccess) { var value = (SomeType)result.Value; }
@@ -114,9 +120,9 @@ var message = error?.Message ?? "Unknown error";
 if (value is null) return Result.Failure(ValidationError.Required(nameof(value)));
 
 // ❌ Jamais de ! (null forgiving) sans commentaire justificatif
-var value = result.Value!; // ❌
+return _value!; // ❌
 // ✅ Avec justification:
-var value = result.Value!; // Safe: IsSuccess checked above
+return _value!; // Safe: _tag == TagSuccess checked above
 ```
 
 ## Documentation XML

@@ -120,7 +120,8 @@ public Dictionary<string, object?> Metadata { get; set; } = new();
 public override IReadOnlyDictionary<string, object?> Metadata =>
     ErrorMetadata.Create("userId", UserId);
 
-// ❌ Exception convertie sans enrichissement
+// ❌ Exception convertie sans enrichissement, ex.Message exposé au client
+// (GenericError : type défini par l'application, déclaré dans rules/result-patterns.md)
 catch (SqlException ex) 
 { return Result.Failure(new GenericError(ErrorCode.Failure, ex.Message)); }
 // ✅ Erreur typée avec contexte
@@ -140,7 +141,7 @@ public sealed class OrderErrorTranslator
     {
         PaymentDeclinedError e => new OrderPaymentFailedError(e.OrderId, e.Reason),
         PaymentGatewayTimeoutError => new OrderProcessingDelayedError(),
-        _ => new OrderTechnicalError(paymentError.Message)
+        _ => new OrderTechnicalError(paymentError.Code)
     };
 }
 ```

@@ -19,7 +19,6 @@ Tu bloques ce qui viole les principes, tu suggères des améliorations non bloqu
 ### Performance
 - [ ] Pas d'allocation inutile dans les hot paths (Map, Bind, Match)
 - [ ] `readonly` sur les champs immuables
-- [ ] `in` parameter pour les gros structs passés souvent
 - [ ] Pas de `LINQ` sur les collections dans les constructeurs d'Error
 - [ ] `string.IsNullOrWhiteSpace` pas `== null || == ""`
 - [ ] Pas de `.ToString()` sur des types value inutilement
@@ -99,6 +98,6 @@ public static async ValueTask<Result<TOut>> MapAsync<TIn, TOut>(
 
 // ❌ Mauvais: allocation inutile
 public IReadOnlyList<IError> Errors => _errors.ToList(); // ToList() alloue!
-// ✅ Bon:
-public IReadOnlyList<IError> Errors => _errors; // déjà ReadOnlyCollection
+// ✅ Bon: propriété en lecture seule, comme ResultException.Errors
+public IReadOnlyList<IError> Errors { get; }
 ```

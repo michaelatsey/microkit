@@ -81,13 +81,14 @@ IResult response = result.Match(
 
 ### Tap (side-effect sans transformation)
 ```csharp
-Result<User> logged = userResult.Tap(u => logger.LogInformation("User {UserId} loaded", u.Id));
+// UserLoaded : méthode [LoggerMessage], déclarée dans rules/result-patterns.md
+Result<User> logged = userResult.Tap(u => logger.UserLoaded(u.Id));
 ```
 
 ### Ensure (validation inline)
 ```csharp
 Result<User> validated = userResult
-    .Ensure(u => u.IsActive, new UserInactiveError());
+    .Ensure(u => u.IsActive, new UserInactiveError(userId));
 ```
 
 ## 🚀 Performance Guidelines

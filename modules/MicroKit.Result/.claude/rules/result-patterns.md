@@ -4,15 +4,19 @@
 
 ### ✅ Création via factory methods statiques
 ```csharp
-Result.Success();
-Result.Success(value);
-Result.Failure(error);
-Result.Failure<T>(error);
-Result.Try(() => riskyCommand());                              // Func<Result>
-Result<T>.Try(() => riskyQuery());                             // Func<T>
-await Result.TryAsync(async () => await riskyCommandAsync());   // Func<Task<Result>>
-await Result<T>.TryAsync(async () => await riskyQueryAsync());  // Func<Task<T>>
+Result ok = Result.Success();
+Result<T> value = Result.Success(input);
+Result failed = Result.Failure(error);
+Result<T> failedValue = Result.Failure<T>(error);
+
+// mapper : journalise l'exception et retourne une erreur au message générique
+Result saved = Result.Try(() => riskyCommand(), mapper.Map);                                  // Func<Result>
+Result<T> loaded = Result<T>.Try(() => riskyQuery(), mapper.Map);                             // Func<T>
+Result savedAsync = await Result.TryAsync(async () => await riskyCommandAsync(), mapper.Map);  // Func<Task<Result>>
+Result<T> loadedAsync = await Result<T>.TryAsync(async () => await riskyQueryAsync(), mapper.Map); // Func<Task<T>>
 ```
+
+`DatabaseExceptionMapper` (`rules/csharp-style.md`) est un tel mapper. Le comportement actuel sans mapper, et la Phase 2 de #184 qui le change, sont décrits dans `rules/no-exceptions-flow.md`.
 
 ### ❌ Ne jamais créer via constructeur public
 ```csharp
@@ -44,13 +48,22 @@ Result<Invoice> invoice = userResult
 
 ### ✅ Tap pour les side-effects (logs, events)
 ```csharp
-Result<User> withLog = userResult.Tap(u => _logger.LogInformation("User {Id}", u.Id));
+internal static partial class UserLog
+{
+    [LoggerMessage(Level = LogLevel.Information, Message = "User {UserId} loaded")]
+    public static partial void UserLoaded(this ILogger logger, Guid userId);
+
+    [LoggerMessage(Level = LogLevel.Error, Message = "Operation failed: {Code}")]
+    public static partial void OperationFailed(this ILogger logger, string code);
+}
+
+Result<User> withLog = userResult.Tap(u => logger.UserLoaded(u.Id));
 ```
 
 ### ✅ Ensure pour les validations inline
 ```csharp
 Result<User> active = userResult
-    .Ensure(u => u.IsActive, new UserInactiveError())
+    .Ensure(u => u.IsActive, new UserInactiveError(userId))
     .Ensure(u => u.IsEmailVerified, new EmailNotVerifiedError());
 ```
 
@@ -98,6 +111,8 @@ ErrorCategory.PreconditionFailed → 412 Precondition Failed
 toute autre valeur              → 500 Internal Server Error
 ```
 
+`ErrorCategory.Timeout` répond aujourd'hui 408 ; #184 Phase 5 décide de son statut.
+
 ## Règles d'erreurs
 
 ### ✅ Une erreur = un type
@@ -115,8 +130,11 @@ public sealed record UserInactiveError(Guid UserId)
     public override ErrorCategory Category => ErrorCategory.BusinessRule;
 }
 
-// ❌ Pas de string discriminants — GenericError : record fourre-tout (ErrorCode, message)
-Result.Failure(new GenericError(ErrorCode.From("USER_NOT_FOUND"), "..."));  // perd le typage fort
+// ❌ Pas de string discriminants. GenericError n'existe pas dans MicroKit.Result : c'est un type
+// défini par l'application, fourre-tout à éviter
+public sealed record GenericError(ErrorCode Code, string Message) : Error(Code, Message);
+
+return Result.Failure(new GenericError(ErrorCode.From("USER_NOT_FOUND"), "..."));  // perd le typage fort
 ```
 
 ### ✅ ErrorCode en SCREAMING_SNAKE_CASE hiérarchique
@@ -155,16 +173,20 @@ public async ValueTask<Result<T>> ProcessAsync(
 ## Anti-patterns stricts
 
 ```csharp
-// ❌ try/catch pour créer un Result dans le code métier
+// ❌ try/catch pour créer un Result dans le code métier ; GenericError (type applicatif) expose ex.Message au client
 try { return Result.Success(Compute()); }
 catch (Exception ex) { return Result.Failure<T>(new GenericError(ErrorCode.Failure, ex.Message)); }
-// ✅ Utiliser Result<T>.Try() — Result.Try() n'accepte que Func<Result>
-return Result<T>.Try(() => Compute());
+// ✅ Utiliser Result<T>.Try() avec un mapper — Result.Try() n'accepte que Func<Result>
+return Result<T>.Try(() => Compute(), mapper.Map);
 
 // ❌ .Value sans vérification (sauf après Match)
 var value = result.Value; // throw si failure
-// ✅ 
-var value = result.Match(v => v, _ => default);
+// ✅ Try pattern : l'erreur reste sur le rail d'échec
+if (!result.TryGetValue(out var user))
+    return Result.Failure<UserDto>(result.Error);
+return Result.Success(user.ToDto());
+// ✅ Valeur de repli choisie explicitement, quand l'échec a ce sens-là
+string label = result.Map(u => u.Name).GetValueOrDefault("N/A");
 
 // ❌ Result<Result<T>> 
 Result<Result<User>> nested; // ← Bind manqué
@@ -174,5 +196,5 @@ Result<User> flat = outer.Bind(inner => inner);
 // ❌ void retourné là où Result suffit
 void SaveUser(User user) { _repo.Save(user); }
 // ✅
-Result SaveUser(User user) => Result.Try(() => { _repo.Save(user); return Result.Success(); });
+Result SaveUser(User user) => Result.Try(() => { _repo.Save(user); return Result.Success(); }, mapper.Map);
 ```

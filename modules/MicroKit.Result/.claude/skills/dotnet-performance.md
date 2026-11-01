@@ -12,8 +12,8 @@
 |-----------|-----------------|---------------------|
 | `Result.Success(value)` | < 1ns | 0 bytes (struct) |
 | `Result.Failure(error)` | < 5ns | sizeof(Error) record |
-| `.Map(lambda)` | < 5ns | 0 bytes si inliné |
-| `.Bind(lambda)` | < 10ns | 0 bytes si inliné |
+| `.Map(lambda)` | < 5ns | 0 bytes si la lambda ne capture rien |
+| `.Bind(lambda)` | < 10ns | 0 bytes si la lambda ne capture rien |
 | `.Match(f, g)` | < 5ns | 0 bytes |
 | `ResultProblemDetailsFactory.CreateProblemDetails(error)` | < 1µs | ~200 bytes (acceptable) |
 

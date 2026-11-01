@@ -64,15 +64,15 @@ var result = ResultCombineExtensions.CombineAll(
 
 ### Dead End (TapError)
 ```csharp
-// Logguer l'erreur sans la transformer
-result.TapError(e => _logger.LogError("Operation failed: {Code}", e.Code));
+// Logguer l'erreur sans la transformer (OperationFailed : [LoggerMessage], rules/result-patterns.md)
+Result<User> observed = result.TapError(e => logger.OperationFailed(e.Code));
 ```
 
 ### Doubling the track (Map + pattern)
 ```csharp
 // Transformer les deux rails simultanément
 // (EnrichedError : erreur applicative qui enveloppe l'erreur d'origine)
-result.Match(
+Result<UserDto> mapped = result.Match(
     onSuccess: v => Result.Success(v.ToDto()),
     onFailure: e => Result.Failure<UserDto>(new EnrichedError(e, correlationId))
 );
@@ -107,17 +107,17 @@ Result<User> flat = outer.Bind(x => GetUser(x.Id));
 ### Le Tap qui modifie
 ```csharp
 // ❌ Tap ne doit pas transformer
-result.Tap(user => user.Name = "modified"); // mutation!
-// ✅ Tap = side-effect pur
-result.Tap(user => _logger.LogInformation("User {UserId}", user.Id));
+Result<User> changed = result.Tap(user => user.Name = "modified"); // mutation!
+// ✅ Tap = side-effect pur (UserLoaded : [LoggerMessage], rules/result-patterns.md)
+Result<User> logged = result.Tap(user => logger.UserLoaded(user.Id));
 ```
 
 ### L'Ensure avec erreur non typée
 ```csharp
-// ❌ Perd le typage fort
-result.Ensure(u => u.IsActive, new GenericError(ErrorCode.From("USER_INACTIVE"), "..."));
+// ❌ Perd le typage fort (GenericError : type défini par l'application, déclaré dans rules/result-patterns.md)
+Result<User> untyped = result.Ensure(u => u.IsActive, new GenericError(ErrorCode.From("USER_INACTIVE"), "..."));
 // ✅ Erreur typée — construite avant l'appel, elle ne voit pas la valeur
-result.Ensure(u => u.IsActive, new UserInactiveError(userId));
+Result<User> active = result.Ensure(u => u.IsActive, new UserInactiveError(userId));
 ```
 
 ## Composition avec LINQ Query Syntax

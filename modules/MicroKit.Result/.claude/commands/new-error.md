@@ -19,7 +19,7 @@ Génère un type d'erreur fortement typé, cohérent avec les conventions MicroK
 
 ### Erreur simple
 ```csharp
-namespace {RootNamespace}.Errors;
+namespace {RootNamespace};
 
 /// <summary>
 /// Raised when {description}.

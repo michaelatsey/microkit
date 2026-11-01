@@ -97,7 +97,7 @@ internal sealed record TestError() : Error(ErrorCode.From("TEST.ERROR"), "Test e
 ### Pour l'async
 1. Completion synchrone (ValueTask optimisé)
 2. Completion asynchrone (await réel)
-3. Annulation — une `OperationCanceledException` levée par le délégué se propage depuis les extensions async (`MapAsync`, `BindAsync`…) ; `TryAsync` la capture et la convertit en échec, comme toute exception
+3. Annulation — une `OperationCanceledException` levée par le délégué se propage depuis les extensions async (`MapAsync`, `BindAsync`…) ; `TryAsync` la capture aujourd'hui et la convertit en échec, comme toute exception (#184 Phase 2 : les surcharges sans mapper la relancent)
 4. Exception dans le mapper — pas swallowed
 
 ## Assertions Shouldly sur Result

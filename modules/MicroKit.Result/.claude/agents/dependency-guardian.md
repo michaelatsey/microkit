@@ -50,8 +50,9 @@ grep -rE 'PackageReference.*Version="' modules/MicroKit.Result/src/
 
 # Banned test libraries: run the detection commands of the root rule .claude/rules/testing-libraries.md
 
-# Check for forbidden cross-module MicroKit references in src/
-grep -rn 'MicroKit\.' modules/MicroKit.Result/src/ --include="*.csproj" | grep -v 'MicroKit\.Result'
+# Check for forbidden cross-module MicroKit references in src/ (any output is a BLOCK).
+# The lookahead applies to each match, so the path grep prefixes to every line cannot hide one.
+grep -rnP '\bMicroKit\.(?!Result\b)' modules/MicroKit.Result/src/ --include="*.csproj"
 
 # Inspect reference graph
 for p in modules/MicroKit.Result/src/*/*.csproj; do dotnet reference list --project "$p"; done

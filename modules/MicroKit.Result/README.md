@@ -16,7 +16,7 @@ Railway-Oriented Programming for .NET 10. Explicit success/failure without excep
 ──── Failure ──────────────────────────────────────────────────►
 ```
 
-Every operation stays on one of these rails. There are no surprises, no hidden throws, no stack unwinding for predictable outcomes.
+Every operation stays on one of these rails: a predictable outcome is a value, not a stack unwind. Exceptions remain for misuse, such as reading `.Value` on a failure (see [Exception Handling](#exception-handling)).
 
 **Key design principles:**
 - `Result<T>` is a `readonly struct` — zero heap allocation on the success path
@@ -38,6 +38,10 @@ dotnet add package MicroKit.Result.AspNetCore  # optional — Minimal APIs / MVC
 ## Quick Start
 
 ```csharp
+using MicroKit.Result;
+using MicroKit.Result.AspNetCore;
+using Microsoft.AspNetCore.Http;
+
 // Create
 Result<User> result = GetUser(id);
 
@@ -67,7 +71,7 @@ IResult response = invoice.ToHttpResult(); // 200 OK or ProblemDetails
 Result success = Result.Success();
 Result failure = Result.Failure(new MyError());
 
-Result<int> value  = Result.Success(42);
+Result<int> value = Result.Success(42);
 Result<int> failed = Result.Failure<int>(new MyError());
 
 // implicit conversion from T
@@ -98,10 +102,10 @@ var code = ErrorCode.From("ORDER.PAYMENT.DECLINED");
 string raw = code;   // implicit string conversion
 
 // Predefined constants
-ErrorCode notFound   = ErrorCode.NotFound;                // "NOT_FOUND"
+ErrorCode notFound = ErrorCode.NotFound;                // "NOT_FOUND"
 ErrorCode validation = ErrorCode.Validation;              // "VALIDATION"
-ErrorCode timeout    = ErrorCode.Timeout;                 // "TIMEOUT"
-ErrorCode external   = ErrorCode.ExternalServiceFailure;  // "EXTERNAL_SERVICE_FAILURE"
+ErrorCode timeout = ErrorCode.Timeout;                 // "TIMEOUT"
+ErrorCode external = ErrorCode.ExternalServiceFailure;  // "EXTERNAL_SERVICE_FAILURE"
 // ...19 predefined constants total
 
 // Comparable
@@ -140,17 +144,17 @@ IReadOnlyDictionary<string, object?> meta = new ErrorMetadataBuilder()
 
 ### ErrorCollection
 
-Aggregates multiple errors into one `IError`:
+Aggregates multiple errors into one `IError`. A filter that matches nothing currently returns an empty collection, which `From` forbids; #184 Phase 2 changes it.
 
 ```csharp
 var collection = ErrorCollection.From(error1, error2, error3);
 
 // Filter
 ErrorCollection validation = collection.WithCategory(ErrorCategory.Validation);
-ErrorCollection critical   = collection.WithSeverity(ErrorSeverity.Critical);
-ErrorCollection notFound   = collection.WithCode(ErrorCode.NotFound);
-ErrorCollection typed      = collection.OfType<ValidationError>();
-bool hasValidation         = collection.HasCategory(ErrorCategory.Validation);
+ErrorCollection critical = collection.WithSeverity(ErrorSeverity.Critical);
+ErrorCollection notFound = collection.WithCode(ErrorCode.NotFound);
+ErrorCollection typed = collection.OfType<ValidationError>();
+bool hasValidation = collection.HasCategory(ErrorCategory.Validation);
 
 // Group
 IReadOnlyDictionary<ErrorCategory, IReadOnlyList<IError>> byCategory =
@@ -163,12 +167,12 @@ ErrorCollection flat = collection.Flatten();
 ### IError extension methods
 
 ```csharp
-bool isValidation      = error.IsCategory(ErrorCategory.Validation);
-bool isCritical        = error.IsCritical();
-bool isWarning         = error.IsWarning();
-bool isInformation     = error.IsInformation();
-bool hasCorrelationId  = error.HasMetadata("correlationId");
-string? correlationId  = error.TryGetMetadata<string>("correlationId");
+bool isValidation = error.IsCategory(ErrorCategory.Validation);
+bool isCritical = error.IsCritical();
+bool isWarning = error.IsWarning();
+bool isInformation = error.IsInformation();
+bool hasCorrelationId = error.HasMetadata("correlationId");
+string? correlationId = error.TryGetMetadata<string>("correlationId");
 ResultException thrown = error.ToException();   // wraps in ResultException
 ```
 
@@ -200,9 +204,24 @@ string label = result.Match(
 
 ### Tap / TapError — side-effects without leaving the rail
 
+Logging goes through source-generated `[LoggerMessage]` methods:
+
 ```csharp
-result
-    .Tap(v => logger.LogInformation("Value: {V}", v))
+using Microsoft.Extensions.Logging;
+
+internal static partial class PipelineLog
+{
+    [LoggerMessage(Level = LogLevel.Information, Message = "Loaded value {Value}")]
+    public static partial void ValueLoaded(this ILogger logger, int value);
+
+    [LoggerMessage(Level = LogLevel.Information, Message = "Completed, success: {IsSuccess}")]
+    public static partial void Completed(this ILogger logger, bool isSuccess);
+}
+```
+
+```csharp
+Result<int> observed = result
+    .Tap(v => logger.ValueLoaded(v))
     .TapError(e => metrics.RecordFailure(e.Code));
 ```
 
@@ -210,7 +229,7 @@ result
 
 ```csharp
 Result<User> active = GetUser(id)
-    .Ensure(u => u.IsActive, new UserInactiveError())
+    .Ensure(u => u.IsActive, new UserInactiveError(id))
     .Ensure(u => u.IsEmailVerified, new EmailNotVerifiedError());
 ```
 
@@ -243,7 +262,7 @@ if (result.TryGetValue(out var v))
 ### Finally — always-execute cleanup
 
 ```csharp
-result.Finally(r => logger.LogInformation("Done, success={S}", r.IsSuccess));
+Result<int> completed = result.Finally(r => logger.Completed(r.IsSuccess));
 ```
 
 ### Conversion
@@ -256,21 +275,21 @@ Result nonGeneric = result.ToResult();  // drops the value, keeps the error
 
 ## Async
 
-The nine pipeline operations of `Result<T>` (`Map`, `Bind`, `Match`, `Tap`, `TapError`, `Ensure`, `MapError`, `Compensate`, `Finally`) have async counterparts on three surfaces. The non-generic `Result` has none.
+The nine pipeline operations of `Result<T>` (`Map`, `Bind`, `Match`, `Tap`, `TapError`, `Ensure`, `MapError`, `Compensate`, `Finally`) have async counterparts on three surfaces. The non-generic `Result` currently has none; #184 Phase 4 adds them.
 
 ```csharp
 // Surface 1: async delegate on Result<T>
-await result.MapAsync(async v => await TransformAsync(v));
-await result.BindAsync(async v => await GetNextAsync(v));
-await result.CompensateAsync(async e => await FallbackAsync(e));
-await result.FinallyAsync(async r => await LogAsync(r));
+Result<string> mapped = await result.MapAsync(async v => await TransformAsync(v));
+Result<string> chained = await result.BindAsync(async v => await GetNextAsync(v));
+Result<int> recovered = await result.CompensateAsync(async e => await FallbackAsync(e));
+Result<int> finished = await result.FinallyAsync(async r => await LogAsync(r));
 
 // Surface 2: on Task<Result<T>> (sync delegate — awaits the task first)
-await GetResultTask().Map(v => Transform(v));
-await GetResultTask().Bind(v => GetNext(v));
+Result<string> mappedTask = await GetResultTask().Map(v => Transform(v));
+Result<string> chainedTask = await GetResultTask().Bind(v => GetNext(v));
 
 // Surface 3: on ValueTask<Result<T>> (sync delegate)
-await GetResultValueTask().Map(v => Transform(v));
+Result<string> mappedValueTask = await GetResultValueTask().Map(v => Transform(v));
 ```
 
 All async methods use `ConfigureAwait(false)`.
@@ -355,7 +374,7 @@ IEnumerable<Result<T>> results = GetAllResults();
 var (successes, failures) = results.Partition();
 
 // Extract only successes / only failures
-IEnumerable<T>      values = results.Successes();
+IEnumerable<T> values = results.Successes();
 IEnumerable<IError> errors = results.Failures();
 
 // Map each element, fail-fast on first error
@@ -367,6 +386,10 @@ Result<IReadOnlyList<Dto>> dtos = users.Traverse(u => MapToDto(u));
 ## ASP.NET Core
 
 ```csharp
+using MicroKit.Result;
+using MicroKit.Result.AspNetCore;
+using Microsoft.AspNetCore.Builder;
+
 // Minimal API
 app.MapGet("/users/{id}", async (Guid id, IUserService svc) =>
     (await svc.GetUserAsync(id)).ToHttpResult());
@@ -388,6 +411,13 @@ app.MapDelete("/users/{id}", async (Guid id, IUserService svc) =>
 }
 ```
 
+Current behavior that #184 changes:
+
+- `detail` is `IError.Message`. For the error `Try` / `TryAsync` build without a mapper, that is `Exception.Message` (see [Exception Boundaries](#exception-boundaries)); Phase 2 removes it from the response.
+- `errors` lists only `code` and `message`, and only for an `ErrorCollection`, so a single `ValidationError` emits none; Phase 2 groups validation errors by property.
+- An `ErrorCollection` answers with its first error's category; Phase 2 makes it the shared category, else the first that maps to 5xx, else the first.
+- `Timeout` answers 408, `type` links to a third-party site, and results are returned as `IResult`; Phase 5 decides these.
+
 ---
 
 ## Serialization
@@ -408,17 +438,62 @@ builder.Services.ConfigureHttpJsonOptions(o =>
 
 ## Exception Boundaries
 
-For infrastructure calls that can throw, use `Try` / `TryAsync`:
+A technical error carries a generic, client-safe message. The exception itself goes to the log:
 
 ```csharp
-// Default — wraps Exception in ExceptionError (Technical category)
-Result<User> result = Result<User>.Try(() => repository.GetUser(id));
+using Microsoft.Extensions.Logging;
 
-// Custom mapper — convert exception to your domain error
+public sealed record DatabaseError()
+    : Error(ErrorCode.From("INFRA.DATABASE.FAILURE"), "A database error occurred.");
+
+internal static partial class InfrastructureLog
+{
+    [LoggerMessage(Level = LogLevel.Error, Message = "Database call failed")]
+    public static partial void DatabaseCallFailed(this ILogger logger, Exception exception);
+}
+```
+
+For a call that takes no caller `CancellationToken`, use `Try` / `TryAsync` with a mapper:
+
+```csharp
+IError ToDatabaseError(Exception ex)
+{
+    logger.DatabaseCallFailed(ex);
+    return new DatabaseError();
+}
+
+Result<User> result = Result<User>.Try(() => repository.GetUser(id), ToDatabaseError);
+
 Result<User> loaded = await Result<User>.TryAsync(
     async () => await repository.GetUserAsync(id),
-    ex => new DatabaseError(ex));
+    ToDatabaseError);
 ```
+
+For a call that takes one, catch at the boundary so that caller cancellation propagates:
+
+```csharp
+public async ValueTask<Result<User>> GetUserAsync(Guid id, CancellationToken ct = default)
+{
+    try
+    {
+        return Result.Success(await repository.GetUserAsync(id, ct).ConfigureAwait(false));
+    }
+    catch (OperationCanceledException) when (ct.IsCancellationRequested)
+    {
+        throw;
+    }
+    catch (Exception ex)
+    {
+        logger.DatabaseCallFailed(ex);
+        return Result.Failure<User>(new DatabaseError());
+    }
+}
+```
+
+Current behavior that #184 Phase 2 changes:
+
+- Every `Try` / `TryAsync` overload catches `OperationCanceledException`. Phase 2 makes the overloads without a mapper rethrow it; with a mapper, the mapper decides.
+- Without a mapper, the error's message is `Exception.Message`, and `ToHttpResult()` writes it to `ProblemDetails.Detail`. Phase 2 replaces it with a generic message.
 
 ---
 
@@ -429,7 +504,7 @@ Result<User> loaded = await Result<User>.TryAsync(
 ```csharp
 try
 {
-    var value = failedResult.Value; // throws ResultException
+    int value = failedResult.GetValueOrThrow(); // throws ResultException
 }
 catch (ResultException ex)
 {
