@@ -1,3 +1,8 @@
+---
+name: functional-railway
+description: Use when composing MicroKit.Result pipelines with Map, Bind, Tap, Ensure, Match, Combine or their async variants, or debugging a pipeline that does not compose. Not for designing error types or for performance questions.
+---
+
 # Skill: Functional Railway-Oriented Programming
 
 ## Quand activer ce skill
@@ -94,6 +99,8 @@ Result<InvoiceDto> invoice = await discounted
 invoice = await invoice.TapAsync(i => PublishInvoiceCreatedEventAsync(i));
 ```
 
+Ces opérations existent sur `Result<T>`. Le `Result` non générique n'a aujourd'hui que `Match`, `Tap`, `TapError` et `Finally`, et aucun async hors `TryAsync` ; #184 Phase 4 les ajoute.
+
 ## Pièges courants
 
 ### Le Bind nested inutile
@@ -104,21 +111,7 @@ Result<Result<User>> nested = outer.Map(x => GetUser(x.Id));
 Result<User> flat = outer.Bind(x => GetUser(x.Id));
 ```
 
-### Le Tap qui modifie
-```csharp
-// ❌ Tap ne doit pas transformer
-Result<User> changed = result.Tap(user => user.Name = "modified"); // mutation!
-// ✅ Tap = side-effect pur (UserLoaded : [LoggerMessage], rules/result-patterns.md)
-Result<User> logged = result.Tap(user => logger.UserLoaded(user.Id));
-```
-
-### L'Ensure avec erreur non typée
-```csharp
-// ❌ Perd le typage fort (GenericError : type défini par l'application, déclaré dans rules/result-patterns.md)
-Result<User> untyped = result.Ensure(u => u.IsActive, new GenericError(ErrorCode.From("USER_INACTIVE"), "..."));
-// ✅ Erreur typée — construite avant l'appel, elle ne voit pas la valeur
-Result<User> active = result.Ensure(u => u.IsActive, new UserInactiveError(userId));
-```
+Les usages attendus de `Tap` et `Ensure` sont dans `rules/result-patterns.md`.
 
 ## Composition avec LINQ Query Syntax
 

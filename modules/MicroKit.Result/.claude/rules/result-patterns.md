@@ -84,6 +84,12 @@ Result failFast = ResultCombineExtensions.Combine(validateName, validateEmail, v
 Result collected = ResultCombineExtensions.CombineAll(validateName, validateEmail, validateAge);
 ```
 
+La Phase 3 de #184 décide de la place de `Combine` et `CombineAll`.
+
+## `Result` non générique
+
+Il n'a aujourd'hui que `Match`, `Tap`, `TapError` et `Finally`, et aucun async hors `TryAsync` : `Map`, `Bind` et `Ensure` ci-dessus sont des opérations de `Result<T>`. La Phase 4 de #184 lui donne les mêmes opérations, sync et async.
+
 ## Règles de mapping HTTP
 
 ### ✅ ToHttpResult() pour les minimal APIs
@@ -111,7 +117,13 @@ ErrorCategory.PreconditionFailed → 412 Precondition Failed
 toute autre valeur              → 500 Internal Server Error
 ```
 
-`ErrorCategory.Timeout` répond aujourd'hui 408 ; #184 Phase 5 décide de son statut.
+L'annulation demandée par l'appelant se propage (`rules/no-exceptions-flow.md`) : elle ne devient jamais une erreur `ErrorCategory.Cancelled`.
+
+Comportement actuel, que #184 change :
+
+- Phase 2 : `errors` ne liste que `code` et `message`, et seulement pour une `ErrorCollection`, si bien que `IValidationError.PropertyName` se perd et qu'une `ValidationError` seule n'émet rien. La Phase 2 groupe les erreurs de validation par propriété.
+- Phase 2 : une `ErrorCollection` répond avec la catégorie de sa première erreur, si bien que Validation + Technical répond 422 et masque le 500.
+- Phase 5 : `ErrorCategory.Timeout` répond 408, `type` pointe vers un site tiers, et `ToHttpResult` retourne `Ok` ou `NoContent` en `IResult` plutôt qu'en `TypedResults`.
 
 ## Règles d'erreurs
 
@@ -145,17 +157,32 @@ ORDER.PAYMENT.DECLINED
 INVENTORY.PRODUCT.OUT_OF_STOCK
 ```
 
+Le code et les samples emploient aussi deux segments (`USER.NOT_FOUND`). La Phase 3 de #184 fixe le rôle de `Code`.
+
 ### ✅ Utiliser ErrorCollection pour les erreurs multiples
 ```csharp
 var errors = ErrorCollection.From(error1, error2, error3);
 return Result.Failure(errors);
 ```
 
+`WithCategory`, `WithSeverity`, `WithCode`, `OfType` et `Flatten` peuvent aujourd'hui construire une collection vide, que `From` interdit ; #184 Phase 2 le change.
+
 ## Règles async
 
-### ✅ ValueTask pour les méthodes async à résultat souvent synchrone
+### ✅ ValueTask<T> pour l'async (convention racine)
 ```csharp
 public ValueTask<Result<T>> GetAsync(Guid id, CancellationToken ct = default);
+```
+
+Son gain face à `Task<T>` n'est pas mesuré ; #184 Phase 7 le mesure.
+
+### ✅ Un ValueTask s'attend directement, une seule fois (CA2012)
+```csharp
+// ✅
+Result<User> user = await GetUserAsync(id, ct);
+
+// ❌ Bloque, et lit un résultat peut-être pas encore disponible
+Result<User> blocked = GetUserAsync(id, ct).Result;
 ```
 
 ### ✅ ConfigureAwait(false) dans la librairie

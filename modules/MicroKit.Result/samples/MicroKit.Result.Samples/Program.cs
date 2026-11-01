@@ -7,19 +7,21 @@ Console.WriteLine("═══ MicroKit.Result Samples ═══\n");
 
 // 1. Happy path
 Console.WriteLine("── 1. Successful order ──");
-OrderService.PlaceOrder(new(FakeDb.WidgetId, 2, "user@example.com", "4111111111111111"))
-    .Tap(o => Console.WriteLine($"  Confirmed: {o.Total:C}"))
-    .TapError(e => Console.WriteLine($"  Failed: {e.Message}"));
+var placed = OrderService.PlaceOrder(new(FakeDb.WidgetId, 2, "user@example.com", "4111111111111111"));
+Console.WriteLine(placed.Match(
+    onSuccess: o => $"  Confirmed: {o.Total:C}",
+    onFailure: e => $"  Failed: {e.Message}"));
 
 // 2. Product not found → HTTP 404
 Console.WriteLine("\n── 2. Product not found → HTTP 404 ──");
 var notFound = OrderService.PlaceOrder(new(Guid.NewGuid(), 1, "user@example.com", "4111111111111111"));
-Console.WriteLine($"  HTTP {ResultProblemDetailsFactory.ToStatusCode(notFound.Error.Category)}");
+if (notFound.IsFailure)
+    Console.WriteLine($"  HTTP {ResultProblemDetailsFactory.ToStatusCode(notFound.Error.Category)}");
 
 // 3. Validation errors (multiple, collected)
 Console.WriteLine("\n── 3. Validation errors (collected) ──");
 var invalid = OrderService.PlaceOrder(new(Guid.NewGuid(), -1, "not-an-email", "0000"));
-if (invalid.Error is ErrorCollection col)
+if (invalid.IsFailure && invalid.Error is ErrorCollection col)
 {
     Console.WriteLine($"  {col.Count} errors:");
     foreach (var e in col)
@@ -78,8 +80,8 @@ foreach (var (cat, group) in errors.GroupByCategory())
 // 10. TryGetValue + Finally
 Console.WriteLine("\n── 10. TryGetValue + Finally ──");
 Result<string> maybe = Result.Success("hello");
-maybe.Finally(r => Console.WriteLine($"  Finally — IsSuccess: {r.IsSuccess}"));
-if (maybe.TryGetValue(out var val))
+var observed = maybe.Finally(r => Console.WriteLine($"  Finally — IsSuccess: {r.IsSuccess}"));
+if (observed.TryGetValue(out var val))
     Console.WriteLine($"  Got: {val}");
 
 Console.WriteLine("\n═══ Done ═══");

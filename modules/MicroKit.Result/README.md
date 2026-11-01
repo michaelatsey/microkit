@@ -423,6 +423,8 @@ Current behavior that #184 changes:
 ## Serialization
 
 ```csharp
+using MicroKit.Result.Serialization;
+
 // Register globally
 builder.Services.ConfigureHttpJsonOptions(o =>
     o.SerializerOptions.Converters.Add(new ResultJsonConverterFactory()));

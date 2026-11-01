@@ -2,7 +2,25 @@
 
 ## 🎯 Mission
 Librairie .NET 10+ pour la gestion explicite des résultats, erreurs et workflows fonctionnels.
-Remplace le pattern exception-as-flow par des types expressifs, composables et performants.
+Remplace le pattern exception-as-flow par des types expressifs et composables.
+
+## 🛡️ Garanties du module
+
+Chaque règle, skill, commande et agent de ce dossier sert ces cinq garanties. Où le code s'en écarte, ce fichier le dit et nomme la phase de #184 qui traite l'écart.
+
+- **Correctness : un résultat invalide n'est jamais lu comme un succès.**
+  - `default(Result<T>)` n'est ni succès ni échec : `Value`, `Error`, `Map`, `Bind`, `Match` et `Ensure` lèvent `ResultException`, `TryGetValue` retourne `false`, `Tap` ne fait rien, `GetValueOrDefault(x)` retourne `x`. Sur `default(Result)`, `Error` et `Match` lèvent aussi `ResultException`.
+  - Écarts : `Result.Success<T>(null)` est un succès, et `Error.Category` vaut `Technical` quand elle n'est pas surchargée. La Phase 3 tranche les deux.
+- **Security : les détails internes n'atteignent jamais un client par défaut.**
+  - `Error.Message` part dans `ProblemDetails.Detail` : il reste sans danger pour le client. Les détails internes vont dans le log ou dans `Metadata`, que ni `ProblemDetails` ni le JSON n'émettent.
+  - Écart : `Try` / `TryAsync` sans mapper écrivent `Exception.Message` dans `Detail`. La Phase 2 le remplace par un message générique.
+- **Predictability : le synchrone et l'asynchrone se comportent de la même façon.**
+  - Écarts : le `Result` non générique n'a que `Match`, `Tap`, `TapError` et `Finally`, et aucun async hors `TryAsync` (Phase 4). `Try` et `TryAsync` capturent tous deux `OperationCanceledException` (Phase 2).
+- **Interoperability : les préoccupations HTTP restent hors du cœur.**
+  - `MicroKit.Result` ne référence pas ASP.NET Core (test `Core_DoesNotReferenceAspNetCore`) ; le mapping HTTP vit dans `MicroKit.Result.AspNetCore`.
+  - Écarts : la doc XML d'`ErrorCategory` cite des statuts HTTP, et la Phase 3 fixe le rôle de `Category`. Le contrat HTTP lui-même évolue en Phases 2 et 5.
+- **Performance : toute affirmation est mesurée.**
+  - Écart : aucun benchmark n'existe, `tests/MicroKit.Result.PerformanceTests` ne contient que son `.csproj`. La Phase 7 publie les mesures. D'ici là, une affirmation de performance est une hypothèse et se présente comme telle.
 
 ## 🏛️ Philosophie Architecturale
 
@@ -34,15 +52,24 @@ Unit            ← void-safe pour les génériques
 - Nullable Reference Types: `enable`
 - `readonly record struct` pour les value objects sans héritage
 - `sealed record` pour les types référence fermés
-- `ValueTask<T>` pour async léger (pas d'await multiple)
-- `Task<T>` pour async avec await multiple ou continuation complexe
+- `ValueTask<T>` pour l'async (convention racine). Son gain face à `Task<T>` n'est pas mesuré ; la Phase 7 de #184 le mesure
 
 ### Interdictions
 - ❌ `throw` dans les flux métier normaux
 - ❌ `null` retourné depuis une méthode publique (utiliser `Result` ou `Result<T>`)  
 - ❌ `Exception` pour représenter une validation ou une règle métier
-- ❌ Réflexion runtime sauf dans la couche Serialization (NativeAOT)
+- ❌ Réflexion runtime sauf dans la couche Serialization, annotée `[RequiresUnreferencedCode]` / `[RequiresDynamicCode]`
 - ❌ `static` mutable partagé (thread-safety)
+
+### Ce qu'aucun sample ni instruction n'enseigne
+Un contre-exemple marqué ❌ peut les montrer : il définit ce qu'une review bloque.
+
+- ❌ Le texte d'une exception envoyé à un client
+- ❌ Une annulation demandée par l'appelant convertie en échec
+- ❌ Un `Result` retourné puis ignoré
+- ❌ `.Value` lu sans vérification préalable du succès, y compris dans un property pattern
+- ❌ Un `ValueTask` bloqué (`.Result`, `.GetAwaiter().GetResult()` avant complétion, CA2012)
+- ❌ CA1848 supprimée : on journalise par `[LoggerMessage]`
 
 ## 🧱 Structure des Erreurs
 
@@ -55,67 +82,46 @@ public sealed record UserNotFoundError(Guid UserId)
 }
 ```
 
-## 🔄 Patterns Autorisés
+Les patterns autorisés (`Map`, `Bind`, `Match`, `Tap`, `Ensure`) sont dans `rules/result-patterns.md`, les frontières d'exception dans `rules/no-exceptions-flow.md`, les conventions de test dans `rules/testing.md`.
 
-### Map (transformation valeur)
-```csharp
-Result<User> userResult = GetUser(id);
-Result<UserDto> dto = userResult.Map(u => mapper.ToDto(u));
+## 🚀 Performance
+
+Hypothèses non mesurées, que la Phase 7 de #184 confirme ou infirme :
+
+1. `Result<T>` étant un struct, `Map` et `Bind` n'allouent rien sur le chemin succès avec une lambda sans capture ; une lambda qui capture alloue à chaque appel
+2. `ValueTask<T>` évite une allocation quand le résultat est disponible de façon synchrone
+
+Fait de conception : `ErrorCollection` est matérialisée à la construction (`ImmutableArray<IError>`, `Message` calculé une fois) ; ne la créer que sur le rail d'échec.
+
+## ✅ Vérification et gates
+
+La vérification a lieu à la fin de chaque étape, pas à chaque édition. Depuis la racine du dépôt :
+
+```bash
+dotnet build modules/MicroKit.Result/MicroKit.Result.slnx -c Release
+dotnet test  modules/MicroKit.Result/MicroKit.Result.slnx -c Release
+dotnet build MicroKit.slnx -c Release -p:WarningsNotAsErrors=NU1902%3BNU1903   # garde : aucun autre module ne casse (#161)
+dotnet format modules/MicroKit.Result/MicroKit.Result.slnx --verify-no-changes
 ```
 
-### Bind (chaînage de résultats)
-```csharp
-Result<Order> order = GetUser(id)
-    .Bind(user => GetCart(user.CartId))
-    .Bind(cart => CreateOrder(cart));
-```
+`-c Release` toujours : `TreatWarningsAsErrors`, nullable compris, ne s'applique qu'en Release. `dotnet format` échoue aujourd'hui sur `src/MicroKit.Result/Validation/ValidationError.cs:99-101`, déjà présent sur `main` ; la CI ne le lance pas. À partir de la Phase 1, `dotnet test ... --collect:"XPlat Code Coverage"` mesure une couverture de lignes d'au moins 90 % sur `src/MicroKit.Result`.
 
-### Match (consommation finale)
-```csharp
-// Équivalent de result.ToHttpResult() (MicroKit.Result.AspNetCore)
-IResult response = result.Match(
-    onSuccess: value => Results.Ok(value),
-    onFailure: error => Results.Problem(ResultProblemDetailsFactory.CreateProblemDetails(error))
-);
-```
+Gates de review, chacun en contexte neuf :
 
-### Tap (side-effect sans transformation)
-```csharp
-// UserLoaded : méthode [LoggerMessage], déclarée dans rules/result-patterns.md
-Result<User> logged = userResult.Tap(u => logger.UserLoaded(u.Id));
-```
+| Gate | Quand |
+|---|---|
+| `code-review` | Avant le push et sur la pull request |
+| `security-review` | Tout changement sous `src/` |
+| `dependency-guardian` | Tout changement d'un `.csproj` ou de `Directory.Packages.props` |
+| `result-architect` | Tout changement de la surface publique ; ce module n'a pas d'agent `api-reviewer`, `result-architect` tient ce gate |
 
-### Ensure (validation inline)
-```csharp
-Result<User> validated = userResult
-    .Ensure(u => u.IsActive, new UserInactiveError(userId));
-```
+Avant une pull request :
 
-## 🚀 Performance Guidelines
-
-1. Préférer `Result` (non-generic) pour les opérations sans valeur de retour
-2. Éviter `ToList()` dans les pipelines — utiliser `IEnumerable<T>` lazy
-3. `ValueTask` pour les méthodes async appelées souvent avec résultat synchrone
-4. Pas d'allocation dans `Map`/`Bind` sur le chemin succès : `Result<T>` est un struct ; une lambda sans capture est mise en cache, une lambda qui capture alloue à chaque appel
-5. `ErrorCollection` est matérialisée à la construction (`ImmutableArray<IError>`, `Message` calculé une fois) — ne la créer que sur le rail d'échec
-
-## 🧪 Testing Conventions
-
-```csharp
-// Arrange
-var sut = new UserService(mockRepo);
-
-// Act  
-Result<User> result = await sut.GetUserAsync(userId);
-
-// Assert - toujours tester les deux rails, chacun dans son test
-result.IsSuccess.ShouldBeTrue();
-result.Value.ShouldBe(expected);
-
-// ... et pour le rail échec :
-result.IsFailure.ShouldBeTrue();
-result.Error.ShouldBeOfType<UserNotFoundError>();
-```
+- XML docs sur tout nouveau membre `public`
+- Un test par chemin nouveau, succès et échec
+- `CHANGELOG.md` à jour en cas de rupture, `README.md` pour toute nouvelle API publique majeure
+- Aucune version dans un `.csproj` : versions et releases relèvent d'ADR-GLOBAL-002
+- Pas de `TODO` sans issue : `// TODO(#184): ...`
 
 ## 📦 Packages
 - `MicroKit.Result` — core (zéro dépendance) ; inclut les convertisseurs JSON (namespace `MicroKit.Result.Serialization`)

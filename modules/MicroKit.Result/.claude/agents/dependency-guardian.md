@@ -37,50 +37,52 @@ Forbidden:
 - Any other MicroKit module
 - EF Core packages
 
+### Test projects (`tests/`)
+Allowed:
+- `ProjectReference` to this module's `src/` projects
+- The test stack already referenced: `Microsoft.NET.Test.Sdk`, `xunit`, `xunit.runner.visualstudio`, `Shouldly`, `NSubstitute`, `coverlet.collector`, `NetArchTest.Rules` (architecture tests), `BenchmarkDotNet` (performance tests)
+- FsCheck in `MicroKit.Result.UnitTests`, added by #184 Phase 1, with its entry in `Directory.Packages.props`
+
+Forbidden:
+- Any other MicroKit module
+
+### MicroKit.Result.Samples (`samples/`)
+Allowed:
+- `ProjectReference` to this module's `src/` projects
+- `IsTrimmable=false`: it is the library opt-in, and this project is an executable (Microsoft Learn, "Prepare .NET libraries for trimming")
+
+Forbidden:
+- Any other MicroKit module
+- Any `PackageReference`: the samples run on the framework and the module alone
+
 ### NuGet Package Management
 - All versions must be in the root `Directory.Packages.props` — never in `.csproj`
-- No `Version` attribute on `<PackageReference>` in any `.csproj`
+- No `Version` attribute on `<PackageReference>` in any `.csproj` of the module
 - Banned test libraries are listed in the root rule `.claude/rules/testing-libraries.md` (commercial license) — flag any reference immediately
 
 ## Workflow
 
 ```bash
-# Check for inline version attributes in csproj files
-grep -rE 'PackageReference.*Version="' modules/MicroKit.Result/src/
+# Check for inline version attributes in every csproj of the module (any output is a BLOCK)
+grep -rE 'PackageReference.*Version(Override)?="' modules/MicroKit.Result/ --include="*.csproj"
 
 # Banned test libraries: run the detection commands of the root rule .claude/rules/testing-libraries.md
 
-# Check for forbidden cross-module MicroKit references in src/ (any output is a BLOCK).
+# Check for forbidden cross-module MicroKit references in every csproj (any output is a BLOCK).
 # The lookahead applies to each match, so the path grep prefixes to every line cannot hide one.
-grep -rnP '\bMicroKit\.(?!Result\b)' modules/MicroKit.Result/src/ --include="*.csproj"
+grep -rnP '\bMicroKit\.(?!Result\b)' modules/MicroKit.Result/ --include="*.csproj"
 
 # Inspect reference graph
 for p in modules/MicroKit.Result/src/*/*.csproj; do dotnet reference list --project "$p"; done
 ```
 
-## Cross-Module Reference Pattern (rule: `/.claude/rules/cross-module-references.md`)
+## Cross-Module Reference Pattern
 
 MicroKit.Result is a **Level 0** module — it must never depend on other MicroKit modules.
-Any cross-module reference in a src `.csproj` is an **immediate BLOCK**.
+Any cross-module reference in a `.csproj` of the module is an **immediate BLOCK**.
 
-If a cross-module reference is somehow required in a future package (requires explicit approval),
-it must follow the canonical two-ItemGroup pattern:
-
-```bash
-# Detect Condition= placed on individual items instead of ItemGroups (violation)
-grep -n 'ProjectReference.*Condition=\|PackageReference.*Condition=' modules/MicroKit.Result/src/**/*.csproj
-```
-
-Checklist (apply whenever any cross-module reference is detected):
-- [ ] `Condition=` is on `<ItemGroup>`, never on individual `<ProjectReference>` or `<PackageReference>` items
-- [ ] Both warning comments appear above the two `<ItemGroup>` blocks:
-      `<!-- DEV: source ProjectReferences — CI/Release: published NuGet packages -->`
-      `<!-- ⚠ Any new cross-module dependency must be added to BOTH ItemGroups -->`
-- [ ] Strict symmetry: every `ProjectReference` has a matching `PackageReference` twin and vice versa
-- [ ] No `Version=` on cross-module `<PackageReference>` (CPM via `Directory.Packages.props`)
-- [ ] All `<ProjectReference>` paths are relative (never absolute)
-- [ ] All newly referenced modules are listed in `MicroKit.Result.slnx`
-- [ ] Test/non-packable projects use unconditional `<ProjectReference>` — never conditional
+A future exception needs explicit approval, an update of the graph in the root `.claude/CLAUDE.md`,
+and the pattern of the root rule `.claude/rules/cross-module-references.md`.
 
 ## Output Format
 

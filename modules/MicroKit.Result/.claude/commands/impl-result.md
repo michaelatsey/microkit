@@ -28,17 +28,19 @@ public sealed class {ServiceName}(IDependency dep) : I{ServiceName}
 {
     public async ValueTask<Result<{Output}>> {MethodName}Async({Input}, CancellationToken ct = default)
     {
-        // TODO: implement
-        // Pattern:
-        // 1. Validate input
-        // 2. Fetch/compute
-        // 3. Map to output
-        // 4. Return Result
-        
-        throw new NotImplementedException();
+        // Pattern :
+        // 1. Valider l'entrée : un échec prévisible retourne Result.Failure
+        // 2. Récupérer ou calculer, en passant ct ; l'annulation de l'appelant se propage
+        // 3. Mapper vers la sortie
+        {Entity}? entity = await dep.FindAsync(id, ct).ConfigureAwait(false);
+        return entity is null
+            ? Result.Failure<{Output}>(new {Entity}NotFoundError(id))
+            : Result.Success(entity.To{Output}());
     }
 }
 ```
+
+Une dépendance d'infrastructure qui lève se traite à la frontière (`rules/no-exceptions-flow.md`) : l'exception part dans le log par `[LoggerMessage]`, l'erreur porte un message générique.
 
 ### 2. Erreurs métier associées
 Génère automatiquement les erreurs probables selon le contexte:
@@ -55,12 +57,38 @@ public sealed class {ServiceName}Tests
     private readonly {ServiceName} _sut;
     
     public {ServiceName}Tests() => _sut = new {ServiceName}(_mockDep);
-    
-    [Fact] public async Task {MethodName}Async_WhenValid_ReturnsSuccess() { }
-    [Fact] public async Task {MethodName}Async_WhenNotFound_ReturnsFailure() { }
-    [Fact] public async Task {MethodName}Async_WhenUnauthorized_ReturnsFailure() { }
+
+    [Fact]
+    public async Task {MethodName}Async_WhenNotFound_ReturnsFailure()
+    {
+        // Arrange
+        _mockDep.FindAsync(Arg.Any<Guid>(), Arg.Any<CancellationToken>()).Returns(({Entity}?)null);
+
+        // Act
+        Result<{Output}> result = await _sut.{MethodName}Async(Guid.NewGuid());
+
+        // Assert
+        result.IsFailure.ShouldBeTrue();
+        result.Error.ShouldBeOfType<{Entity}NotFoundError>();
+    }
+
+    [Fact]
+    public async Task {MethodName}Async_WhenCallerCancels_PropagatesCancellation()
+    {
+        // Arrange
+        using var cts = new CancellationTokenSource();
+        await cts.CancelAsync();
+        _mockDep.FindAsync(Arg.Any<Guid>(), cts.Token)
+            .Returns<Task<{Entity}?>>(_ => Task.FromCanceled<{Entity}?>(cts.Token));
+
+        // Act + Assert
+        await Should.ThrowAsync<OperationCanceledException>(async () =>
+            await _sut.{MethodName}Async(Guid.NewGuid(), cts.Token));
+    }
 }
 ```
+
+Mêmes structures pour les autres cas : `{MethodName}Async_WhenValid_ReturnsSuccess`, `{MethodName}Async_WhenUnauthorized_ReturnsFailure`.
 
 ### 4. Endpoint minimal API (si --api flag)
 ```csharp
@@ -72,7 +100,7 @@ app.MapGet("/api/{entity}/{id}", async (
 ```
 
 ## Conventions appliquées
-- `async` → `ValueTask<Result<T>>` par défaut
-- `CancellationToken` toujours en dernier paramètre avec default
+- `async` → `ValueTask<Result<T>>` (convention racine ; son gain face à `Task<T>` n'est pas mesuré, #184 Phase 7 le mesure)
+- `CancellationToken` toujours en dernier paramètre avec default, transmis aux appels ; l'annulation de l'appelant se propage
 - Guard null en entrée via `ArgumentNullException.ThrowIfNull`
 - Pas d'exception dans l'implémentation métier

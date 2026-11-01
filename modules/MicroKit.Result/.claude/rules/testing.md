@@ -21,4 +21,30 @@ Voir la règle globale : `.claude/rules/testing-libraries.md` (racine du monorep
 - Toujours tester le chemin succès ET le chemin échec pour chaque opération
 - Vérifier `IsSuccess`, `IsFailure`, `Value`, `Error` de façon indépendante
 - Tester les transformations : `Map`, `Bind`, `MapError`, etc.
-- Les exceptions en Result : ne jamais throw ; capturer via `Result.Try` / `Result<T>.Try` (ou `TryAsync`) et représenter l'échec par `Result.Failure`
+- `default(Result)` et `default(Result<T>)` : ni succès ni échec, `Error` et `Match` lèvent `ResultException` (garantie correctness, `.claude/CLAUDE.md`)
+- Les exceptions en Result : ne jamais throw ; capturer via `Result.Try` / `Result<T>.Try` (ou `TryAsync`) avec un mapper (`rules/no-exceptions-flow.md`) et représenter l'échec par `Result.Failure`
+- Un `Result` retourné est toujours assigné puis vérifié, jamais ignoré
+
+```csharp
+// Assert : les deux rails, chacun dans son test
+result.IsSuccess.ShouldBeTrue();
+result.Value.ShouldBe(expected);
+
+result.IsFailure.ShouldBeTrue();
+result.Error.ShouldBeOfType<UserNotFoundError>();
+```
+
+## Cible : #184 Phase 1
+
+- Tests unitaires de `Result`, `Result<T>`, chaque extension de `Extensions/`, `ErrorCollection`, `ValidationResult`, `ValidationError`, `ErrorMetadataBuilder` et du convertisseur JSON : les deux rails de chaque opération, plus `default(Result)` et `default(Result<T>)`.
+- Tests de propriétés, au moins 100 cas chacun, pour les lois ci-dessous. La Phase 1 ajoute FsCheck (l'intégration qui correspond à la version épinglée de xunit) ; il n'est pas encore référencé.
+- Les tests décrivent le comportement actuel. Là où c'est un défaut listé par #184, le test affirme le comportement corrigé et porte `Skip = "#184 phase 2"` ; la Phase 2 retire le skip.
+- Couverture de lignes de `src/MicroKit.Result` d'au moins 90 %.
+
+```
+Map, identité       : r.Map(x => x) == r
+Map, composition    : r.Map(f).Map(g) == r.Map(x => g(f(x)))
+Bind, neutre gauche : Result.Success(a).Bind(f) == f(a)
+Bind, neutre droit  : r.Bind(x => Result.Success(x)) == r
+Bind, associativité : r.Bind(f).Bind(g) == r.Bind(x => f(x).Bind(g))
+```

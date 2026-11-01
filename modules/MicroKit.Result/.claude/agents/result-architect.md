@@ -17,6 +17,8 @@ Concevoir, challenger et valider l'architecture de MicroKit.Result. Tu intervien
 - Valider la cohérence des APIs publiques
 - Garantir la compatibilité NativeAOT et trimming
 
+Tu tiens aussi le gate de review de la surface publique (`api-reviewer` à la racine) : tout changement d'API publique passe par toi, en contexte neuf.
+
 ## Contexte à charger systématiquement
 - `.claude/CLAUDE.md` — philosophie du projet
 - `.claude/rules/result-patterns.md` — patterns autorisés
@@ -32,6 +34,7 @@ Concevoir, challenger et valider l'architecture de MicroKit.Result. Tu intervien
 3. **Impact NativeAOT?** (éviter réflexion, dynamic, Emit)
 4. **Impact allocations?** (struct vs class, boxing évitable?)
 5. **Cohérence avec la philosophie railway?** (pas de mélange exception/result)
+6. **Respecte-t-il les cinq garanties de `.claude/CLAUDE.md`?** Un résultat invalide n'est jamais lu comme un succès ; les détails internes n'atteignent pas le client par défaut ; sync et async se comportent de la même façon ; HTTP reste hors du cœur ; toute affirmation de performance est mesurée.
 
 ## Patterns de décision
 
@@ -39,7 +42,7 @@ Concevoir, challenger et valider l'architecture de MicroKit.Result. Tu intervien
 ```
 Si prévisible + domaine métier → sealed record héritant Error
 Si validation → ValidationError avec champs
-Si HTTP → utiliser ErrorCategory.NotFound / Conflict / etc.
+Si la catégorie compte → ErrorCategory.NotFound / Conflict / etc. ; le statut HTTP se décide dans MicroKit.Result.AspNetCore, jamais dans le cœur
 Jamais → Exception comme Error
 ```
 
@@ -55,8 +58,7 @@ Jamais → méthode qui throw dans un pipeline Result
 
 ### Async
 ```
-Un seul await + résultat souvent sync → ValueTask
-Plusieurs awaits / continuations → Task
+Retour → ValueTask<T> (convention racine) ; son gain face à Task<T> n'est pas mesuré, la Phase 7 de #184 le mesure
 Jamais → async void
 ```
 

@@ -166,9 +166,12 @@ public async Task<User> GetUserAsync(Guid id)
 }
 
 // ❌ BLOQUANT
-public Result<T> GetValue()
+public Result<Order> GetOrder(Guid id)
 {
-    if (!IsSuccess) throw new InvalidOperationException("No value"); // expose throw public
-    return _value!;
+    Order? order = _repo.Find(id);
+    if (order is null) throw new InvalidOperationException("Order not found"); // prévisible : new OrderNotFoundError(id)
+    return Result.Success(order);
 }
 ```
+
+`Result<T>.Value`, `Error` et `GetValueOrThrow` lèvent `ResultException`, et ce n'est pas un flux métier : c'est ce qui empêche de lire un résultat invalide comme un succès.

@@ -2,8 +2,10 @@
 
 ## Usage
 ```
-/new-error <ErrorName> [--category <NotFound|Validation|Conflict|Unauthorized|Technical>] [--domain <DomainName>] [--fields <field1:type,field2:type>]
+/new-error <ErrorName> [--category <ErrorCategory>] [--domain <DomainName>] [--fields <field1:type,field2:type>]
 ```
+
+`<ErrorCategory>` : `NotFound`, `Validation`, `Unauthorized`, `Forbidden`, `Conflict`, `TooManyRequests`, `Technical`, `Unavailable`, `External`, `BusinessRule`, `NotSupported`, `Timeout`, `PreconditionFailed`. `Cancelled` n'est pas proposée : l'annulation demandée par l'appelant se propage, elle ne devient pas une erreur. Sans `--category`, la catégorie est `Technical` (HTTP 500) ; #184 Phase 3 décide si elle devient obligatoire.
 
 ## Description
 Génère un type d'erreur fortement typé, cohérent avec les conventions MicroKit.Result.
@@ -12,7 +14,7 @@ Génère un type d'erreur fortement typé, cohérent avec les conventions MicroK
 ```
 /new-error UserNotFound --category NotFound --domain User --fields userId:Guid
 /new-error OrderAmountInvalid --category Validation --domain Order --fields amount:decimal,minAmount:decimal
-/new-error PaymentGatewayTimeout --category Technical --domain Payment
+/new-error PaymentGatewayTimeout --category Timeout --domain Payment
 ```
 
 ## Template généré
@@ -28,7 +30,7 @@ namespace {RootNamespace};
 public sealed record {ErrorName}({Type1} {Field1}, ...)
     : Error(
         ErrorCode.From("{DOMAIN}.{ENTITY}.{ACTION}"),
-        $"[description avec interpolation des champs]")
+        $"[description sans danger pour le client]")
 {
     /// <inheritdoc/>
     public override ErrorCategory Category => ErrorCategory.{Category};
@@ -45,19 +47,16 @@ public sealed record {ErrorName}({Fields})
 {
     public override ErrorCategory Category => ErrorCategory.{Category};
     
-    public override IReadOnlyDictionary<string, object?> Metadata => 
-        new Dictionary<string, object?>
-        {
-            // champs comme metadata pour observabilité
-            [nameof({Field1})] = {Field1},
-        };
+    // champs comme metadata pour observabilité
+    public override IReadOnlyDictionary<string, object?> Metadata =>
+        ErrorMetadata.Create(nameof({Field1}), {Field1});
 }
 ```
 
 ## Règles appliquées automatiquement
 1. `sealed record` — pas d'héritage non contrôlé
 2. ErrorCode au format `DOMAIN.ENTITY.ACTION` en SCREAMING_SNAKE_CASE
-3. Message avec interpolation des champs pour le debugging
+3. Message sans danger pour le client : il part dans `ProblemDetails.Detail`. Jamais le texte d'une exception, ni un détail interne (requête, chemin, serveur) ; ceux-là vont dans `Metadata` ou le log. Une erreur `Technical` porte un message générique
 4. Category cohérente avec le nom (NotFound → category NotFound)
 5. XML docs générés
 6. Placement dans le bon namespace/dossier

@@ -20,7 +20,8 @@ Utilise l'agent `test-generator` pour la logique de génération.
 2. Détecter les tests existants dans `tests/` pour ce fichier
 3. Identifier les membres non couverts
 4. Générer les tests manquants avec AAA structure
-5. Si `--bench` : générer un fichier BenchmarkDotNet correspondant
+5. Lancer les tests générés et rapporter leur résultat
+6. Si `--bench` : générer un fichier BenchmarkDotNet correspondant (les benchmarks publiés relèvent de #184 Phase 7)
 
 ## Output
 - `tests/MicroKit.Result.UnitTests/{Dossier}/{FileName}Tests.cs`
@@ -29,7 +30,10 @@ Utilise l'agent `test-generator` pour la logique de génération.
 ## Règles de génération
 - Un `[Fact]` par cas — pas de `[Fact]` avec plusieurs assertions sur des chemins différents
 - `[Theory]` avec `[InlineData]` pour les variantes de valeurs
-- Toujours tester: success path, failure path, null args, chained behavior
+- Toujours tester, selon #184 Phase 1 (`rules/testing.md`) : success path, failure path, `default(Result)` et `default(Result<T>)`, null args, chained behavior
+- Lois de `Map` et `Bind` en tests de propriétés (FsCheck, ajouté par la Phase 1)
+- Défaut listé par #184 : le test affirme le comportement corrigé et porte `Skip = "#184 phase 2"`
+- Aucun `Result` retourné n'est ignoré : il est assigné puis vérifié
 - Assertions Shouldly sur l'API de `Result` : `result.IsSuccess.ShouldBeTrue()`, `result.Value.ShouldBe(expected)`, `result.Error.ShouldBeOfType<TError>()`
 - Pas de `Thread.Sleep` — utiliser `Task.Delay` ou fake time
 - Noms clairs: `Method_Scenario_ExpectedResult` (règle `.claude/rules/testing.md`)

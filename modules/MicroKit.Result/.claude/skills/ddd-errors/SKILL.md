@@ -1,3 +1,8 @@
+---
+name: ddd-errors
+description: Use when designing, naming or reviewing a typed domain error for MicroKit.Result (error code, category, client-safe message, metadata), or translating errors between bounded contexts. Not for composing pipelines or for infrastructure exception handling.
+---
+
 # Skill: DDD Error Design
 
 ## Quand activer ce skill
@@ -5,6 +10,12 @@
 - Review d'erreurs existantes
 - Mapping entre domaines / bounded contexts
 - Traduction d'erreurs vers l'API externe
+
+## Ce qui atteint le client
+
+`Error.Message` part dans `ProblemDetails.Detail` : il reste sans danger pour le client, et n'est jamais le texte d'une exception. Les détails internes vont dans `Metadata`, que ni `ProblemDetails` ni le JSON n'émettent aujourd'hui, ou dans le log (garantie security, `.claude/CLAUDE.md`).
+
+`Category` vaut `Technical` (HTTP 500) quand elle n'est pas surchargée ; #184 Phase 3 décide si elle devient obligatoire.
 
 ## Taxonomie des erreurs DDD
 
@@ -67,11 +78,7 @@ public sealed record DatabaseUnavailableError(string DataSource, string Details)
     // Les détails techniques ne sont PAS dans le message public
     // Ils sont en metadata pour les logs internes
     public override IReadOnlyDictionary<string, object?> Metadata =>
-        new Dictionary<string, object?>
-        {
-            ["dataSource"] = DataSource,
-            ["details"] = Details
-        };
+        ErrorMetadata.Create(new("dataSource", DataSource), new("details", Details));
 }
 ```
 
