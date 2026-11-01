@@ -19,7 +19,7 @@ Génère un type d'erreur fortement typé, cohérent avec les conventions MicroK
 
 ### Erreur simple
 ```csharp
-namespace MicroKit.Domain.{Domain}.Errors;
+namespace {RootNamespace}.Errors;
 
 /// <summary>
 /// Raised when {description}.
@@ -27,8 +27,8 @@ namespace MicroKit.Domain.{Domain}.Errors;
 /// <param name="{Field1}">{Field1 description}.</param>
 public sealed record {ErrorName}({Type1} {Field1}, ...)
     : Error(
-        code: ErrorCode.From("{DOMAIN}.{ENTITY}.{ACTION}"),
-        message: $"[description avec interpolation des champs]")
+        ErrorCode.From("{DOMAIN}.{ENTITY}.{ACTION}"),
+        $"[description avec interpolation des champs]")
 {
     /// <inheritdoc/>
     public override ErrorCategory Category => ErrorCategory.{Category};

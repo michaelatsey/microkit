@@ -25,7 +25,7 @@ Unit            ← void-safe pour les génériques
 ### Naming
 - Types: `PascalCase`, `sealed` par défaut
 - Méthodes d'extension: verbes fonctionnels (`Map`, `Bind`, `Match`, `Tap`, `Ensure`)
-- Erreurs: noun phrases (`NotFoundError`, `ValidationError`, `UnauthorizedError`)
+- Erreurs: noun phrases (`UserNotFoundError`, `PaymentDeclinedError`) ; la librairie ne fournit que `ValidationError` et `ErrorCollection`, les erreurs de domaine dérivent de `Error`
 - Codes d'erreur: `DOMAIN.ENTITY.ACTION` ex: `AUTH.USER.NOT_FOUND`
 
 ### Style C# 2026
@@ -39,7 +39,7 @@ Unit            ← void-safe pour les génériques
 
 ### Interdictions
 - ❌ `throw` dans les flux métier normaux
-- ❌ `null` retourné depuis une méthode publique (utiliser `Result` ou `Option`)  
+- ❌ `null` retourné depuis une méthode publique (utiliser `Result` ou `Result<T>`)  
 - ❌ `Exception` pour représenter une validation ou une règle métier
 - ❌ Réflexion runtime sauf dans la couche Serialization (NativeAOT)
 - ❌ `static` mutable partagé (thread-safety)
@@ -72,15 +72,16 @@ Result<Order> order = GetUser(id)
 
 ### Match (consommation finale)
 ```csharp
-IActionResult response = result.Match(
-    onSuccess: value => Ok(value),
-    onFailure: error => error.ToProblemDetails()
+// Équivalent de result.ToHttpResult() (MicroKit.Result.AspNetCore)
+IResult response = result.Match(
+    onSuccess: value => Results.Ok(value),
+    onFailure: error => Results.Problem(ResultProblemDetailsFactory.CreateProblemDetails(error))
 );
 ```
 
 ### Tap (side-effect sans transformation)
 ```csharp
-Result<User> logged = userResult.Tap(u => logger.LogInfo(u.Id));
+Result<User> logged = userResult.Tap(u => logger.LogInformation("User {UserId} loaded", u.Id));
 ```
 
 ### Ensure (validation inline)
@@ -94,8 +95,8 @@ Result<User> validated = userResult
 1. Préférer `Result` (non-generic) pour les opérations sans valeur de retour
 2. Éviter `ToList()` dans les pipelines — utiliser `IEnumerable<T>` lazy
 3. `ValueTask` pour les méthodes async appelées souvent avec résultat synchrone
-4. Pas d'allocation intermédiaire dans les `Map`/`Bind` — les lambdas inline sont inlinées par le JIT
-5. `ErrorCollection` est lazy — ne matérialisez que si nécessaire
+4. Pas d'allocation dans `Map`/`Bind` sur le chemin succès : `Result<T>` est un struct ; une lambda sans capture est mise en cache, une lambda qui capture alloue à chaque appel
+5. `ErrorCollection` est matérialisée à la construction (`ImmutableArray<IError>`, `Message` calculé une fois) — ne la créer que sur le rail d'échec
 
 ## 🧪 Testing Conventions
 
@@ -106,16 +107,18 @@ var sut = new UserService(mockRepo);
 // Act  
 Result<User> result = await sut.GetUserAsync(userId);
 
-// Assert - toujours tester les deux rails
-result.Should().BeSuccess().WithValue(expected);
-result.Should().BeFailure().WithError<UserNotFoundError>();
+// Assert - toujours tester les deux rails, chacun dans son test
+result.IsSuccess.ShouldBeTrue();
+result.Value.ShouldBe(expected);
+
+// ... et pour le rail échec :
+result.IsFailure.ShouldBeTrue();
+result.Error.ShouldBeOfType<UserNotFoundError>();
 ```
 
-## 📦 Packages Cibles
-- `MicroKit.Result` — core (zero dépendances)
+## 📦 Packages
+- `MicroKit.Result` — core (zéro dépendance) ; inclut les convertisseurs JSON (namespace `MicroKit.Result.Serialization`)
 - `MicroKit.Result.AspNetCore` — extensions HTTP/ProblemDetails
-- `MicroKit.Result.FluentValidation` — intégration FluentValidation
-- `MicroKit.Result.Serialization` — JSON converters
 
 ## 🔗 Références
 - [Railway Oriented Programming - Scott Wlaschin](https://fsharpforfunandprofit.com/rop/)

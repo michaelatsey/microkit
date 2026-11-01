@@ -2,7 +2,7 @@
 
 ## Usage
 ```
-/impl-result <ServiceName> --operation <description> [--input <Type>] [--output <Type>] [--async]
+/impl-result <ServiceName> --operation <description> [--input <Type>] [--output <Type>] [--async] [--api]
 ```
 
 ## Description
@@ -56,12 +56,9 @@ public sealed class {ServiceName}Tests
     
     public {ServiceName}Tests() => _sut = new {ServiceName}(_mockDep);
     
-    public sealed class {MethodName}AsyncShould
-    {
-        [Fact] public async Task ReturnSuccess_WhenValid() { }
-        [Fact] public async Task ReturnFailure_WhenNotFound() { }
-        [Fact] public async Task ReturnFailure_WhenUnauthorized() { }
-    }
+    [Fact] public async Task {MethodName}Async_WhenValid_ReturnsSuccess() { }
+    [Fact] public async Task {MethodName}Async_WhenNotFound_ReturnsFailure() { }
+    [Fact] public async Task {MethodName}Async_WhenUnauthorized_ReturnsFailure() { }
 }
 ```
 

@@ -73,21 +73,29 @@ Tu bloques ce qui viole les principes, tu suggères des améliorations non bloqu
 ## Patterns de référence acceptés
 
 ```csharp
-// ✅ Bon: guard pattern avec ThrowHelper
-internal static class ThrowHelper
+// ✅ Bon: guard inlinable, throw délégué à un ThrowHelper froid (NoInlining)
+internal static class ResultGuard
 {
-    [DoesNotReturn]
-    public static void ThrowIfNull(object? value, string paramName)
-        => throw new ArgumentNullException(paramName);
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    internal static void NotNull<T>(
+        [NotNull] T? value,
+        [CallerArgumentExpression(nameof(value))] string? paramName = null)
+        where T : class
+    {
+        if (value is null)
+            ThrowHelper.ThrowArgumentNull(paramName!);
+    }
 }
 
-// ✅ Bon: ValueTask pour async léger
+// ✅ Bon: ValueTask pour async léger, ConfigureAwait(false)
 public static async ValueTask<Result<TOut>> MapAsync<TIn, TOut>(
-    this Result<TIn> result, 
-    Func<TIn, ValueTask<TOut>> mapper)
-    => result.IsSuccess 
-        ? Result.Success(await mapper(result.Value)) 
-        : Result.Failure<TOut>(result.Error);
+    this Result<TIn> result, Func<TIn, Task<TOut>> mapper)
+{
+    ResultGuard.NotNull(mapper);
+    return result.IsSuccess
+        ? Result<TOut>.Success(await mapper(result.Value).ConfigureAwait(false))
+        : Result<TOut>.Failure(result.Error);
+}
 
 // ❌ Mauvais: allocation inutile
 public IReadOnlyList<IError> Errors => _errors.ToList(); // ToList() alloue!

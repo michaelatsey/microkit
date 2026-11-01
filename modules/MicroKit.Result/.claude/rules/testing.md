@@ -6,7 +6,7 @@
 
 Voir la règle globale : `.claude/rules/testing-libraries.md` (racine du monorepo).
 
-**FluentAssertions est interdit** — licence commerciale Xceed en v8+.
+**La bibliothèque d'assertions interdite, et la raison (licence), sont dans la règle globale ci-dessus.**
 **Shouldly est obligatoire** — MIT, syntaxe : `result.ShouldBe(expected)`.
 
 ## Conventions de test Result
@@ -21,4 +21,4 @@ Voir la règle globale : `.claude/rules/testing-libraries.md` (racine du monorep
 - Toujours tester le chemin succès ET le chemin échec pour chaque opération
 - Vérifier `IsSuccess`, `IsFailure`, `Value`, `Error` de façon indépendante
 - Tester les transformations : `Map`, `Bind`, `MapError`, etc.
-- Les exceptions en Result : ne jamais throw, toujours capturer via Result.Fail
+- Les exceptions en Result : ne jamais throw ; capturer via `Result.Try` / `Result<T>.Try` (ou `TryAsync`) et représenter l'échec par `Result.Failure`

@@ -9,6 +9,10 @@
     <RootNamespace>MicroKit.Result.Samples</RootNamespace>
     <IsPackable>false</IsPackable>
     <IsPublishable>false</IsPublishable>
+    <!-- A demo executable, never trimmed. The README samples call trim-unsafe APIs on purpose
+         (MapGet/MapDelete with a delegate, ResultJsonConverterFactory); the trim analyzer that the
+         root IsTrimmable=true turns on would report them as IL2026 build errors in Release. -->
+    <IsTrimmable>false</IsTrimmable>
   </PropertyGroup>
 
   <ItemGroup>

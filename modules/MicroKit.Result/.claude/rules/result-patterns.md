@@ -8,13 +8,15 @@ Result.Success();
 Result.Success(value);
 Result.Failure(error);
 Result.Failure<T>(error);
-Result.Try(() => riskyOperation());
-Result.TryAsync(async () => await riskyOperation());
+Result.Try(() => riskyCommand());                              // Func<Result>
+Result<T>.Try(() => riskyQuery());                             // Func<T>
+await Result.TryAsync(async () => await riskyCommandAsync());   // Func<Task<Result>>
+await Result<T>.TryAsync(async () => await riskyQueryAsync());  // Func<Task<T>>
 ```
 
 ### ❌ Ne jamais créer via constructeur public
 ```csharp
-// ❌ Interdit — le constructeur est internal
+// ❌ Interdit — les constructeurs de Result<T> sont privés
 new Result<T>(value);
 ```
 
@@ -63,10 +65,10 @@ Result<User> monitored = userResult
 ### ✅ Combine pour valider plusieurs résultats
 ```csharp
 // Fail-fast: arrête au premier échec
-var result = Result.Combine(validateName, validateEmail, validateAge);
+Result failFast = ResultCombineExtensions.Combine(validateName, validateEmail, validateAge);
 
-// Collect-all: collecte toutes les erreurs
-var result = Result.CombineAll(validateName, validateEmail, validateAge);
+// Collect-all: collecte toutes les erreurs dans une ErrorCollection
+Result collected = ResultCombineExtensions.CombineAll(validateName, validateEmail, validateAge);
 ```
 
 ## Règles de mapping HTTP
@@ -87,6 +89,13 @@ ErrorCategory.Conflict          → 409 Conflict
 ErrorCategory.TooManyRequests   → 429 Too Many Requests
 ErrorCategory.Technical         → 500 Internal Server Error
 ErrorCategory.Unavailable       → 503 Service Unavailable
+ErrorCategory.External          → 502 Bad Gateway
+ErrorCategory.BusinessRule      → 422 Unprocessable Entity
+ErrorCategory.NotSupported      → 501 Not Implemented
+ErrorCategory.Timeout           → 408 Request Timeout
+ErrorCategory.Cancelled         → 499 Client Closed Request
+ErrorCategory.PreconditionFailed → 412 Precondition Failed
+toute autre valeur              → 500 Internal Server Error
 ```
 
 ## Règles d'erreurs
@@ -94,11 +103,20 @@ ErrorCategory.Unavailable       → 503 Service Unavailable
 ### ✅ Une erreur = un type
 ```csharp
 // ✅ Types distincts pour des erreurs distincts
-public sealed record UserNotFoundError(Guid UserId) : Error(...);
-public sealed record UserInactiveError(Guid UserId) : Error(...);
+public sealed record UserNotFoundError(Guid UserId)
+    : Error(ErrorCode.From("USER.NOT_FOUND"), $"User {UserId} not found")
+{
+    public override ErrorCategory Category => ErrorCategory.NotFound;
+}
 
-// ❌ Pas de string discriminants
-Result.Failure(new Error("USER_NOT_FOUND", "..."));  // perd le typage fort
+public sealed record UserInactiveError(Guid UserId)
+    : Error(ErrorCode.From("USER.INACTIVE"), $"User {UserId} is inactive")
+{
+    public override ErrorCategory Category => ErrorCategory.BusinessRule;
+}
+
+// ❌ Pas de string discriminants — GenericError : record fourre-tout (ErrorCode, message)
+Result.Failure(new GenericError(ErrorCode.From("USER_NOT_FOUND"), "..."));  // perd le typage fort
 ```
 
 ### ✅ ErrorCode en SCREAMING_SNAKE_CASE hiérarchique
@@ -139,9 +157,9 @@ public async ValueTask<Result<T>> ProcessAsync(
 ```csharp
 // ❌ try/catch pour créer un Result dans le code métier
 try { return Result.Success(Compute()); }
-catch (Exception ex) { return Result.Failure(new Error(ex.Message)); }
-// ✅ Utiliser Result.Try()
-return Result.Try(() => Compute());
+catch (Exception ex) { return Result.Failure<T>(new GenericError(ErrorCode.Failure, ex.Message)); }
+// ✅ Utiliser Result<T>.Try() — Result.Try() n'accepte que Func<Result>
+return Result<T>.Try(() => Compute());
 
 // ❌ .Value sans vérification (sauf après Match)
 var value = result.Value; // throw si failure
@@ -156,5 +174,5 @@ Result<User> flat = outer.Bind(inner => inner);
 // ❌ void retourné là où Result suffit
 void SaveUser(User user) { _repo.Save(user); }
 // ✅
-Result SaveUser(User user) => Result.Try(() => _repo.Save(user));
+Result SaveUser(User user) => Result.Try(() => { _repo.Save(user); return Result.Success(); });
 ```

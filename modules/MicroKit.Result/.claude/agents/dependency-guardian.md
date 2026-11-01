@@ -1,6 +1,6 @@
 ---
 name: dependency-guardian
-description: Automatically invoked on ANY change to .csproj files, Directory.Packages.props, or project references within MicroKit.Result. Validates that no new dependency violates the module's rules — no cross-module MicroKit references in src/, no inline package versions, no FluentAssertions. Also invoked when a new PackageReference is added to verify it belongs in Directory.Packages.props.
+description: Automatically invoked on ANY change to .csproj files, Directory.Packages.props, or project references within MicroKit.Result. Validates that no new dependency violates the module's rules — no cross-module MicroKit references in src/, no inline package versions, no banned test library. Also invoked when a new PackageReference is added to verify it belongs in Directory.Packages.props.
 tools: Read, Glob, Grep, Bash
 model: haiku
 ---
@@ -11,7 +11,7 @@ You run fast. Your job is binary: **PASS** or **BLOCK** with a clear reason.
 
 ## Dependency Rules
 
-### MicroKit.Result.Abstractions (if present)
+### MicroKit.Result.Abstractions (absent at HEAD — rules apply if it is ever added)
 Allowed:
 - BCL types only — no external NuGet packages
 
@@ -21,7 +21,7 @@ Forbidden:
 
 ### MicroKit.Result (core)
 Allowed:
-- `MicroKit.Result.Abstractions` (project ref, intra-module)
+- `MicroKit.Result.Abstractions` (project ref, intra-module; absent at HEAD — rules apply if it is ever added)
 - BCL types only — no external NuGet packages
 
 Forbidden:
@@ -38,9 +38,9 @@ Forbidden:
 - EF Core packages
 
 ### NuGet Package Management
-- All versions must be in `build/Directory.Packages.props` — never in `.csproj`
+- All versions must be in the root `Directory.Packages.props` — never in `.csproj`
 - No `Version` attribute on `<PackageReference>` in any `.csproj`
-- `FluentAssertions` is **banned** everywhere (commercial license) — flag any reference immediately
+- Banned test libraries are listed in the root rule `.claude/rules/testing-libraries.md` (commercial license) — flag any reference immediately
 
 ## Workflow
 
@@ -48,14 +48,13 @@ Forbidden:
 # Check for inline version attributes in csproj files
 grep -rE 'PackageReference.*Version="' modules/MicroKit.Result/src/
 
-# Check for banned FluentAssertions anywhere
-grep -rn 'FluentAssertions' modules/MicroKit.Result/
+# Banned test libraries: run the detection commands of the root rule .claude/rules/testing-libraries.md
 
 # Check for forbidden cross-module MicroKit references in src/
 grep -rn 'MicroKit\.' modules/MicroKit.Result/src/ --include="*.csproj" | grep -v 'MicroKit\.Result'
 
 # Inspect reference graph
-dotnet list modules/MicroKit.Result/MicroKit.Result.slnx reference
+for p in modules/MicroKit.Result/src/*/*.csproj; do dotnet reference list --project "$p"; done
 ```
 
 ## Cross-Module Reference Pattern (rule: `/.claude/rules/cross-module-references.md`)

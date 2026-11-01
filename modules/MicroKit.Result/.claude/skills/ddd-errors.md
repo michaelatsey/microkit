@@ -57,7 +57,7 @@ public sealed record UnauthorizedOperationError(string Operation, Guid UserId)
 Capturées à la frontière, converties en erreurs techniques.
 
 ```csharp
-public sealed record DatabaseUnavailableError(string ConnectionString, string Details)
+public sealed record DatabaseUnavailableError(string DataSource, string Details)
     : Error(ErrorCode.From("INFRA.DATABASE.UNAVAILABLE"),
             "Database connection failed")
 {
@@ -69,7 +69,7 @@ public sealed record DatabaseUnavailableError(string ConnectionString, string De
     public override IReadOnlyDictionary<string, object?> Metadata =>
         new Dictionary<string, object?>
         {
-            ["connection"] = MaskConnectionString(ConnectionString),
+            ["dataSource"] = DataSource,
             ["details"] = Details
         };
 }
@@ -103,21 +103,26 @@ EmailAlreadyRegisteredError
 
 ```csharp
 // ❌ Erreur trop générique — perd la sémantique
-public sealed record OperationFailedError(string Message) : Error(...);
+public sealed record OperationFailedError(string Message) : Error(ErrorCode.Failure, Message);
 
 // ❌ Héritage profond — complexifie inutilement
-public sealed record SpecificUserError : UserError : DomainError : Error;
+// SpecificUserError → UserError → DomainError → Error
 // ✅ Plat — toutes les erreurs héritent directement de Error
-public sealed record UserNotFoundError(...) : Error(...);
+public sealed record UserNotFoundError(Guid UserId)
+    : Error(ErrorCode.From("USER.NOT_FOUND"), $"User {UserId} not found")
+{
+    public override ErrorCategory Category => ErrorCategory.NotFound;
+}
 
 // ❌ Mutable metadata
 public Dictionary<string, object?> Metadata { get; set; } = new();
-// ✅ Immutable
-public IReadOnlyDictionary<string, object?> Metadata { get; init; }
+// ✅ Immutable : override de la propriété virtuelle Error.Metadata
+public override IReadOnlyDictionary<string, object?> Metadata =>
+    ErrorMetadata.Create("userId", UserId);
 
 // ❌ Exception convertie sans enrichissement
 catch (SqlException ex) 
-{ return Result.Failure(new Error(ex.Message)); }
+{ return Result.Failure(new GenericError(ErrorCode.Failure, ex.Message)); }
 // ✅ Erreur typée avec contexte
 catch (SqlException ex) when (ex.Number == 2627) // unique constraint
 { return Result.Failure(new EntityAlreadyExistsError(entityType, entityId)); }
@@ -143,19 +148,15 @@ public sealed class OrderErrorTranslator
 ## Erreurs et observabilité
 
 ```csharp
-// Structure pour le logging structuré
-public abstract record Error
+// Tags d'Activity pour les traces distribuées, calculés depuis l'API d'IError
+// (extension côté application : Error n'expose pas GetActivityTags)
+public static class ErrorActivityExtensions
 {
-    // Pour Serilog / OpenTelemetry
-    public virtual IReadOnlyDictionary<string, object?> Metadata => 
-        ImmutableDictionary<string, object?>.Empty;
-    
-    // ActivityTags pour les traces distribuées
-    public virtual IEnumerable<KeyValuePair<string, object?>> GetActivityTags()
+    public static IEnumerable<KeyValuePair<string, object?>> GetActivityTags(this IError error)
     {
-        yield return new("error.code", Code.Value);
-        yield return new("error.category", Category.ToString());
-        foreach (var (key, value) in Metadata)
+        yield return new("error.code", error.Code.Value);
+        yield return new("error.category", error.Category.ToString());
+        foreach (var (key, value) in error.Metadata)
             yield return new($"error.{key}", value);
     }
 }

@@ -1,6 +1,6 @@
 ---
 name: test-generator
-description: Generates exhaustive xUnit + FluentAssertions tests for MicroKit.Result. Covers success paths, failure paths, edge cases, async behaviors, error equality, and serialization. Also generates BenchmarkDotNet benchmarks for hot-path methods.
+description: Generates exhaustive xUnit + Shouldly tests for MicroKit.Result. Covers success paths, failure paths, edge cases, async behaviors, error equality, and serialization. Also generates BenchmarkDotNet benchmarks for hot-path methods.
 model: inherit
 tools: Read, Grep, Glob, Write, Edit
 ---
@@ -8,14 +8,14 @@ tools: Read, Grep, Glob, Write, Edit
 # Agent: Test Generator
 
 ## Identité
-Tu génères des tests xUnit + FluentAssertions exhaustifs pour MicroKit.Result.
+Tu génères des tests xUnit + Shouldly exhaustifs pour MicroKit.Result.
 Tu couvres les chemins happy, failure, edge cases et les comportements async.
 
 ## Stack de test
 - **Framework**: xUnit v2+
-- **Assertions**: FluentAssertions
+- **Assertions**: Shouldly (règle `.claude/rules/testing.md`)
 - **Mocking**: NSubstitute
-- **Performance**: BenchmarkDotNet (séparé, en /benchmarks/)
+- **Performance**: BenchmarkDotNet (séparé, dans `tests/MicroKit.Result.PerformanceTests/`)
 
 ## Conventions de nommage
 ```
@@ -30,56 +30,55 @@ Exemple: Ensure_WhenPredicateFalse_ReturnsFailureWithError
 ## Structure des tests
 
 ```csharp
-// Template standard
-public sealed class ResultTests
+// Template standard — une classe sealed par type testé, nommage Method_Scenario_ExpectedResult
+public sealed class ResultExtensionsTests
 {
-    // Grouper par méthode testée
-    public sealed class MapShould
+    [Fact]
+    public void Map_WhenSuccess_TransformsValue()
     {
-        [Fact]
-        public void TransformValue_WhenSuccess()
-        {
-            // Arrange
-            var result = Result.Success(42);
-            
-            // Act
-            var mapped = result.Map(x => x * 2);
-            
-            // Assert
-            mapped.Should().BeSuccess()
-                  .WithValue(84);
-        }
-        
-        [Fact]
-        public void PropagateError_WhenFailure()
-        {
-            // Arrange
-            var error = new TestError();
-            var result = Result.Failure<int>(error);
-            
-            // Act
-            var mapped = result.Map(x => x * 2);
-            
-            // Assert
-            mapped.Should().BeFailure()
-                  .WithError(error);
-        }
-        
-        [Fact]
-        public void NotCallMapper_WhenFailure()
-        {
-            // Arrange
-            var called = false;
-            var result = Result.Failure<int>(new TestError());
-            
-            // Act
-            result.Map(x => { called = true; return x; });
-            
-            // Assert
-            called.Should().BeFalse();
-        }
+        // Arrange
+        var result = Result.Success(42);
+
+        // Act
+        var mapped = result.Map(x => x * 2);
+
+        // Assert
+        mapped.IsSuccess.ShouldBeTrue();
+        mapped.Value.ShouldBe(84);
+    }
+
+    [Fact]
+    public void Map_WhenFailure_PropagatesError()
+    {
+        // Arrange
+        var error = new TestError();
+        var result = Result.Failure<int>(error);
+
+        // Act
+        var mapped = result.Map(x => x * 2);
+
+        // Assert
+        mapped.IsFailure.ShouldBeTrue();
+        mapped.Error.ShouldBeSameAs(error);
+    }
+
+    [Fact]
+    public void Map_WhenFailure_DoesNotCallMapper()
+    {
+        // Arrange
+        var called = false;
+        var result = Result.Failure<int>(new TestError());
+
+        // Act
+        result.Map(x => { called = true; return x; });
+
+        // Assert
+        called.ShouldBeFalse();
     }
 }
+
+// Erreur de test minimale
+internal sealed record TestError() : Error(ErrorCode.From("TEST.ERROR"), "Test error");
 ```
 
 ## Cas à toujours couvrir
@@ -98,30 +97,26 @@ public sealed class ResultTests
 ### Pour l'async
 1. Completion synchrone (ValueTask optimisé)
 2. Completion asynchrone (await réel)
-3. Cancellation (CancellationToken respecté)
+3. Annulation — une `OperationCanceledException` levée par le délégué se propage depuis les extensions async (`MapAsync`, `BindAsync`…) ; `TryAsync` la capture et la convertit en échec, comme toute exception
 4. Exception dans le mapper — pas swallowed
 
-## Extensions FluentAssertions personnalisées à générer
+## Assertions Shouldly sur Result
 
 ```csharp
-// Générer ces custom assertions pour le projet
-public static class ResultAssertions
-{
-    public static ResultSuccessAssertions<T> Should<T>(this Result<T> result) 
-        => new(result);
-    
-    // Usage cible:
-    // result.Should().BeSuccess().WithValue(x => x.Id == expectedId);
-    // result.Should().BeFailure().WithError<NotFoundError>();
-    // result.Should().BeFailure().WithErrorCode("USER.NOT_FOUND");
-}
+// Shouldly sur l'API publique de Result<T> — pas d'extension d'assertion maison
+result.IsSuccess.ShouldBeTrue();
+result.Value.Id.ShouldBe(expectedId);
+
+result.IsFailure.ShouldBeTrue();
+result.Error.ShouldBeOfType<UserNotFoundError>();
+result.Error.Code.Value.ShouldBe("USER.NOT_FOUND");
 ```
 
 ## Benchmarks à générer (BenchmarkDotNet)
 
 ```csharp
 [MemoryDiagnoser]
-[SimpleJob(RuntimeMoniker.Net10)]
+[SimpleJob(RuntimeMoniker.Net10_0)]
 public class ResultMapBenchmark
 {
     // Baseline: direct method call
@@ -134,6 +129,6 @@ public class ResultMapBenchmark
 
 1. Lire la signature publique du type/méthode
 2. Identifier tous les cas de branches (success/failure/null/edge)
-3. Générer les tests groupés par méthode (nested class)
+3. Générer une classe `sealed` `{Type}Tests` par type testé, une méthode `Method_Scenario_ExpectedResult` par cas
 4. Vérifier que chaque `[Fact]` a AAA structure
 5. Proposer les benchmarks si méthode hot-path

@@ -22,7 +22,7 @@ Every operation stays on one of these rails. There are no surprises, no hidden t
 - `Result<T>` is a `readonly struct` — zero heap allocation on the success path
 - `byte _tag` discriminator: no `bool` ambiguity, safe with `default`
 - `sealed` by default; `ThrowHelper` keeps hot paths JIT-inlineable
-- NativeAOT / trim-safe (reflection only in `MicroKit.Result.Serialization`)
+- NativeAOT / trim-safe core; reflection is confined to the JSON converters (`MicroKit.Result.Serialization` namespace, annotated `[RequiresUnreferencedCode]` / `[RequiresDynamicCode]`)
 
 ---
 
@@ -71,7 +71,7 @@ Result<int> value  = Result.Success(42);
 Result<int> failed = Result.Failure<int>(new MyError());
 
 // implicit conversion from T
-Result<int> implicit = 42;
+Result<int> fromValue = 42;
 ```
 
 ---
@@ -98,14 +98,14 @@ var code = ErrorCode.From("ORDER.PAYMENT.DECLINED");
 string raw = code;   // implicit string conversion
 
 // Predefined constants
-ErrorCode.NotFound          // "NOT_FOUND"
-ErrorCode.Validation        // "VALIDATION"
-ErrorCode.Timeout           // "TIMEOUT"
-ErrorCode.ExternalServiceFailure // "EXTERNAL_SERVICE_FAILURE"
+ErrorCode notFound   = ErrorCode.NotFound;                // "NOT_FOUND"
+ErrorCode validation = ErrorCode.Validation;              // "VALIDATION"
+ErrorCode timeout    = ErrorCode.Timeout;                 // "TIMEOUT"
+ErrorCode external   = ErrorCode.ExternalServiceFailure;  // "EXTERNAL_SERVICE_FAILURE"
 // ...19 predefined constants total
 
 // Comparable
-ErrorCode.Conflict < ErrorCode.NotFound  // ordinal comparison
+bool ordered = ErrorCode.Conflict < ErrorCode.NotFound;   // ordinal comparison
 ```
 
 ### ErrorCategory → HTTP mapping
@@ -146,11 +146,11 @@ Aggregates multiple errors into one `IError`:
 var collection = ErrorCollection.From(error1, error2, error3);
 
 // Filter
-collection.WithCategory(ErrorCategory.Validation)
-collection.WithSeverity(ErrorSeverity.Critical)
-collection.WithCode(ErrorCode.NotFound)
-collection.OfType<ValidationError>()
-collection.HasCategory(ErrorCategory.Validation)  // bool
+ErrorCollection validation = collection.WithCategory(ErrorCategory.Validation);
+ErrorCollection critical   = collection.WithSeverity(ErrorSeverity.Critical);
+ErrorCollection notFound   = collection.WithCode(ErrorCode.NotFound);
+ErrorCollection typed      = collection.OfType<ValidationError>();
+bool hasValidation         = collection.HasCategory(ErrorCategory.Validation);
 
 // Group
 IReadOnlyDictionary<ErrorCategory, IReadOnlyList<IError>> byCategory =
@@ -163,13 +163,13 @@ ErrorCollection flat = collection.Flatten();
 ### IError extension methods
 
 ```csharp
-error.IsCategory(ErrorCategory.Validation)
-error.IsCritical()
-error.IsWarning()
-error.IsInformation()
-error.HasMetadata("correlationId")
-error.TryGetMetadata<string>("correlationId")
-error.ToException()   // wraps in ResultException
+bool isValidation      = error.IsCategory(ErrorCategory.Validation);
+bool isCritical        = error.IsCritical();
+bool isWarning         = error.IsWarning();
+bool isInformation     = error.IsInformation();
+bool hasCorrelationId  = error.HasMetadata("correlationId");
+string? correlationId  = error.TryGetMetadata<string>("correlationId");
+ResultException thrown = error.ToException();   // wraps in ResultException
 ```
 
 ---
@@ -233,8 +233,8 @@ Result<Product> product = GetProduct(id)
 ```csharp
 int value = result.GetValueOrDefault(0);
 
-string s = result.GetValueOrThrow();                          // ResultException on failure
-string s = result.GetValueOrThrow(e => new MyException(e));  // custom exception
+int strict = result.GetValueOrThrow();                          // ResultException on failure
+int custom = result.GetValueOrThrow(e => new MyException(e));  // custom exception
 
 if (result.TryGetValue(out var v))
     Process(v);
@@ -256,7 +256,7 @@ Result nonGeneric = result.ToResult();  // drops the value, keeps the error
 
 ## Async
 
-All sync methods have async counterparts on three surfaces:
+The nine pipeline operations of `Result<T>` (`Map`, `Bind`, `Match`, `Tap`, `TapError`, `Ensure`, `MapError`, `Compensate`, `Finally`) have async counterparts on three surfaces. The non-generic `Result` has none.
 
 ```csharp
 // Surface 1: async delegate on Result<T>
@@ -282,15 +282,18 @@ All async methods use `ConfigureAwait(false)`.
 ### ValidationError factories
 
 ```csharp
-ValidationError.Required("Email")
-ValidationError.MinLength("Password", 8)
-ValidationError.MaxLength("Username", 50)
-ValidationError.StringLength("Bio", 10, 500)
-ValidationError.OutOfRange("Age", min: 0, max: 120)
-ValidationError.InvalidFormat("PostalCode", hint: "5 digits")
-ValidationError.InvalidEmail()
-ValidationError.InvalidUrl("WebsiteUrl")
-ValidationError.Custom("Field", "Custom message")
+ValidationError[] errors =
+[
+    ValidationError.Required("Email"),
+    ValidationError.MinLength("Password", 8),
+    ValidationError.MaxLength("Username", 50),
+    ValidationError.StringLength("Bio", 10, 500),
+    ValidationError.OutOfRange("Age", min: 0, max: 120),
+    ValidationError.InvalidFormat("PostalCode", hint: "5 digits"),
+    ValidationError.InvalidEmail(),
+    ValidationError.InvalidUrl("WebsiteUrl"),
+    ValidationError.Custom("Field", "Custom message"),
+];
 ```
 
 ### ValidationResult — collect all errors
@@ -302,7 +305,7 @@ var validation = new ValidationResult()
     .AddError(ValidationError.InvalidEmail());
 
 Result<Order> result = validation.IsValid
-    ? CreateOrder(...)
+    ? CreateOrder(name, age)
     : validation.ToResult<Order>(default!);
 ```
 
@@ -312,10 +315,10 @@ Result<Order> result = validation.IsValid
 
 ```csharp
 // Fail-fast — stops at first failure
-Result combined = Result.Combine(validateName, validateEmail, validateAge);
+Result combined = ResultCombineExtensions.Combine(validateName, validateEmail, validateAge);
 
 // Collect-all — returns ErrorCollection with ALL errors
-Result allErrors = Result.CombineAll(validateName, validateEmail, validateAge);
+Result allErrors = ResultCombineExtensions.CombineAll(validateName, validateEmail, validateAge);
 
 // Tuple combination (up to 3)
 Result<(User, Cart)> pair = ResultCombineExtensions.Combine(getUser, getCart);
@@ -409,11 +412,11 @@ For infrastructure calls that can throw, use `Try` / `TryAsync`:
 
 ```csharp
 // Default — wraps Exception in ExceptionError (Technical category)
-Result<User> result = Result.Try(() => repository.GetUser(id));
+Result<User> result = Result<User>.Try(() => repository.GetUser(id));
 
 // Custom mapper — convert exception to your domain error
-Result<User> result = Result<User>.TryAsync(
-    async () => await _db.Users.FindAsync(id),
+Result<User> loaded = await Result<User>.TryAsync(
+    async () => await repository.GetUserAsync(id),
     ex => new DatabaseError(ex));
 ```
 
@@ -421,7 +424,7 @@ Result<User> result = Result<User>.TryAsync(
 
 ## Exception Handling
 
-`ResultException` is thrown only when you access `.Value` on a failure or `.Error` on a success:
+`ResultException` is thrown when `.Value` is read on a failure or `.Error` on a success, when either one is read on an uninitialized (`default`) result — directly or by a method that reads it — and by `GetValueOrThrow()` on a failure without an exception factory:
 
 ```csharp
 try
@@ -459,4 +462,4 @@ catch (ResultException ex)
 
 ## License
 
-MIT — see [LICENSE](../../LICENSE).
+`MicroKit.Result` and `MicroKit.Result.AspNetCore` are MIT-licensed.

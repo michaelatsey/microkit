@@ -7,12 +7,14 @@
 
 | Situation | ❌ Ne pas faire | ✅ Faire |
 |-----------|----------------|----------|
-| Entity non trouvée | `throw new NotFoundException()` | `return Result.Failure(new NotFoundError(id))` |
-| Validation échouée | `throw new ValidationException()` | `return Result.Failure(new ValidationError(...))` |
-| Utilisateur non autorisé | `throw new UnauthorizedException()` | `return Result.Failure(new UnauthorizedError())` |
-| Règle métier violée | `throw new DomainException()` | `return Result.Failure(new DomainRuleError(...))` |
-| Ressource indisponible | `throw new ServiceUnavailableException()` | `return Result.Failure(new UnavailableError(...))` |
-| Conflit de données | `throw new ConflictException()` | `return Result.Failure(new ConflictError(...))` |
+| Entity non trouvée | `throw new NotFoundException()` | `return Result.Failure(new UserNotFoundError(id))` |
+| Validation échouée | `throw new ValidationException()` | `return Result.Failure(ValidationError.Required("Email"))` |
+| Utilisateur non autorisé | `throw new UnauthorizedException()` | `return Result.Failure(new UnauthorizedOperationError(operation, userId))` |
+| Règle métier violée | `throw new DomainException()` | `return Result.Failure(new OrderAlreadyShippedError(orderId, shippedAt))` |
+| Ressource indisponible | `throw new ServiceUnavailableException()` | `return Result.Failure(new PaymentGatewayUnavailableError(gateway))` |
+| Conflit de données | `throw new ConflictException()` | `return Result.Failure(new EmailAlreadyRegisteredError(email))` |
+
+Hormis `ValidationError` et `ErrorCollection`, la librairie ne fournit aucun type d'erreur : les autres erreurs ci-dessus sont des `sealed record` du domaine dérivés de `Error`, qui surchargent `Category` (sinon `Technical`, HTTP 500).
 
 ## Ce qui est IMPRÉVISIBLE → Exception
 
@@ -33,13 +35,12 @@ Les appels d'infrastructure (DB, HTTP, files) doivent être wrappés:
 // ✅ Pattern pour les appels d'infra
 public async ValueTask<Result<User>> GetUserAsync(Guid id, CancellationToken ct)
 {
-    return await Result.TryAsync(async () =>
-    {
-        var entity = await _dbContext.Users.FindAsync([id], ct);
-        return entity is null 
+    return await Result<UserEntity?>.TryAsync(
+            async () => await _dbContext.Users.FindAsync([id], ct),
+            ex => new DatabaseError(ex))
+        .Bind(entity => entity is null
             ? Result.Failure<User>(new UserNotFoundError(id))
-            : Result.Success(entity.ToDomain());
-    }, ex => new DatabaseError(ex));
+            : Result.Success(entity.ToDomain()));
 }
 ```
 
@@ -49,14 +50,14 @@ Pour les librairies tierces qui throw:
 
 ```csharp
 // ✅ Mapper les exceptions d'infra en Result à la frontière
-public sealed class HttpClientResultExtensions
+public static class HttpClientResultExtensions
 {
     public static async ValueTask<Result<T>> GetAsResultAsync<T>(
         this HttpClient client, 
         string url,
         CancellationToken ct = default)
     {
-        return await Result.TryAsync(
+        return await Result<T>.TryAsync(
             async () => await client.GetFromJsonAsync<T>(url, ct) 
                         ?? throw new InvalidOperationException("Null response"),
             ex => ex switch
@@ -83,10 +84,10 @@ Infrastructure         → wrapp les exceptions en Result à la frontière
 Ces patterns déclenchent un 🔴 BLOQUANT en review:
 
 ```csharp
-// ❌ BLOQUANT
+// ❌ BLOQUANT — GenericError : record fourre-tout (ErrorCode, message)
 catch (SomePredictableException ex)
 {
-    return Result.Failure(new Error(ex.Message)); // perd le typage fort
+    return Result.Failure(new GenericError(ErrorCode.Failure, ex.Message)); // perd le typage fort
 }
 
 // ❌ BLOQUANT  

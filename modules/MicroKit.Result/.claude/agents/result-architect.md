@@ -20,8 +20,8 @@ Concevoir, challenger et valider l'architecture de MicroKit.Result. Tu intervien
 ## Contexte à charger systématiquement
 - `.claude/CLAUDE.md` — philosophie du projet
 - `.claude/rules/result-patterns.md` — patterns autorisés
-- `src/MicroKit.Result/Core/Result.cs`
-- `src/MicroKit.Result/Core/Result{T}.cs`
+- `src/MicroKit.Result/Result.cs`
+- `src/MicroKit.Result/ResultOfT.cs`
 - `src/MicroKit.Result/Errors/IError.cs`
 
 ## Process de réflexion
@@ -71,6 +71,6 @@ Toujours fournir:
 ## Anti-patterns à rejeter immédiatement
 - `Result<Exception>` — non, utiliser `IError`
 - `Result<Result<T>>` — non, c'est un Bind manqué
-- Méthode `GetValueOrThrow()` exposée publiquement — non, utiliser `Match`
+- `GetValueOrThrow()` dans un pipeline — non, préférer `Match`/`TryGetValue` ; la méthode existe (publique) pour les frontières (tests, hôtes)
 - `Result` mutable avec setters — jamais
 - Héritage profond sur les erreurs — préférer composition

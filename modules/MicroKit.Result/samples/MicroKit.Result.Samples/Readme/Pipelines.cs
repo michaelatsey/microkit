@@ -1,0 +1,114 @@
+using Microsoft.Extensions.Logging;
+
+// The README shows side effects with the ILogger extension methods readers already know;
+// source-generated LoggerMessage delegates (CA1848, CA1873) would bury the Tap/Finally shape it teaches.
+#pragma warning disable CA1848, CA1873
+
+namespace MicroKit.Result.Samples.Readme;
+
+// Verbatim copies of the README "Pipelines" blocks — keep them identical to README.md.
+internal static class PipelinesSamples
+{
+    internal static void MapSample(Guid id)
+    {
+Result<string> name = GetUser(id).Map(u => u.Name);
+    }
+
+    internal static void BindSample(Guid id)
+    {
+Result<Invoice> invoice = GetUser(id)
+    .Bind(u => GetCart(u.CartId))
+    .Bind(c => CreateInvoice(c));
+    }
+
+    internal static void MatchSample(Result<int> result)
+    {
+string label = result.Match(
+    onSuccess: v => $"Got {v}",
+    onFailure: e => $"Error: {e.Message}");
+    }
+
+    internal static void TapSample(Result<int> result, ILogger logger, IMetrics metrics)
+    {
+result
+    .Tap(v => logger.LogInformation("Value: {V}", v))
+    .TapError(e => metrics.RecordFailure(e.Code));
+    }
+
+    internal static void EnsureSample(Guid id)
+    {
+Result<User> active = GetUser(id)
+    .Ensure(u => u.IsActive, new UserInactiveError())
+    .Ensure(u => u.IsEmailVerified, new EmailNotVerifiedError());
+    }
+
+    internal static void MapErrorSample(Guid id, string correlationId)
+    {
+Result<Order> result = GetOrder(id)
+    .MapError(e => new EnrichedError(e, correlationId));
+    }
+
+    internal static void CompensateSample(Guid id)
+    {
+Result<Product> product = GetProduct(id)
+    .Compensate(_ => GetDefaultProduct());
+    }
+
+    internal static void ValueAccessSample(Result<int> result)
+    {
+int value = result.GetValueOrDefault(0);
+
+int strict = result.GetValueOrThrow();                          // ResultException on failure
+int custom = result.GetValueOrThrow(e => new MyException(e));  // custom exception
+
+if (result.TryGetValue(out var v))
+    Process(v);
+    }
+
+    internal static void FinallySample(Result<int> result, ILogger logger)
+    {
+result.Finally(r => logger.LogInformation("Done, success={S}", r.IsSuccess));
+    }
+
+    internal static void ConversionSample(Result<int> result)
+    {
+Result nonGeneric = result.ToResult();  // drops the value, keeps the error
+    }
+
+    internal sealed record User(string Name, Guid CartId, bool IsActive, bool IsEmailVerified);
+
+    internal sealed record Cart;
+
+    internal sealed record Invoice;
+
+    internal sealed record Order;
+
+    internal sealed record Product;
+
+    internal sealed record UserInactiveError() : Error(ErrorCode.From("USER.INACTIVE"), "User is inactive");
+
+    internal sealed record EmailNotVerifiedError() : Error(ErrorCode.From("USER.EMAIL_NOT_VERIFIED"), "Email is not verified");
+
+    internal sealed record EnrichedError(IError Inner, string CorrelationId) : Error(Inner.Code, Inner.Message);
+
+    internal sealed class MyException(IError error) : Exception(error.Message);
+
+    internal interface IMetrics
+    {
+        void RecordFailure(ErrorCode code);
+    }
+
+    private static Result<User> GetUser(Guid id) => throw new NotSupportedException();
+
+    private static Result<Cart> GetCart(Guid cartId) => throw new NotSupportedException();
+
+    private static Result<Invoice> CreateInvoice(Cart cart) => throw new NotSupportedException();
+
+    private static Result<Order> GetOrder(Guid id) => throw new NotSupportedException();
+
+    private static Result<Product> GetProduct(Guid id) => throw new NotSupportedException();
+
+    private static Result<Product> GetDefaultProduct() => throw new NotSupportedException();
+
+    private static void Process(int value) { }
+}

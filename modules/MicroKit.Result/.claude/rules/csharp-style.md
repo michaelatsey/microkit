@@ -6,13 +6,14 @@ Toujours actif pour tout fichier `.cs` dans ce projet.
 ## Namespaces
 ```csharp
 // ✅ File-scoped namespace obligatoire
-namespace MicroKit.Result.Core;
+namespace MicroKit.Result;
 
 // ❌ Block-scoped namespace interdit
-namespace MicroKit.Result.Core
+namespace MicroKit.Result
 {
 }
 ```
+Les dossiers ne créent pas de namespace : tous les types du cœur sont dans `MicroKit.Result`, sauf les convertisseurs JSON (`MicroKit.Result.Serialization`) ; le package ASP.NET Core est dans `MicroKit.Result.AspNetCore`.
 
 ## Types
 
@@ -31,14 +32,17 @@ public readonly record struct ErrorCode(string Value)
 ```csharp
 // ✅ sealed par défaut sur tous les records concrets
 public sealed record UserNotFoundError(Guid UserId) 
-    : Error(ErrorCode.From("USER.NOT_FOUND"), $"User {UserId} not found");
+    : Error(ErrorCode.From("USER.NOT_FOUND"), $"User {UserId} not found")
+{
+    public override ErrorCategory Category => ErrorCategory.NotFound; // sinon Technical (HTTP 500)
+}
 ```
 
 ### Classes internes
 ```csharp
-// ✅ sealed + internal pour les helpers d'infrastructure
+// ✅ internal static pour les helpers d'infrastructure sans état
 internal static class ThrowHelper { }
-internal sealed class ResultGuard { }
+internal static class ResultGuard { }
 ```
 
 ## Constructeurs
@@ -46,22 +50,24 @@ internal sealed class ResultGuard { }
 ### Primary constructors (C# 12+)
 ```csharp
 // ✅ Primary constructor pour DI et value objects
-public sealed class DefaultExceptionMapper(ILogger<DefaultExceptionMapper> logger) 
-    : IExceptionMapper
+public sealed class DatabaseExceptionMapper(ILogger<DatabaseExceptionMapper> logger)
 {
-    public Result Map(Exception ex) => logger.LogAndMap(ex);
+    public IError Map(Exception ex)
+    {
+        logger.LogError(ex, "Database call failed");
+        return new DatabaseError(ex);
+    }
 }
+// Usage : Result<User>.Try(() => repository.Load(id), mapper.Map)
 ```
 
-### Validation dans les constructeurs
+### Validation des arguments
 ```csharp
-// ✅ ArgumentNullException.ThrowIfNull (pas de guard manuel)
-public Error(ErrorCode code, string message)
+// ✅ ArgumentException.ThrowIfNullOrWhiteSpace / ArgumentNullException.ThrowIfNull (pas de guard manuel)
+public static ErrorCode From(string value)
 {
-    ArgumentNullException.ThrowIfNull(message);
-    ArgumentException.ThrowIfNullOrWhiteSpace(message);
-    Code = code;
-    Message = message;
+    ArgumentException.ThrowIfNullOrWhiteSpace(value);
+    return new(value);
 }
 ```
 
@@ -76,8 +82,9 @@ private readonly IReadOnlyList<IError> _errors;
 ### in parameter modifier
 ```csharp
 // ✅ Pour les gros structs passés sans modification
-public static Result<T> Ensure<T>(this in Result<T> result, ...)
+public static decimal Total(in OrderLine line) => line.UnitPrice * line.Quantity;
 // Note: utiliser avec parcimonie, seulement pour structs > 16 bytes
+// Les extensions de Result<T> prennent le struct par valeur (pas de `in`).
 ```
 
 ## Méthodes
@@ -85,9 +92,9 @@ public static Result<T> Ensure<T>(this in Result<T> result, ...)
 ### Expression-bodied
 ```csharp
 // ✅ Pour one-liners
-public bool IsSuccess => _state == ResultState.Success;
-public bool IsFailure => !IsSuccess;
-public override string ToString() => IsSuccess ? $"Success({Value})" : $"Failure({Error})";
+public bool IsSuccess => _tag == TagSuccess;
+public bool IsFailure => _tag == TagFailure; // pas !IsSuccess : default(Result) n'est ni succès ni échec
+public override string ToString() => "()"; // Unit
 ```
 
 ### Pattern matching (préféré au casting)
@@ -105,7 +112,7 @@ if (result.IsSuccess) { var value = (SomeType)result.Value; }
 var message = error?.Message ?? "Unknown error";
 
 // ✅ Pattern matching sur null
-if (value is null) return Result.Failure(new NullValueError());
+if (value is null) return Result.Failure(ValidationError.Required(nameof(value)));
 
 // ❌ Jamais de ! (null forgiving) sans commentaire justificatif
 var value = result.Value!; // ❌

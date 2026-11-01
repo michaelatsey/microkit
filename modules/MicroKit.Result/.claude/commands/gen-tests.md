@@ -12,7 +12,7 @@ Utilise l'agent `test-generator` pour la logique de génération.
 ## Exemple
 ```
 /gen-tests src/MicroKit.Result/Extensions/ResultExtensions.cs
-/gen-tests src/MicroKit.Result/Core/Result{T}.cs --coverage all --bench
+/gen-tests src/MicroKit.Result/ResultOfT.cs --coverage all --bench
 ```
 
 ## Process
@@ -23,13 +23,13 @@ Utilise l'agent `test-generator` pour la logique de génération.
 5. Si `--bench` : générer un fichier BenchmarkDotNet correspondant
 
 ## Output
-- `tests/MicroKit.Result.Tests/{Namespace}/{FileName}Tests.cs`
-- (si --bench) `benchmarks/MicroKit.Result.Benchmarks/{FileName}Benchmarks.cs`
+- `tests/MicroKit.Result.UnitTests/{Dossier}/{FileName}Tests.cs`
+- (si --bench) `tests/MicroKit.Result.PerformanceTests/{FileName}Benchmarks.cs`
 
 ## Règles de génération
 - Un `[Fact]` par cas — pas de `[Fact]` avec plusieurs assertions sur des chemins différents
 - `[Theory]` avec `[InlineData]` pour les variantes de valeurs
 - Toujours tester: success path, failure path, null args, chained behavior
-- FluentAssertions custom: `Should().BeSuccess()`, `Should().BeFailure()`
+- Assertions Shouldly sur l'API de `Result` : `result.IsSuccess.ShouldBeTrue()`, `result.Value.ShouldBe(expected)`, `result.Error.ShouldBeOfType<TError>()`
 - Pas de `Thread.Sleep` — utiliser `Task.Delay` ou fake time
-- Noms clairs: `MethodName_WhenCondition_ThenExpected`
+- Noms clairs: `Method_Scenario_ExpectedResult` (règle `.claude/rules/testing.md`)

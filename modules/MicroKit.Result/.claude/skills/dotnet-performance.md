@@ -15,16 +15,16 @@
 | `.Map(lambda)` | < 5ns | 0 bytes si inliné |
 | `.Bind(lambda)` | < 10ns | 0 bytes si inliné |
 | `.Match(f, g)` | < 5ns | 0 bytes |
-| `.ToProblemDetails()` | < 1µs | ~200 bytes (acceptable) |
+| `ResultProblemDetailsFactory.CreateProblemDetails(error)` | < 1µs | ~200 bytes (acceptable) |
 
 ## Techniques d'optimisation appliquées
 
 ### 1. readonly record struct pour Unit
 ```csharp
-// 0 allocation, 0 bytes de données, reference-equal par défaut
+// 0 allocation, 0 bytes de données ; toutes les valeurs sont égales (record struct sans champ)
 public readonly record struct Unit
 {
-    public static readonly Unit Value = default;
+    public static readonly Unit Value;
     public override string ToString() => "()";
 }
 ```
@@ -37,29 +37,33 @@ internal static class ThrowHelper
     // [DoesNotReturn] hint permet au JIT d'optimiser la branche normale
     [DoesNotReturn]
     [MethodImpl(MethodImplOptions.NoInlining)] // Ne pas inliner le lancement
-    public static void ThrowArgumentNull(string paramName)
-        => throw new ArgumentNullException(paramName);
+    internal static void ThrowArgumentNull(string paramName) =>
+        throw new ArgumentNullException(paramName);
     
     [DoesNotReturn]
     [MethodImpl(MethodImplOptions.NoInlining)]
-    public static void ThrowInvalidOperation(string message)
-        => throw new InvalidOperationException(message);
+    internal static void ThrowResultUninitialized() =>
+        throw new ResultException(
+            "Result was not initialized. Use Result.Success() or Result.Failure() factory methods.");
 }
 
-// Usage dans le hot path:
+// Usage dans le hot path (ResultGuard.NotNull délègue le throw à ThrowHelper.ThrowArgumentNull) :
 public static Result<TOut> Map<TIn, TOut>(this Result<TIn> result, Func<TIn, TOut> mapper)
 {
-    if (mapper is null) ThrowHelper.ThrowArgumentNull(nameof(mapper)); // branche froide
-    return result.IsSuccess                                             // branche chaude
-        ? Result.Success(mapper(result.Value))
-        : Result.Failure<TOut>(result.Error);
+    ResultGuard.NotNull(mapper);                     // branche froide
+    return result.IsSuccess                          // branche chaude
+        ? Result<TOut>.Success(mapper(result.Value))
+        : Result<TOut>.Failure(result.Error);
 }
 ```
 
 ### 3. AggressiveInlining pour les one-liners chauds
 ```csharp
-[MethodImpl(MethodImplOptions.AggressiveInlining)]
-public static bool IsSuccess(this Result result) => result._state == ResultState.Success;
+public bool IsSuccess
+{
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    get => _tag == TagSuccess;
+}
 
 // Note: seulement pour les méthodes < 32 bytes IL environ
 // Ne pas abuser — le JIT inline déjà les petites méthodes
@@ -80,23 +84,33 @@ IError error = new MyError(); // si MyError est un struct
 
 ### 5. ImmutableArray vs List pour ErrorCollection
 ```csharp
-// ImmutableArray<T>: 
-//  ✅ Stack-allocated wrapper autour d'un array
-//  ✅ Pas d'allocation supplémentaire pour l'itération
-//  ✅ Comparable par valeur (important pour les tests)
+// ImmutableArray<T>:
+//  ✅ Wrapper struct autour d'un array — aucune allocation en plus du tableau
+//  ✅ Énumérateur struct : pas d'allocation pour l'itération
+//  ⚠️ Égalité = référence du tableau sous-jacent, pas égalité par valeur
 //  ❌ Modification = réallocation totale (ok car immuable)
 
-public sealed class ErrorCollection
+public sealed class ErrorCollection : IError, IReadOnlyList<IError>
 {
     private readonly ImmutableArray<IError> _errors;
-    
-    // Single error path — très fréquent
-    public static ErrorCollection From(IError error) 
-        => new(ImmutableArray.Create(error));
-    
-    // Multiple errors path
+
+    // Pas de surcharge à une seule erreur : un tableau params, ou une séquence
     public static ErrorCollection From(params IError[] errors)
-        => new(errors.ToImmutableArray());
+    {
+        ArgumentNullException.ThrowIfNull(errors);
+        if (errors.Length == 0)
+            throw new ArgumentException("An ErrorCollection must contain at least one error.", nameof(errors));
+        return new ErrorCollection(ImmutableArray.Create(errors));
+    }
+
+    public static ErrorCollection From(IEnumerable<IError> errors)
+    {
+        ArgumentNullException.ThrowIfNull(errors);
+        var array = errors.ToImmutableArray();
+        if (array.IsEmpty)
+            throw new ArgumentException("An ErrorCollection must contain at least one error.", nameof(errors));
+        return new ErrorCollection(array);
+    }
 }
 ```
 
@@ -119,23 +133,28 @@ public async ValueTask<Result<User>> GetUserAsync(Guid id, CancellationToken ct)
 
 ### 7. Éviter les closures qui capturent `this`
 ```csharp
-// ❌ Capture implicite de this → allocation de closure
-public Result<UserDto> ToDto(Result<User> result) 
-    => result.Map(u => _mapper.Map(u)); // _mapper capture this
+// ❌ Capture de this → un délégué alloué à chaque appel
+public Result<UserDto> ToDto(Result<User> result)
+    => result.Map(u => _mapper.Map(u));
 
-// ✅ Passer comme paramètre → pas de closure si méthode statique
+// ❌ Capture d'un paramètre → une closure + un délégué à chaque appel
 public static Result<UserDto> ToDto(Result<User> result, IMapper mapper)
-    => result.Map(u => mapper.Map(u)); // si mapper est local, pas de capture this
-// Ou encore mieux pour le hot path:
-public static Result<UserDto> ToDto(Result<User> result, IMapper mapper)
-    => result.Map(mapper.Map); // method group — 0 allocation de lambda
+    => result.Map(u => mapper.Map(u));
+
+// ❌ Method group d'instance → un délégué à chaque appel aussi
+public static Result<UserDto> ToDtoGroup(Result<User> result, IMapper mapper)
+    => result.Map(mapper.Map);
+
+// ✅ Lambda statique (aucune capture) → délégué mis en cache par le compilateur, 0 allocation
+public static Result<UserDto> ToDtoStatic(Result<User> result)
+    => result.Map(static u => new UserDto(u.Id, u.Name));
 ```
 
 ## BenchmarkDotNet baseline
 
 ```csharp
 [MemoryDiagnoser]
-[SimpleJob(RuntimeMoniker.Net10)]
+[SimpleJob(RuntimeMoniker.Net10_0)]
 public class ResultCoreBenchmarks
 {
     private static readonly Result<int> _successResult = Result.Success(42);

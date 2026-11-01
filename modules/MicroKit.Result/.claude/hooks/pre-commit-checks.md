@@ -37,8 +37,8 @@ Vérifier qu'aucun `CS8600`, `CS8601`, `CS8602`, `CS8603`, `CS8604` n'est prése
 ### Coverage minimum
 ```bash
 dotnet test --collect:"XPlat Code Coverage"
-# Target: 85% sur MicroKit.Result.Core
-# Target: 75% sur MicroKit.Result.Extensions
+# Target: 85% sur src/MicroKit.Result/ hors Extensions/
+# Target: 75% sur src/MicroKit.Result/Extensions/
 ```
 
 ### Analyse statique

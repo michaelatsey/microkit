@@ -44,7 +44,7 @@ Confirm both `.nupkg` files are present.
 ### 5. Dependency verification
 - `MicroKit.Result` declares no MicroKit dependencies — it is a Level 0 foundation package
 - `MicroKit.Result.AspNetCore` declares `MicroKit.Result` + ASP.NET Core abstractions only
-- No `FluentAssertions` anywhere in the package graph
+- No banned test library anywhere in the package graph (root rule `.claude/rules/testing-libraries.md`)
 
 ### 6. Verify workflow version extraction
 Confirm `release-result.yml` contains:
@@ -68,7 +68,7 @@ git push origin result-v{version}
 ### 8. Post-release
 - [ ] GitHub Release created with CHANGELOG excerpt
 - [ ] Samples updated if public API changed
-- [ ] Notify dependent modules (MicroKit.MediatR, MicroKit.Persistence) if Result<T> signatures changed
+- [ ] Notify dependent modules (MicroKit.Auth, MicroKit.MediatR, MicroKit.Messaging, MicroKit.Persistence, MicroKit.Tenancy) if Result<T> signatures changed
 
 ## Tag Convention
 ```

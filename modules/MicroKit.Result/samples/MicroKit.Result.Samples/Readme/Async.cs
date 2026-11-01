@@ -1,0 +1,37 @@
+namespace MicroKit.Result.Samples.Readme;
+
+// Verbatim copy of the README "Async" block — keep it identical to README.md.
+internal static class AsyncSamples
+{
+    internal static async Task AsyncSample(Result<int> result)
+    {
+// Surface 1: async delegate on Result<T>
+await result.MapAsync(async v => await TransformAsync(v));
+await result.BindAsync(async v => await GetNextAsync(v));
+await result.CompensateAsync(async e => await FallbackAsync(e));
+await result.FinallyAsync(async r => await LogAsync(r));
+
+// Surface 2: on Task<Result<T>> (sync delegate — awaits the task first)
+await GetResultTask().Map(v => Transform(v));
+await GetResultTask().Bind(v => GetNext(v));
+
+// Surface 3: on ValueTask<Result<T>> (sync delegate)
+await GetResultValueTask().Map(v => Transform(v));
+    }
+
+    private static Task<string> TransformAsync(int value) => throw new NotSupportedException();
+
+    private static Task<Result<string>> GetNextAsync(int value) => throw new NotSupportedException();
+
+    private static Task<Result<int>> FallbackAsync(IError error) => throw new NotSupportedException();
+
+    private static Task LogAsync(Result<int> result) => throw new NotSupportedException();
+
+    private static Task<Result<int>> GetResultTask() => throw new NotSupportedException();
+
+    private static ValueTask<Result<int>> GetResultValueTask() => throw new NotSupportedException();
+
+    private static string Transform(int value) => throw new NotSupportedException();
+
+    private static Result<string> GetNext(int value) => throw new NotSupportedException();
+}

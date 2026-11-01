@@ -47,7 +47,7 @@ Utilise l'agent `dotnet-reviewer` avec un focus spécifique performance.
 
 ✅ Bon:
   readonly record struct Unit — 0 allocation
-  ThrowHelper.ThrowIfNull — inlinable par JIT
+  ResultGuard.NotNull — AggressiveInlining, throw délégué à ThrowHelper (NoInlining)
 
 📈 Estimation d'impact:
   Map() hot path: -1 allocation/call (-8 bytes GC pressure)

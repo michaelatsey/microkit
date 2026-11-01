@@ -26,14 +26,16 @@ if (result.IsSuccess)
     var inner = result.Value;
     var next = await NextOperation(inner);
     if (!next.IsSuccess) return Result.Failure<C>(next.Error);
-    ...
+    return await LastOperation(next.Value);
 }
+return Result.Failure<C>(result.Error);
 
-// Avec Bind:
+// Avec Bind : un délégué async part d'un Result<T> (BindAsync) ;
+// sur un Task/ValueTask<Result<T>>, Bind n'accepte qu'un délégué synchrone
 var final = await GetUser(id)
-    .BindAsync(u => GetCart(u.CartId))
-    .BindAsync(c => ValidateCart(c))
-    .BindAsync(c => CreateOrder(c));
+    .BindAsync(u => GetCartAsync(u.CartId))
+    .Bind(c => ValidateCart(c))
+    .Bind(c => CreateOrder(c));
 ```
 
 ### Map vs Bind — quand utiliser quoi
@@ -49,13 +51,13 @@ var final = await GetUser(id)
 ### Parallel composition (Combine)
 ```csharp
 // Toutes les opérations indépendantes exécutées, erreurs collectées
-var result = Result.CombineAll(
+var result = ResultCombineExtensions.CombineAll(
     ValidateName(command.Name),
     ValidateEmail(command.Email),
     ValidateAge(command.Age)
 );
-// Si toutes success → Result.Success(Unit)
-// Si certaines fail → Result.Failure(ErrorCollection{errors...})
+// Si toutes success → Result.Success()
+// Si certaines fail → Result.Failure(ErrorCollection)
 ```
 
 ## Patterns avancés
@@ -69,22 +71,27 @@ result.TapError(e => _logger.LogError("Operation failed: {Code}", e.Code));
 ### Doubling the track (Map + pattern)
 ```csharp
 // Transformer les deux rails simultanément
+// (EnrichedError : erreur applicative qui enveloppe l'erreur d'origine)
 result.Match(
     onSuccess: v => Result.Success(v.ToDto()),
-    onFailure: e => Result.Failure<UserDto>(e.Enrich(correlationId))
+    onFailure: e => Result.Failure<UserDto>(new EnrichedError(e, correlationId))
 );
 ```
 
 ### Async railway
 ```csharp
-// Pipeline entièrement async
-Result<InvoiceDto> invoice = await GetUserAsync(userId)
-    .BindAsync(u => GetActiveCartAsync(u.Id))
-    .EnsureAsync(c => !c.IsEmpty, new EmptyCartError())
-    .BindAsync(c => ApplyDiscountsAsync(c, promoCode))
+// Pipeline async — les extensions sur Task/ValueTask<Result<T>> n'acceptent que des délégués
+// synchrones ; un délégué async (BindAsync, MapAsync, EnsureAsync, TapAsync…) part d'un
+// Result<T> déjà attendu, et doit retourner un Task (pas un ValueTask).
+Result<User> user = await GetUserAsync(userId);
+Result<Cart> cart = await user.BindAsync(u => GetActiveCartAsync(u.Id));
+Result<Cart> discounted = await cart
+    .Ensure(c => !c.IsEmpty, new EmptyCartError())
+    .BindAsync(c => ApplyDiscountsAsync(c, promoCode));
+Result<InvoiceDto> invoice = await discounted
     .BindAsync(c => CreateInvoiceAsync(c))
-    .MapAsync(i => i.ToDto())
-    .TapAsync(i => PublishInvoiceCreatedEventAsync(i));
+    .Map(i => i.ToDto());
+invoice = await invoice.TapAsync(i => PublishInvoiceCreatedEventAsync(i));
 ```
 
 ## Pièges courants
@@ -100,17 +107,17 @@ Result<User> flat = outer.Bind(x => GetUser(x.Id));
 ### Le Tap qui modifie
 ```csharp
 // ❌ Tap ne doit pas transformer
-result.Tap(user => { user.Name = "modified"; return user; }); // mutation!
+result.Tap(user => user.Name = "modified"); // mutation!
 // ✅ Tap = side-effect pur
-result.Tap(user => _logger.Log(user.Id));
+result.Tap(user => _logger.LogInformation("User {UserId}", user.Id));
 ```
 
 ### L'Ensure avec erreur non typée
 ```csharp
 // ❌ Perd le typage fort
-result.Ensure(u => u.IsActive, new Error("USER_INACTIVE", "..."));
-// ✅ Erreur typée
-result.Ensure(u => u.IsActive, new UserInactiveError(u.Id));
+result.Ensure(u => u.IsActive, new GenericError(ErrorCode.From("USER_INACTIVE"), "..."));
+// ✅ Erreur typée — construite avant l'appel, elle ne voit pas la valeur
+result.Ensure(u => u.IsActive, new UserInactiveError(userId));
 ```
 
 ## Composition avec LINQ Query Syntax
