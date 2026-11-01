@@ -57,18 +57,28 @@ public static class HttpClientResultExtensions
         string url,
         CancellationToken ct = default)
     {
-        return await Result<T>.TryAsync(
-            async () => await client.GetFromJsonAsync<T>(url, ct) 
-                        ?? throw new InvalidOperationException("Null response"),
-            ex => ex switch
-            {
-                HttpRequestException http => new NetworkError(http.StatusCode, http.Message),
-                TaskCanceledException => new TimeoutError(url),
-                _ => new TechnicalError(ex.Message)
-            });
+        try
+        {
+            return Result.Success(await client.GetFromJsonAsync<T>(url, ct)
+                                  ?? throw new InvalidOperationException("Null response"));
+        }
+        catch (HttpRequestException http)
+        {
+            return Result.Failure<T>(new NetworkError(http.StatusCode, http.Message));
+        }
+        catch (TaskCanceledException) when (!ct.IsCancellationRequested)
+        {
+            return Result.Failure<T>(new TimeoutError(url));
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            return Result.Failure<T>(new TechnicalError(ex.Message));
+        }
     }
 }
 ```
+
+`TaskCanceledException` n'est un timeout que si le jeton de l'appelant n'est pas annulé ; l'annulation demandée par l'appelant se propage. `Try` / `TryAsync` ne conviennent pas ici : ils attrapent toute `Exception`, annulation comprise.
 
 ## Règle des couches
 

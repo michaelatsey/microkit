@@ -80,11 +80,10 @@ private readonly IReadOnlyList<IError> _errors;
 ```
 
 ### in parameter modifier
+Aucun paramètre de `src/` n'utilise `in` : tous les structs, dont `Result` et `Result<T>` dans chaque extension, sont passés par valeur.
 ```csharp
-// ✅ Pour les gros structs passés sans modification
-public static decimal Total(in OrderLine line) => line.UnitPrice * line.Quantity;
-// Note: utiliser avec parcimonie, seulement pour structs > 16 bytes
-// Les extensions de Result<T> prennent le struct par valeur (pas de `in`).
+// ✅ Par valeur, comme dans toutes les extensions
+public static Result<TOut> Map<TIn, TOut>(this Result<TIn> result, Func<TIn, TOut> mapper)
 ```
 
 ## Méthodes
