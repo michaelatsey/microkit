@@ -145,7 +145,7 @@ public static class ServiceCollectionExtensions
 
         // Ingestion counters, recorded by EnvelopeReceiver. Owns its Meter rather than taking
         // IMeterFactory, so no host is obliged to call AddMetrics(); subscribe with
-        // AddMeter(InboxMetrics.MeterName).
+        // AddMeter(MessagingDiagnostics.InboxMeterName).
         services.TryAddSingleton<InboxMetrics>();
 
         return new MessagingBuilder(services, registry);

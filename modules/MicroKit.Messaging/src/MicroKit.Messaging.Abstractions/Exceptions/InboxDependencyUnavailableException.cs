@@ -6,6 +6,12 @@ namespace MicroKit.Messaging;
 /// </summary>
 /// <remarks>
 /// <para>
+/// <b>Application code raises this one.</b> It is part of the application surface, not the SPI:
+/// nothing inside the module ever throws it, and an <see cref="IMessageHandler{T}"/>
+/// implementation is its only source. The engine catches it and draws a verdict from it, which
+/// is the opposite direction from the exceptions in <c>MicroKit.Messaging.Spi</c>.
+/// </para>
+/// <para>
 /// The processor abandons the batch, releases every unattempted row back to <c>Received</c>,
 /// and consumes no retry budget. Turning a five-minute outage into a hundred rows pushed one
 /// step closer to dead-lettering is the failure mode this prevents.

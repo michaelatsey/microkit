@@ -10,7 +10,7 @@ namespace MicroKit.Messaging.Publishing;
 /// from a per-module call site is silently overwritten by whichever module registers last, and the
 /// symptom is a wrong source on the wire.
 /// </remarks>
-public sealed class IntegrationEventContracts
+internal sealed class IntegrationEventContracts
 {
     internal IntegrationEventContracts(
         string source, IReadOnlyList<IntegrationEventRegistration> registrations)

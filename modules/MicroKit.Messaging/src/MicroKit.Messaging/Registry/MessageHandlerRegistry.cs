@@ -30,7 +30,7 @@ using System.Reflection;
 /// via <c>MessagingBuilder.AddMessageHandler&lt;THandler, TEvent&gt;()</c>.
 /// </para>
 /// </remarks>
-public sealed class MessageHandlerRegistry
+internal sealed class MessageHandlerRegistry
 {
     private readonly Dictionary<Type, List<HandlerEntry>> _byEventType = new();
     private readonly Dictionary<string, HandlerEntry> _byConsumerType = new();

@@ -23,4 +23,4 @@ namespace MicroKit.Messaging.Publishing;
 /// The wire contract name, taken from <see cref="IntegrationEventAttribute"/> on
 /// <paramref name="EventType"/>.
 /// </param>
-public sealed record IntegrationEventSubscription(Type EventType, string ContractName);
+internal sealed record IntegrationEventSubscription(Type EventType, string ContractName);

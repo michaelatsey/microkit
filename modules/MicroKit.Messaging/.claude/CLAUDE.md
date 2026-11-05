@@ -136,6 +136,36 @@ which may reference `MicroKit.MediatR` / `MediatR` / `MediatR.Contracts` (ADR-MS
 
 ## 🔑 Key Contracts (quick reference)
 
+> ⚠ **#185 split `MicroKit.Messaging.Abstractions` into two namespaces, one package.** The names
+> below are unchanged; several of their namespaces are not, and some of the types are no longer
+> public. The lists in this file have **not** been restructured for it — the full brain rewrite is
+> #188 — so read them against these three rules:
+>
+> 1. **Namespace `MicroKit.Messaging`** holds the application surface and nothing else:
+>    `IIntegrationEvent`, `IntegrationEventAttribute`, `IIntegrationEventPublisher`,
+>    `IMessageHandler<T>`, `MessageId`, `IntegrationEventPublishException`,
+>    `IntegrationEventConfigurationException`, `InboxDependencyUnavailableException` (a handler is
+>    its only source, so it is API and not SPI) — plus, from Core, `ServiceCollectionExtensions`,
+>    `IntegrationEventServiceCollectionExtensions`, `MessagingBuilder` and `MessagingDiagnostics`.
+> 2. **Namespace `MicroKit.Messaging.Spi`** (same package) holds everything a store, transport or
+>    dispatcher author implements: `IMessageTransport`, `MessageEnvelope`, `IEnvelopeReceiver`,
+>    `EnvelopeReceiveResult`, `IMessageSerializer`, `IOutboxDispatcher`, `OutboxDispatcherKeys`, the
+>    nine store interfaces, `IIntegrationEventWriter`, `IntegrationEventWriteResult`,
+>    `OutboxMessage`, `InboxMessage`, the claim/outcome/key types, `CorrelationId`, `CausationId`,
+>    the six row and outcome enums, and five seam exceptions — every one except
+>    `InboxDependencyUnavailableException`, which is in the application surface above.
+> 3. **These are now `internal` and must not be named as contracts:** `IOutboxCoordinator`,
+>    `IInboxCoordinator`, `IOutboxProcessor`, `IInboxProcessor`, `OutboxBatchResult`,
+>    `InboxBatchResult`, `OutboxBatchAbortReason`, `InboxBatchAbortReason` (all moved to
+>    `MicroKit.Messaging.Processing` — ADR-MSG-002's public surface is superseded; the
+>    database-per-tenant engine is #191), plus `InboxMetrics`, `MessageHandlerRegistry`,
+>    `IntegrationEventRegistry`, `IntegrationEventRegistration`, `IntegrationEventSubscription`,
+>    `IntegrationEventContracts`, `IntegrationEventSubscriptions`.
+>
+> The surface is pinned by `PublicSurfaceTests`; widening it is a deliberate edit there.
+> Subscribe to the inbox meter with `MessagingDiagnostics.InboxMeterName`, never
+> `InboxMetrics.MeterName`.
+
 ### Event contracts
 ```csharp
 IIntegrationEvent                  // BARE MARKER (ADR-MSG-018) — business payload only. It once
@@ -150,11 +180,11 @@ IIntegrationEventPublisher         // PublishAsync<T>(evt, occurredOnUtc, ct) �
 IIntegrationEventWriter            // AddAsync(OutboxMessage) -> IntegrationEventWriteResult +
                                    //   HasOpenTransaction. Writes a Contract row into the OUTBOX;
                                    //   it flushes (the replay key must be attempted) but never commits
-IntegrationEventRegistry           // BIDIRECTIONAL — ResolveContract(Type) → contract; ResolveLocalType(name)
+IntegrationEventRegistry           // INTERNAL since #185. BIDIRECTIONAL — ResolveContract(Type) → contract; ResolveLocalType(name)
                                    //   → local CLR type. The reverse direction is the precondition
                                    //   for any transport: a consumer lacks the producer's assembly,
                                    //   so Type.GetType(AQN) cannot resolve across a process
-IntegrationEventSubscription       // sealed record (Type, ContractName) — no Source, deliberately
+IntegrationEventSubscription       // INTERNAL since #185. sealed record (Type, ContractName) — no Source, deliberately
 IntegrationEventWriteResult        // sealed record — Staged / AlreadyPublishedAs(existingId).
                                    //   A replayed publication is REPORTED, never thrown
 MessageId                          // sealed record — strongly-typed message identifier
@@ -190,7 +220,7 @@ CausationId                        // sealed record — causal parent identifier
 IMessageHandler<T>                 // HandleAsync(T evt, CancellationToken ct) → ValueTask
 ```
 
-### Outbox / Inbox stores (in Abstractions)
+### Outbox / Inbox stores (namespace `MicroKit.Messaging.Spi`, in Abstractions — #185)
 ```csharp
 IOutboxWriter                      // AddAsync + AddBatchAsync — write-only, used by domain handlers
                                    //   in transaction; no processor operations (ADR-MSG-011)
@@ -235,7 +265,7 @@ MessageEnvelope                    // sealed record — the WIRE FORM. MessageId
 ## 📐 Non-Negotiable Rules
 
 1. **`IIntegrationEvent` (not `INotification`)** — no MediatR dependency anywhere in Messaging
-2. **`IOutboxWriter` and `IOutboxProcessorStore` live in `Messaging.Abstractions`** — never in `Persistence.Abstractions`
+2. **`IOutboxWriter` and `IOutboxProcessorStore` live in `Messaging.Abstractions`** — never in `Persistence.Abstractions`. Since #185 they are in its `MicroKit.Messaging.Spi` namespace; the package is unchanged
 3. **Tenant-aware, but `TenantId` is NULLABLE** — `string?` on `OutboxMessage` and
    `InboxMessage`, with no `IsRequired()` and no global query filter. Messaging must run without
    Tenancy (ADR-EXEC-001), and a single-tenant deployment legitimately has null on every row

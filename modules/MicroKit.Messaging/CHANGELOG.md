@@ -1,6 +1,83 @@
 # Changelog — MicroKit.Messaging
 
-## [Unreleased] — outbox and inbox claim rewrites
+## [Unreleased] — the user API is separated from the storage and transport SPI
+
+### Changed — BREAKING: `MicroKit.Messaging.Abstractions` splits into an API and an SPI (#185)
+
+`MicroKit.Messaging.Abstractions` published 54 types in one flat namespace, mixing the application
+surface with the engine's internals. An application developer met the coordinators, the processors,
+nine store contracts, the mutable EF rows and the batch plumbing instead of the seven types it
+uses, and every internal change was a public break. The package now has two layers, and **no
+behaviour changes**.
+
+**Namespace `MicroKit.Messaging` — the application surface, eight types.** `IIntegrationEvent`,
+`IntegrationEventAttribute`, `IIntegrationEventPublisher`, `IMessageHandler<T>`, `MessageId`,
+`IntegrationEventPublishException`, `IntegrationEventConfigurationException`,
+`InboxDependencyUnavailableException`.
+
+`InboxDependencyUnavailableException` is in the application surface rather than the SPI because
+**application code is its only source**: nothing in the module throws it, an `IMessageHandler<T>`
+raises it to abandon a batch whose shared dependency is down, and the engine catches it. That is
+the opposite direction from every exception in `MicroKit.Messaging.Spi`. `IMessageHandler<T>`
+now documents the full throw-side contract with `<exception>` tags.
+
+**Namespace `MicroKit.Messaging.Spi` — the contract for store, transport and dispatcher authors,
+38 types, same package.** `IMessageTransport`, `MessageEnvelope`, `IEnvelopeReceiver`,
+`EnvelopeReceiveResult`, `IMessageSerializer`, `IOutboxDispatcher`, `OutboxDispatcherKeys`, the
+nine outbox/inbox store interfaces, `IIntegrationEventWriter`, `IntegrationEventWriteResult`,
+`OutboxMessage`, `InboxMessage`, the claim/outcome/key types, `CorrelationId`, `CausationId`, the
+six row and outcome enums, and the five exceptions that cross the seam.
+
+Migration is a `using`: add `using MicroKit.Messaging.Spi;` (or a `global using`) wherever a store,
+transport or row type is named. Note that namespace nesting is one-way — `MicroKit.Messaging.Spi`
+sees `MicroKit.Messaging`, not the reverse.
+
+### Changed — BREAKING: the engine seams and the registries are internal (#185)
+
+**The four drain seams and their batch types left the package entirely** and are now `internal` to
+`MicroKit.Messaging`, in `MicroKit.Messaging.Processing`: `IOutboxCoordinator`, `IInboxCoordinator`,
+`IOutboxProcessor`, `IInboxProcessor`, `OutboxBatchResult`, `InboxBatchResult`,
+`OutboxBatchAbortReason`, `InboxBatchAbortReason`.
+
+This supersedes ADR-MSG-002's *Public surface (v1)*, which kept them public so a deferred
+`MicroKit.Messaging.Multitenancy` package could supply a per-tenant coordinator. That served the
+database-per-tenant topology, which tenant fairness (#124) does not cover; the requirement is now
+tracked by **#191** as a generic multi-store engine *inside* Core, so no external package needs
+these seams. `internal` → `public` stays additive if that changes.
+
+**Also now `internal`, in the `MicroKit.Messaging` assembly** — their namespaces are unchanged:
+`InboxMetrics` (`MicroKit.Messaging.Processing`), `MessageHandlerRegistry`
+(`MicroKit.Messaging.Registry`), and `IntegrationEventRegistry`, `IntegrationEventRegistration`,
+`IntegrationEventSubscription`, `IntegrationEventContracts`, `IntegrationEventSubscriptions`
+(`MicroKit.Messaging.Publishing`). None appeared in a public signature.
+`IntegrationEventContractBuilder` and `IntegrationEventSubscriptionBuilder` stay public — they are
+the fluent configuration API.
+
+### Added: `MessagingDiagnostics` (#185)
+
+```csharp
+public static class MessagingDiagnostics            // namespace MicroKit.Messaging
+{
+    public const string InboxMeterName = "MicroKit.Messaging.Inbox";
+}
+```
+
+`InboxMetrics.MeterName` was the documented way to subscribe to the inbox counters, and
+`InboxMetrics` is now internal. **Migration: `AddMeter(InboxMetrics.MeterName)` becomes
+`AddMeter(MessagingDiagnostics.InboxMeterName)`.** The meter name itself is unchanged, so no
+collector configuration moves. The type is named for diagnostics rather than metrics because it
+will also carry the `ActivitySource` name when tracing lands (#186, #126).
+
+### Added: the public surface is pinned (#185)
+
+`PublicSurfaceTests` pins the complete visible surface of all four shipped assemblies, grouped by
+namespace, so widening it again costs a deliberate edit. It asserts set equality in both
+directions — an unexpected type fails, and a stale allow-list entry fails too — and covers every
+namespace, not only `MicroKit.Messaging` and `MicroKit.Messaging.Spi`: `MicroKit.Messaging.Processing`
+and `MicroKit.Messaging.Registry` must expose nothing at all, which is the property most easily lost
+by accident.
+
+## [Earlier unreleased work] — outbox and inbox claim rewrites
 
 Both sides of the module move off the per-message lease and onto an atomic batch claim carrying an
 ownership token. Round trips per batch drop from `2N+1` to two or three plus one settlement — flat
