@@ -34,7 +34,7 @@ transaction is durable, and nothing durable goes unpublished.
 
 | Package | Description |
 |---------|-------------|
-| `MicroKit.Messaging.Abstractions` | Contracts: `IIntegrationEvent`, `IIntegrationEventPublisher`, `IMessageHandler<T>`, `IOutboxWriter`, `IMessageTransport`, `MessageEnvelope`, the outbox/inbox stores, `OutboxMessage`, `InboxMessage`, `IntegrationEventWriteResult` |
+| `MicroKit.Messaging.Abstractions` | Contracts, in two layers. **`MicroKit.Messaging`** — what an application names: `IIntegrationEvent`, `IntegrationEventAttribute`, `IIntegrationEventPublisher`, `IMessageHandler<T>`, `MessageId`, `IntegrationEventPublishException`, `IntegrationEventConfigurationException`, `InboxDependencyUnavailableException`. **`MicroKit.Messaging.Spi`** — what an author of a store, transport or dispatcher implements: `IMessageTransport`, `MessageEnvelope`, `IEnvelopeReceiver`, `IOutboxDispatcher`, `IOutboxWriter` and the other store interfaces, `OutboxMessage`, `InboxMessage`, `IntegrationEventWriteResult` |
 | `MicroKit.Messaging` | Outbox/inbox processors and workers, the transport dispatcher, integration-event publishing, DI |
 | `MicroKit.Messaging.EntityFrameworkCore` | `EfOutboxStore`, `EfInboxStore`, entity configuration for your `DbContext` |
 | `MicroKit.Messaging.MediatR` | Glue: puts MicroKit.MediatR domain events on the outbox as notifications |
@@ -505,6 +505,16 @@ a legitimate composition. But it is also what a forgotten `AddMessageHandler<,>(
 two look identical from outside, so it is logged at `Warning` and counted as
 `microkit.inbox.envelopes.unconsumed`. Alert on a sustained non-zero value.
 
+All three inbox counters — `microkit.inbox.messages.added`,
+`microkit.inbox.messages.deduplicated` and `microkit.inbox.envelopes.unconsumed` — are published
+on the meter named by `MessagingDiagnostics.InboxMeterName`.
+Subscribe to it or you receive nothing:
+
+```csharp
+builder.Services.AddOpenTelemetry()
+    .WithMetrics(m => m.AddMeter(MessagingDiagnostics.InboxMeterName));
+```
+
 ---
 
 ## State
@@ -531,7 +541,7 @@ calls it again on replay: database effects happen effectively once, external eff
 A handler that commits no unit of work at all is **detected and reported**, not degraded silently.
 
 `LeaseDuration` is the setting that matters: it must comfortably exceed your worst-case handler
-duration. `InboxBatchResult.LeasesLost` is the signal that it does not — without that counter, a
+duration. The processor's lost-lease tally is the signal that it does not — without it, a
 lease set too short is invisible, and the system stays correct while quietly doing less work than it
 appears to.
 

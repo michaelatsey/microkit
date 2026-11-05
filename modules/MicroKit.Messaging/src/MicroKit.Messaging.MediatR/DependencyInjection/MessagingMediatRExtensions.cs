@@ -120,7 +120,7 @@ public static class MessagingMediatRExtensions
     /// throws <see cref="InvalidOperationException"/> while <c>OutboxProcessor</c> is activating the
     /// decorator. That is an activation
     /// failure, not a missing registration: the processor releases the batch with no retry consumed
-    /// and reports <see cref="OutboxBatchAbortReason.DispatcherActivationFailed"/>, rather than
+    /// and reports <c>OutboxBatchAbortReason.DispatcherActivationFailed</c>, rather than
     /// raising <see cref="OutboxConfigurationException"/>.
     /// </para>
     /// </remarks>

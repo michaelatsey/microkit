@@ -8,3 +8,4 @@ global using MicroKit.Messaging.Options;
 global using MicroKit.Execution.Abstractions;
 global using Microsoft.Extensions.DependencyInjection;
 global using Microsoft.Extensions.Logging;
+global using MicroKit.Messaging.Spi;

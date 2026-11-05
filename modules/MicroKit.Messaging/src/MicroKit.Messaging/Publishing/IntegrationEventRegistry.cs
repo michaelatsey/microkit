@@ -45,7 +45,7 @@ using System.Diagnostics.CodeAnalysis;
 /// Singleton, composed once from every module's contribution and read-only afterwards.
 /// </para>
 /// </remarks>
-public sealed class IntegrationEventRegistry
+internal sealed class IntegrationEventRegistry
 {
     private readonly Dictionary<Type, IntegrationEventRegistration> _byType;
     private readonly Dictionary<string, Type> _byName;

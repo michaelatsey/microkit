@@ -1,3 +1,5 @@
+using MicroKit.Messaging.Spi;
+
 namespace MicroKit.Messaging;
 
 /// <summary>The only way application code emits an integration event.</summary>

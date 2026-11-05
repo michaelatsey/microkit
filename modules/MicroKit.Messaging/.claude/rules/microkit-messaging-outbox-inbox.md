@@ -345,7 +345,7 @@ await _inboxStore.AddAsync(message, ct);   // throws on redelivery; nothing catc
 
 ---
 
-## IOutboxWriter Contract (Abstractions — domain handlers only)
+## IOutboxWriter Contract (Abstractions, namespace `MicroKit.Messaging.Spi` since #185 — domain handlers only)
 
 ```csharp
 /// <summary>
@@ -371,7 +371,7 @@ public interface IOutboxWriter
 
 ---
 
-## Outbox Store Contracts (Abstractions — split by consumer, ISP)
+## Outbox Store Contracts (Abstractions, namespace `MicroKit.Messaging.Spi` since #185 — split by consumer, ISP)
 
 One class may implement all three; three interfaces so a DLQ console never sees `ClaimBatchAsync`
 and the processor never sees `RequeueAsync`.
@@ -513,7 +513,7 @@ throws `InvalidOperationException` while activating the dispatcher, and that is 
 no-budget, no-rethrow verdict above. A transport implementation must never raise `OutboxConfigurationException` — by the time one
 runs, the composition is already proven.
 
-## Inbox Store Contracts (Abstractions — split by consumer, ISP)
+## Inbox Store Contracts (Abstractions, namespace `MicroKit.Messaging.Spi` since #185 — split by consumer, ISP)
 
 One class may implement all five; five interfaces so a publisher never sees `ClaimBatchAsync` and
 the drain processor never sees `AddAsync`.
@@ -642,7 +642,7 @@ them.
 |---|---|---|---|
 | **Permanent** (`InboxPayloadException`) | unknown consumer, unreadable payload | dead-letter **immediately** | continues |
 | **Transient** (anything unrecognised) | — | retry, full-jitter back-off | continues |
-| **Dependency** (`InboxDependencyUnavailableException`) | downstream service unreachable | **released**, no retry spent | abandoned |
+| **Dependency** (`InboxDependencyUnavailableException` — the one exception here that lives in the *application* namespace `MicroKit.Messaging`, because a handler is its only source) | downstream service unreachable | **released**, no retry spent | abandoned |
 | **Configuration** (`InboxConfigurationException`) | handler or settlement store not registered | released, no retry spent | abandoned, **worker stops** |
 | **Lease lost** | expired mid-handler | untouched, owned elsewhere | continues |
 

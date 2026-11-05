@@ -9,4 +9,4 @@ namespace MicroKit.Messaging.Publishing;
 /// The emitting module, supplied per module at registration rather than per host — so several
 /// modules composed into one process each keep their own identity.
 /// </param>
-public sealed record IntegrationEventRegistration(Type EventType, string ContractName, string Source);
+internal sealed record IntegrationEventRegistration(Type EventType, string ContractName, string Source);

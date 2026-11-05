@@ -320,14 +320,21 @@ public sealed class MessagingAbstractionsArchitectureTests
     [Fact]
     public void Core_DependsOnSharedDbOutboxCoordinator_OnlyThroughIOutboxCoordinator()
     {
-        // ADR-MSG-002 defers a per-tenant topology to MicroKit.Messaging.Multitenancy, which will
-        // supply its own IOutboxCoordinator without touching Core. That is only possible while
-        // nothing inside Core reaches for the shared-DB implementation by name. The composition
-        // root necessarily does — that is what a composition root is — and the type may of course
-        // refer to itself.
+        // A second topology must be addable without editing the engine, which is only possible
+        // while nothing inside Core reaches for the shared-DB implementation by name. The
+        // composition root necessarily does — that is what a composition root is — and the type may
+        // of course refer to itself.
+        //
+        // ADR-MSG-002 made this promise about a per-tenant coordinator in a separate
+        // MicroKit.Messaging.Multitenancy package, and #185 superseded that: IOutboxCoordinator is
+        // now internal to Core, because the database-per-tenant requirement it served is tracked by
+        // #191 as a generic multi-store engine IN Core rather than a coordinator outside it. The
+        // decoupling this test enforces is what #191 will build on, so the rule outlives the
+        // package it was written for.
         //
         // Name-based rather than typeof(): SharedDbOutboxCoordinator is internal and this project
-        // has no InternalsVisibleTo, which is itself part of the point.
+        // has no InternalsVisibleTo, which is itself part of the point — and since #185 the same is
+        // true of IOutboxCoordinator.
         const string Coordinator = "MicroKit.Messaging.Processing.SharedDbOutboxCoordinator";
 
         var permitted = new[]
@@ -346,7 +353,9 @@ public sealed class MessagingAbstractionsArchitectureTests
 
         offenders.ShouldBeEmpty(
             "only the composition root may name SharedDbOutboxCoordinator; everything else must " +
-            "depend on IOutboxCoordinator, or the per-tenant topology cannot be added additively");
+            "depend on IOutboxCoordinator, or a second topology cannot be added without " +
+            "editing the engine (ADR-MSG-002, superseded by #185; the multi-store engine " +
+            "is #191)");
     }
 
     /// <summary>
@@ -375,7 +384,9 @@ public sealed class MessagingAbstractionsArchitectureTests
 
         offenders.ShouldBeEmpty(
             "only the composition root may name SharedDbInboxCoordinator; everything else must " +
-            "depend on IInboxCoordinator, or the per-tenant topology cannot be added additively");
+            "depend on IInboxCoordinator, or a second topology cannot be added without " +
+            "editing the engine (ADR-MSG-002, superseded by #185; the multi-store engine " +
+            "is #191)");
     }
 
     // ---------------------------------------------------------------------------

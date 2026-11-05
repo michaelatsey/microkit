@@ -5,3 +5,4 @@ global using MicroKit.Messaging.MediatR.DependencyInjection;
 global using NetArchTest.Rules;
 global using Shouldly;
 global using Xunit;
+global using MicroKit.Messaging.Spi;

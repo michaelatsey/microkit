@@ -120,7 +120,26 @@ Role definitions:
   interface, single Core impl, injected by all coordinators (so the per-tenant package reuses the
   engine, never reimplements it). `internal sealed` impl.
 
-### Public surface (v1)
+### Public surface (v1) — **SUPERSEDED by #185.** Original text kept below.
+
+> **What is true now.** `IOutboxCoordinator`, `IInboxCoordinator`, `IOutboxProcessor` and
+> `IInboxProcessor` are **`internal`** to `MicroKit.Messaging`, in `MicroKit.Messaging.Processing`,
+> together with `OutboxBatchResult`, `InboxBatchResult` and the two batch abort-reason enums.
+> `IOutboxDispatcher` remains public, in the new `MicroKit.Messaging.Spi` namespace.
+>
+> **Why the rationale below no longer holds.** It protects a PerTenant coordinator in a separate
+> assembly, which served the **database-per-tenant** topology. Tenant fairness (#124) does not cover
+> that requirement, and it is now tracked by **#191** as a generic **multi-store engine inside
+> Core** rather than coordinators outside it — so no external package needs these seams. #186 and
+> #188 redesign them, and `internal` → `public` remains additive if that changes.
+>
+> **What survives.** The Worker / Coordinator / Processor decomposition is unchanged, and so is the
+> rule that nothing inside Core may name a concrete coordinator except the composition root —
+> still enforced by `Core_DependsOnSharedDb{Outbox,Inbox}Coordinator_OnlyThroughI{Outbox,Inbox}Coordinator`,
+> name-based because the types are now internal. That decoupling is what #191 builds on.
+>
+> The public surface is now pinned by `PublicSurfaceTests` (#185).
+
 - Public: `IOutboxCoordinator`, `IOutboxProcessor`, `IOutboxDispatcher` (+ inbox symmetry) + DI
   registration extensions.
 - Internal sealed: `OutboxWorker`, `SharedDbOutboxCoordinator`, `OutboxProcessor`,
