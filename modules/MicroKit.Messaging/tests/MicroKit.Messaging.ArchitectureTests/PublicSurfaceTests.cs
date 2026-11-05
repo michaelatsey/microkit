@@ -20,16 +20,20 @@ namespace MicroKit.Messaging.ArchitectureTests;
 /// which is precisely the property most easily lost by accident.
 /// </para>
 /// <para>
-/// <b>Why <see cref="Type.IsVisible"/> and not <c>IsPublic &amp;&amp; !IsNested</c>.</b>
-/// <c>IsVisible</c> is true for a public type nested in a public one — which is reachable surface
-/// and must be pinned — and false for a public type nested in an internal one, which is not
-/// reachable and must not be. The pair of flags gets the first case wrong.
+/// <b>Why <see cref="Assembly.GetExportedTypes"/>.</b> It is the runtime's own definition of the
+/// visible surface — exactly the types reachable from outside the assembly — so it needs no
+/// predicate of ours to approximate it. In particular it keeps the two cases a bare
+/// <c>IsPublic &amp;&amp; !IsNested</c> gets wrong: a public type nested in a public one IS
+/// reachable surface and is included; a public type nested in an internal one is not and is left
+/// out.
 /// </para>
 /// <para>
-/// <b>Why <c>Types.InAssembly(...).GetTypes()</c> and not <c>Assembly.GetTypes()</c>.</b>
-/// <c>IsTrimmable</c> is set repo-wide, so a direct call raises IL2026, which is an error under
-/// Release. Keeping the reflection inside NetArchTest avoids suppressing a trimming diagnostic in
-/// our own code.
+/// <b>Why not NetArchTest's <c>Types.InAssembly(...).GetTypes()</c>.</b> It enumerates with
+/// Mono.Cecil and then resolves every type definition back through <see cref="Type.GetType(string)"/>.
+/// Under <c>--collect:"XPlat Code Coverage"</c> coverlet rewrites each instrumented assembly to
+/// carry a tracker type whose name that round trip cannot resolve, so every test here threw
+/// <see cref="TypeLoadException"/> in CI while passing locally. Reflection reads the same metadata
+/// the runtime already loaded and has no name to re-resolve.
 /// </para>
 /// <para>
 /// Assertions run in both directions: an unexpected type fails, and an allow-list entry that no
@@ -206,19 +210,34 @@ public sealed class PublicSurfaceTests
     /// </remarks>
     private static List<string> VisibleTypeNamesIn(string ns, params Assembly[] assemblies) =>
         assemblies
-            .SelectMany(a => Types.InAssembly(a).GetTypes())
-            .Where(t => t.IsVisible && string.Equals(t.Namespace, ns, StringComparison.Ordinal))
+            .SelectMany(VisibleTypesOf)
+            .Where(t => string.Equals(t.Namespace, ns, StringComparison.Ordinal))
             .Select(t => t.Name)
             .Order(StringComparer.Ordinal)
             .ToList();
 
     /// <summary>The distinct namespaces in which <paramref name="assembly"/> exposes anything.</summary>
     private static List<string> VisibleNamespacesIn(Assembly assembly) =>
-        Types.InAssembly(assembly)
-            .GetTypes()
-            .Where(t => t.IsVisible)
+        VisibleTypesOf(assembly)
             .Select(t => t.Namespace ?? string.Empty)
             .Distinct(StringComparer.Ordinal)
             .Order(StringComparer.Ordinal)
             .ToList();
+
+    /// <summary>
+    /// Every type <paramref name="assembly"/> makes visible outside itself, as the runtime sees it.
+    /// </summary>
+    /// <remarks>
+    /// <c>IsTrimmable</c> is set repo-wide, so the call raises IL2026, an error under Release. The
+    /// suppression is sound rather than convenient: this is a test assembly, it is never published
+    /// or trimmed, and the whole point of the method is to read a surface no trimmer has touched.
+    /// Trimming the assemblies under test would be the one thing that could invalidate the
+    /// snapshots, which is precisely what the diagnostic is warning about.
+    /// </remarks>
+    [System.Diagnostics.CodeAnalysis.UnconditionalSuppressMessage(
+        "AOT",
+        "IL2026:RequiresUnreferencedCode",
+        Justification = "Test-only assembly: never published, never trimmed. Reading the complete " +
+                        "exported surface is the assertion.")]
+    private static Type[] VisibleTypesOf(Assembly assembly) => assembly.GetExportedTypes();
 }
