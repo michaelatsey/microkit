@@ -645,4 +645,30 @@ public sealed class ErrorCollectionTests
 
         public IReadOnlyDictionary<string, object?> Metadata => ErrorMetadata.Empty;
     }
+
+    [Theory]
+    [InlineData(ErrorCategory.Validation, ErrorCategory.Unauthorized, ErrorCategory.Unauthorized)]
+    [InlineData(ErrorCategory.Validation, ErrorCategory.NotFound, ErrorCategory.NotFound)]
+    [InlineData(ErrorCategory.Cancelled, ErrorCategory.NotFound, ErrorCategory.NotFound)]
+    [InlineData(ErrorCategory.BusinessRule, ErrorCategory.Validation, ErrorCategory.Validation)]
+    [InlineData(ErrorCategory.Forbidden, ErrorCategory.Unauthorized, ErrorCategory.Unauthorized)]
+    [InlineData(ErrorCategory.Timeout, ErrorCategory.Technical, ErrorCategory.Technical)]
+    [InlineData((ErrorCategory)998, (ErrorCategory)999, (ErrorCategory)998)]
+    [InlineData((ErrorCategory)998, ErrorCategory.NotSupported, ErrorCategory.NotSupported)]
+    public void Category_WhenErrorsDisagree_IsTheHighestPrecedenceInEitherOrder(
+        ErrorCategory first, ErrorCategory second, ErrorCategory expected)
+    {
+        // Act
+        var forward = ErrorCollection.From(new PrecedenceError(first), new PrecedenceError(second));
+        var backward = ErrorCollection.From(new PrecedenceError(second), new PrecedenceError(first));
+
+        // Assert
+        forward.Category.ShouldBe(expected);
+        backward.Category.ShouldBe(expected);
+    }
+
+    private sealed record PrecedenceError(ErrorCategory Kind) : Error(ErrorCode.From("TEST.PRECEDENCE"), "Precedence test")
+    {
+        public override ErrorCategory Category => Kind;
+    }
 }

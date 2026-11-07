@@ -113,21 +113,86 @@ public sealed class ProblemDetailsContractTests
         return data;
     }
 
-    // The core decides which category an ErrorCollection reports without knowing HTTP; this keeps its
-    // "server fault" notion in step with the status codes this package maps to 5xx.
+    public static TheoryData<ErrorCategory, ErrorCategory> CategoryPairs()
+    {
+        var categories = Enum.GetValues<ErrorCategory>().Append((ErrorCategory)999).ToArray();
+        var data = new TheoryData<ErrorCategory, ErrorCategory>();
+        foreach (var first in categories)
+            foreach (var second in categories)
+                data.Add(first, second);
+        return data;
+    }
+
+    // The category, hence the status, of an ErrorCollection never depends on the order of its errors.
     [Theory]
-    [MemberData(nameof(Categories))]
-    public void ErrorCollectionCategory_ForEveryCategory_PrefersItOverValidationExactlyWhenItMapsTo5xx(ErrorCategory category)
+    [MemberData(nameof(CategoryPairs))]
+    public void ErrorCollectionCategory_ForEveryPairInBothOrders_GivesTheSameStatus(ErrorCategory first, ErrorCategory second)
     {
         // Arrange
-        var collection = ErrorCollection.From(ValidationError.Required("Name"), new CategorizedTestError(category));
+        var forward = ErrorCollection.From(new CategorizedTestError(first), new CategorizedTestError(second));
+        var backward = ErrorCollection.From(new CategorizedTestError(second), new CategorizedTestError(first));
 
         // Act
-        bool reportsTheCategory = collection.Category == category;
+        int forwardStatus = ResultProblemDetailsFactory.ToStatusCode(forward.Category);
+        int backwardStatus = ResultProblemDetailsFactory.ToStatusCode(backward.Category);
+
+        // Assert
+        forward.Category.ShouldBe(backward.Category);
+        forwardStatus.ShouldBe(backwardStatus);
+    }
+
+    // A server fault is never hidden behind a client error.
+    [Theory]
+    [MemberData(nameof(Categories))]
+    public void ErrorCollectionCategory_WhenOneErrorMapsTo5xx_Answers5xx(ErrorCategory category)
+    {
+        // Arrange
+        var collection = ErrorCollection.From(ValidationError.Required("Name"), new CategorizedTestError(category), new CategorizedTestError(ErrorCategory.NotFound));
+
+        // Act
         bool mapsTo5xx = ResultProblemDetailsFactory.ToStatusCode(category) >= 500;
 
         // Assert
-        reportsTheCategory.ShouldBe(mapsTo5xx || category == ErrorCategory.Validation);
+        (ResultProblemDetailsFactory.ToStatusCode(collection.Category) >= 500).ShouldBe(mapsTo5xx);
+    }
+
+    [Theory]
+    [InlineData(ErrorCategory.Unauthorized, HttpStatusCode.Unauthorized)]
+    [InlineData(ErrorCategory.NotFound, HttpStatusCode.NotFound)]
+    [InlineData(ErrorCategory.Forbidden, HttpStatusCode.Forbidden)]
+    [InlineData(ErrorCategory.Conflict, HttpStatusCode.Conflict)]
+    public async Task ToHttpResult_WhenCollectionMixesValidationWithAClientError_AnswersThatErrorWithoutFieldErrors(
+        ErrorCategory category, HttpStatusCode expected)
+    {
+        // Arrange: the validation error comes first, so order cannot decide the status
+        var errors = ErrorCollection.From(ValidationError.Required("Email"), new CategorizedTestError(category));
+        await using var host = await ResultHttpHost.StartAsync(app =>
+            app.MapPost("/users", () => Result.Failure(errors).ToHttpResult()));
+
+        // Act
+        using var response = await host.Client.PostAsync(new Uri("/users", UriKind.Relative), null);
+        using var json = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+
+        // Assert: an unauthenticated caller, or a missing resource, never receives field validation detail
+        response.StatusCode.ShouldBe(expected);
+        json.RootElement.TryGetProperty("errors", out _).ShouldBeFalse();
+    }
+
+    [Fact]
+    public async Task ToHttpResult_WhenCollectionMixesValidationAndBusinessRule_AnswersFieldErrors()
+    {
+        // Arrange
+        var errors = ErrorCollection.From(new CategorizedTestError(ErrorCategory.BusinessRule), ValidationError.Required("Email"));
+        await using var host = await ResultHttpHost.StartAsync(app =>
+            app.MapPost("/users", () => Result.Failure(errors).ToHttpResult()));
+
+        // Act
+        using var response = await host.Client.PostAsync(new Uri("/users", UriKind.Relative), null);
+        using var json = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+
+        // Assert
+        response.StatusCode.ShouldBe(HttpStatusCode.UnprocessableEntity);
+        json.RootElement.GetProperty("errors").TryGetProperty("Email", out _).ShouldBeTrue();
     }
 
     [Fact]

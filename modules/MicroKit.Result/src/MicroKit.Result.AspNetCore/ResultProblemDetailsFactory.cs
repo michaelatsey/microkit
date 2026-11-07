@@ -14,13 +14,14 @@ public static class ResultProblemDetailsFactory
     /// </summary>
     /// <remarks>
     /// <para>
-    /// When the error is an <see cref="IValidationError"/>, or an <see cref="ErrorCollection"/> that holds some
-    /// (nested collections included), and the status is not a server error (5xx), the result is an
-    /// <see cref="HttpValidationProblemDetails"/> whose <see cref="HttpValidationProblemDetails.Errors"/> groups
-    /// the validation messages by <see cref="IValidationError.PropertyName"/>, each property's messages in order;
-    /// other errors are not
-    /// listed there. A 5xx response never carries field errors: the client has nothing to correct. Otherwise
-    /// the result is a <see cref="ProblemDetails"/>.
+    /// When the error's category is <see cref="ErrorCategory.Validation"/> or <see cref="ErrorCategory.BusinessRule"/>,
+    /// and the error is an <see cref="IValidationError"/> or an <see cref="ErrorCollection"/> that holds some (nested
+    /// collections included), the result is an <see cref="HttpValidationProblemDetails"/> whose
+    /// <see cref="HttpValidationProblemDetails.Errors"/> groups the validation messages by
+    /// <see cref="IValidationError.PropertyName"/>, each property's messages in order; other errors are not listed
+    /// there. Any other category — a server, access or resource error — never carries field errors, whatever errors a
+    /// collection also holds: an unauthenticated caller, for one, receives no validation detail. Otherwise the result
+    /// is a <see cref="ProblemDetails"/>.
     /// </para>
     /// <para>
     /// <see cref="ProblemDetails.Detail"/> is <see cref="IError.Message"/>, which the error contract keeps safe for
@@ -41,7 +42,11 @@ public static class ResultProblemDetailsFactory
         ArgumentNullException.ThrowIfNull(error);
 
         var statusCode = ToStatusCode(error.Category);
-        var fieldErrors = statusCode < StatusCodes.Status500InternalServerError ? GroupValidationErrors(error) : null;
+        // Field errors describe the request's input: only a Validation or BusinessRule response carries them, never
+        // an access, resource or server error, whatever errors a collection also holds.
+        var fieldErrors = error.Category is ErrorCategory.Validation or ErrorCategory.BusinessRule
+            ? GroupValidationErrors(error)
+            : null;
 
         var problemDetails = fieldErrors is null
             ? new ProblemDetails()

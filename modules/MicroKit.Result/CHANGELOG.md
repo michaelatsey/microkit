@@ -43,8 +43,11 @@ Hardening before stable (#184). Breaking changes ship outright on `preview.*` (A
 - `ErrorCollection.WithCategory`, `WithSeverity` and `WithCode` return `IReadOnlyList<IError>`, and
   `OfType<TError>` returns `IReadOnlyList<TError>`: a filter that matches nothing returns an empty list,
   never an empty `ErrorCollection`.
-- `ErrorCollection.Category` is the category its errors share; otherwise the first server-fault category
-  (`Technical`, `Unavailable`, `External`, `NotSupported`, and since Phase 5 `Timeout`); otherwise the first error's.
+- `ErrorCollection.Category` is the category its errors share; otherwise the one of highest precedence, so the order of the errors never matters.
+  Precedence, highest first: faults of the system (`Technical`, `External`, `Unavailable`, `Timeout`, `NotSupported`, undefined values), then `Unauthorized` and `Forbidden`, then `NotFound`, `Conflict`, `PreconditionFailed` and `TooManyRequests`, then `Cancelled`, then `Validation` and `BusinessRule`;
+  inside a group, the category declared first in `ErrorCategory` wins.
+- `ToHttpResult()` writes grouped field errors only when the category is `Validation` or `BusinessRule`: a
+  collection that also holds an access, resource or server error answers that error, without `errors`.
 - `ResultJsonConverter<T>.Read` throws `JsonException` for a payload that does not describe a valid
   result: a success without `value` or with `error`, a failure without `error` or with `value`, a
   duplicate `isSuccess`, an empty `code`.

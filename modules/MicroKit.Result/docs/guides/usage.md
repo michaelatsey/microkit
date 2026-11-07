@@ -530,7 +530,7 @@ Every argument is evaluated before the call. To skip a step after a failure, cha
 
 An `ErrorCollection` is an `IError` that holds other errors. It is never empty. Its code is `MULTI.ERROR`, its message joins the messages with `; `, and its severity is the highest of its errors, at least `Error`.
 
-Its category is the category its errors share. Otherwise, it is the first server-fault category among them (`Technical`, `Unavailable`, `External`, `NotSupported`, `Timeout`), so a server fault is never hidden behind a client error. Otherwise, it is the first error's category.
+Its category is the category its errors share; otherwise the one of highest precedence, so the order of the errors never matters. Precedence, highest first: faults of the system (`Technical`, `External`, `Unavailable`, `Timeout`, `NotSupported`, undefined values), then `Unauthorized` and `Forbidden`, then `NotFound`, `Conflict`, `PreconditionFailed` and `TooManyRequests`, then `Cancelled`, then `Validation` and `BusinessRule`; inside a group, the category declared first in `ErrorCategory` wins. A server fault is never hidden behind a client error, nor an access error behind a validation error.
 
 ```csharp
 var collection = ErrorCollection.From(error1, error2, error3);
@@ -781,7 +781,7 @@ A validation error, alone or in an `ErrorCollection`, answers an `HttpValidation
 }
 ```
 
-A 5xx response never carries field errors: the client has nothing to correct. An `ErrorCollection` that mixes a validation error with a `Technical` one answers 500, without `errors`.
+Only a `Validation` or `BusinessRule` response carries field errors. An `ErrorCollection` that mixes a validation error with a `Technical` one answers 500, with an `Unauthorized` one 401, with a `NotFound` one 404, each without `errors`: an unauthenticated caller receives no validation detail.
 
 ### Use the factory directly
 

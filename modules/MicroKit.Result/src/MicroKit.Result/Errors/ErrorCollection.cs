@@ -33,10 +33,16 @@ public sealed class ErrorCollection : IError, IReadOnlyList<IError>
     public string Message { get; }
 
     /// <summary>
-    /// Gets the collection's category: the category every contained error shares; otherwise the first category
-    /// that reports a fault of the system (<see cref="ErrorCategory.Technical"/>, <see cref="ErrorCategory.Unavailable"/>,
-    /// <see cref="ErrorCategory.External"/>, <see cref="ErrorCategory.NotSupported"/>, <see cref="ErrorCategory.Timeout"/>,
-    /// or a value the enum does not define), so a server fault is never hidden behind a client error; otherwise the first error's category.
+    /// Gets the collection's category: the category every contained error shares; otherwise the one of highest
+    /// precedence, so the result never depends on the order of the errors. Precedence, highest first: faults of the
+    /// system (<see cref="ErrorCategory.Technical"/>, <see cref="ErrorCategory.External"/>,
+    /// <see cref="ErrorCategory.Unavailable"/>, <see cref="ErrorCategory.Timeout"/>, <see cref="ErrorCategory.NotSupported"/>,
+    /// undefined values); <see cref="ErrorCategory.Unauthorized"/>, <see cref="ErrorCategory.Forbidden"/>;
+    /// <see cref="ErrorCategory.NotFound"/>, <see cref="ErrorCategory.Conflict"/>, <see cref="ErrorCategory.PreconditionFailed"/>,
+    /// <see cref="ErrorCategory.TooManyRequests"/>; <see cref="ErrorCategory.Cancelled"/>;
+    /// <see cref="ErrorCategory.Validation"/>, <see cref="ErrorCategory.BusinessRule"/>. Inside a group, the category
+    /// declared first in <see cref="ErrorCategory"/> wins. A server fault is thus never hidden behind a client error,
+    /// nor an access error behind a validation error.
     /// </summary>
     public ErrorCategory Category { get; }
 
@@ -180,19 +186,21 @@ public sealed class ErrorCollection : IError, IReadOnlyList<IError>
 
     private static ErrorCategory SelectCategory(ImmutableArray<IError> errors)
     {
-        var first = errors[0].Category;
-        ErrorCategory? firstServerFault = null;
-        var shared = true;
+        var selected = errors[0].Category;
+        long precedence = ErrorCategoryFacts.Precedence(selected);
 
-        foreach (var error in errors)
+        for (var i = 1; i < errors.Length; i++)
         {
-            var category = error.Category;
-            shared &= category == first;
-            if (firstServerFault is null && ErrorCategoryFacts.IsServerFault(category))
-                firstServerFault = category;
+            var category = errors[i].Category;
+            var candidate = ErrorCategoryFacts.Precedence(category);
+            if (candidate > precedence)
+            {
+                selected = category;
+                precedence = candidate;
+            }
         }
 
-        return shared ? first : firstServerFault ?? first;
+        return selected;
     }
 
     // ── Enumeration ───────────────────────────────────────────────────────
