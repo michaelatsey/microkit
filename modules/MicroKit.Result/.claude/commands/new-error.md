@@ -9,7 +9,7 @@
 
 `<ErrorCategory>` : `NotFound`, `Unauthorized`, `Forbidden`, `Conflict`, `TooManyRequests`, `Technical`, `Unavailable`, `External`, `BusinessRule`, `NotSupported`, `Timeout`, `PreconditionFailed`. `Cancelled` n'est pas proposée : l'annulation demandée par l'appelant se propage, elle ne devient pas une erreur.
 
-Sans `--category`, la catégorie se déduit du nom (règle 4 ci-dessous) ; si le nom ne la donne pas, la commande la demande. Le template surcharge toujours `Category` : sans surcharge, `Error.Category` vaut `Technical` (HTTP 500), et #184 Phase 3 décide si elle devient obligatoire.
+Sans `--category`, la catégorie se déduit du nom (règle 4 ci-dessous) ; si le nom ne la donne pas, la commande la demande. Le template surcharge toujours `Category` : sans surcharge, `Error.Category` vaut `Technical` (HTTP 500), et ADR-RESULT-001 D5 la garde facultative : la Phase 6 ajoute un avertissement d'analyseur pour une sous-classe qui l'oublie.
 
 `Validation` n'est pas proposée non plus : une erreur de validation est une `ValidationError` (`ValidationError.Custom(propertyName, message)` ou ses factories), qui implémente `IValidationError`. `ValidationResult.AddError` a deux surcharges : `AddError(IValidationError error)`, et `AddError(string propertyName, string message)`, qui construit une `ValidationError`. L'une comme l'autre portent un `PropertyName` : `ToHttpResult()` regroupe les messages par champ dans `errors`.
 
@@ -62,7 +62,7 @@ public sealed record {ErrorName}({Fields})
     public override ErrorCategory Category => ErrorCategory.{Category};
     
     // Champs sans danger pour un client seulement : un champ positionnel est déjà une propriété
-    // publique, et la Phase 3 de #184 décide du rôle de Metadata
+    // publique, et ADR-RESULT-001 D1 : Metadata reste en mémoire
     /// <inheritdoc/>
     public override IReadOnlyDictionary<string, object?> Metadata =>
         ErrorMetadata.Create(nameof({Field1}), {Field1});

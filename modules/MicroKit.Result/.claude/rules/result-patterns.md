@@ -114,7 +114,7 @@ Result failFast = ResultCombineExtensions.Combine(validateName, validateEmail, v
 Result collected = ResultCombineExtensions.CombineAll(validateName, validateEmail, validateAge);
 ```
 
-Pour qu'une étape ne s'exécute pas après un échec, `Bind` la chaîne : `Combine(Validate(x), Save(x))` exécute `Save`. Sur un résultat `default`, `Combine` et `CombineAll` lèvent `ResultException`. La Phase 3 de #184 décide de leur place.
+Pour qu'une étape ne s'exécute pas après un échec, `Bind` la chaîne : `Combine(Validate(x), Save(x))` exécute `Save`. Sur un résultat `default`, `Combine` et `CombineAll` lèvent `ResultException`. ADR-RESULT-001 D7 en fait des membres statiques de `Result` ; la Phase 4 retire `ResultCombineExtensions`.
 
 ## `Result` non générique
 
@@ -189,7 +189,7 @@ ORDER.PAYMENT.DECLINED
 INVENTORY.PRODUCT.OUT_OF_STOCK
 ```
 
-Le code et les samples emploient aussi deux segments (`USER.NOT_FOUND`). La Phase 3 de #184 fixe le rôle de `Code`.
+Le code et les samples emploient aussi deux segments (`USER.NOT_FOUND`). ADR-RESULT-001 D1 fixe son rôle : identifiant stable, chaîne libre, `DOMAIN.ENTITY.REASON` par convention.
 
 ### ✅ Utiliser ErrorCollection pour les erreurs multiples
 ```csharp
@@ -229,7 +229,7 @@ public async ValueTask<Result<T>> ProcessAsync(
     CancellationToken ct = default)  // ← toujours avec default
 ```
 
-La règle vaut pour le code qui appelle la librairie et pour une nouvelle méthode qui fait elle-même un appel annulable. Les extensions async de la librairie (`MapAsync`, `BindAsync`…) ne prennent pas de `CancellationToken` : un délégué qui en a besoin le capture. L'ADR de la Phase 3 de #184 décide s'ils en prennent un, la Phase 4 l'applique (écart, `.claude/CLAUDE.md`).
+La règle vaut pour le code qui appelle la librairie et pour une nouvelle méthode qui fait elle-même un appel annulable. Les extensions async de la librairie (`MapAsync`, `BindAsync`…) ne prennent pas de `CancellationToken` : un délégué qui en a besoin le capture. ADR-RESULT-001 D8 leur ajoute une surcharge dont le délégué prend le `CancellationToken` et retourne un `ValueTask` ; la Phase 4 l'applique (écart, `.claude/CLAUDE.md`).
 
 ## Anti-patterns stricts
 

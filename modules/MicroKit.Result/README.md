@@ -135,7 +135,7 @@ bool ordered = ErrorCode.Conflict < ErrorCode.NotFound;   // ordinal comparison
 | `Unavailable` | 503 | Service temporarily unavailable |
 | `Technical` | 500 | Internal error (default) |
 
-The XML doc of `ErrorCategory.Cancelled` still describes it as a caller cancellation; #184 Phase 3 settles the role of `Category`.
+The XML doc of `ErrorCategory.Cancelled` still describes it as a caller cancellation and cites HTTP statuses; ADR-RESULT-001 (D1, D11) makes `Category` the kind of failure, mapped to a status only by `MicroKit.Result.AspNetCore`, and #184 Phase 4 rewrites the doc.
 
 ### ErrorMetadataBuilder
 
@@ -321,7 +321,7 @@ Current behavior:
 - Async delegates return `Task`, never `ValueTask`. A method returning `ValueTask` is passed through an async lambda, as in Surface 1.
 - The async extensions take no `CancellationToken`; a delegate that needs one captures it.
 
-The #184 Phase 3 ADR decides whether the async extensions take a `CancellationToken` and accept `ValueTask` delegates; Phase 4 applies it.
+ADR-RESULT-001 D8 adds, to each async operation, an overload whose delegate takes a `CancellationToken` and returns a `ValueTask`; #184 Phase 4 applies it.
 
 ---
 

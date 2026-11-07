@@ -12,13 +12,13 @@ description: Use when designing, naming or reviewing a typed domain error for Mi
 
 ## Ce qui atteint le client
 
-`Error.Message` part dans `ProblemDetails.Detail` : il reste sans danger pour le client, et n'est jamais le texte d'une exception. Les détails internes vont dans le log, pas dans `Metadata` : `ProblemDetails` et `ResultJsonConverter<T>` ne l'émettent pas, mais un `Result` non générique retourné tel quel par un endpoint l'émet (Phase 5 de #184), et la Phase 3 décide de son rôle (garantie security, `.claude/CLAUDE.md`).
+`Error.Message` part dans `ProblemDetails.Detail` : il reste sans danger pour le client, et n'est jamais le texte d'une exception. Les détails internes vont dans le log, pas dans `Metadata` : `ProblemDetails` et `ResultJsonConverter<T>` ne l'émettent pas, mais un `Result` non générique retourné tel quel par un endpoint l'émet (Phase 5 de #184), et ADR-RESULT-001 D1 en fait un contexte en mémoire, jamais envoyé au client par défaut (garantie security, `.claude/CLAUDE.md`).
 
 Un paramètre positionnel d'un record est une propriété publique : sérialiser l'erreur elle-même, ou l'afficher par `ToString`, l'émet. Un détail interne n'est donc jamais un paramètre de l'erreur.
 
 Un id interpolé dans le message s'affiche par son `ToString`. Les ids de ce skill (`OrderId`, `ProductId`) le surchargent pour n'afficher que leur valeur, comme ceux de MicroKit.Domain ; sans cela, le message porte le texte généré du record (`OrderId { Value = … }`).
 
-`Category` vaut `Technical` (HTTP 500) quand elle n'est pas surchargée ; #184 Phase 3 décide si elle devient obligatoire.
+`Category` vaut `Technical` (HTTP 500) quand elle n'est pas surchargée : ADR-RESULT-001 D5 la garde facultative dans le code, et la Phase 6 de #184 ajoute un avertissement d'analyseur pour une sous-classe qui l'oublie.
 
 ## Taxonomie des erreurs DDD
 
@@ -174,4 +174,4 @@ public static class ErrorActivityExtensions
 }
 ```
 
-`Metadata` n'est pas exporté : la Phase 3 de #184 décide de son rôle, et une trace part souvent vers un service tiers.
+`Metadata` n'est pas exporté : ADR-RESULT-001 D1 en fait un contexte en mémoire, et une trace part souvent vers un service tiers.

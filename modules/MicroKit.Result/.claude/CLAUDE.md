@@ -13,9 +13,9 @@ Une note d'écart décrit le comportement actuel. La PR d'une phase retire ou r�
 - **Correctness : un résultat invalide n'est jamais lu comme un succès.**
   - `default(Result<T>)`, comme `new Result<T>()`, n'est ni succès ni échec : `Value`, `Error`, `Map`, `Bind`, `Match` et `Ensure` lèvent `ResultException`, `TryGetValue` retourne `false`, `Tap` ne fait rien, `GetValueOrDefault(x)` retourne `x`. Sur `default(Result)`, `Error` et `Match` lèvent aussi `ResultException`. `Combine`, `CombineAll`, `Partition`, `Successes` et `Failures` lèvent `ResultException` sur un résultat `default`.
   - La conversion implicite de `T` vers `Result<T>` refuse un `Result` ou un `Result<T>` comme valeur (`ArgumentException`), possible quand `T` est `object`. `ResultJsonConverter<T>.Read` refuse (`JsonException`) un contenu qui ne décrit pas un résultat valide : succès sans `value` ou avec `error`, échec sans `error` ou avec `value`, `isSuccess` en double, `code` vide. Un mapper de `Try` / `TryAsync` qui retourne `null` lève `ArgumentNullException`. Les filtres d'`ErrorCollection` retournent une liste, jamais une collection vide.
-  - Écarts, Phase 3 : `Result.Success<T>(null)` est un succès, et `Error.Category` vaut `Technical` quand elle n'est pas surchargée.
+  - Écarts : `Result.Success<T>(null)` est un succès (ADR-RESULT-001 D6, Phase 4 le fait lever `ArgumentNullException`), et `Error.Category` vaut `Technical` quand elle n'est pas surchargée (ADR-RESULT-001 D5, Phase 6 ajoute l'avertissement d'analyseur).
 - **Security : les détails internes n'atteignent jamais un client par défaut.**
-  - `Error.Message` atteint le client : il reste sans danger pour lui. Les détails internes vont dans le log, pas dans `Metadata` : `ProblemDetails` et `ResultJsonConverter<T>` ne l'émettent pas, mais le `Result` non générique l'émet (ci-dessous) et la Phase 3 décide de son rôle.
+  - `Error.Message` atteint le client : il reste sans danger pour lui. Les détails internes vont dans le log, pas dans `Metadata` : `ProblemDetails` et `ResultJsonConverter<T>` ne l'émettent pas, mais le `Result` non générique l'émet (ci-dessous) et ADR-RESULT-001 D1 en fait un contexte en mémoire, jamais envoyé au client par défaut.
   - `Try` / `TryAsync` sans mapper construisent une `ExceptionError` : code `ErrorCode.Exception`, message générique (`"An unexpected error occurred."`), aucune métadonnée ; l'exception reste en mémoire (`ExceptionError.Exception`, `[JsonIgnore]`) pour le log.
   - Écart, Phase 5 : le `Result` non générique n'a pas de convertisseur JSON. Retourné tel quel par un endpoint, il est sérialisé propriété par propriété : un échec répond 200 avec `error.metadata`, un succès répond 500. Par `ToHttpResult()`, il n'expose rien de cela.
 - **Predictability : le synchrone et l'asynchrone se comportent de la même façon.**
@@ -23,15 +23,15 @@ Une note d'écart décrit le comportement actuel. La PR d'une phase retire ou r�
   - `Try` et `TryAsync` sans mapper relancent `OperationCanceledException`. Avec un mapper, le mapper reçoit toute exception et décide, et `DatabaseExceptionMapper` (`rules/csharp-style.md`) en fait une erreur : `Try` et `TryAsync` ne servent pas un appel annulable, et leur lambda ne capture pas de `CancellationToken`.
   - Les extensions async et `TryAsync` valident leurs arguments à l'appel, avant tout `await`, la tâche source comprise.
   - Écart, Phase 4 : le `Result` non générique n'a que `Match`, `Tap`, `TapError` et `Finally`, et aucun async hors `TryAsync` et les surcharges attendues de `Tap`, `TapError` et `Finally`.
-  - Écart, Phase 4 : un lambda non async qui retourne un `ValueTask` (`u => cache.SetAsync(u)`) se lie à la surcharge `Action` de `Tap`, `TapError` ou `Finally`, et son `ValueTask` est abandonné ; CA2012 le signale, une erreur en Release. On l'écrit `async u => await cache.SetAsync(u)`. Une surcharge `Func<T, ValueTask>` à côté de `Func<T, Task>` rendrait tout lambda async ambigu (CS0121) : l'ADR de la Phase 3 en tient compte.
-  - Écarts, Phase 3 (décision de l'ADR) puis Phase 4 (mise en œuvre) :
+  - Écart, Phase 4 : un lambda non async qui retourne un `ValueTask` (`u => cache.SetAsync(u)`) se lie à la surcharge `Action` de `Tap`, `TapError` ou `Finally`, et son `ValueTask` est abandonné ; CA2012 le signale, une erreur en Release. On l'écrit `async u => await cache.SetAsync(u)`. Une surcharge `Func<T, ValueTask>` à côté de `Func<T, Task>` rendrait tout lambda async ambigu (CS0121) : ADR-RESULT-001 D8 en tient compte.
+  - Écarts, ADR-RESULT-001 D8, que la Phase 4 applique :
     - Les délégués async des extensions retournent `Task`, jamais `ValueTask` : un port `ValueTask<Result<T>>` s'y passe par un lambda async, `async x => await port(x, ct)`.
     - Aucune extension async ne prend de `CancellationToken` : un délégué qui en a besoin le capture.
 - **Interoperability : les préoccupations HTTP restent hors du cœur.**
   - `MicroKit.Result` ne référence pas ASP.NET Core (test `Core_DoesNotReferenceAspNetCore`) ; le mapping HTTP vit dans `MicroKit.Result.AspNetCore`. La catégorie d'une `ErrorCollection` préfère une faute du système (`Technical`, `Unavailable`, `External`, `NotSupported`) sans connaître HTTP ; un test d'intégration garde cette liste alignée sur les catégories que `MicroKit.Result.AspNetCore` mappe en 5xx.
-  - Écarts, Phase 3 : la doc XML d'`ErrorCategory` cite des statuts HTTP et décrit `Cancelled` comme une annulation de l'appelant, que les règles interdisent de convertir en erreur ; la Phase 3 fixe le rôle de `Category`.
+  - Écart, ADR-RESULT-001 D1 et D11, que la Phase 4 applique : la doc XML d'`ErrorCategory` cite des statuts HTTP et décrit `Cancelled` comme une annulation de l'appelant, que les règles interdisent de convertir en erreur.
   - Écart, Phase 5 : `ResultJsonConverter<T>` perd `Severity`, `Metadata` et les erreurs d'une `ErrorCollection` ; il désérialise une erreur en un type privé, et lève une exception sans rapport en sérialisant un `default`. La Phase 5 conserve ces champs sur un aller-retour, et fait échouer la sérialisation d'un `default` avec une erreur claire.
-  - Écart, Phase 5 : le contrat HTTP lui-même (`rules/result-patterns.md`). Le commentaire de `ResultProblemDetailsFactory.cs:70` dit aussi qu'aucune constante `StatusCodes` n'existe pour 499, alors que `StatusCodes.Status499ClientClosedRequest` existe.
+  - Écart, Phase 5 : le contrat HTTP lui-même (`rules/result-patterns.md`). Le commentaire de `ResultProblemDetailsFactory.cs:75` dit aussi qu'aucune constante `StatusCodes` n'existe pour 499, alors que `StatusCodes.Status499ClientClosedRequest` existe.
 - **Performance : toute affirmation est mesurée.**
   - Écart : aucun benchmark n'existe, `tests/MicroKit.Result.PerformanceTests` ne contient que son `.csproj`. La Phase 7 publie les mesures. D'ici là, une affirmation de performance est une hypothèse et se présente comme telle.
   - Écart, Phase 7 : le constructeur d'`ErrorCollection` construit `Message` par LINQ (`ErrorCollection.cs:26`), ce que la checklist de `agents/dotnet-reviewer.md` bloque dans un nouveau code. La Phase 7 mesure ce chemin, et il ne change que si la mesure en montre le coût.
@@ -149,6 +149,7 @@ Avant une pull request :
 - `MicroKit.Result.AspNetCore` — extensions HTTP/ProblemDetails
 
 ## 🔗 Références
+- [ADR-RESULT-001 — le modèle d'erreur](../.claude-context/context/architecture/decisions/ADR-RESULT-001-error-model.md) : rôle de `Code`, `Category`, `Severity`, `Metadata`, factories, conversions, async et parité du `Result` non générique
 - [Railway Oriented Programming - Scott Wlaschin](https://fsharpforfunandprofit.com/rop/)
 - [Error handling in .NET — Microsoft](https://learn.microsoft.com/dotnet/standard/exceptions/)
 - [OneOf library](https://github.com/mcintyre321/OneOf) — inspiration pattern
