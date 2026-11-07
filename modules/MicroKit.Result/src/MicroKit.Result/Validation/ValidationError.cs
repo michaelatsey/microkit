@@ -96,8 +96,8 @@ public sealed record ValidationError(string PropertyName, string Message)
         (min, max) switch
         {
             (not null, not null) => $"{propertyName} must be between {min} and {max}.",
-            (not null, null)     => $"{propertyName} must be greater than or equal to {min}.",
-            (null, not null)     => $"{propertyName} must be less than or equal to {max}.",
-            _                    => $"{propertyName} is out of range.",
+            (not null, null) => $"{propertyName} must be greater than or equal to {min}.",
+            (null, not null) => $"{propertyName} must be less than or equal to {max}.",
+            _ => $"{propertyName} is out of range.",
         };
 }

@@ -56,7 +56,7 @@ var final = await GetUser(id)
 ### Parallel composition (Combine)
 ```csharp
 // Toutes les opérations indépendantes exécutées, erreurs collectées
-var result = ResultCombineExtensions.CombineAll(
+var result = Result.CombineAll(
     ValidateName(command.Name),
     ValidateEmail(command.Email),
     ValidateAge(command.Age)
@@ -76,23 +76,24 @@ Result<User> observed = result.TapError(e => logger.OperationFailed(e.Code));
 ### Doubling the track (Map + MapError)
 ```csharp
 // Transformer les deux rails : Map sur le succès, MapError sur l'échec
-// (EnrichedError : erreur applicative qui enveloppe l'erreur d'origine, et en reprend
-// Category, Severity et Metadata ; sinon elle répond 500, samples/.../Readme/Pipelines.cs)
+// (EnrichedError : erreur applicative qui enveloppe une erreur seule, et en reprend
+// Category, Severity et Metadata ; sinon elle répond 500. Enrich enrichit chaque erreur d'une
+// ErrorCollection et la reconstruit, samples/.../Guide/Composing.cs)
 Result<UserDto> mapped = result
     .Map(v => v.ToDto())
-    .MapError(e => new EnrichedError(e, correlationId));
+    .MapError(e => EnrichedError.Enrich(e, correlationId));
 ```
 
 ### Async railway
 ```csharp
-// Les ports retournent ValueTask<Result<T>> (convention racine), les délégués async des
-// extensions retournent Task : chaque port s'y passe par un lambda async, qui capture ct
-// (les extensions ne prennent pas de CancellationToken).
+// Les ports retournent ValueTask<Result<T>> et prennent ct (convention racine) : ils passent par la forme
+// à jeton des extensions, dont le délégué reçoit le CancellationToken et retourne un ValueTask
+// (ADR-RESULT-001 D8). Le ct est passé explicitement : omis, le délégué reçoit CancellationToken.None.
 Result<User> user = await GetUserAsync(userId, ct);
-Result<Cart> cart = await user.BindAsync(async u => await GetActiveCartAsync(u.Id, ct));
+Result<Cart> cart = await user.BindAsync((u, token) => GetActiveCartAsync(u.Id, token), ct);
 Result<Cart> discounted = await cart
     .Ensure(c => !c.IsEmpty, new EmptyCartError())   // erreur construite à chaque appel
-    .BindAsync(async c => await ApplyDiscountsAsync(c, promoCode, ct));
+    .BindAsync((c, token) => ApplyDiscountsAsync(c, promoCode, token), ct);
 Result<InvoiceDto> invoice = await discounted
     .BindAsync(async c => await CreateInvoiceAsync(c, ct))
     .Map(i => i.ToDto());
@@ -105,14 +106,14 @@ invoice = await invoice.BindAsync(async i =>
         onFailure: e => Result.Failure<InvoiceDto>(e)));
 ```
 
-Les extensions sur `Task<Result<T>>` et `ValueTask<Result<T>>` prennent des délégués synchrones. Un lambda async y compile quand même :
+Les extensions sur `Task<Result<T>>` et `ValueTask<Result<T>>` prennent des délégués synchrones, sauf `Tap`, `TapError` et `Finally`. Un lambda async y compile quand même :
 
 - dans `Map` ou `Match`, il retourne un `Task` imbriqué dans le résultat ;
-- dans `Tap`, `TapError` ou `Finally`, comme sur `Result<T>`, il compile en `async void` : le résultat revient avant l'effet, et une exception de l'effet termine le processus (écart, Phase 2 de #184).
+- dans `Tap`, `TapError` ou `Finally`, sur `Result<T>`, `Result` ou une tâche, il se lie à la surcharge qui attend l'effet et retourne un `ValueTask` : l'appel s'attend.
 
-Un délégué async passe donc par `MapAsync`, `BindAsync`, `TapAsync`, `EnsureAsync`… sur un `Result<T>` déjà attendu.
+Un délégué async de `Map`, `Bind`, `Ensure`… passe donc par `MapAsync`, `BindAsync`, `EnsureAsync`… sur un `Result<T>` déjà attendu.
 
-Ces opérations existent sur `Result<T>`. Le `Result` non générique n'a aujourd'hui que `Match`, `Tap`, `TapError` et `Finally`, et aucun async hors `TryAsync` ; #184 Phase 4 les ajoute.
+Ces opérations existent sur `Result<T>`. Le `Result` non générique les a aussi, sync et async (ADR-RESULT-001 D9), et `Result<T>.Bind(Func<T, Result>)` mène d'une valeur à une commande.
 
 ## Pièges courants
 

@@ -100,7 +100,7 @@ app.MapGet("/api/{entity}/{id}", async (
 ```
 
 ## Conventions appliquées
-- `async` → `ValueTask<Result<T>>` (convention racine ; son gain face à `Task<T>` n'est pas mesuré, #184 Phase 7 le mesure). Les délégués async des extensions (`BindAsync`, `MapAsync`…) retournent `Task` : un port généré s'y compose par un lambda async, `BindAsync(async x => await svc.{MethodName}Async(x, ct))` (écart, `.claude/CLAUDE.md`)
+- `async` → `ValueTask<Result<T>>` (convention racine, mesurée face à `Task<T>` dans `README.md`, Performance). Les délégués async des extensions (`BindAsync`, `MapAsync`…) retournent `Task` : un port généré s'y compose par un lambda async, `BindAsync(async x => await svc.{MethodName}Async(x, ct))` (écart, `.claude/CLAUDE.md`)
 - `CancellationToken` toujours en dernier paramètre avec default, transmis aux appels ; l'annulation de l'appelant se propage
 - Guard null en entrée via `ArgumentNullException.ThrowIfNull`
 - Pas d'exception dans l'implémentation métier

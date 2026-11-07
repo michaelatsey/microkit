@@ -1,5 +1,9 @@
 <Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup>
+    <!-- Turns on the trim, single-file and AOT analyzers (Microsoft Learn, "How to make libraries
+         compatible with native AOT"): every IL2xxx/IL3xxx warning is fixed or carried by an explicit
+         [RequiresUnreferencedCode]/[RequiresDynamicCode] on the public API. -->
+    <IsAotCompatible>true</IsAotCompatible>
     <AssemblyName>MicroKit.Result.AspNetCore</AssemblyName>
     <RootNamespace>MicroKit.Result.AspNetCore</RootNamespace>
     <Description>ASP.NET Core extensions for MicroKit.Result — ProblemDetails, HTTP mapping.</Description>

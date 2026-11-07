@@ -34,11 +34,13 @@ result.IsFailure.ShouldBeTrue();
 result.Error.ShouldBeOfType<UserNotFoundError>();
 ```
 
-## Cible : #184 Phase 1
+## Socle : #184 Phase 1
+
+Livré par la Phase 1 ; chaque nouvelle opération y ajoute ses tests.
 
 - Tests unitaires de `Result`, `Result<T>`, chaque extension de `Extensions/`, `ErrorCollection`, `ValidationResult`, `ValidationError`, `ErrorMetadataBuilder` et du convertisseur JSON : les deux rails de chaque opération, plus `default(Result)` et `default(Result<T>)`.
-- Tests de propriétés, au moins 100 cas chacun, pour les lois ci-dessous. La Phase 1 ajoute FsCheck (l'intégration qui correspond à la version épinglée de xunit) ; il n'est pas encore référencé.
-- Les tests décrivent le comportement actuel. Là où c'est un défaut que la Phase 2 de #184 corrige (sa liste dans l'issue, et les écarts « Phase 2 » de `.claude/CLAUDE.md`), le test affirme le comportement corrigé et porte `Skip = "#184 phase 2"` ; la Phase 2 retire le skip, et sa vérification exige que ces tests passent alors.
+- Tests de propriétés, au moins 100 cas chacun, pour les lois ci-dessous (`Properties/MonadLawTests.cs`) : FsCheck.Xunit 3.6.0, l'intégration xunit v2 qui correspond à xunit 2.9.3, avec `[Property(MaxTest = 100)]` écrit explicitement.
+- Les tests décrivent le comportement actuel. Les défauts de la Phase 2 de #184 ont été testés sous leur forme corrigée, avec un `Skip` que la Phase 2 a retiré ; ces tests passent.
 - Un écart qu'une phase ultérieure traite (3 à 7) se teste tel qu'il est, sans `Skip` : son comportement corrigé n'est pas encore livré, ou pas encore décidé, et la phase qui le change réécrit le test.
 - Couverture de lignes de `src/MicroKit.Result` d'au moins 90 %.
 

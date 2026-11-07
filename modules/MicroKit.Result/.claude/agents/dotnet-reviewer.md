@@ -32,7 +32,7 @@ Un écart déjà nommé par `.claude/CLAUDE.md` avec sa phase de #184 n'est pas 
 ### Performance
 - [ ] Pas d'allocation inutile dans les hot paths (Map, Bind, Match)
 - [ ] `readonly` sur les champs immuables
-- [ ] Pas de `LINQ` sur les collections dans les constructeurs d'Error (le constructeur d'`ErrorCollection` le fait : écart nommé par `.claude/CLAUDE.md`)
+- [ ] Pas de `LINQ` sur les collections dans les constructeurs d'Error (le constructeur d'`ErrorCollection` le fait, mesuré et gardé faute d'un gain de 20 % : `.claude/CLAUDE.md`, garantie performance)
 - [ ] `string.IsNullOrEmpty` pas `== null || == ""` (`IsNullOrWhiteSpace` change le résultat pour `" "`)
 - [ ] Pas de `.ToString()` sur des types value inutilement
 
@@ -44,8 +44,8 @@ Un écart déjà nommé par `.claude/CLAUDE.md` avec sa phase de #184 n'est pas 
 - [ ] Les opérateurs `==` sont cohérents avec `Equals` (records ok par défaut)
 
 ### API Design
-- [ ] Une nouvelle opération existe sur `Result` et `Result<T>` quand elle s'applique (le `Result` non générique rattrape l'existant en Phase 4)
-- [ ] Une nouvelle opération async couvre les surfaces existantes (`Result<T>`, `Task<Result<T>>`, `ValueTask<Result<T>>`)
+- [ ] Une nouvelle opération existe sur `Result` et `Result<T>` quand elle s'applique (depuis la Phase 4 de #184, les deux ont les mêmes opérations, sync et async)
+- [ ] Une nouvelle opération async existe sur `Result<T>` et `Result` en deux formes : délégué `Task` sans jeton, et délégué à `CancellationToken` qui retourne un `ValueTask`, `ct = default` en dernier (ADR-RESULT-001 D8). Sur `Task<Result<T>>` / `ValueTask<Result<T>>`, seuls les délégués synchrones (et les `Tap`, `TapError`, `Finally` attendus) : on attend la tâche d'abord
 - [ ] XML docs sur toutes les méthodes publiques
 
 ### NativeAOT / Trimming
@@ -99,11 +99,10 @@ internal static class ResultGuard
     }
 }
 
-// ✅ Bon: ValueTask (convention racine ; son gain face à Task n'est pas mesuré, la Phase 7 le mesure),
+// ✅ Bon: ValueTask (convention racine ; mesuré face à Task dans README.md, Performance),
 // ConfigureAwait(false), et l'argument validé avant la partie async : un mapper null lève à l'appel,
-// comme Map (Microsoft Learn, Best practices for exceptions). Les extensions async de src/ valident
-// dans la partie async (écart, Phase 2) et ne prennent pas de CancellationToken (écart, ADR de la
-// Phase 3 puis Phase 4) : deux écarts nommés par .claude/CLAUDE.md
+// comme Map (Microsoft Learn, Best practices for exceptions), ce que font les extensions async de src/.
+// Chacune a aussi une forme à CancellationToken dont le délégué retourne un ValueTask (ADR-RESULT-001 D8)
 public static ValueTask<Result<TOut>> MapAsync<TIn, TOut>(
     this Result<TIn> result, Func<TIn, Task<TOut>> mapper)
 {

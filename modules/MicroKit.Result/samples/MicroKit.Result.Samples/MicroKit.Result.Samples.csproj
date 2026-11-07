@@ -10,7 +10,7 @@
     <IsPackable>false</IsPackable>
     <IsPublishable>false</IsPublishable>
     <!-- IsTrimmable is the library opt-in for trim compatibility (Microsoft Learn, "Prepare .NET
-         libraries for trimming"). This project is an executable that is never trimmed, and its README
+         libraries for trimming"). This project is an executable that is never trimmed, and its guide
          samples call trim-unsafe APIs on purpose (MapGet/MapDelete with a delegate,
          ResultJsonConverterFactory), so it opts out of the root IsTrimmable=true. -->
     <IsTrimmable>false</IsTrimmable>
@@ -19,5 +19,9 @@
   <ItemGroup>
     <ProjectReference Include="..\..\src\MicroKit.Result\MicroKit.Result.csproj" />
     <ProjectReference Include="..\..\src\MicroKit.Result.AspNetCore\MicroKit.Result.AspNetCore.csproj" />
+    <!-- The samples are the analyzers' corpus of valid usage against the real library: a Release build fails on
+         any MKR001/MKR002 they report (#184 Phase 6). -->
+    <ProjectReference Include="..\..\src\MicroKit.Result.Analyzers\MicroKit.Result.Analyzers.csproj"
+                      OutputItemType="Analyzer" ReferenceOutputAssembly="false" />
   </ItemGroup>
 </Project>

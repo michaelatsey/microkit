@@ -6,18 +6,18 @@ namespace MicroKit.Result;
 /// </summary>
 public interface IError
 {
-    /// <summary>Gets the error code.</summary>
+    /// <summary>Gets the stable identifier of the error, <c>DOMAIN.ENTITY.REASON</c> by convention.</summary>
     ErrorCode Code { get; }
 
-    /// <summary>Gets the human-readable error message.</summary>
+    /// <summary>Gets the human-readable message. It reaches a client, so it never carries internal details.</summary>
     string Message { get; }
 
-    /// <summary>Gets the error category for HTTP mapping and error handling strategies.</summary>
+    /// <summary>Gets the kind of failure, the only input to a transport status.</summary>
     ErrorCategory Category { get; }
 
-    /// <summary>Gets the severity level.</summary>
+    /// <summary>Gets the severity, for logging and observability only.</summary>
     ErrorSeverity Severity { get; }
 
-    /// <summary>Gets additional metadata associated with this error.</summary>
+    /// <summary>Gets in-process context, never sent to a client by default.</summary>
     IReadOnlyDictionary<string, object?> Metadata { get; }
 }

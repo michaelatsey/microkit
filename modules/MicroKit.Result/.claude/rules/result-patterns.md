@@ -17,7 +17,7 @@ Result savedAsync = await Result.TryAsync(async () => await riskyCommandAsync(),
 Result<T> loadedAsync = await Result<T>.TryAsync(async () => await riskyQueryAsync(), mapper.Map); // Func<Task<T>>
 ```
 
-`DatabaseExceptionMapper` (`rules/csharp-style.md`) est un tel mapper. Il fait une erreur de toute exception, `OperationCanceledException` comprise : un appel annulable ne passe pas par `Try` / `TryAsync` mais par un `catch` à la frontière (`rules/no-exceptions-flow.md`), qui laisse l'annulation se propager. Le comportement actuel sans mapper, et la Phase 2 de #184 qui le change, sont décrits dans `rules/no-exceptions-flow.md`.
+`DatabaseExceptionMapper` (`rules/csharp-style.md`) est un tel mapper. Il fait une erreur de toute exception, `OperationCanceledException` comprise : un appel annulable ne passe pas par `Try` / `TryAsync` mais par un `catch` à la frontière (`rules/no-exceptions-flow.md`), qui laisse l'annulation se propager. Sans mapper, `Try` / `TryAsync` relancent `OperationCanceledException` et font de toute autre exception une `ExceptionError` au message générique (`rules/no-exceptions-flow.md`).
 
 ### ❌ Ne jamais créer via constructeur
 ```csharp
@@ -71,7 +71,7 @@ Result<User> mutated = userResult.Tap(u => u.Rename(newName));
 Result<User> renamed = userResult.Map(u => u.WithName(newName));
 ```
 
-Un effet async passe par `TapAsync`, `TapErrorAsync` ou `FinallyAsync`. Dans `Tap`, `TapError` ou `Finally`, un lambda async compile en `async void` : le résultat revient avant l'effet, et une exception de l'effet termine le processus (écart, Phase 2 de #184).
+Un effet async passe par `Tap`, `TapError` ou `Finally` avec un lambda async, ou par `TapAsync`, `TapErrorAsync` ou `FinallyAsync` : la surcharge prise attend l'effet et retourne un `ValueTask`, qu'on attend. Une `Action` garde la surcharge synchrone.
 
 ### ✅ Ensure pour les validations inline
 ```csharp
@@ -90,12 +90,12 @@ Result<User> activeLazy = userResult
 ### ✅ MapError et Compensate sur le rail d'échec
 ```csharp
 // MapError : transformer l'erreur, sans changer de rail
-Result<Order> enriched = orderResult.MapError(e => new EnrichedError(e, correlationId));
+Result<Order> enriched = orderResult.MapError(e => EnrichedError.Enrich(e, correlationId));
 // Compensate : revenir sur le rail de succès par une valeur de repli
 Result<Product> product = productResult.Compensate(_ => GetDefaultProduct());
 ```
 
-Une erreur qui en enveloppe une autre reprend sa `Category`, sa `Severity` et ses `Metadata` ; sinon elle vaut `Technical` et répond 500 (`samples/MicroKit.Result.Samples/Readme/Pipelines.cs`).
+Une erreur qui en enveloppe une autre reprend sa `Category`, sa `Severity` et ses `Metadata` ; sinon elle vaut `Technical` et répond 500 (`samples/MicroKit.Result.Samples/Guide/Composing.cs`). Elle n'enveloppe qu'une erreur seule, jamais une `ErrorCollection` : enveloppée entière, la collection deviendrait une erreur portant sa catégorie et son `Message` joint, et un 401 montrerait ses messages de validation. `EnrichedError.Enrich` enrichit chaque erreur d'une collection et la reconstruit.
 
 ### ✅ TapError pour gérer les side-effects sur l'échec
 ```csharp
@@ -108,17 +108,22 @@ Result<User> monitored = userResult
 ### ✅ Combine pour valider plusieurs résultats
 ```csharp
 // Fail-fast : retourne le premier échec ; les arguments sont tous évalués avant l'appel
-Result failFast = ResultCombineExtensions.Combine(validateName, validateEmail, validateAge);
+Result failFast = Result.Combine(validateName, validateEmail, validateAge);
 
 // Collect-all: collecte toutes les erreurs dans une ErrorCollection
-Result collected = ResultCombineExtensions.CombineAll(validateName, validateEmail, validateAge);
+Result collected = Result.CombineAll(validateName, validateEmail, validateAge);
 ```
 
-Pour qu'une étape ne s'exécute pas après un échec, `Bind` la chaîne : `Combine(Validate(x), Save(x))` exécute `Save`. Sur des `Result`, `Combine` et `CombineAll` lisent aujourd'hui un résultat `default` comme un succès ; la Phase 2 de #184 le corrige. La Phase 3 décide de leur place.
+Pour qu'une étape ne s'exécute pas après un échec, `Bind` la chaîne : `Combine(Validate(x), Save(x))` exécute `Save`. Sur un résultat `default`, `Combine` et `CombineAll` lèvent `ResultException`. Ce sont des membres statiques de `Result` (ADR-RESULT-001 D7).
 
 ## `Result` non générique
 
-Il n'a aujourd'hui que `Match`, `Tap`, `TapError` et `Finally`, et aucun async hors `TryAsync` : `Map`, `Bind` et `Ensure` ci-dessus sont des opérations de `Result<T>`. La Phase 4 de #184 lui donne les mêmes opérations, sync et async.
+Il a les opérations de `Result<T>`, sync et async (ADR-RESULT-001 D9) : `Map` vers un `Result<TOut>`, `Bind` vers un `Result` ou un `Result<TOut>`, `Ensure`, `MapError`, `Compensate`, `Match`, `Tap`, `TapError`, `Finally`. `Result<T>.Bind(Func<T, Result>)` mène d'une valeur à une commande.
+
+```csharp
+Result saved = GetUser(id).Bind(user => Save(user));
+Result<Invoice> invoice = Validate(command).Bind(() => CreateInvoice(command));
+```
 
 ## Règles de mapping HTTP
 
@@ -143,7 +148,7 @@ ErrorCategory.Unavailable       → 503 Service Unavailable
 ErrorCategory.External          → 502 Bad Gateway
 ErrorCategory.BusinessRule      → 422 Unprocessable Entity
 ErrorCategory.NotSupported      → 501 Not Implemented
-ErrorCategory.Timeout           → 408 Request Timeout
+ErrorCategory.Timeout           → 504 Gateway Timeout
 ErrorCategory.Cancelled         → 499 Client Closed Request
 ErrorCategory.PreconditionFailed → 412 Precondition Failed
 toute autre valeur              → 500 Internal Server Error
@@ -151,11 +156,9 @@ toute autre valeur              → 500 Internal Server Error
 
 L'annulation demandée par l'appelant se propage (`rules/no-exceptions-flow.md`) : elle ne devient jamais une erreur `ErrorCategory.Cancelled`.
 
-Comportement actuel, que #184 change :
+Une erreur de validation, seule ou dans une `ErrorCollection`, répond en `HttpValidationProblemDetails` : `errors` regroupe ses messages par `PropertyName` (`{ "Email": ["..."] }`) ; seule une réponse `Validation` ou `BusinessRule` en porte, jamais une erreur d'accès, de ressource ou du système. Une `ErrorCollection` liste le code de chacune de ses erreurs dans `errorCodes` ; sur une réponse d'une autre catégorie que `Validation` ou `BusinessRule`, `detail` et `errorCodes` ne nomment que ses erreurs de la catégorie retenue : un appelant non authentifié ne reçoit ni message, ni code, ni nom de propriété de validation. Une `ErrorCollection` répond avec la catégorie que partagent ses erreurs ; sinon avec celle de plus haute préséance (`.claude/CLAUDE.md`, garantie interoperability), quel que soit leur ordre : un 500 ne se cache pas derrière un 422, ni un 401 derrière un 422.
 
-- Phase 2 : `errors` ne liste que `code` et `message`, et seulement pour une `ErrorCollection`, si bien que `IValidationError.PropertyName` se perd et qu'une `ValidationError` seule n'émet rien. La Phase 2 groupe les erreurs de validation par propriété.
-- Phase 2 : une `ErrorCollection` répond avec la catégorie de sa première erreur, si bien que Validation + Technical répond 422 et masque le 500.
-- Phase 5 : `ErrorCategory.Timeout` répond 408, `type` pointe vers un site tiers, et `ToHttpResult` retourne `Ok` ou `NoContent` en `IResult` plutôt qu'en `TypedResults`.
+`ToHttpResult`, `ToCreatedHttpResult(location)` et `ToAcceptedHttpResult(location)` retournent des `TypedResults` (`Results<Ok<T>, ProblemHttpResult>`…) : OpenAPI voit le type du succès ; les réponses problem se déclarent par `ProducesProblem(status)`. Les problem details passent par l'`IProblemDetailsService` de l'hôte (`AddProblemDetails`), donc `CustomizeProblemDetails` et le `traceId` s'appliquent ; `type` est la section qu'ASP.NET Core connaît pour le statut (RFC 9110, RFC 4918 pour 422), absente pour 429 et 499. `Timeout` répond 504 : l'opération, typiquement un appel à une dépendance, n'a pas abouti à temps ; 408 accuserait la requête du client.
 
 ## Règles d'erreurs
 
@@ -189,7 +192,7 @@ ORDER.PAYMENT.DECLINED
 INVENTORY.PRODUCT.OUT_OF_STOCK
 ```
 
-Le code et les samples emploient aussi deux segments (`USER.NOT_FOUND`). La Phase 3 de #184 fixe le rôle de `Code`.
+Le code et les samples emploient aussi deux segments (`USER.NOT_FOUND`). ADR-RESULT-001 D1 fixe son rôle : identifiant stable, chaîne libre, `DOMAIN.ENTITY.REASON` par convention.
 
 ### ✅ Utiliser ErrorCollection pour les erreurs multiples
 ```csharp
@@ -197,7 +200,7 @@ var errors = ErrorCollection.From(error1, error2, error3);
 return Result.Failure(errors);
 ```
 
-`WithCategory`, `WithSeverity`, `WithCode`, `OfType` et `Flatten` peuvent aujourd'hui construire une collection vide, que `From` interdit ; #184 Phase 2 le change.
+`WithCategory`, `WithSeverity`, `WithCode` et `OfType` retournent une liste, vide quand rien ne correspond : une `ErrorCollection` n'est jamais vide. `Flatten` retourne une `ErrorCollection`.
 
 ## Règles async
 
@@ -206,7 +209,7 @@ return Result.Failure(errors);
 public ValueTask<Result<T>> GetAsync(Guid id, CancellationToken ct = default);
 ```
 
-Son gain face à `Task<T>` n'est pas mesuré ; #184 Phase 7 le mesure.
+Son coût face à `Task<T>` est mesuré dans `README.md` (Performance) : plus rapide et plus petit en complétion synchrone, un peu plus lent et plus gros quand l'opération cède vraiment.
 
 ### ✅ Un ValueTask s'attend directement, une seule fois (CA2012)
 ```csharp
@@ -229,7 +232,11 @@ public async ValueTask<Result<T>> ProcessAsync(
     CancellationToken ct = default)  // ← toujours avec default
 ```
 
-La règle vaut pour le code qui appelle la librairie et pour une nouvelle méthode qui fait elle-même un appel annulable. Les extensions async de la librairie (`MapAsync`, `BindAsync`…) ne prennent pas de `CancellationToken` : un délégué qui en a besoin le capture. L'ADR de la Phase 3 de #184 décide s'ils en prennent un, la Phase 4 l'applique (écart, `.claude/CLAUDE.md`).
+La règle vaut pour le code qui appelle la librairie et pour une nouvelle méthode qui fait elle-même un appel annulable. Chaque extension async a deux formes (ADR-RESULT-001 D8) : un délégué qui retourne une `Task`, sans jeton, et un délégué qui prend le `CancellationToken` et retourne un `ValueTask`, avec `CancellationToken ct = default` en dernier, transmis au délégué :
+
+```csharp
+Result<Order> order = await userResult.BindAsync((user, ct) => orders.GetLatestAsync(user.Id, ct), ct);
+```
 
 ## Anti-patterns stricts
 

@@ -3,7 +3,7 @@ namespace MicroKit.Result;
 /// <summary>
 /// Synchronous extension methods for <see cref="Result{T}"/> and <see cref="Result"/>.
 /// </summary>
-public static class ResultExtensions
+public static partial class ResultExtensions
 {
     #region Map
 
@@ -16,6 +16,8 @@ public static class ResultExtensions
     /// <param name="result">The source result.</param>
     /// <param name="mapper">The transformation function.</param>
     /// <returns>A new result with the mapped value, or the original failure.</returns>
+    /// <exception cref="ArgumentNullException">Thrown when the delegate returns <see langword="null"/>: a success needs a value (ADR-RESULT-001 D6).</exception>
+    /// <exception cref="ArgumentException">Thrown when the delegate returns a result as the value; use Bind.</exception>
     public static Result<TOut> Map<TIn, TOut>(this Result<TIn> result, Func<TIn, TOut> mapper)
     {
         ResultGuard.NotNull(mapper);

@@ -7,20 +7,20 @@ description: Use when making or reviewing an allocation or latency claim about M
 
 ## La règle : toute affirmation est mesurée
 
-Aucun benchmark n'existe aujourd'hui : `tests/MicroKit.Result.PerformanceTests` ne contient que son `.csproj`. #184 Phase 7 publie les mesures dans le README, avec la machine et le SDK, contre ErrorOr et FluentResults : chemin succès, chemin échec, chaîne `Map`/`Bind`, allocation par appel.
+`tests/MicroKit.Result.PerformanceTests` est une application BenchmarkDotNet. `README.md` (Performance) publie ses mesures, avec la machine et le SDK, contre ErrorOr et FluentResults : création, chaîne `Map`/`Bind` sur les deux rails, `ValueTask` face à `Task`, `ErrorCollection.From`. Ce skill ne recopie pas les chiffres : il renvoie au README.
 
-D'ici là, ce skill ne donne aucun chiffre. Une affirmation de performance est soit une sortie de BenchmarkDotNet avec sa machine et son SDK, soit une hypothèse présentée comme telle.
+Une affirmation de performance est soit une sortie de BenchmarkDotNet avec sa machine et son SDK, soit une hypothèse présentée comme telle.
 
-## Hypothèses à mesurer
+## Ce que les mesures disent, et ce qui reste à mesurer
 
-| Opération | Hypothèse |
-|-----------|-----------|
-| `Result.Success(value)` | Aucune allocation : `Result<T>` est un struct |
-| `Result.Failure(error)` | Le coût de créer l'erreur, rien de plus |
-| `.Map(lambda)`, `.Bind(lambda)` | Aucune allocation avec une lambda sans capture |
-| `.Match(f, g)` | Aucune allocation avec des lambdas sans capture |
-| `ResultProblemDetailsFactory.CreateProblemDetails(error)` | Quelques allocations par appel, sur le rail d'échec seulement |
-| `ValueTask<T>` face à `Task<T>` | Une allocation évitée quand le résultat est disponible de façon synchrone |
+| Opération | État |
+|-----------|------|
+| `Result.Success(value)`, `Result.Failure<T>(error)` | Mesuré : aucune allocation |
+| `.Map(lambda)`, `.Bind(lambda)` | Mesuré : aucune allocation sur les deux rails, lambdas sans capture |
+| `.Match(f, g)` | Hypothèse : aucune allocation avec des lambdas sans capture |
+| `ResultProblemDetailsFactory.CreateProblemDetails(error)` | Hypothèse : quelques allocations par appel, sur le rail d'échec seulement |
+| `ValueTask<T>` face à `Task<T>` | Mesuré : plus rapide et une allocation évitée en complétion synchrone ; `Task<T>` un peu plus rapide et plus petit quand l'opération cède vraiment |
+| `ErrorCollection.From` | Mesuré : un `string.Create` à lecture unique gagne 18–19 %, sous le seuil de 20 % de la Phase 7 ; le `string.Join` sur LINQ reste |
 
 ## Techniques employées
 
@@ -106,7 +106,7 @@ public sealed class ErrorCollection : IError, IReadOnlyList<IError>
 ```
 
 ### 5. ValueTask<T>
-`ValueTask<T>` est la convention racine ; son gain face à `Task<T>` n'est pas mesuré, la Phase 7 le mesure. Il s'attend directement et une seule fois, sans `.Result` ni `.GetAwaiter().GetResult()` avant complétion (CA2012).
+`ValueTask<T>` est la convention racine ; son coût face à `Task<T>` est mesuré dans `README.md` (Performance, #184 Phase 7) : plus rapide et plus petit en complétion synchrone, un peu plus lent et plus gros quand l'opération cède vraiment. Il s'attend directement et une seule fois, sans `.Result` ni `.GetAwaiter().GetResult()` avant complétion (CA2012).
 
 ```csharp
 public async ValueTask<Result<User>> GetUserAsync(Guid id, CancellationToken ct = default)
@@ -145,14 +145,7 @@ public static Result<UserDto> ToDtoStatic(Result<User> result)
 
 ## Écrire un benchmark
 
-Point de départ pour mesurer une hypothèse. Les benchmarks publiés et leur périmètre relèvent de la Phase 7.
-
-`tests/MicroKit.Result.PerformanceTests` ne produit aujourd'hui aucune mesure : le Test SDK y génère un `Main` vide, si bien que `dotnet run` sort 0 sans rien afficher et que `dotnet test` ne trouve aucun test. Pour mesurer, le projet doit porter `<GenerateProgramFile>false</GenerateProgramFile>` (sinon un `Main` à soi échoue en CS7022) et un `Program.cs` qui lance BenchmarkDotNet. Ce changement du `.csproj` appartient à la Phase 7. Une fois fait, depuis `modules/MicroKit.Result/` :
-
-```csharp
-// Program.cs
-BenchmarkSwitcher.FromAssembly(typeof(ResultCoreBenchmarks).Assembly).Run(args);
-```
+Point de départ pour mesurer une hypothèse : une classe `[MemoryDiagnoser]` de plus dans `tests/MicroKit.Result.PerformanceTests` (application console, `IsTestProject=false`, sans Test SDK), que `Program.cs` découvre par `BenchmarkSwitcher`. Depuis `modules/MicroKit.Result/` :
 
 ```bash
 dotnet run -c Release --project tests/MicroKit.Result.PerformanceTests -- --filter '*'
