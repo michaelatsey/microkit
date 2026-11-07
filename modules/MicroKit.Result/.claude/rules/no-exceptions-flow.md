@@ -56,7 +56,7 @@ public async ValueTask<Result<User>> GetUserAsync(Guid id, CancellationToken ct 
     {
         entity = await _dbContext.Users.FindAsync([id], ct).ConfigureAwait(false);
     }
-    catch (DbException ex) // exception du fournisseur ADO.NET ; l'annulation et les bugs se propagent
+    catch (DbException ex) when (!ct.IsCancellationRequested) // exception du fournisseur ADO.NET ; l'annulation de l'appelant, même levée en DbException par le fournisseur, et les bugs se propagent
     {
         _logger.DatabaseCallFailed(ex);
         return Result.Failure<User>(new DatabaseError());

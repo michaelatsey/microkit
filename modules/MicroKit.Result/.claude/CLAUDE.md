@@ -26,7 +26,7 @@ Une note d'écart décrit le comportement actuel. La PR d'une phase retire ou r�
   - Écart, Phase 5 : le `Result` non générique n'a pas de convertisseur JSON. Retourné tel quel par un endpoint, il est sérialisé propriété par propriété : un échec répond 200 avec `error.metadata`, un succès répond 500. Par `ToHttpResult()`, il n'expose rien de cela.
 - **Predictability : le synchrone et l'asynchrone se comportent de la même façon.**
   - Écarts, Phase 2 :
-    - `Tap`, `TapError` et `Finally` prennent une `Action`, sur `Result<T>` comme sur `Task<Result<T>>` et `ValueTask<Result<T>>` : un lambda async y compile en `async void`, le résultat revient avant l'effet, et une exception de l'effet termine le processus. `TapAsync`, `TapErrorAsync` et `FinallyAsync` l'attendent.
+    - `Tap`, `TapError` et `Finally` prennent une `Action`, sur `Result<T>` comme sur `Task<Result<T>>` et `ValueTask<Result<T>>` : un lambda async y compile en `async void`, le résultat revient avant l'effet, et une exception de l'effet termine le processus. `TapAsync`, `TapErrorAsync` et `FinallyAsync` l'attendent, mais n'existent que sur `Result<T>`, ni sur `Task<Result<T>>` ni sur `ValueTask<Result<T>>` : on attend d'abord la tâche (`Result<User> user = await GetUserAsync(id, ct);`), puis on appelle `user.TapAsync(...)`.
     - `Try` et `TryAsync` sans mapper capturent `OperationCanceledException` ; la Phase 2 les fait relancer. Avec un mapper, le mapper décide, et `DatabaseExceptionMapper` (`rules/csharp-style.md`) en fait une erreur : `Try` et `TryAsync` ne servent pas un appel annulable, et leur lambda ne capture pas de `CancellationToken`.
     - Les extensions async valident leurs arguments dans leur partie async : `MapAsync(null)` lève à l'`await`, `Map(null)` à l'appel. La Phase 2 les valide avant le premier `await`.
   - Écart, Phase 4 : le `Result` non générique n'a que `Match`, `Tap`, `TapError` et `Finally`, et aucun async hors `TryAsync`.
@@ -81,7 +81,7 @@ Unit            ← void-safe pour les génériques
 - ❌ Réflexion runtime sauf dans la couche Serialization, annotée `[RequiresUnreferencedCode]` / `[RequiresDynamicCode]`
 - ❌ `static` mutable partagé (thread-safety)
 
-`samples/MicroKit.Result.Samples` est une démo console : `Console.WriteLine` y est permis, et nulle part ailleurs (convention racine). Ses ports simulés retournent `Task` là où un délégué async des extensions l'exige.
+`samples/MicroKit.Result.Samples` est une démo console : ce module y permet `Console.WriteLine`, par une règle qui lui est propre. La convention racine l'interdit sans exception ; ailleurs dans le module, elle s'applique. Ses ports simulés retournent `Task` là où un délégué async des extensions l'exige.
 
 ### Ce qu'aucun sample ni instruction n'enseigne
 Un contre-exemple marqué ❌ peut les montrer : il définit ce qu'une review bloque.

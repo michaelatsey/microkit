@@ -11,8 +11,8 @@ le test correspondant et le mapping HTTP si applicable.
 
 ## Exemple
 ```
-/impl-result UserService --operation "get user by id" --input "Guid userId" --output UserDto
-/impl-result OrderHandler --operation "create order from cart" --input CreateOrderCommand --output OrderId --api
+/impl-result UserService --operation "get user by id" --input "Guid userId" --output UserDto --api
+/impl-result OrderHandler --operation "create order from cart" --input CreateOrderCommand --output OrderId
 ```
 
 ## Ce qui est généré

@@ -8,17 +8,23 @@ internal static class ExceptionBoundariesSamples
 {
     internal static async Task MapperSample(IUserRepository repository, ILegacyUserClient legacyClient, ILogger logger, Guid id)
     {
-        IError ToInfrastructureError(Exception ex)
+        IError ToDatabaseError(Exception ex)
         {
             logger.DatabaseCallFailed(ex);
             return ex is DbException ? new DatabaseError() : new TechnicalError();
         }
 
-        Result<User> result = Result<User>.Try(() => repository.GetUser(id), ToInfrastructureError);
+        Result<User> result = Result<User>.Try(() => repository.GetUser(id), ToDatabaseError);
+
+        IError ToRemoteCallError(Exception ex)
+        {
+            logger.RemoteCallFailed(ex);
+            return ex is HttpRequestException ? new RemoteCallError() : new TechnicalError();
+        }
 
         Result<User> loaded = await Result<User>.TryAsync(
             async () => await legacyClient.FetchUserAsync(id), // a third-party API with no CancellationToken
-            ToInfrastructureError);
+            ToRemoteCallError);
     }
 
     // ILogger<T>: dependency injection registers the generic logger, not ILogger.
@@ -30,7 +36,7 @@ internal static class ExceptionBoundariesSamples
             {
                 return Result.Success(await repository.GetUserAsync(id, ct).ConfigureAwait(false));
             }
-            catch (DbException ex) // the ADO.NET provider's exception; cancellation and bugs propagate
+            catch (DbException ex) when (!ct.IsCancellationRequested) // the ADO.NET provider's exception; caller cancellation, even one the provider throws as a DbException, and bugs propagate
             {
                 logger.DatabaseCallFailed(ex);
                 return Result.Failure<User>(new DatabaseError());
@@ -43,6 +49,12 @@ internal static class ExceptionBoundariesSamples
 
     public sealed record TechnicalError()
         : Error(ErrorCode.Internal, "An internal error occurred.");
+
+    public sealed record RemoteCallError()
+        : Error(ErrorCode.ExternalServiceFailure, "The remote service call failed.")
+    {
+        public override ErrorCategory Category => ErrorCategory.External;
+    }
 
     internal sealed record User;
 
@@ -64,4 +76,7 @@ internal static partial class InfrastructureLog
 {
     [LoggerMessage(Level = LogLevel.Error, Message = "Database call failed")]
     public static partial void DatabaseCallFailed(this ILogger logger, Exception exception);
+
+    [LoggerMessage(Level = LogLevel.Error, Message = "Remote service call failed")]
+    public static partial void RemoteCallFailed(this ILogger logger, Exception exception);
 }

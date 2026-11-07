@@ -15,6 +15,10 @@ internal static class AsyncSamples
         Result<string> mappedTask = await GetResultTask().Map(v => Transform(v));
         Result<string> chainedTask = await GetResultTask().Bind(v => GetNext(v));
 
+        // TapAsync, TapErrorAsync and FinallyAsync exist only on Result<T>: await the task first
+        Result<int> awaited = await GetResultTask();
+        Result<int> audited = await awaited.TapAsync(async v => await AuditAsync(v));
+
         // Surface 3: on ValueTask<Result<T>> (sync delegate)
         Result<string> mappedValueTask = await GetResultValueTask().Map(v => Transform(v));
     }
@@ -26,6 +30,8 @@ internal static class AsyncSamples
     private static Task<Result<int>> FallbackAsync(IError error) => throw new NotSupportedException();
 
     private static Task LogAsync(Result<int> result) => throw new NotSupportedException();
+
+    private static Task AuditAsync(int value) => throw new NotSupportedException();
 
     private static Task<Result<int>> GetResultTask() => throw new NotSupportedException();
 

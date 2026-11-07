@@ -307,13 +307,17 @@ Result<int> finished = await result.FinallyAsync(async r => await LogAsync(r));
 Result<string> mappedTask = await GetResultTask().Map(v => Transform(v));
 Result<string> chainedTask = await GetResultTask().Bind(v => GetNext(v));
 
+// TapAsync, TapErrorAsync and FinallyAsync exist only on Result<T>: await the task first
+Result<int> awaited = await GetResultTask();
+Result<int> audited = await awaited.TapAsync(async v => await AuditAsync(v));
+
 // Surface 3: on ValueTask<Result<T>> (sync delegate)
 Result<string> mappedValueTask = await GetResultValueTask().Map(v => Transform(v));
 ```
 
 All async methods use `ConfigureAwait(false)`. Current behavior:
 
-- On `Result<T>` and on both task surfaces, `Tap`, `TapError` and `Finally` take an `Action`. An async lambda passed to them compiles as `async void`: the result comes back before the side effect, and an exception the side effect throws ends the process. Use `TapAsync`, `TapErrorAsync` and `FinallyAsync`; #184 Phase 2 changes this.
+- On `Result<T>` and on both task surfaces, `Tap`, `TapError` and `Finally` take an `Action`. An async lambda passed to them compiles as `async void`: the result comes back before the side effect, and an exception the side effect throws ends the process. Use `TapAsync`, `TapErrorAsync` and `FinallyAsync`. They exist only on `Result<T>`, not on `Task<Result<T>>` or `ValueTask<Result<T>>`: await the task first, then call them on the result, as in the block above. #184 Phase 2 changes this.
 - Async delegates return `Task`, never `ValueTask`. A method returning `ValueTask` is passed through an async lambda, as in Surface 1.
 - The async extensions take no `CancellationToken`; a delegate that needs one captures it.
 - The async extensions validate their arguments after the call has started: a `null` delegate throws at the `await`, not at the call. Phase 2 validates them first.
@@ -495,27 +499,42 @@ public sealed record DatabaseError()
 public sealed record TechnicalError()
     : Error(ErrorCode.Internal, "An internal error occurred.");
 
+public sealed record RemoteCallError()
+    : Error(ErrorCode.ExternalServiceFailure, "The remote service call failed.")
+{
+    public override ErrorCategory Category => ErrorCategory.External;
+}
+
 internal static partial class InfrastructureLog
 {
     [LoggerMessage(Level = LogLevel.Error, Message = "Database call failed")]
     public static partial void DatabaseCallFailed(this ILogger logger, Exception exception);
+
+    [LoggerMessage(Level = LogLevel.Error, Message = "Remote service call failed")]
+    public static partial void RemoteCallFailed(this ILogger logger, Exception exception);
 }
 ```
 
 For a call that takes no caller `CancellationToken`, such as a third-party client without one, use `Try` / `TryAsync` with a mapper. They catch every exception, a programming error included, and hand it to the mapper:
 
 ```csharp
-IError ToInfrastructureError(Exception ex)
+IError ToDatabaseError(Exception ex)
 {
     logger.DatabaseCallFailed(ex);
     return ex is DbException ? new DatabaseError() : new TechnicalError();
 }
 
-Result<User> result = Result<User>.Try(() => repository.GetUser(id), ToInfrastructureError);
+Result<User> result = Result<User>.Try(() => repository.GetUser(id), ToDatabaseError);
+
+IError ToRemoteCallError(Exception ex)
+{
+    logger.RemoteCallFailed(ex);
+    return ex is HttpRequestException ? new RemoteCallError() : new TechnicalError();
+}
 
 Result<User> loaded = await Result<User>.TryAsync(
     async () => await legacyClient.FetchUserAsync(id), // a third-party API with no CancellationToken
-    ToInfrastructureError);
+    ToRemoteCallError);
 ```
 
 For a call that takes one, catch only the infrastructure's exceptions at the boundary. Caller cancellation and programming errors then propagate; Microsoft's guidance is not to catch an exception your code cannot recover from:
@@ -527,7 +546,7 @@ public async ValueTask<Result<User>> GetUserAsync(Guid id, CancellationToken ct 
     {
         return Result.Success(await repository.GetUserAsync(id, ct).ConfigureAwait(false));
     }
-    catch (DbException ex) // the ADO.NET provider's exception; cancellation and bugs propagate
+    catch (DbException ex) when (!ct.IsCancellationRequested) // the ADO.NET provider's exception; caller cancellation, even one the provider throws as a DbException, and bugs propagate
     {
         logger.DatabaseCallFailed(ex);
         return Result.Failure<User>(new DatabaseError());
@@ -537,7 +556,7 @@ public async ValueTask<Result<User>> GetUserAsync(Guid id, CancellationToken ct 
 
 Current behavior that #184 Phase 2 changes:
 
-- Every `Try` / `TryAsync` overload catches `OperationCanceledException`. Phase 2 makes the overloads without a mapper rethrow it; with a mapper, the mapper decides, and the mapper above turns it into a `TechnicalError`. That is why `Try` / `TryAsync` are kept for calls that take no token.
+- Every `Try` / `TryAsync` overload catches `OperationCanceledException`. Phase 2 makes the overloads without a mapper rethrow it; with a mapper, the mapper decides, and the mappers above turn it into a `TechnicalError`. That is why `Try` / `TryAsync` are kept for calls that take no token.
 - Without a mapper, the error's message is `Exception.Message`. `ToHttpResult()` writes it to `ProblemDetails.Detail`, or to `errors[].message` inside a collection, and `ResultJsonConverter<T>` to `error.message`. Phase 2 replaces it with a generic message.
 
 ---

@@ -74,7 +74,9 @@ grep -rnP '\bVersion(Override)?\s*=|<Version(Override)?>' --include="*.csproj" .
 # Banned test library (root rule .claude/rules/testing-libraries.md), scoped to this module
 # and to the central file (any output is a BLOCK). NetArchTest's fluent assertion calls and the
 # architecture tests that check FluentAssertions is absent are not references.
-grep -rnE 'Include="FluentAssertions' --include="*.csproj" . ../../Directory.Packages.props
+grep -rnE 'Include="FluentAssertions' --include="*.csproj" .
+# The central file in its own command: --include also filters files named on the command line
+grep -nE 'Include="FluentAssertions' ../../Directory.Packages.props
 grep -rnE '^\s*(global )?using FluentAssertions' --include="*.cs" .
 
 # Forbidden cross-module MicroKit references in every csproj (any output is a BLOCK).
