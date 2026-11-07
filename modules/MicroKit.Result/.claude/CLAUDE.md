@@ -22,7 +22,7 @@ Une note d'écart décrit le comportement actuel. La PR d'une phase retire ou r�
   - Écarts, Phase 3 : `Result.Success<T>(null)` est un succès, et `Error.Category` vaut `Technical` quand elle n'est pas surchargée.
 - **Security : les détails internes n'atteignent jamais un client par défaut.**
   - `Error.Message` atteint le client : il reste sans danger pour lui. Les détails internes vont dans le log, pas dans `Metadata` : `ProblemDetails` et `ResultJsonConverter<T>` ne l'émettent pas, mais le `Result` non générique l'émet (ci-dessous) et la Phase 3 décide de son rôle.
-  - Écart, Phase 2 : `Try` / `TryAsync` sans mapper font de `Exception.Message` le message de l'erreur. Il atteint le client par `ProblemDetails.Detail` et `errors[].message` (`ToHttpResult`), et par `error.message` (`ResultJsonConverter<T>`). La Phase 2 le remplace par un message générique.
+  - Écart, Phase 2 : `Try` / `TryAsync` sans mapper font de `Exception.Message` le message de l'erreur. Il atteint le client par `ProblemDetails.Detail` et `errors[].message` (`ToHttpResult`), et par `error.message` (`ResultJsonConverter<T>`). La Phase 2 le remplace par un message générique. Cette erreur met aussi le nom complet du type de l'exception dans `Metadata` (`exceptionType`) ; la Phase 2 l'en retire, l'exception restant en mémoire pour le log.
   - Écart, Phase 5 : le `Result` non générique n'a pas de convertisseur JSON. Retourné tel quel par un endpoint, il est sérialisé propriété par propriété : un échec répond 200 avec `error.metadata`, un succès répond 500. Par `ToHttpResult()`, il n'expose rien de cela.
 - **Predictability : le synchrone et l'asynchrone se comportent de la même façon.**
   - Écarts, Phase 2 :

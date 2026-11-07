@@ -16,7 +16,7 @@ Tu lances les tests que tu écris avant de rendre la main.
 - **Framework**: xunit 2.9.3, la version épinglée dans `Directory.Packages.props`
 - **Assertions**: Shouldly (règle `.claude/rules/testing.md`)
 - **Mocking**: NSubstitute
-- **Propriétés**: FsCheck, que la Phase 1 ajoute à `Directory.Packages.props` (l'intégration qui correspond à la version épinglée de xunit). Il n'est pas encore référencé : ne pas supposer son API avant cet ajout
+- **Propriétés**: FsCheck.Xunit 3.6.0 (`Directory.Packages.props`), l'intégration xunit v2 qui correspond à xunit 2.9.3 ; `[Property(MaxTest = 100)]` écrit explicitement, comme dans `tests/MicroKit.Result.UnitTests/Properties/MonadLawTests.cs`
 
 Les benchmarks ne sont pas de ton ressort : la Phase 7 les écrit.
 

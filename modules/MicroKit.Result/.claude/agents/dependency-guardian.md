@@ -40,7 +40,7 @@ Allowed in one project only, each with its entry in the root `Directory.Packages
 | Package | Project | Why |
 |---|---|---|
 | `NetArchTest.Rules` | `MicroKit.Result.ArchitectureTests` | Architecture tests |
-| `FsCheck` (the integration matching the pinned xunit) | `MicroKit.Result.UnitTests` | #184 Phase 1: property tests |
+| `FsCheck.Xunit` (3.6.0, the xunit v2 integration matching the pinned xunit 2.9.3; not `FsCheck.Xunit.v3`) | `MicroKit.Result.UnitTests` | #184 Phase 1: property tests |
 | `BenchmarkDotNet` | `MicroKit.Result.PerformanceTests` | #184 Phase 7: benchmarks |
 | `ErrorOr`, `FluentResults` | `MicroKit.Result.PerformanceTests` | #184 Phase 7: compared libraries |
 
