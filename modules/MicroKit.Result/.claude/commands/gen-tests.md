@@ -30,7 +30,7 @@ Utilise l'agent `test-generator` pour la logique de génération. Les benchmarks
 - `[Theory]` avec `[InlineData]` pour les variantes de valeurs
 - Toujours tester, selon #184 Phase 1 (`rules/testing.md`) : success path, failure path, `default(Result)` et `default(Result<T>)`, null args, chained behavior
 - Lois de `Map` et `Bind` en tests de propriétés (FsCheck, ajouté par la Phase 1)
-- Défaut que la Phase 2 de #184 corrige : le test affirme le comportement corrigé et porte `Skip = "#184 phase 2"` ; un écart d'une phase ultérieure, ou sans phase, se teste tel qu'il est (`rules/testing.md`)
+- Défaut que la Phase 2 de #184 corrige : le test affirme le comportement corrigé et porte `Skip = "#184 phase 2"` ; un écart d'une phase ultérieure se teste tel qu'il est (`rules/testing.md`)
 - Aucun `Result` retourné n'est ignoré : il est assigné puis vérifié
 - Assertions Shouldly sur l'API de `Result` : `result.IsSuccess.ShouldBeTrue()`, `result.Value.ShouldBe(expected)`, `result.Error.ShouldBeOfType<TError>()`
 - Pas de `Thread.Sleep` — utiliser `Task.Delay` ou fake time

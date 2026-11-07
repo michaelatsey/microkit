@@ -35,6 +35,8 @@ dotnet add package MicroKit.Result --prerelease
 dotnet add package MicroKit.Result.AspNetCore --prerelease  # optional — Minimal APIs / MVC
 ```
 
+The published previews predate this documentation; releases are governed by ADR-GLOBAL-002.
+
 ---
 
 ## Quick Start
@@ -314,6 +316,9 @@ All async methods use `ConfigureAwait(false)`. Current behavior:
 - On `Result<T>` and on both task surfaces, `Tap`, `TapError` and `Finally` take an `Action`. An async lambda passed to them compiles as `async void`: the result comes back before the side effect, and an exception the side effect throws ends the process. Use `TapAsync`, `TapErrorAsync` and `FinallyAsync`; #184 Phase 2 changes this.
 - Async delegates return `Task`, never `ValueTask`. A method returning `ValueTask` is passed through an async lambda, as in Surface 1.
 - The async extensions take no `CancellationToken`; a delegate that needs one captures it.
+- The async extensions validate their arguments after the call has started: a `null` delegate throws at the `await`, not at the call. Phase 2 validates them first.
+
+The #184 Phase 3 ADR decides whether the async extensions take a `CancellationToken` and accept `ValueTask` delegates; Phase 4 applies it.
 
 ---
 
@@ -406,7 +411,7 @@ IEnumerable<IError> errors = results.Failures();
 Result<IReadOnlyList<Dto>> dtos = users.Traverse(u => MapToDto(u));
 ```
 
-`Successes` and `Failures` currently skip a `default` result, while `Partition` throws on it; no #184 phase changes this yet.
+`Successes` and `Failures` currently skip a `default` result, while `Partition` throws on it; #184 Phase 2 makes all three treat it alike.
 
 ---
 
@@ -471,7 +476,7 @@ Current behavior:
 
 - The factory converts `Result<T>` only. A non-generic `Result` returned as is from an endpoint is serialized property by property: a failure answers 200 with `error.metadata`, a success answers 500. Return it through `ToHttpResult()`; #184 Phase 5 adds the converter.
 - `error.message` is `IError.Message`, so the exception text of a `Try` / `TryAsync` error without a mapper; Phase 2 replaces it.
-- `Severity`, `Metadata` and the errors of an `ErrorCollection` are not written, a read error becomes a private type, and writing a `default` result throws.
+- `Severity`, `Metadata` and the errors of an `ErrorCollection` are not written, a read error becomes a private type, and writing a `default` result throws an unrelated exception. Phase 5 keeps those fields across a round trip and makes writing a `default` fail with a clear error.
 - Reading `{"isSuccess":true}` without `value` gives a success with no value; Phase 2 rejects it.
 
 ---

@@ -6,7 +6,7 @@ Remplace le pattern exception-as-flow par des types expressifs et composables.
 
 ## 🛡️ Garanties du module
 
-Chaque règle, skill, commande et agent de ce dossier sert ces cinq garanties. Où le code s'en écarte, ce fichier le dit et nomme la phase de #184 qui traite l'écart, ou « hors #184 » quand aucune phase ne le traite : l'écart devient alors sa propre issue. Les autres fichiers peuvent détailler un écart listé ici, jamais en ajouter un qui n'y est pas.
+Chaque règle, skill, commande et agent de ce dossier sert ces cinq garanties. Où le code s'en écarte, ce fichier le dit et nomme la phase de #184 qui traite l'écart. Un écart nouveau, qu'aucune phase ne traite, devient sa propre issue ou entre dans #184 avant d'être listé ici. Les autres fichiers peuvent détailler un écart listé ici, jamais en ajouter un qui n'y est pas.
 
 Une note d'écart décrit le comportement actuel. La PR d'une phase retire ou réécrit, dans la même PR, chaque note qu'elle résout : ici, dans `README.md`, `rules/`, `skills/`, `agents/` et `commands/` (`grep -rn "Phase <N>" .claude README.md`). Une note qui décrit un comportement corrigé fait échouer la review de la phase.
 
@@ -18,8 +18,8 @@ Une note d'écart décrit le comportement actuel. La PR d'une phase retire ou r�
     - `ResultJsonConverter<T>.Read` fait de `{"isSuccess":true}` sans `value` un succès sans valeur, et ignore un `error` à côté d'un `isSuccess` vrai.
     - `Result<T>.Try` et `TryAsync` avec un mapper qui retourne `null` donnent un échec dont `Error` est `null` (`ResultOfT.cs:139,179`).
     - Les filtres d'`ErrorCollection` (`WithCategory`, `WithSeverity`, `WithCode`, `OfType`, `Flatten`) peuvent construire une collection vide, que `From` interdit.
+    - `Successes` et `Failures` ignorent un résultat `default`, que `Partition` refuse en levant ; la Phase 2 les fait traiter de la même façon.
   - Écarts, Phase 3 : `Result.Success<T>(null)` est un succès, et `Error.Category` vaut `Technical` quand elle n'est pas surchargée.
-  - Écart hors #184 : `Successes` et `Failures` ignorent un résultat `default`, que `Partition` refuse en levant.
 - **Security : les détails internes n'atteignent jamais un client par défaut.**
   - `Error.Message` atteint le client : il reste sans danger pour lui. Les détails internes vont dans le log, pas dans `Metadata` : `ProblemDetails` et `ResultJsonConverter<T>` ne l'émettent pas, mais le `Result` non générique l'émet (ci-dessous) et la Phase 3 décide de son rôle.
   - Écart, Phase 2 : `Try` / `TryAsync` sans mapper font de `Exception.Message` le message de l'erreur. Il atteint le client par `ProblemDetails.Detail` et `errors[].message` (`ToHttpResult`), et par `error.message` (`ResultJsonConverter<T>`). La Phase 2 le remplace par un message générique.
@@ -28,19 +28,19 @@ Une note d'écart décrit le comportement actuel. La PR d'une phase retire ou r�
   - Écarts, Phase 2 :
     - `Tap`, `TapError` et `Finally` prennent une `Action`, sur `Result<T>` comme sur `Task<Result<T>>` et `ValueTask<Result<T>>` : un lambda async y compile en `async void`, le résultat revient avant l'effet, et une exception de l'effet termine le processus. `TapAsync`, `TapErrorAsync` et `FinallyAsync` l'attendent.
     - `Try` et `TryAsync` sans mapper capturent `OperationCanceledException` ; la Phase 2 les fait relancer. Avec un mapper, le mapper décide, et `DatabaseExceptionMapper` (`rules/csharp-style.md`) en fait une erreur : `Try` et `TryAsync` ne servent pas un appel annulable, et leur lambda ne capture pas de `CancellationToken`.
+    - Les extensions async valident leurs arguments dans leur partie async : `MapAsync(null)` lève à l'`await`, `Map(null)` à l'appel. La Phase 2 les valide avant le premier `await`.
   - Écart, Phase 4 : le `Result` non générique n'a que `Match`, `Tap`, `TapError` et `Finally`, et aucun async hors `TryAsync`.
-  - Écarts hors #184 :
+  - Écarts, Phase 3 (décision de l'ADR) puis Phase 4 (mise en œuvre) :
     - Les délégués async des extensions retournent `Task`, jamais `ValueTask` : un port `ValueTask<Result<T>>` s'y passe par un lambda async, `async x => await port(x, ct)`.
     - Aucune extension async ne prend de `CancellationToken` : un délégué qui en a besoin le capture.
-    - Les extensions async valident leurs arguments dans leur partie async : `MapAsync(null)` lève à l'`await`, `Map(null)` à l'appel.
 - **Interoperability : les préoccupations HTTP restent hors du cœur.**
   - `MicroKit.Result` ne référence pas ASP.NET Core (test `Core_DoesNotReferenceAspNetCore`) ; le mapping HTTP vit dans `MicroKit.Result.AspNetCore`.
   - Écarts, Phase 3 : la doc XML d'`ErrorCategory` cite des statuts HTTP et décrit `Cancelled` comme une annulation de l'appelant, que les règles interdisent de convertir en erreur ; la Phase 3 fixe le rôle de `Category`.
-  - Écart hors #184 : `ResultJsonConverter<T>` perd `Severity`, `Metadata` et les erreurs d'une `ErrorCollection` ; il désérialise une erreur en un type privé, et lève en sérialisant un `default`.
+  - Écart, Phase 5 : `ResultJsonConverter<T>` perd `Severity`, `Metadata` et les erreurs d'une `ErrorCollection` ; il désérialise une erreur en un type privé, et lève une exception sans rapport en sérialisant un `default`. La Phase 5 conserve ces champs sur un aller-retour, et fait échouer la sérialisation d'un `default` avec une erreur claire.
   - Écarts, Phases 2 et 5 : le contrat HTTP lui-même (`rules/result-patterns.md`). En Phase 5 aussi, le commentaire de `ResultProblemDetailsFactory.cs:65` dit qu'aucune constante `StatusCodes` n'existe pour 499, alors que `StatusCodes.Status499ClientClosedRequest` existe.
 - **Performance : toute affirmation est mesurée.**
   - Écart : aucun benchmark n'existe, `tests/MicroKit.Result.PerformanceTests` ne contient que son `.csproj`. La Phase 7 publie les mesures. D'ici là, une affirmation de performance est une hypothèse et se présente comme telle.
-  - Écart hors #184 : le constructeur d'`ErrorCollection` construit `Message` par LINQ (`ErrorCollection.cs:27`), ce que la checklist de `agents/dotnet-reviewer.md` bloque dans un nouveau code.
+  - Écart, Phase 7 : le constructeur d'`ErrorCollection` construit `Message` par LINQ (`ErrorCollection.cs:27`), ce que la checklist de `agents/dotnet-reviewer.md` bloque dans un nouveau code. La Phase 7 mesure ce chemin, et il ne change que si la mesure en montre le coût.
 
 ## 🏛️ Philosophie Architecturale
 

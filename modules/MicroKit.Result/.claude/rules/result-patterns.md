@@ -229,7 +229,7 @@ public async ValueTask<Result<T>> ProcessAsync(
     CancellationToken ct = default)  // ← toujours avec default
 ```
 
-La règle vaut pour le code qui appelle la librairie et pour une nouvelle méthode qui fait elle-même un appel annulable. Les extensions async de la librairie (`MapAsync`, `BindAsync`…) ne prennent pas de `CancellationToken` : un délégué qui en a besoin le capture (écart hors #184, `.claude/CLAUDE.md`).
+La règle vaut pour le code qui appelle la librairie et pour une nouvelle méthode qui fait elle-même un appel annulable. Les extensions async de la librairie (`MapAsync`, `BindAsync`…) ne prennent pas de `CancellationToken` : un délégué qui en a besoin le capture. L'ADR de la Phase 3 de #184 décide s'ils en prennent un, la Phase 4 l'applique (écart, `.claude/CLAUDE.md`).
 
 ## Anti-patterns stricts
 
