@@ -90,12 +90,12 @@ Result<User> activeLazy = userResult
 ### ✅ MapError et Compensate sur le rail d'échec
 ```csharp
 // MapError : transformer l'erreur, sans changer de rail
-Result<Order> enriched = orderResult.MapError(e => new EnrichedError(e, correlationId));
+Result<Order> enriched = orderResult.MapError(e => EnrichedError.Enrich(e, correlationId));
 // Compensate : revenir sur le rail de succès par une valeur de repli
 Result<Product> product = productResult.Compensate(_ => GetDefaultProduct());
 ```
 
-Une erreur qui en enveloppe une autre reprend sa `Category`, sa `Severity` et ses `Metadata` ; sinon elle vaut `Technical` et répond 500 (`samples/MicroKit.Result.Samples/Guide/Composing.cs`).
+Une erreur qui en enveloppe une autre reprend sa `Category`, sa `Severity` et ses `Metadata` ; sinon elle vaut `Technical` et répond 500 (`samples/MicroKit.Result.Samples/Guide/Composing.cs`). Elle n'enveloppe qu'une erreur seule, jamais une `ErrorCollection` : enveloppée entière, la collection deviendrait une erreur portant sa catégorie et son `Message` joint, et un 401 montrerait ses messages de validation. `EnrichedError.Enrich` enrichit chaque erreur d'une collection et la reconstruit.
 
 ### ✅ TapError pour gérer les side-effects sur l'échec
 ```csharp
@@ -156,7 +156,7 @@ toute autre valeur              → 500 Internal Server Error
 
 L'annulation demandée par l'appelant se propage (`rules/no-exceptions-flow.md`) : elle ne devient jamais une erreur `ErrorCategory.Cancelled`.
 
-Une erreur de validation, seule ou dans une `ErrorCollection`, répond en `HttpValidationProblemDetails` : `errors` regroupe ses messages par `PropertyName` (`{ "Email": ["..."] }`) ; seule une réponse `Validation` ou `BusinessRule` en porte, jamais une erreur d'accès, de ressource ou du système. Une `ErrorCollection` liste le code de chacune de ses erreurs dans `errorCodes` ; sur une réponse d'une autre catégorie que `Validation` ou `BusinessRule`, `detail` et `errorCodes` ne nomment que ses erreurs de la catégorie retenue : un appelant non authentifié ne reçoit ni message, ni code, ni nom de propriété de validation. Cela vaut pour l'`ErrorCollection` elle-même : une erreur qui l'enveloppe et reprend son `Message` (`EnrichedError`) est une erreur seule, dont `detail` porte tous les messages de la collection, ceux de validation compris. Une `ErrorCollection` répond avec la catégorie que partagent ses erreurs ; sinon avec celle de plus haute préséance (`.claude/CLAUDE.md`, garantie interoperability), quel que soit leur ordre : un 500 ne se cache pas derrière un 422, ni un 401 derrière un 422.
+Une erreur de validation, seule ou dans une `ErrorCollection`, répond en `HttpValidationProblemDetails` : `errors` regroupe ses messages par `PropertyName` (`{ "Email": ["..."] }`) ; seule une réponse `Validation` ou `BusinessRule` en porte, jamais une erreur d'accès, de ressource ou du système. Une `ErrorCollection` liste le code de chacune de ses erreurs dans `errorCodes` ; sur une réponse d'une autre catégorie que `Validation` ou `BusinessRule`, `detail` et `errorCodes` ne nomment que ses erreurs de la catégorie retenue : un appelant non authentifié ne reçoit ni message, ni code, ni nom de propriété de validation. Une `ErrorCollection` répond avec la catégorie que partagent ses erreurs ; sinon avec celle de plus haute préséance (`.claude/CLAUDE.md`, garantie interoperability), quel que soit leur ordre : un 500 ne se cache pas derrière un 422, ni un 401 derrière un 422.
 
 `ToHttpResult`, `ToCreatedHttpResult(location)` et `ToAcceptedHttpResult(location)` retournent des `TypedResults` (`Results<Ok<T>, ProblemHttpResult>`…) : OpenAPI voit le type du succès ; les réponses problem se déclarent par `ProducesProblem(status)`. Les problem details passent par l'`IProblemDetailsService` de l'hôte (`AddProblemDetails`), donc `CustomizeProblemDetails` et le `traceId` s'appliquent ; `type` est la section qu'ASP.NET Core connaît pour le statut (RFC 9110, RFC 4918 pour 422), absente pour 429 et 499. `Timeout` répond 504 : l'opération, typiquement un appel à une dépendance, n'a pas abouti à temps ; 408 accuserait la requête du client.
 

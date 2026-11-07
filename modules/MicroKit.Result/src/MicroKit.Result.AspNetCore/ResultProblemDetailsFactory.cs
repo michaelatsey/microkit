@@ -33,9 +33,7 @@ public static class ResultProblemDetailsFactory
     /// <see cref="ProblemDetails.Detail"/> and <c>errorCodes</c> are built only from its errors (nested collections
     /// flattened, in order) whose category is the collection's: <see cref="ProblemDetails.Detail"/> joins their
     /// messages with <c>"; "</c>. An unauthenticated caller, for one, receives no validation message, code or
-    /// property name. The filter applies to an <see cref="ErrorCollection"/> only: an error that wraps a collection
-    /// and copies its <see cref="IError.Message"/> is a single error, and that message, every error's included, is
-    /// its <see cref="ProblemDetails.Detail"/>.
+    /// property name.
     /// </para>
     /// <para>
     /// <see cref="ProblemDetails.Type"/> is left unset: when the response is written, ASP.NET Core fills it with the

@@ -289,6 +289,32 @@ public sealed class ProblemDetailsContractTests
         body.ShouldNotContain("Password", Case.Sensitive);
     }
 
+    // The guide's MapError pattern (docs/guides/usage.md, "Work on the failure rail with MapError and Compensate"):
+    // a collection is enriched error by error, so category filtering still applies.
+    [Fact]
+    public async Task ToHttpResult_WhenEnrichedCollectionMixesUnauthorizedAndValidation_BodyNamesNoValidationError()
+    {
+        // Arrange
+        var unauthorized = new NamedTestError(ErrorCategory.Unauthorized);
+        Result<int> failed = Result.Failure<int>(ErrorCollection.From(ValidationError.Required("Email"), unauthorized));
+        Result<int> enriched = failed.MapError(e => EnrichedError.Enrich(e, "corr-1"));
+        await using var host = await ResultHttpHost.StartAsync(app =>
+            app.MapPost("/users", () => enriched.ToHttpResult()));
+
+        // Act
+        using var response = await host.Client.PostAsync(new Uri("/users", UriKind.Relative), null);
+        var body = await response.Content.ReadAsStringAsync();
+        using var json = JsonDocument.Parse(body);
+
+        // Assert
+        response.StatusCode.ShouldBe(HttpStatusCode.Unauthorized);
+        json.RootElement.TryGetProperty("errors", out _).ShouldBeFalse();
+        json.RootElement.GetProperty("detail").GetString().ShouldBe(unauthorized.Message);
+        body.ShouldNotContain("VALIDATION.", Case.Sensitive);
+        body.ShouldNotContain("Email", Case.Sensitive);
+        body.ShouldNotContain("is required", Case.Sensitive);
+    }
+
     [Fact]
     public void CreateProblemDetails_WhenValidationErrorHasNullPropertyName_GroupsItUnderEmptyKey()
     {
@@ -313,6 +339,21 @@ public sealed class ProblemDetailsContractTests
         public ErrorSeverity Severity => ErrorSeverity.Warning;
 
         public IReadOnlyDictionary<string, object?> Metadata => ErrorMetadata.Empty;
+    }
+
+    // Copy of the guide's application wrapper (samples/MicroKit.Result.Samples/Guide/Composing.cs).
+    private sealed record EnrichedError(IError Inner, string CorrelationId) : Error(Inner.Code, Inner.Message)
+    {
+        public override ErrorCategory Category => Inner.Category;
+
+        public override ErrorSeverity Severity => Inner.Severity;
+
+        public override IReadOnlyDictionary<string, object?> Metadata =>
+            new ErrorMetadataBuilder().Merge(Inner.Metadata).WithCorrelationId(CorrelationId).Build();
+
+        public static IError Enrich(IError error, string correlationId) => error is ErrorCollection collection
+            ? ErrorCollection.From(collection.Select(e => Enrich(e, correlationId)))
+            : new EnrichedError(error, correlationId);
     }
 
     private sealed record NamedTestError(ErrorCategory Kind)

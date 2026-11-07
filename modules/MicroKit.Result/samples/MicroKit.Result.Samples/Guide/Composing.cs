@@ -49,14 +49,15 @@ internal static class ComposingSamples
     {
         // MapError: replace the error, stay on the failure rail
         Result<Order> enriched = GetOrder(id)
-            .MapError(e => new EnrichedError(e, correlationId));
+            .MapError(e => EnrichedError.Enrich(e, correlationId));
 
         // Compensate: return to the success rail with a fallback
         Result<Product> product = GetProduct(id)
             .Compensate(_ => GetDefaultProduct());
     }
 
-    // A wrapper forwards the wrapped error's category, severity and metadata
+    // A wrapper forwards the wrapped error's category, severity and metadata. It wraps a single error:
+    // Enrich rebuilds a collection from its errors, each enriched, nested collections included
     internal sealed record EnrichedError(IError Inner, string CorrelationId) : Error(Inner.Code, Inner.Message)
     {
         public override ErrorCategory Category => Inner.Category;
@@ -65,6 +66,10 @@ internal static class ComposingSamples
 
         public override IReadOnlyDictionary<string, object?> Metadata =>
             new ErrorMetadataBuilder().Merge(Inner.Metadata).WithCorrelationId(CorrelationId).Build();
+
+        public static IError Enrich(IError error, string correlationId) => error is ErrorCollection collection
+            ? ErrorCollection.From(collection.Select(e => Enrich(e, correlationId)))
+            : new EnrichedError(error, correlationId);
     }
 
     internal static string DescribeSample(Guid id)

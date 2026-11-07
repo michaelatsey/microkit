@@ -173,7 +173,7 @@ A side effect does not transform. It never changes the value or the object the v
 ```csharp
 // MapError: replace the error, stay on the failure rail
 Result<Order> enriched = GetOrder(id)
-    .MapError(e => new EnrichedError(e, correlationId));
+    .MapError(e => EnrichedError.Enrich(e, correlationId));
 
 // Compensate: return to the success rail with a fallback
 Result<Product> product = GetProduct(id)
@@ -182,8 +182,11 @@ Result<Product> product = GetProduct(id)
 
 `EnrichedError` is an application type. A wrapper forwards the `Category`, `Severity` and `Metadata` of the error it wraps. Without them it would be a `Technical` error, and HTTP would answer 500.
 
+A wrapper wraps a single error, never an `ErrorCollection`. Wrapped whole, a collection would become one error carrying the collection's category and its joined `Message`, every error's included; a 401 would then show the validation messages it holds. `Enrich` enriches each error of a collection and rebuilds it, so its category and its HTTP response still see each error.
+
 ```csharp
-// A wrapper forwards the wrapped error's category, severity and metadata
+// A wrapper forwards the wrapped error's category, severity and metadata. It wraps a single error:
+// Enrich rebuilds a collection from its errors, each enriched, nested collections included
 internal sealed record EnrichedError(IError Inner, string CorrelationId) : Error(Inner.Code, Inner.Message)
 {
     public override ErrorCategory Category => Inner.Category;
@@ -192,6 +195,10 @@ internal sealed record EnrichedError(IError Inner, string CorrelationId) : Error
 
     public override IReadOnlyDictionary<string, object?> Metadata =>
         new ErrorMetadataBuilder().Merge(Inner.Metadata).WithCorrelationId(CorrelationId).Build();
+
+    public static IError Enrich(IError error, string correlationId) => error is ErrorCollection collection
+        ? ErrorCollection.From(collection.Select(e => Enrich(e, correlationId)))
+        : new EnrichedError(error, correlationId);
 }
 ```
 
@@ -423,7 +430,7 @@ public sealed record PaymentDeclinedError(Guid PaymentId, string ProviderReferen
 
 Put internal details in the log or in `Metadata`, never in `Message`.
 
-To add context to an existing error, wrap it, as [`EnrichedError`](#work-on-the-failure-rail-with-maperror-and-compensate) does.
+To add context to an existing error, wrap it, one error at a time, as [`EnrichedError`](#work-on-the-failure-rail-with-maperror-and-compensate) does.
 
 ### Inspect an error
 
@@ -781,7 +788,7 @@ A validation error, alone or in an `ErrorCollection`, answers an `HttpValidation
 }
 ```
 
-Only a `Validation` or `BusinessRule` response describes the request's input. An `ErrorCollection` that mixes a validation error with a `Technical` one answers 500, with an `Unauthorized` one 401, with a `NotFound` one 404. That response has no `errors`, and its `detail` and `errorCodes` come only from the errors of the chosen category, nested collections flattened: `detail` joins their messages with `"; "`. An unauthenticated caller receives no validation message, code or property name. This holds for an `ErrorCollection` itself: a wrapper that copies a collection's `Message`, as [`EnrichedError`](#work-on-the-failure-rail-with-maperror-and-compensate) does, is a single error, and its `detail` carries every message of the collection, the validation ones included.
+Only a `Validation` or `BusinessRule` response describes the request's input. An `ErrorCollection` that mixes a validation error with a `Technical` one answers 500, with an `Unauthorized` one 401, with a `NotFound` one 404. That response has no `errors`, and its `detail` and `errorCodes` come only from the errors of the chosen category, nested collections flattened: `detail` joins their messages with `"; "`. An unauthenticated caller receives no validation message, code or property name.
 
 ### Use the factory directly
 
