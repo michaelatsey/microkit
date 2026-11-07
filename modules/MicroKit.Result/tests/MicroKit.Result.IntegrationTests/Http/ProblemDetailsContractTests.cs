@@ -213,11 +213,11 @@ public sealed class ProblemDetailsContractTests
     }
 
     [Fact]
-    public async Task ToHttpResult_WhenErrorIsACollection_ResponseListsEveryCodeInOrder()
+    public async Task ToHttpResult_WhenValidationCollectionIsNested_ResponseListsEveryCodeInOrder()
     {
         // Arrange
-        var inner = ErrorCollection.From(new CategorizedTestError(ErrorCategory.Conflict), ValidationError.Required("Name"));
-        var errors = ErrorCollection.From(new CategorizedTestError(ErrorCategory.Conflict), inner);
+        var inner = ErrorCollection.From(new CategorizedTestError(ErrorCategory.BusinessRule), ValidationError.Required("Name"));
+        var errors = ErrorCollection.From(ValidationError.Required("Email"), inner);
         await using var host = await ResultHttpHost.StartAsync(app =>
             app.MapPost("/orders", () => Result.Failure(errors).ToHttpResult()));
 
@@ -225,9 +225,68 @@ public sealed class ProblemDetailsContractTests
         using var response = await host.Client.PostAsync(new Uri("/orders", UriKind.Relative), null);
         using var json = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
 
-        // Assert
+        // Assert: a Validation or BusinessRule response names every error
+        response.StatusCode.ShouldBe(HttpStatusCode.UnprocessableEntity);
         json.RootElement.GetProperty("errorCodes").EnumerateArray().Select(c => c.GetString())
-            .ShouldBe(["TEST.CATEGORIZED", "TEST.CATEGORIZED", "VALIDATION.NAME"]);
+            .ShouldBe(["VALIDATION.EMAIL", "TEST.CATEGORIZED", "VALIDATION.NAME"]);
+        json.RootElement.GetProperty("detail").GetString()
+            .ShouldBe("Email is required.; A categorized test error.; Name is required.");
+    }
+
+    [Fact]
+    public async Task ToHttpResult_WhenNonValidationCollectionIsNested_ResponseListsOnlyTheChosenCategorysCodesInOrder()
+    {
+        // Arrange
+        var inner = ErrorCollection.From(new CategorizedTestError(ErrorCategory.Conflict), ValidationError.Required("Name"));
+        var errors = ErrorCollection.From(new CategorizedTestError(ErrorCategory.Conflict), inner, new CategorizedTestError(ErrorCategory.Cancelled));
+        await using var host = await ResultHttpHost.StartAsync(app =>
+            app.MapPost("/orders", () => Result.Failure(errors).ToHttpResult()));
+
+        // Act
+        using var response = await host.Client.PostAsync(new Uri("/orders", UriKind.Relative), null);
+        using var json = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+
+        // Assert: nested collections are flattened, and only the Conflict errors are named, not the Validation or Cancelled one
+        response.StatusCode.ShouldBe(HttpStatusCode.Conflict);
+        json.RootElement.GetProperty("errorCodes").EnumerateArray().Select(c => c.GetString())
+            .ShouldBe(["TEST.CATEGORIZED", "TEST.CATEGORIZED"]);
+        json.RootElement.GetProperty("detail").GetString()
+            .ShouldBe("A categorized test error.; A categorized test error.");
+    }
+
+    // A non-validation response says nothing of the request's input: no field errors, and neither detail nor
+    // errorCodes name a validation error, whatever the order.
+    [Theory]
+    [InlineData(ErrorCategory.Unauthorized, HttpStatusCode.Unauthorized, false)]
+    [InlineData(ErrorCategory.Unauthorized, HttpStatusCode.Unauthorized, true)]
+    [InlineData(ErrorCategory.NotFound, HttpStatusCode.NotFound, false)]
+    [InlineData(ErrorCategory.NotFound, HttpStatusCode.NotFound, true)]
+    public async Task ToHttpResult_WhenCollectionMixesValidationWithAClientError_BodyNamesOnlyThatError(
+        ErrorCategory category, HttpStatusCode expected, bool validationFirst)
+    {
+        // Arrange
+        var clientError = new NamedTestError(category);
+        IError[] mixed = validationFirst
+            ? [ValidationError.Required("Email"), clientError, ValidationError.Required("Password")]
+            : [clientError, ValidationError.Required("Email"), ValidationError.Required("Password")];
+        var errors = ErrorCollection.From(mixed);
+        await using var host = await ResultHttpHost.StartAsync(app =>
+            app.MapPost("/users", () => Result.Failure(errors).ToHttpResult()));
+
+        // Act
+        using var response = await host.Client.PostAsync(new Uri("/users", UriKind.Relative), null);
+        var body = await response.Content.ReadAsStringAsync();
+        using var json = JsonDocument.Parse(body);
+
+        // Assert
+        response.StatusCode.ShouldBe(expected);
+        json.RootElement.TryGetProperty("errors", out _).ShouldBeFalse();
+        json.RootElement.GetProperty("detail").GetString().ShouldBe(clientError.Message);
+        json.RootElement.GetProperty("errorCodes").EnumerateArray().Select(c => c.GetString())
+            .ShouldBe([clientError.Code.Value]);
+        body.ShouldNotContain("VALIDATION.", Case.Sensitive);
+        body.ShouldNotContain("Email", Case.Sensitive);
+        body.ShouldNotContain("Password", Case.Sensitive);
     }
 
     [Fact]
@@ -254,6 +313,12 @@ public sealed class ProblemDetailsContractTests
         public ErrorSeverity Severity => ErrorSeverity.Warning;
 
         public IReadOnlyDictionary<string, object?> Metadata => ErrorMetadata.Empty;
+    }
+
+    private sealed record NamedTestError(ErrorCategory Kind)
+    : Error(ErrorCode.From($"TEST.{Kind}".ToUpperInvariant()), $"The {Kind} test error.")
+    {
+        public override ErrorCategory Category => Kind;
     }
 
     private sealed record CategorizedTestError(ErrorCategory Kind)

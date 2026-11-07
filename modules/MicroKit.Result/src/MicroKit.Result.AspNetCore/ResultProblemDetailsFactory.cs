@@ -19,15 +19,23 @@ public static class ResultProblemDetailsFactory
     /// collections included), the result is an <see cref="HttpValidationProblemDetails"/> whose
     /// <see cref="HttpValidationProblemDetails.Errors"/> groups the validation messages by
     /// <see cref="IValidationError.PropertyName"/>, each property's messages in order; other errors are not listed
-    /// there. Any other category — a server, access or resource error — never carries field errors, whatever errors a
-    /// collection also holds; its <see cref="ProblemDetails.Detail"/> and <c>errorCodes</c> still name every error of
-    /// the collection, validation errors included (below). Otherwise the result is a <see cref="ProblemDetails"/>.
+    /// there. Otherwise the result is a <see cref="ProblemDetails"/>.
     /// </para>
     /// <para>
     /// <see cref="ProblemDetails.Detail"/> is <see cref="IError.Message"/>, which the error contract keeps safe for
     /// a client; <see cref="IError.Metadata"/> is never emitted. The extension <c>errorCode</c> carries
     /// <see cref="IError.Code"/>; for an <see cref="ErrorCollection"/>, the extension <c>errorCodes</c> lists the
     /// codes of its errors, nested collections flattened, in order.
+    /// </para>
+    /// <para>
+    /// A response of any other category — a server, access or resource error — says nothing of the request's input,
+    /// whatever errors a collection also holds: it carries no field errors, and for an <see cref="ErrorCollection"/>,
+    /// <see cref="ProblemDetails.Detail"/> and <c>errorCodes</c> are built only from its errors (nested collections
+    /// flattened, in order) whose category is the collection's: <see cref="ProblemDetails.Detail"/> joins their
+    /// messages with <c>"; "</c>. An unauthenticated caller, for one, receives no validation message, code or
+    /// property name. The filter applies to an <see cref="ErrorCollection"/> only: an error that wraps a collection
+    /// and copies its <see cref="IError.Message"/> is a single error, and that message, every error's included, is
+    /// its <see cref="ProblemDetails.Detail"/>.
     /// </para>
     /// <para>
     /// <see cref="ProblemDetails.Type"/> is left unset: when the response is written, ASP.NET Core fills it with the
@@ -42,11 +50,10 @@ public static class ResultProblemDetailsFactory
         ArgumentNullException.ThrowIfNull(error);
 
         var statusCode = ToStatusCode(error.Category);
-        // Field errors describe the request's input: only a Validation or BusinessRule response carries them, never
-        // an access, resource or server error, whatever errors a collection also holds.
-        var fieldErrors = error.Category is ErrorCategory.Validation or ErrorCategory.BusinessRule
-            ? GroupValidationErrors(error)
-            : null;
+        // The request's input is described only by a Validation or BusinessRule response: an access, resource or
+        // server response names neither field errors nor any error outside its own category.
+        var describesInput = error.Category is ErrorCategory.Validation or ErrorCategory.BusinessRule;
+        var fieldErrors = describesInput ? GroupValidationErrors(error) : null;
 
         var problemDetails = fieldErrors is null
             ? new ProblemDetails()
@@ -57,7 +64,17 @@ public static class ResultProblemDetailsFactory
         problemDetails.Detail = error.Message;
         problemDetails.Extensions["errorCode"] = error.Code.Value;
         if (error is ErrorCollection collection)
-            problemDetails.Extensions["errorCodes"] = collection.Flatten().Select(e => e.Code.Value).ToArray();
+        {
+            IEnumerable<IError> named = collection.Flatten();
+            if (!describesInput)
+            {
+                var category = collection.Category;
+                named = named.Where(e => e.Category == category).ToArray(); // never empty: the category is a leaf's
+                problemDetails.Detail = string.Join("; ", named.Select(e => e.Message));
+            }
+
+            problemDetails.Extensions["errorCodes"] = named.Select(e => e.Code.Value).ToArray();
+        }
 
         return problemDetails;
     }

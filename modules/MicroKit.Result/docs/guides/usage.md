@@ -765,7 +765,7 @@ A lambda that returns both `ToHttpResult()` and another typed result, such as `T
 }
 ```
 
-A validation error, alone or in an `ErrorCollection`, answers an `HttpValidationProblemDetails`. Its `errors` groups the messages by `PropertyName`, so a front end can attach them to form fields. For an `ErrorCollection`, `errorCodes` lists the code of each error, nested collections flattened.
+A validation error, alone or in an `ErrorCollection`, answers an `HttpValidationProblemDetails`. Its `errors` groups the messages by `PropertyName`, so a front end can attach them to form fields. For an `ErrorCollection` answered as `Validation` or `BusinessRule`, `errorCodes` lists the code of each error, nested collections flattened.
 
 ```json
 {
@@ -781,7 +781,7 @@ A validation error, alone or in an `ErrorCollection`, answers an `HttpValidation
 }
 ```
 
-Only a `Validation` or `BusinessRule` response carries field errors. An `ErrorCollection` that mixes a validation error with a `Technical` one answers 500, with an `Unauthorized` one 401, with a `NotFound` one 404, each without `errors`; `detail` and `errorCodes` still give every error's message and code, the validation ones included.
+Only a `Validation` or `BusinessRule` response describes the request's input. An `ErrorCollection` that mixes a validation error with a `Technical` one answers 500, with an `Unauthorized` one 401, with a `NotFound` one 404. That response has no `errors`, and its `detail` and `errorCodes` come only from the errors of the chosen category, nested collections flattened: `detail` joins their messages with `"; "`. An unauthenticated caller receives no validation message, code or property name. This holds for an `ErrorCollection` itself: a wrapper that copies a collection's `Message`, as [`EnrichedError`](#work-on-the-failure-rail-with-maperror-and-compensate) does, is a single error, and its `detail` carries every message of the collection, the validation ones included.
 
 ### Use the factory directly
 

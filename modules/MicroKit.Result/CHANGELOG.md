@@ -47,7 +47,8 @@ Hardening before stable (#184). Breaking changes ship outright on `preview.*` (A
   Precedence, highest first: faults of the system (`Technical`, `External`, `Unavailable`, `Timeout`, `NotSupported`, undefined values), then `Unauthorized` and `Forbidden`, then `NotFound`, `Conflict`, `PreconditionFailed` and `TooManyRequests`, then `Cancelled`, then `Validation` and `BusinessRule`;
   inside a group, the category declared first in `ErrorCategory` wins.
 - `ToHttpResult()` writes grouped field errors only when the category is `Validation` or `BusinessRule`: a
-  collection that also holds an access, resource or server error answers that error, without `errors`.
+  collection that also holds an access, resource or server error answers that error, without `errors`, and
+  its `detail` and `errorCodes` name only the errors of that category.
 - `ResultJsonConverter<T>.Read` throws `JsonException` for a payload that does not describe a valid
   result: a success without `value` or with `error`, a failure without `error` or with `value`, a
   duplicate `isSuccess`, an error without a non-empty `code` (missing, `null` or empty), a duplicate metadata
@@ -57,7 +58,8 @@ Hardening before stable (#184). Breaking changes ship outright on `preview.*` (A
 - `ToHttpResult()` / `ResultProblemDetailsFactory.CreateProblemDetails`: a validation error, alone or in
   an `ErrorCollection`, answers an `HttpValidationProblemDetails` whose `errors` groups the messages by
   `PropertyName`; a 5xx response carries no field errors. The previous `errors` list of `{ code, message }`
-  is replaced by `errorCodes`, the code of each error of an `ErrorCollection`, nested ones flattened.
+  is replaced by `errorCodes`, the code of each error of an `ErrorCollection`, nested ones flattened (on a
+  non-validation response, only those of its category).
 - `Result<T>.Success` (and `Result.Success<T>`) throw `ArgumentException` when the value is itself a result,
   as the implicit conversion does.
 - `ExceptionError.ToString()` prints its code, message and category, never the exception.
