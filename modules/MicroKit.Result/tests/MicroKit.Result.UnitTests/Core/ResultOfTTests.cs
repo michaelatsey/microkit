@@ -33,14 +33,12 @@ public sealed class ResultOfTTests
     }
 
     [Fact]
-    public void Success_WhenValueIsNull_IsSuccessWithNullValue()
+    public void Success_WhenValueIsNull_ThrowsArgumentNullException()
     {
-        // Act — Phase 3 of #184 decides on a null success value; today it is accepted
-        Result<string> result = Result.Success<string>(null!);
-
-        // Assert
-        result.IsSuccess.ShouldBeTrue();
-        result.Value.ShouldBeNull();
+        // Act + Assert — ADR-RESULT-001 D6: absence is a failure, not a null value
+        Should.Throw<ArgumentNullException>(() => Result.Success<string>(null!)).ParamName.ShouldBe("value");
+        Should.Throw<ArgumentNullException>(() => Result<int?>.Success(null));
+        Should.Throw<ArgumentNullException>(() => { Result<string> converted = (string)null!; return converted; });
     }
 
     [Fact]
@@ -783,7 +781,7 @@ public sealed class ResultOfTTests
         Result<int> result = Result.Success(5);
 
         // Act
-        var equal = result.Equals(null);
+        var equal = result.Equals((object?)null); // a bare null binds to Equals(Result) through the conversion from Error (CS0037)
 
         // Assert
         equal.ShouldBeFalse();

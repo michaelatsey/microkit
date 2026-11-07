@@ -19,16 +19,17 @@ internal static class ValidationSamples
         ];
     }
 
-    internal static void ValidationResultSample(string name, int age, string email)
+    internal static Result<Order> ValidationResultSample(string name, int age, string email)
     {
         var validation = new ValidationResult()
             .AddErrorIf(string.IsNullOrEmpty(name), "Name", "Name is required.")
             .AddErrorIf(age < 0, "Age", "Age must be non-negative.")
             .AddErrorIf(!email.Contains('@'), "Email", "Email is not a valid email address.");
 
-        Result<Order> result = validation.IsValid
-            ? CreateOrder(name, age, email)
-            : Result.Failure<Order>(validation.ToResult().Error);
+        if (!validation.IsValid)
+            return validation.ToResult<Order>(); // a failure holding every validation error
+
+        return CreateOrder(name, age, email);
     }
 
     internal sealed record Order;

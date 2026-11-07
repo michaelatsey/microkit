@@ -1,49 +1,54 @@
 namespace MicroKit.Result;
 
 /// <summary>
-/// Categorizes errors for HTTP status code mapping and error handling strategies.
+/// The kind of failure an error reports. It is the only input to a transport's status: the HTTP mapping lives in
+/// <c>MicroKit.Result.AspNetCore</c> (<c>ResultProblemDetailsFactory.ToStatusCode</c>), not in the core.
 /// </summary>
 public enum ErrorCategory
 {
-    /// <summary>The requested resource was not found (HTTP 404).</summary>
+    /// <summary>The requested resource does not exist.</summary>
     NotFound,
 
-    /// <summary>Input validation failed (HTTP 422).</summary>
+    /// <summary>The input is invalid.</summary>
     Validation,
 
-    /// <summary>Authentication is required (HTTP 401).</summary>
+    /// <summary>The caller is not authenticated.</summary>
     Unauthorized,
 
-    /// <summary>The authenticated user lacks permission (HTTP 403).</summary>
+    /// <summary>The authenticated caller may not perform the operation.</summary>
     Forbidden,
 
-    /// <summary>A resource conflict occurred (HTTP 409).</summary>
+    /// <summary>The operation conflicts with the current state of a resource.</summary>
     Conflict,
 
-    /// <summary>Rate limit exceeded (HTTP 429).</summary>
+    /// <summary>The caller exceeded a rate limit.</summary>
     TooManyRequests,
 
-    /// <summary>An internal technical error occurred (HTTP 500).</summary>
+    /// <summary>An internal fault of the system. The default category of <see cref="Error"/>.</summary>
     Technical,
 
-    /// <summary>The service is temporarily unavailable (HTTP 503).</summary>
+    /// <summary>A service the operation needs is temporarily unavailable.</summary>
     Unavailable,
 
-    /// <summary>An external dependency (API, service, provider) returned a failure (HTTP 502).</summary>
+    /// <summary>An external dependency (API, service, provider) returned a failure.</summary>
     External,
 
-    /// <summary>A domain business rule was violated (HTTP 422).</summary>
+    /// <summary>A business rule of the domain forbids the operation.</summary>
     BusinessRule,
 
-    /// <summary>The requested operation is not supported (HTTP 501).</summary>
+    /// <summary>The requested operation is not supported.</summary>
     NotSupported,
 
-    /// <summary>The operation exceeded its time limit (HTTP 408).</summary>
+    /// <summary>The operation exceeded its time limit.</summary>
     Timeout,
 
-    /// <summary>The operation was cancelled by the caller (HTTP 499).</summary>
+    /// <summary>
+    /// The operation was cancelled by something other than the caller's own cancellation, such as a downstream
+    /// service. A cancellation the caller requested propagates as <see cref="OperationCanceledException"/>; it
+    /// never becomes an error.
+    /// </summary>
     Cancelled,
 
-    /// <summary>A required precondition was not met (HTTP 412).</summary>
+    /// <summary>A precondition of the operation was not met.</summary>
     PreconditionFailed,
 }

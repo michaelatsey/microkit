@@ -8,13 +8,13 @@ internal static class CombiningResultsSamples
         Result<User> getUser, Result<Cart> getCart)
     {
         // Fail-fast — returns the first failure
-        Result combined = ResultCombineExtensions.Combine(validateName, validateEmail, validateAge);
+        Result combined = Result.Combine(validateName, validateEmail, validateAge);
 
         // Collect-all — returns ErrorCollection with ALL errors
-        Result allErrors = ResultCombineExtensions.CombineAll(validateName, validateEmail, validateAge);
+        Result allErrors = Result.CombineAll(validateName, validateEmail, validateAge);
 
         // Tuple combination (up to 3)
-        Result<(User, Cart)> pair = ResultCombineExtensions.Combine(getUser, getCart);
+        Result<(User, Cart)> pair = Result.Combine(getUser, getCart);
     }
 
     internal sealed record User;

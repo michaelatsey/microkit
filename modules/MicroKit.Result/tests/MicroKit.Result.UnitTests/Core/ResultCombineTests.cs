@@ -1,8 +1,8 @@
 using MicroKit.Result.UnitTests.TestSupport;
 
-namespace MicroKit.Result.UnitTests.Extensions;
+namespace MicroKit.Result.UnitTests.Core;
 
-public sealed class ResultCombineExtensionsTests
+public sealed class ResultCombineTests
 {
 
     #region Combine
@@ -11,7 +11,7 @@ public sealed class ResultCombineExtensionsTests
     public void Combine_WhenEmpty_ReturnsSuccess()
     {
         // Act
-        var combined = ResultCombineExtensions.Combine();
+        var combined = Result.Combine();
 
         // Assert
         combined.IsSuccess.ShouldBeTrue();
@@ -21,7 +21,7 @@ public sealed class ResultCombineExtensionsTests
     public void Combine_WhenAllSucceed_ReturnsSuccess()
     {
         // Act
-        var combined = ResultCombineExtensions.Combine(Result.Success(), Result.Success(), Result.Success());
+        var combined = Result.Combine(Result.Success(), Result.Success(), Result.Success());
 
         // Assert
         combined.IsSuccess.ShouldBeTrue();
@@ -35,7 +35,7 @@ public sealed class ResultCombineExtensionsTests
         var second = new OtherError();
 
         // Act
-        var combined = ResultCombineExtensions.Combine(
+        var combined = Result.Combine(
             Result.Success(),
             Result.Failure(first),
             Result.Failure(second));
@@ -52,7 +52,7 @@ public sealed class ResultCombineExtensionsTests
         Result uninitialized = default;
 
         // Act + Assert
-        Should.Throw<ResultException>(() => ResultCombineExtensions.Combine(Result.Success(), uninitialized));
+        Should.Throw<ResultException>(() => Result.Combine(Result.Success(), uninitialized));
     }
 
     #endregion
@@ -63,7 +63,7 @@ public sealed class ResultCombineExtensionsTests
     public void CombineAll_WhenEmpty_ReturnsSuccess()
     {
         // Act
-        var combined = ResultCombineExtensions.CombineAll();
+        var combined = Result.CombineAll();
 
         // Assert
         combined.IsSuccess.ShouldBeTrue();
@@ -73,7 +73,7 @@ public sealed class ResultCombineExtensionsTests
     public void CombineAll_WhenAllSucceed_ReturnsSuccess()
     {
         // Act
-        var combined = ResultCombineExtensions.CombineAll(Result.Success(), Result.Success());
+        var combined = Result.CombineAll(Result.Success(), Result.Success());
 
         // Assert
         combined.IsSuccess.ShouldBeTrue();
@@ -87,7 +87,7 @@ public sealed class ResultCombineExtensionsTests
         var second = new OtherError();
 
         // Act
-        var combined = ResultCombineExtensions.CombineAll(
+        var combined = Result.CombineAll(
             Result.Failure(first),
             Result.Success(),
             Result.Failure(second));
@@ -107,7 +107,7 @@ public sealed class ResultCombineExtensionsTests
         var error = new TestError();
 
         // Act
-        var combined = ResultCombineExtensions.CombineAll(Result.Success(), Result.Failure(error));
+        var combined = Result.CombineAll(Result.Success(), Result.Failure(error));
 
         // Assert
         combined.IsFailure.ShouldBeTrue();
@@ -122,7 +122,7 @@ public sealed class ResultCombineExtensionsTests
         Result uninitialized = default;
 
         // Act + Assert
-        Should.Throw<ResultException>(() => ResultCombineExtensions.CombineAll(Result.Success(), uninitialized));
+        Should.Throw<ResultException>(() => Result.CombineAll(Result.Success(), uninitialized));
     }
 
     #endregion
@@ -133,7 +133,7 @@ public sealed class ResultCombineExtensionsTests
     public void Combine_TwoValuesWhenBothSucceed_ReturnsTuple()
     {
         // Act
-        var combined = ResultCombineExtensions.Combine(Result.Success(1), Result.Success("two"));
+        var combined = Result.Combine(Result.Success(1), Result.Success("two"));
 
         // Assert
         combined.IsSuccess.ShouldBeTrue();
@@ -147,7 +147,7 @@ public sealed class ResultCombineExtensionsTests
         var first = new TestError("first");
 
         // Act
-        var combined = ResultCombineExtensions.Combine(
+        var combined = Result.Combine(
             Result.Failure<int>(first),
             Result.Failure<string>(new OtherError()));
 
@@ -163,7 +163,7 @@ public sealed class ResultCombineExtensionsTests
         var error = new OtherError();
 
         // Act
-        var combined = ResultCombineExtensions.Combine(Result.Success(1), Result.Failure<string>(error));
+        var combined = Result.Combine(Result.Success(1), Result.Failure<string>(error));
 
         // Assert
         combined.IsFailure.ShouldBeTrue();
@@ -178,7 +178,7 @@ public sealed class ResultCombineExtensionsTests
 
         // Act + Assert
         Should.Throw<ResultException>(() =>
-            ResultCombineExtensions.Combine(uninitialized, Result.Success("two")));
+            Result.Combine(uninitialized, Result.Success("two")));
     }
 
     [Fact]
@@ -189,7 +189,7 @@ public sealed class ResultCombineExtensionsTests
 
         // Act + Assert
         Should.Throw<ResultException>(() =>
-            ResultCombineExtensions.Combine(Result.Success(1), uninitialized));
+            Result.Combine(Result.Success(1), uninitialized));
     }
 
     #endregion
@@ -200,7 +200,7 @@ public sealed class ResultCombineExtensionsTests
     public void Combine_ThreeValuesWhenAllSucceed_ReturnsTuple()
     {
         // Act
-        var combined = ResultCombineExtensions.Combine(
+        var combined = Result.Combine(
             Result.Success(1),
             Result.Success("two"),
             Result.Success(3.0));
@@ -223,7 +223,7 @@ public sealed class ResultCombineExtensionsTests
         var third = failingIndex == 2 ? Result.Failure<double>(error) : Result.Success(3.0);
 
         // Act
-        var combined = ResultCombineExtensions.Combine(first, second, third);
+        var combined = Result.Combine(first, second, third);
 
         // Assert
         combined.IsFailure.ShouldBeTrue();
@@ -237,7 +237,7 @@ public sealed class ResultCombineExtensionsTests
         var second = new TestError("second");
 
         // Act
-        var combined = ResultCombineExtensions.Combine(
+        var combined = Result.Combine(
             Result.Success(1),
             Result.Failure<string>(second),
             Result.Failure<double>(new OtherError()));
@@ -259,7 +259,7 @@ public sealed class ResultCombineExtensionsTests
         var third = defaultIndex == 2 ? default : Result.Success(3.0);
 
         // Act + Assert
-        Should.Throw<ResultException>(() => ResultCombineExtensions.Combine(first, second, third));
+        Should.Throw<ResultException>(() => Result.Combine(first, second, third));
     }
 
     #endregion
@@ -270,7 +270,7 @@ public sealed class ResultCombineExtensionsTests
     public void CombineAll_GenericWhenEmpty_ReturnsSuccess()
     {
         // Act
-        var combined = ResultCombineExtensions.CombineAll<int>();
+        var combined = Result.CombineAll<int>();
 
         // Assert
         combined.IsSuccess.ShouldBeTrue();
@@ -280,7 +280,7 @@ public sealed class ResultCombineExtensionsTests
     public void CombineAll_GenericWhenAllSucceed_ReturnsSuccess()
     {
         // Act
-        var combined = ResultCombineExtensions.CombineAll(Result.Success(1), Result.Success(2));
+        var combined = Result.CombineAll(Result.Success(1), Result.Success(2));
 
         // Assert
         combined.IsSuccess.ShouldBeTrue();
@@ -294,7 +294,7 @@ public sealed class ResultCombineExtensionsTests
         var second = new OtherError();
 
         // Act
-        var combined = ResultCombineExtensions.CombineAll(
+        var combined = Result.CombineAll(
             Result.Success(1),
             Result.Failure<int>(first),
             Result.Failure<int>(second));
@@ -314,7 +314,7 @@ public sealed class ResultCombineExtensionsTests
         Result<int> uninitialized = default;
 
         // Act + Assert
-        Should.Throw<ResultException>(() => ResultCombineExtensions.CombineAll(Result.Success(1), uninitialized));
+        Should.Throw<ResultException>(() => Result.CombineAll(Result.Success(1), uninitialized));
     }
 
     #endregion

@@ -56,7 +56,7 @@ var final = await GetUser(id)
 ### Parallel composition (Combine)
 ```csharp
 // Toutes les opérations indépendantes exécutées, erreurs collectées
-var result = ResultCombineExtensions.CombineAll(
+var result = Result.CombineAll(
     ValidateName(command.Name),
     ValidateEmail(command.Email),
     ValidateAge(command.Age)
@@ -85,14 +85,14 @@ Result<UserDto> mapped = result
 
 ### Async railway
 ```csharp
-// Les ports retournent ValueTask<Result<T>> (convention racine), les délégués async des
-// extensions retournent Task : chaque port s'y passe par un lambda async, qui capture ct
-// (les extensions ne prennent pas de CancellationToken).
+// Les ports retournent ValueTask<Result<T>> et prennent ct (convention racine) : ils passent par la forme
+// à jeton des extensions, dont le délégué reçoit le CancellationToken et retourne un ValueTask
+// (ADR-RESULT-001 D8). Le ct est passé explicitement : omis, le délégué reçoit CancellationToken.None.
 Result<User> user = await GetUserAsync(userId, ct);
-Result<Cart> cart = await user.BindAsync(async u => await GetActiveCartAsync(u.Id, ct));
+Result<Cart> cart = await user.BindAsync((u, token) => GetActiveCartAsync(u.Id, token), ct);
 Result<Cart> discounted = await cart
     .Ensure(c => !c.IsEmpty, new EmptyCartError())   // erreur construite à chaque appel
-    .BindAsync(async c => await ApplyDiscountsAsync(c, promoCode, ct));
+    .BindAsync((c, token) => ApplyDiscountsAsync(c, promoCode, token), ct);
 Result<InvoiceDto> invoice = await discounted
     .BindAsync(async c => await CreateInvoiceAsync(c, ct))
     .Map(i => i.ToDto());
@@ -112,7 +112,7 @@ Les extensions sur `Task<Result<T>>` et `ValueTask<Result<T>>` prennent des dél
 
 Un délégué async de `Map`, `Bind`, `Ensure`… passe donc par `MapAsync`, `BindAsync`, `EnsureAsync`… sur un `Result<T>` déjà attendu.
 
-Ces opérations existent sur `Result<T>`. Le `Result` non générique n'a aujourd'hui que `Match`, `Tap`, `TapError` et `Finally`, et aucun async hors `TryAsync` et les surcharges attendues de `Tap`, `TapError` et `Finally` ; #184 Phase 4 ajoute les autres.
+Ces opérations existent sur `Result<T>`. Le `Result` non générique les a aussi, sync et async (ADR-RESULT-001 D9), et `Result<T>.Bind(Func<T, Result>)` mène d'une valeur à une commande.
 
 ## Pièges courants
 

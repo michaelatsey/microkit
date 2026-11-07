@@ -13,6 +13,15 @@ internal static class ErrorSystemSamples
         public override ErrorCategory Category => ErrorCategory.NotFound;
     }
 
+    internal static Result<Order> ErrorFactoriesSample(Guid orderId)
+    {
+        // Ad-hoc error with an explicit category: one factory per ErrorCategory
+        CategorizedError missing = Error.NotFound(ErrorCode.From("ORDER.NOT_FOUND"), $"Order {orderId} does not exist.");
+        return missing; // implicit conversion: a failure
+    }
+
+    internal sealed record Order;
+
     internal static void ErrorCodeSample()
     {
         var code = ErrorCode.From("ORDER.PAYMENT.DECLINED");

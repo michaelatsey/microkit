@@ -79,4 +79,23 @@ public sealed class ValidationResult
         IsValid
             ? Result<T>.Success(value)
             : Result<T>.Failure(ErrorCollection.From(_errors.Cast<IError>()));
+
+    /// <summary>
+    /// Converts the accumulated errors to a failed <see cref="Result{T}"/>, for an early return from a method that
+    /// produces a value: <c>if (!validation.IsValid) return validation.ToResult&lt;Order&gt;();</c>.
+    /// </summary>
+    /// <typeparam name="T">The value type of the result.</typeparam>
+    /// <returns>A failure holding an <see cref="ErrorCollection"/> of every validation error.</returns>
+    /// <exception cref="InvalidOperationException">
+    /// Thrown when there is no validation error: a failure-only conversion never produces a success without a value
+    /// (ADR-RESULT-001 D10). Use <see cref="ToResult{T}(T)"/> for the success-or-failure case.
+    /// </exception>
+    public Result<T> ToResult<T>()
+    {
+        if (IsValid)
+            throw new InvalidOperationException(
+                "The validation has no error: ToResult<T>() returns a failure only. Use ToResult<T>(value) instead.");
+        return Result<T>.Failure(ErrorCollection.From(_errors.Cast<IError>()));
+    }
+
 }

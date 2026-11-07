@@ -17,6 +17,14 @@ Hardening before stable (#184). Breaking changes ship outright on `preview.*` (A
 - `Tap`, `TapError` and `Finally` overloads taking a `Task`-returning delegate, on `Result<T>`, `Result`,
   `Task<Result<T>>` and `ValueTask<Result<T>>`: an async lambda now binds to an overload that awaits it.
 - `IsAotCompatible` on both packages: the trim, single-file and AOT analyzers run, with no warning.
+- ADR-RESULT-001, the error model (#184 Phase 3), implemented by Phase 4:
+  - `CategorizedError` and one factory per category on `Error` (`Error.NotFound(code, message)`…).
+  - Implicit conversions from `Error` and `ErrorCollection` to `Result<T>` and to `Result` (a failure).
+  - The non-generic `Result` gets `Map`, `Bind` (to `Result` and to `Result<T>`), `Ensure`, `MapError`,
+    `Compensate`, and every async operation; `Result<T>.Bind(Func<T, Result>)` and its `BindAsync`.
+  - Every `XxxAsync` gains a form whose delegate takes the `CancellationToken` and returns a `ValueTask`,
+    with `CancellationToken ct = default` last, on `Result<T>` and `Result`.
+  - `ValidationResult.ToResult<T>()`: a failure-only result (throws on a valid validation).
 
 ### Changed (breaking)
 - `Try` / `TryAsync` without a mapper rethrow `OperationCanceledException` instead of returning a failure.
@@ -53,9 +61,36 @@ Hardening before stable (#184). Breaking changes ship outright on `preview.*` (A
 - `Tap(null!)` is ambiguous (CS0121): cast the argument, `Tap((Action<T>)null!)`.
 - A lambda that only throws (`_ => throw new X()`) binds to the awaited overload: the exception surfaces
   at the await.
+- `result.Equals(null)` no longer compiles (the `null` literal binds to `Equals(Result<T>)` through the
+  conversion from `Error`): write `result.Equals((object?)null)`.
+- `ResultCombineExtensions.Combine(...)` becomes `Result.Combine(...)`.
+- `Result<string> r = null;` and `return null;` in a method returning a result no longer compile (CS0037):
+  the conversions from `Error` and `ErrorCollection` both accept `null`. They used to give a null success.
+- A record deriving from `Error` with a positional parameter named after a category (`Timeout`,
+  `Conflict`, `External`, `Validation`…) no longer compiles (CS8866: the factory `Error.Timeout(…)` is an
+  inherited member of that name): rename the parameter, for example `TimeoutAfter`. A property or method of
+  such a name declared in an `Error` subtype hides the inherited factory (CS0108, an error with
+  `TreatWarningsAsErrors`): rename it, or declare it `new`.
+- `Bind(u => u.IsActive ? u : new UserInactiveError(u.Id))` does not compile (the conditional has no type):
+  write `u.IsActive ? Result.Success(u) : new UserInactiveError(u.Id)`, or use `Ensure`.
+
+### Changed (breaking, Phase 4)
+- `Result.Success<T>` / `Result<T>.Success` and the implicit conversion from `T` throw
+  `ArgumentNullException` on `null`; `Try` / `TryAsync` whose delegate returns `null` throw it to the caller;
+  the JSON converter reads `"value": null` as an invalid payload (ADR-RESULT-001 D6).
+- `Combine` and `CombineAll` are static members of `Result` (`Result.Combine(...)`).
+- An `Error` converted to `Result<object>`, `Result<IError>` or another unrelated `T`, and an
+  `ErrorCollection` converted to `Result<IReadOnlyList<IError>>`, are now failures, not successes;
+  `Result<Error> r = error;` and `Result<ErrorCollection> r = errors;` are ambiguous (CS0457).
+- `Map`, `MapAsync`, `Select` and `SelectMany` with a mapper that returns `null` throw
+  `ArgumentNullException`: a success needs a value. Return a failure from `Bind` instead.
+- `ErrorCollection.FirstOrDefault` is typed `IError` (never `null`).
+- The core's XML docs no longer cite HTTP statuses; the mapping is documented on
+  `ResultProblemDetailsFactory.ToStatusCode`.
 
 ### Removed
 - The internal, unused `ResultState` enum.
+- `ResultCombineExtensions`: its members are on `Result`.
 
 ---
 

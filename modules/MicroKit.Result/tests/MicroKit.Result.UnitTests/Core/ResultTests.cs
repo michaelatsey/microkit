@@ -688,7 +688,7 @@ public sealed class ResultTests
         Result result = Result.Success();
 
         // Act
-        var equal = result.Equals(null);
+        var equal = result.Equals((object?)null); // a bare null binds to Equals(Result) through the conversion from Error (CS0037)
 
         // Assert
         equal.ShouldBeFalse();

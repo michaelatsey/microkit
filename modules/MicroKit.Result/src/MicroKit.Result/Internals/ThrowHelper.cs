@@ -29,6 +29,14 @@ internal static class ThrowHelper
         throw new ResultException(
             "Result was not initialized. Use Result.Success() or Result.Failure() factory methods.");
 
+    [DoesNotReturn]
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    internal static void ThrowSuccessValueNull(string paramName) =>
+        throw new ArgumentNullException(
+            paramName,
+            "A successful result needs a value: null means absence, which is a failure (for instance Error.NotFound). " +
+            "A mapper or delegate that can return null belongs in Bind, returning that failure (ADR-RESULT-001 D6).");
+
     /// <summary>Returns the mapped error, or throws, keeping the caught exception, when the mapper returned null.</summary>
     internal static IError EnsureMapped(IError? mapped, Exception caught) =>
         mapped ?? throw new ArgumentNullException(

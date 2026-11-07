@@ -108,17 +108,22 @@ Result<User> monitored = userResult
 ### ✅ Combine pour valider plusieurs résultats
 ```csharp
 // Fail-fast : retourne le premier échec ; les arguments sont tous évalués avant l'appel
-Result failFast = ResultCombineExtensions.Combine(validateName, validateEmail, validateAge);
+Result failFast = Result.Combine(validateName, validateEmail, validateAge);
 
 // Collect-all: collecte toutes les erreurs dans une ErrorCollection
-Result collected = ResultCombineExtensions.CombineAll(validateName, validateEmail, validateAge);
+Result collected = Result.CombineAll(validateName, validateEmail, validateAge);
 ```
 
-Pour qu'une étape ne s'exécute pas après un échec, `Bind` la chaîne : `Combine(Validate(x), Save(x))` exécute `Save`. Sur un résultat `default`, `Combine` et `CombineAll` lèvent `ResultException`. ADR-RESULT-001 D7 en fait des membres statiques de `Result` ; la Phase 4 retire `ResultCombineExtensions`.
+Pour qu'une étape ne s'exécute pas après un échec, `Bind` la chaîne : `Combine(Validate(x), Save(x))` exécute `Save`. Sur un résultat `default`, `Combine` et `CombineAll` lèvent `ResultException`. Ce sont des membres statiques de `Result` (ADR-RESULT-001 D7).
 
 ## `Result` non générique
 
-Il n'a aujourd'hui que `Match`, `Tap`, `TapError` et `Finally`, et aucun async hors `TryAsync` et les surcharges attendues de `Tap`, `TapError` et `Finally` : `Map`, `Bind` et `Ensure` ci-dessus sont des opérations de `Result<T>`. La Phase 4 de #184 lui donne les mêmes opérations, sync et async.
+Il a les opérations de `Result<T>`, sync et async (ADR-RESULT-001 D9) : `Map` vers un `Result<TOut>`, `Bind` vers un `Result` ou un `Result<TOut>`, `Ensure`, `MapError`, `Compensate`, `Match`, `Tap`, `TapError`, `Finally`. `Result<T>.Bind(Func<T, Result>)` mène d'une valeur à une commande.
+
+```csharp
+Result saved = GetUser(id).Bind(user => Save(user));
+Result<Invoice> invoice = Validate(command).Bind(() => CreateInvoice(command));
+```
 
 ## Règles de mapping HTTP
 
@@ -229,7 +234,11 @@ public async ValueTask<Result<T>> ProcessAsync(
     CancellationToken ct = default)  // ← toujours avec default
 ```
 
-La règle vaut pour le code qui appelle la librairie et pour une nouvelle méthode qui fait elle-même un appel annulable. Les extensions async de la librairie (`MapAsync`, `BindAsync`…) ne prennent pas de `CancellationToken` : un délégué qui en a besoin le capture. ADR-RESULT-001 D8 leur ajoute une surcharge dont le délégué prend le `CancellationToken` et retourne un `ValueTask` ; la Phase 4 l'applique (écart, `.claude/CLAUDE.md`).
+La règle vaut pour le code qui appelle la librairie et pour une nouvelle méthode qui fait elle-même un appel annulable. Chaque extension async a deux formes (ADR-RESULT-001 D8) : un délégué qui retourne une `Task`, sans jeton, et un délégué qui prend le `CancellationToken` et retourne un `ValueTask`, avec `CancellationToken ct = default` en dernier, transmis au délégué :
+
+```csharp
+Result<Order> order = await userResult.BindAsync((user, ct) => orders.GetLatestAsync(user.Id, ct), ct);
+```
 
 ## Anti-patterns stricts
 

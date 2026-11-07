@@ -44,8 +44,8 @@ Un écart déjà nommé par `.claude/CLAUDE.md` avec sa phase de #184 n'est pas 
 - [ ] Les opérateurs `==` sont cohérents avec `Equals` (records ok par défaut)
 
 ### API Design
-- [ ] Une nouvelle opération existe sur `Result` et `Result<T>` quand elle s'applique (le `Result` non générique rattrape l'existant en Phase 4)
-- [ ] Une nouvelle opération async couvre les surfaces existantes (`Result<T>`, `Task<Result<T>>`, `ValueTask<Result<T>>`)
+- [ ] Une nouvelle opération existe sur `Result` et `Result<T>` quand elle s'applique (depuis la Phase 4 de #184, les deux ont les mêmes opérations, sync et async)
+- [ ] Une nouvelle opération async existe sur `Result<T>` et `Result` en deux formes : délégué `Task` sans jeton, et délégué à `CancellationToken` qui retourne un `ValueTask`, `ct = default` en dernier (ADR-RESULT-001 D8). Sur `Task<Result<T>>` / `ValueTask<Result<T>>`, seuls les délégués synchrones (et les `Tap`, `TapError`, `Finally` attendus) : on attend la tâche d'abord
 - [ ] XML docs sur toutes les méthodes publiques
 
 ### NativeAOT / Trimming
@@ -102,8 +102,7 @@ internal static class ResultGuard
 // ✅ Bon: ValueTask (convention racine ; son gain face à Task n'est pas mesuré, la Phase 7 le mesure),
 // ConfigureAwait(false), et l'argument validé avant la partie async : un mapper null lève à l'appel,
 // comme Map (Microsoft Learn, Best practices for exceptions), ce que font les extensions async de src/.
-// Elles ne prennent pas de CancellationToken (écart, ADR-RESULT-001 D8 puis Phase 4, nommé par
-// .claude/CLAUDE.md)
+// Chacune a aussi une forme à CancellationToken dont le délégué retourne un ValueTask (ADR-RESULT-001 D8)
 public static ValueTask<Result<TOut>> MapAsync<TIn, TOut>(
     this Result<TIn> result, Func<TIn, Task<TOut>> mapper)
 {

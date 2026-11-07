@@ -12,13 +12,18 @@ namespace MicroKit.Result;
 /// at the await. Every await uses <c>ConfigureAwait(false)</c>.
 /// </para>
 /// <para>
+/// The overloads whose delegate takes a <see cref="CancellationToken"/> take <c>CancellationToken ct = default</c>
+/// last and pass it to the delegate. Omitted, the delegate receives <see cref="CancellationToken.None"/>; a lambda
+/// parameter named <c>ct</c> then shadows the caller's token. Pass it explicitly (CA2016 reports a missing one).
+/// </para>
+/// <para>
 /// <c>Tap</c>, <c>TapError</c> and <c>Finally</c> given a delegate that returns a <see cref="Task"/>, an async
 /// lambda included, bind to the overloads here, which await the side effect. A non-async lambda that returns a
 /// <see cref="ValueTask"/> binds to the synchronous <see cref="Action{T}"/> overload instead, and its
 /// <see cref="ValueTask"/> is discarded (CA2012 reports it): write it <c>async x =&gt; await port(x)</c>.
 /// </para>
 /// </remarks>
-public static class AsyncResultExtensions
+public static partial class AsyncResultExtensions
 {
     #region Map
 
@@ -28,6 +33,8 @@ public static class AsyncResultExtensions
     /// <param name="result">The source result.</param>
     /// <param name="mapper">The async transformation function.</param>
     /// <returns>A result with the mapped value, or the original failure.</returns>
+    /// <exception cref="ArgumentNullException">Thrown when the delegate returns <see langword="null"/>: a success needs a value (ADR-RESULT-001 D6).</exception>
+    /// <exception cref="ArgumentException">Thrown when the delegate returns a result as the value; use Bind.</exception>
     public static ValueTask<Result<TOut>> MapAsync<TIn, TOut>(this Result<TIn> result, Func<TIn, Task<TOut>> mapper)
     {
         ResultGuard.NotNull(mapper);
@@ -47,6 +54,8 @@ public static class AsyncResultExtensions
     /// <param name="resultTask">The task wrapping the source result.</param>
     /// <param name="mapper">The transformation function.</param>
     /// <returns>A result with the mapped value, or the original failure.</returns>
+    /// <exception cref="ArgumentNullException">Thrown when the delegate returns <see langword="null"/>: a success needs a value (ADR-RESULT-001 D6).</exception>
+    /// <exception cref="ArgumentException">Thrown when the delegate returns a result as the value; use Bind.</exception>
     public static ValueTask<Result<TOut>> Map<TIn, TOut>(this Task<Result<TIn>> resultTask, Func<TIn, TOut> mapper)
     {
         ArgumentNullException.ThrowIfNull(resultTask);
@@ -65,6 +74,8 @@ public static class AsyncResultExtensions
     /// <param name="resultTask">The value task wrapping the source result.</param>
     /// <param name="mapper">The transformation function.</param>
     /// <returns>A result with the mapped value, or the original failure.</returns>
+    /// <exception cref="ArgumentNullException">Thrown when the delegate returns <see langword="null"/>: a success needs a value (ADR-RESULT-001 D6).</exception>
+    /// <exception cref="ArgumentException">Thrown when the delegate returns a result as the value; use Bind.</exception>
     public static ValueTask<Result<TOut>> Map<TIn, TOut>(this ValueTask<Result<TIn>> resultTask, Func<TIn, TOut> mapper)
     {
         ResultGuard.NotNull(mapper);
@@ -229,18 +240,8 @@ public static class AsyncResultExtensions
     /// <param name="result">The result.</param>
     /// <param name="action">The async side-effect action.</param>
     /// <returns>The original result.</returns>
-    public static ValueTask<Result> Tap(this Result result, Func<Task> action)
-    {
-        ResultGuard.NotNull(action);
-        return Core(result, action);
-
-        static async ValueTask<Result> Core(Result result, Func<Task> action)
-        {
-            if (result.IsSuccess)
-                await action().ConfigureAwait(false);
-            return result;
-        }
-    }
+    public static ValueTask<Result> Tap(this Result result, Func<Task> action) =>
+        result.TapAsync(action);
 
     /// <summary>Awaits the task and executes a side effect on the value of a successful result.</summary>
     /// <typeparam name="T">The value type.</typeparam>
@@ -347,18 +348,8 @@ public static class AsyncResultExtensions
     /// <param name="result">The result.</param>
     /// <param name="action">The async side-effect action.</param>
     /// <returns>The original result.</returns>
-    public static ValueTask<Result> TapError(this Result result, Func<IError, Task> action)
-    {
-        ResultGuard.NotNull(action);
-        return Core(result, action);
-
-        static async ValueTask<Result> Core(Result result, Func<IError, Task> action)
-        {
-            if (result.IsFailure)
-                await action(result.Error).ConfigureAwait(false);
-            return result;
-        }
-    }
+    public static ValueTask<Result> TapError(this Result result, Func<IError, Task> action) =>
+        result.TapErrorAsync(action);
 
     /// <summary>Awaits the task and executes a side effect on the error of a failed result.</summary>
     /// <typeparam name="T">The value type.</typeparam>
@@ -635,17 +626,8 @@ public static class AsyncResultExtensions
     /// <param name="result">The result.</param>
     /// <param name="action">The async action to always execute, receiving the full result.</param>
     /// <returns>The original result.</returns>
-    public static ValueTask<Result> Finally(this Result result, Func<Result, Task> action)
-    {
-        ResultGuard.NotNull(action);
-        return Core(result, action);
-
-        static async ValueTask<Result> Core(Result result, Func<Result, Task> action)
-        {
-            await action(result).ConfigureAwait(false);
-            return result;
-        }
-    }
+    public static ValueTask<Result> Finally(this Result result, Func<Result, Task> action) =>
+        result.FinallyAsync(action);
 
     /// <summary>Awaits the task and always executes the action regardless of outcome.</summary>
     /// <typeparam name="T">The value type.</typeparam>

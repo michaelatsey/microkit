@@ -78,9 +78,13 @@ Result<int> failed = Result.Failure<int>(new MyError());
 
 // implicit conversion from T
 Result<int> fromValue = 42;
+
+// implicit conversion from an error: a failure
+Result<int> fromError = new MyError();
+Result commandFailed = new MyError();
 ```
 
-The conversion rejects a value that is itself a `Result` or a `Result<T>` (possible when `T` is `object`) with an `ArgumentException`: a failure never becomes a success.
+`Success` and the conversion from `T` reject `null` with an `ArgumentNullException`: absence is a failure (`Error.NotFound`), not a null value. They reject a value that is itself a `Result` or a `Result<T>` (possible when `T` is `object`) with an `ArgumentException`: a failure never becomes a success. The conversion from an `Error` or an `ErrorCollection` gives a failure, except into `Result<SomeErrorType>`, where the conversion from `T` wins, and into `Result<Error>`, where it is ambiguous (CS0457): write `Success` or `Failure` there.
 
 ---
 
@@ -97,9 +101,19 @@ public sealed record UserNotFoundError(Guid UserId)
 }
 ```
 
+### Error factories
+
+A domain error is one type each, as above. At a boundary, or for an error used once, a factory of `Error` builds a `CategorizedError` with an explicit category; there is one per `ErrorCategory`:
+
+```csharp
+// Ad-hoc error with an explicit category: one factory per ErrorCategory
+CategorizedError missing = Error.NotFound(ErrorCode.From("ORDER.NOT_FOUND"), $"Order {orderId} does not exist.");
+return missing; // implicit conversion: a failure
+```
+
 ### ErrorCode
 
-Strongly-typed hierarchical code: `DOMAIN.ENTITY.ACTION`
+Strongly-typed hierarchical code: `DOMAIN.ENTITY.REASON`. The code is the error's stable identifier; the predefined constants are convenience codes for an error without a domain code, not a second taxonomy: `Category`, not `Code`, drives behavior.
 
 ```csharp
 var code = ErrorCode.From("ORDER.PAYMENT.DECLINED");
@@ -118,6 +132,8 @@ bool ordered = ErrorCode.Conflict < ErrorCode.NotFound;   // ordinal comparison
 
 ### ErrorCategory → HTTP mapping
 
+`Category` says what kind of failure happened. `Severity` serves logging only, and `Metadata` is in-process context that no response emits by default (ADR-RESULT-001 D1). `MicroKit.Result.AspNetCore` maps the category to a status (`ResultProblemDetailsFactory.ToStatusCode`):
+
 | Category | HTTP | Description |
 |----------|------|-------------|
 | `NotFound` | 404 | Resource does not exist |
@@ -135,7 +151,7 @@ bool ordered = ErrorCode.Conflict < ErrorCode.NotFound;   // ordinal comparison
 | `Unavailable` | 503 | Service temporarily unavailable |
 | `Technical` | 500 | Internal error (default) |
 
-The XML doc of `ErrorCategory.Cancelled` still describes it as a caller cancellation and cites HTTP statuses; ADR-RESULT-001 (D1, D11) makes `Category` the kind of failure, mapped to a status only by `MicroKit.Result.AspNetCore`, and #184 Phase 4 rewrites the doc.
+A domain error that does not override `Category` is `Technical`, so a 500; #184 Phase 6 adds an analyzer warning for it.
 
 ### ErrorMetadataBuilder
 
@@ -292,7 +308,7 @@ Result nonGeneric = result.ToResult();  // drops the value, keeps the error
 
 ## Async
 
-The nine pipeline operations of `Result<T>` (`Map`, `Bind`, `Match`, `Tap`, `TapError`, `Ensure`, `MapError`, `Compensate`, `Finally`) have async counterparts on three surfaces. The non-generic `Result` currently has only the awaited `Tap`, `TapError` and `Finally`; #184 Phase 4 adds the others.
+The nine pipeline operations (`Map`, `Bind`, `Match`, `Tap`, `TapError`, `Ensure`, `MapError`, `Compensate`, `Finally`) have async counterparts on `Result<T>` and on the non-generic `Result`, and with a synchronous delegate on `Task<Result<T>>` and `ValueTask<Result<T>>`. Each `XxxAsync` has two forms: a delegate that returns a `Task`, without a token; and a delegate that takes the `CancellationToken` and returns a `ValueTask`, with `CancellationToken ct = default` last, passed to the delegate — the shape of a port such as `ValueTask<Result<T>> GetAsync(Guid id, CancellationToken ct = default)`.
 
 ```csharp
 // Surface 1: async delegate on Result<T>
@@ -310,18 +326,20 @@ Result<int> audited = await GetResultTask().Tap(async v => await AuditAsync(v));
 
 // Surface 3: on ValueTask<Result<T>> (sync delegate)
 Result<string> mappedValueTask = await GetResultValueTask().Map(v => Transform(v));
+
+// CancellationToken form: the delegate takes the token and returns a ValueTask, as a port does
+Result<string> fetched = await result.BindAsync((v, token) => FetchAsync(v, token), ct);
+
+// The non-generic Result has the same operations, in both forms
+Result saved = await command.BindAsync(async () => await SaveAsync());
+Result audit = await command.TapAsync(token => AuditCommandAsync(token), ct);
 ```
 
 All async methods use `ConfigureAwait(false)`, and validate their arguments when called, before anything is awaited: a `null` delegate throws at the call, as in the synchronous methods.
 
 `Tap`, `TapError` and `Finally` given a delegate that returns a `Task`, an async lambda included, bind to an overload that awaits the side effect and returns a `ValueTask`, on `Result<T>`, `Result` and both task surfaces. An `Action` keeps the synchronous overload. A non-async lambda that returns a `ValueTask` binds to that `Action` overload and its `ValueTask` is discarded, which CA2012 reports: write it `async x => await port(x)`.
 
-Current behavior:
-
-- Async delegates return `Task`, never `ValueTask`. A method returning `ValueTask` is passed through an async lambda, as in Surface 1.
-- The async extensions take no `CancellationToken`; a delegate that needs one captures it.
-
-ADR-RESULT-001 D8 adds, to each async operation, an overload whose delegate takes a `CancellationToken` and returns a `ValueTask`; #184 Phase 4 applies it.
+The extensions pass the token to the delegate and neither check it nor catch a cancellation: it propagates. A `Task` and a `ValueTask` overload without a token would make every async lambda ambiguous (CS0121), so `ValueTask` comes with the token form; an async lambda with one parameter, `async v => …`, takes the `Task` form. On `Task<Result<T>>` and `ValueTask<Result<T>>`, await first to use an async delegate.
 
 ---
 
@@ -352,10 +370,13 @@ var validation = new ValidationResult()
     .AddErrorIf(age < 0, "Age", "Age must be non-negative.")
     .AddErrorIf(!email.Contains('@'), "Email", "Email is not a valid email address.");
 
-Result<Order> result = validation.IsValid
-    ? CreateOrder(name, age, email)
-    : Result.Failure<Order>(validation.ToResult().Error);
+if (!validation.IsValid)
+    return validation.ToResult<Order>(); // a failure holding every validation error
+
+return CreateOrder(name, age, email);
 ```
+
+`ToResult<T>()` is failure-only: on a valid `ValidationResult` it throws `InvalidOperationException`. `ToResult<T>(value)` gives the success or the failure.
 
 ---
 
@@ -363,13 +384,13 @@ Result<Order> result = validation.IsValid
 
 ```csharp
 // Fail-fast — returns the first failure
-Result combined = ResultCombineExtensions.Combine(validateName, validateEmail, validateAge);
+Result combined = Result.Combine(validateName, validateEmail, validateAge);
 
 // Collect-all — returns ErrorCollection with ALL errors
-Result allErrors = ResultCombineExtensions.CombineAll(validateName, validateEmail, validateAge);
+Result allErrors = Result.CombineAll(validateName, validateEmail, validateAge);
 
 // Tuple combination (up to 3)
-Result<(User, Cart)> pair = ResultCombineExtensions.Combine(getUser, getCart);
+Result<(User, Cart)> pair = Result.Combine(getUser, getCart);
 ```
 
 Every argument is evaluated before the call: to skip a step after a failure, chain it with `Bind`.

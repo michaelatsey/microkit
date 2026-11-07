@@ -218,7 +218,11 @@ Phase 5 names the option.
 - Not breaking for other modules' builds, by construction: D2 keeps the constants, D5 avoids the abstract
   member, D8 keeps every existing overload. D6 is applied only if the guard build stays green.
 - Overloads added: 14 factories (D3), 4 conversions (D4), 9 token overloads × 2 receivers (D8), the sync
-  and async parity set of `Result` (D9). Each is reviewed by `result-architect` in Phase 4.
+  and async parity set of `Result` (D9). Each is reviewed by `result-architect` in Phase 4. As implemented,
+  D9's `Bind` to `Result` and `Bind<TOut>` on `Result` bring their async twins in both forms: 20 token
+  overloads, and 11 `Task` overloads for `Result`, `BindAsync<TIn>` → `Result` included.
+- The 14 factory names are inherited members of every `Error` subtype: a positional record parameter of the
+  same name (`Timeout`, `Conflict`…) fails with CS8866 (verified). The CHANGELOG migration notes say so.
 - G5: no decision here claims a performance gain. `ValueTask` delegates follow the module's port convention,
   not a measurement; Phase 7 measures `ValueTask<Result<T>>` against `Task<Result<T>>`.
 

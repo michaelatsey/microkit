@@ -24,6 +24,8 @@ public static class ResultLinqExtensions
     /// <param name="result">The source result.</param>
     /// <param name="selector">The projection function.</param>
     /// <returns>A result with the projected value, or the original failure.</returns>
+    /// <exception cref="ArgumentNullException">Thrown when the delegate returns <see langword="null"/>: a success needs a value (ADR-RESULT-001 D6).</exception>
+    /// <exception cref="ArgumentException">Thrown when the delegate returns a result as the value; use Bind.</exception>
     public static Result<TOut> Select<TIn, TOut>(
         this Result<TIn> result, Func<TIn, TOut> selector)
         => result.Map(selector);
@@ -38,6 +40,8 @@ public static class ResultLinqExtensions
     /// <param name="collectionSelector">The function producing an intermediate result.</param>
     /// <param name="resultSelector">The function combining source and intermediate values.</param>
     /// <returns>A result with the combined value, or the first failure encountered.</returns>
+    /// <exception cref="ArgumentNullException">Thrown when the delegate returns <see langword="null"/>: a success needs a value (ADR-RESULT-001 D6).</exception>
+    /// <exception cref="ArgumentException">Thrown when the delegate returns a result as the value; use Bind.</exception>
     public static Result<TOut> SelectMany<TIn, TMid, TOut>(
         this Result<TIn> result,
         Func<TIn, Result<TMid>> collectionSelector,

@@ -14,7 +14,7 @@
 | Ressource indisponible | `throw new ServiceUnavailableException()` | `return Result.Failure(new PaymentGatewayUnavailableError(gateway))` |
 | Conflit de données | `throw new ConflictException()` | `return Result.Failure(new EmailAlreadyRegisteredError(email))` |
 
-Hormis `ValidationError` et `ErrorCollection`, la librairie ne fournit aucun type d'erreur : les autres erreurs ci-dessus sont des `sealed record` du domaine dérivés de `Error`, qui surchargent `Category` (sinon `Technical`, HTTP 500).
+La librairie fournit `ValidationError`, `ErrorCollection`, `ExceptionError` et `CategorizedError` (les factories `Error.NotFound(code, message)`…, pour une erreur ponctuelle) : les autres erreurs ci-dessus sont des `sealed record` du domaine dérivés de `Error`, qui surchargent `Category` (sinon `Technical`, HTTP 500).
 
 ## Ce qui est IMPRÉVISIBLE → Exception
 

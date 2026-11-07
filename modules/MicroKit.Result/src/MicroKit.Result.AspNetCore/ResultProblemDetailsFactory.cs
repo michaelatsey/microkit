@@ -54,8 +54,27 @@ public static class ResultProblemDetailsFactory
     }
 
     /// <summary>
-    /// Maps an <see cref="ErrorCategory"/> to its corresponding HTTP status code.
+    /// Maps an <see cref="ErrorCategory"/> to its HTTP status code. The core names kinds of failure; this package
+    /// owns their HTTP meaning (ADR-RESULT-001 D11).
     /// </summary>
+    /// <remarks>
+    /// <list type="table">
+    /// <listheader><term>Category</term><description>Status</description></listheader>
+    /// <item><term><see cref="ErrorCategory.NotFound"/></term><description>404 Not Found</description></item>
+    /// <item><term><see cref="ErrorCategory.Validation"/>, <see cref="ErrorCategory.BusinessRule"/></term><description>422 Unprocessable Entity</description></item>
+    /// <item><term><see cref="ErrorCategory.Unauthorized"/></term><description>401 Unauthorized</description></item>
+    /// <item><term><see cref="ErrorCategory.Forbidden"/></term><description>403 Forbidden</description></item>
+    /// <item><term><see cref="ErrorCategory.Conflict"/></term><description>409 Conflict</description></item>
+    /// <item><term><see cref="ErrorCategory.TooManyRequests"/></term><description>429 Too Many Requests</description></item>
+    /// <item><term><see cref="ErrorCategory.PreconditionFailed"/></term><description>412 Precondition Failed</description></item>
+    /// <item><term><see cref="ErrorCategory.Timeout"/></term><description>408 Request Timeout</description></item>
+    /// <item><term><see cref="ErrorCategory.Cancelled"/></term><description>499 Client Closed Request</description></item>
+    /// <item><term><see cref="ErrorCategory.Technical"/>, and any undefined value</term><description>500 Internal Server Error</description></item>
+    /// <item><term><see cref="ErrorCategory.NotSupported"/></term><description>501 Not Implemented</description></item>
+    /// <item><term><see cref="ErrorCategory.External"/></term><description>502 Bad Gateway</description></item>
+    /// <item><term><see cref="ErrorCategory.Unavailable"/></term><description>503 Service Unavailable</description></item>
+    /// </list>
+    /// </remarks>
     /// <param name="category">The error category.</param>
     /// <returns>The corresponding HTTP status code.</returns>
     public static int ToStatusCode(ErrorCategory category) => category switch

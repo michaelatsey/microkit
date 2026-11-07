@@ -52,7 +52,7 @@ public sealed class ErrorCollection : IError, IReadOnlyList<IError>
     /// <summary>
     /// Gets the first error in the collection. Never <see langword="null"/>: a collection is never empty.
     /// </summary>
-    public IError? FirstOrDefault => _errors.IsEmpty ? null : _errors[0];
+    public IError FirstOrDefault => _errors[0];
 
     /// <summary>Gets the error at the specified index.</summary>
     /// <param name="index">The zero-based index of the error.</param>

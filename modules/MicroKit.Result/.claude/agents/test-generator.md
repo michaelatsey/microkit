@@ -117,7 +117,7 @@ internal sealed record TestError() : Error(ErrorCode.From("TEST.ERROR"), "Test e
 4. 🚫 Null guard — ArgumentNullException si lambda null
 5. 🔗 Chained — comportement dans une chaîne
 
-Le `Result` non générique n'a aujourd'hui que `Match`, `Tap`, `TapError` et `Finally` ; ses autres opérations arrivent en Phase 4.
+Le `Result` non générique a les mêmes opérations que `Result<T>`, sync et async, chacune async en deux formes : délégué `Task` sans jeton, et délégué à `CancellationToken` qui retourne un `ValueTask` (ADR-RESULT-001 D8, D9).
 
 ### Lois (tests de propriétés, au moins 100 cas chacun)
 ```

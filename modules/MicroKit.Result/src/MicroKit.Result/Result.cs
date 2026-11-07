@@ -75,8 +75,10 @@ public readonly struct Result : IEquatable<Result>, IResultMarker
 
     /// <summary>Creates a successful result with a value.</summary>
     /// <typeparam name="T">The type of the value.</typeparam>
-    /// <param name="value">The success value.</param>
+    /// <param name="value">The success value; not <see langword="null"/>, and not itself a result.</param>
     /// <returns>A successful <see cref="Result{T}"/>.</returns>
+    /// <exception cref="ArgumentNullException">Thrown when <paramref name="value"/> is <see langword="null"/> (ADR-RESULT-001 D6).</exception>
+    /// <exception cref="ArgumentException">Thrown when <paramref name="value"/> is itself a result.</exception>
     public static Result<T> Success<T>(T value) => Result<T>.Success(value);
 
     /// <summary>Creates a failed result with the specified error.</summary>
@@ -194,6 +196,105 @@ public readonly struct Result : IEquatable<Result>, IResultMarker
         }
     }
 
+    /// <summary>
+    /// Combines multiple results. Fails fast on the first failure.
+    /// </summary>
+    /// <param name="results">The results to combine.</param>
+    /// <returns>A single successful result, or the first failure encountered.</returns>
+    /// <exception cref="ResultException">Thrown when a result before the first failure is uninitialized (<c>default</c>).</exception>
+    public static Result Combine(params ReadOnlySpan<Result> results)
+    {
+        foreach (var result in results)
+        {
+            if (!result.IsSuccess)
+                return Failure(result.Error); // Error throws ResultException on a default result
+        }
+        return Success();
+    }
+
+    /// <summary>
+    /// Combines multiple results, collecting ALL errors into an <see cref="ErrorCollection"/>.
+    /// </summary>
+    /// <param name="results">The results to combine.</param>
+    /// <returns>A single successful result, or a failure with all collected errors.</returns>
+    /// <exception cref="ResultException">Thrown when a result is uninitialized (<c>default</c>).</exception>
+    public static Result CombineAll(params ReadOnlySpan<Result> results)
+    {
+        List<IError>? errors = null;
+        foreach (var result in results)
+        {
+            if (!result.IsSuccess)
+            {
+                errors ??= [];
+                errors.Add(result.Error); // throws ResultException on a default result
+            }
+        }
+
+        return errors is null
+            ? Success()
+            : Failure(ErrorCollection.From(errors));
+    }
+
+    /// <summary>
+    /// Combines two generic results into a tuple. Fails fast on the first failure.
+    /// </summary>
+    /// <typeparam name="T1">The first value type.</typeparam>
+    /// <typeparam name="T2">The second value type.</typeparam>
+    /// <param name="first">The first result.</param>
+    /// <param name="second">The second result.</param>
+    /// <returns>A success holding both values, or the first failure.</returns>
+    /// <exception cref="ResultException">Thrown when a result before the first failure is uninitialized (<c>default</c>).</exception>
+    public static Result<(T1, T2)> Combine<T1, T2>(Result<T1> first, Result<T2> second)
+    {
+        if (first.IsFailure) return Result<(T1, T2)>.Failure(first.Error);
+        if (second.IsFailure) return Result<(T1, T2)>.Failure(second.Error);
+        return Result<(T1, T2)>.Success((first.Value, second.Value));
+    }
+
+    /// <summary>
+    /// Combines three generic results into a tuple. Fails fast on the first failure.
+    /// </summary>
+    /// <typeparam name="T1">The first value type.</typeparam>
+    /// <typeparam name="T2">The second value type.</typeparam>
+    /// <typeparam name="T3">The third value type.</typeparam>
+    /// <param name="first">The first result.</param>
+    /// <param name="second">The second result.</param>
+    /// <param name="third">The third result.</param>
+    /// <returns>A success holding the three values, or the first failure.</returns>
+    /// <exception cref="ResultException">Thrown when a result before the first failure is uninitialized (<c>default</c>).</exception>
+    public static Result<(T1, T2, T3)> Combine<T1, T2, T3>(
+        Result<T1> first, Result<T2> second, Result<T3> third)
+    {
+        if (first.IsFailure) return Result<(T1, T2, T3)>.Failure(first.Error);
+        if (second.IsFailure) return Result<(T1, T2, T3)>.Failure(second.Error);
+        if (third.IsFailure) return Result<(T1, T2, T3)>.Failure(third.Error);
+        return Result<(T1, T2, T3)>.Success((first.Value, second.Value, third.Value));
+    }
+
+    /// <summary>
+    /// Combines multiple generic results, collecting ALL errors.
+    /// </summary>
+    /// <typeparam name="T">The value type.</typeparam>
+    /// <param name="results">The results to combine.</param>
+    /// <returns>A single successful result, or a failure with all collected errors.</returns>
+    /// <exception cref="ResultException">Thrown when a result is uninitialized (<c>default</c>).</exception>
+    public static Result CombineAll<T>(params ReadOnlySpan<Result<T>> results)
+    {
+        List<IError>? errors = null;
+        foreach (var result in results)
+        {
+            if (!result.IsSuccess)
+            {
+                errors ??= [];
+                errors.Add(result.Error); // throws ResultException on a default result
+            }
+        }
+
+        return errors is null
+            ? Success()
+            : Failure(ErrorCollection.From(errors));
+    }
+
     /// <inheritdoc/>
     public bool Equals(Result other) =>
         _tag == other._tag && Equals(_error, other._error);
@@ -206,12 +307,6 @@ public readonly struct Result : IEquatable<Result>, IResultMarker
     public override int GetHashCode() =>
         HashCode.Combine(_tag, _error);
 
-    /// <summary>Determines whether two results are equal.</summary>
-    public static bool operator ==(Result left, Result right) => left.Equals(right);
-
-    /// <summary>Determines whether two results are not equal.</summary>
-    public static bool operator !=(Result left, Result right) => !left.Equals(right);
-
     /// <inheritdoc/>
     public override string ToString() => _tag switch
     {
@@ -219,4 +314,20 @@ public readonly struct Result : IEquatable<Result>, IResultMarker
         TagFailure => $"Result {{ Failure: [{_error!.Code}] {_error.Message} }}",
         _ => "Result { Uninitialized }",
     };
+
+    /// <summary>Determines whether two results are equal.</summary>
+    public static bool operator ==(Result left, Result right) => left.Equals(right);
+
+    /// <summary>Determines whether two results are not equal.</summary>
+    public static bool operator !=(Result left, Result right) => !left.Equals(right);
+
+    /// <summary>Implicitly converts an error to a failed <see cref="Result"/>.</summary>
+    /// <param name="error">The error describing the failure.</param>
+    /// <exception cref="ArgumentNullException">Thrown when <paramref name="error"/> is <see langword="null"/>.</exception>
+    public static implicit operator Result(Error error) => Failure(error);
+
+    /// <summary>Implicitly converts an error collection to a failed <see cref="Result"/>.</summary>
+    /// <param name="errors">The errors describing the failure.</param>
+    /// <exception cref="ArgumentNullException">Thrown when <paramref name="errors"/> is <see langword="null"/>.</exception>
+    public static implicit operator Result(ErrorCollection errors) => Failure(errors);
 }

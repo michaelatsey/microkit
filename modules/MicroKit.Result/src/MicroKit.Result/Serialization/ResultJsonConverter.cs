@@ -74,7 +74,14 @@ public sealed class ResultJsonConverter<T> : JsonConverter<Result<T>>
                 throw new JsonException("A successful result requires a 'value' property.");
             if (hasError)
                 throw new JsonException("A successful result cannot carry an 'error' property.");
-            return Result<T>.Success(value!);
+            try
+            {
+                return Result<T>.Success(value!);
+            }
+            catch (ArgumentException ex) // a null value (ADR-RESULT-001 D6) or a result used as the value
+            {
+                throw new JsonException("The 'value' of a successful result must not be null or a result.", ex);
+            }
         }
 
         if (!hasError)

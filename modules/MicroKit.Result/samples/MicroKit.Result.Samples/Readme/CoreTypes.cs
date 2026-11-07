@@ -13,6 +13,10 @@ internal static class CoreTypesSamples
 
         // implicit conversion from T
         Result<int> fromValue = 42;
+
+        // implicit conversion from an error: a failure
+        Result<int> fromError = new MyError();
+        Result commandFailed = new MyError();
     }
 
     internal sealed record MyError() : Error(ErrorCode.From("SAMPLE.ERROR"), "Sample error");
