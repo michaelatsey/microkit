@@ -50,7 +50,8 @@ Hardening before stable (#184). Breaking changes ship outright on `preview.*` (A
   collection that also holds an access, resource or server error answers that error, without `errors`.
 - `ResultJsonConverter<T>.Read` throws `JsonException` for a payload that does not describe a valid
   result: a success without `value` or with `error`, a failure without `error` or with `value`, a
-  duplicate `isSuccess`, an empty `code`.
+  duplicate `isSuccess`, an error without a non-empty `code` (missing, `null` or empty), a duplicate metadata
+  key.
 - The async extensions and `TryAsync` validate their arguments, the source task included, when called,
   before anything is awaited.
 - `ToHttpResult()` / `ResultProblemDetailsFactory.CreateProblemDetails`: a validation error, alone or in

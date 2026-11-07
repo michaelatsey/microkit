@@ -862,7 +862,7 @@ Reading rebuilds an `ErrorCollection`, a `DeserializedValidationError`, which ke
 
 ### Invalid payloads
 
-A payload that does not describe a valid result throws `JsonException`; it is never read as a success. That covers a success without `value` or with `error`, a failure without `error` or with `value`, a `null` value, a missing or duplicate `isSuccess`, and an empty `code`. Writing a `default` result throws `JsonException` too. [Troubleshooting](#jsonexception-when-reading-or-writing-a-result) lists every message.
+A payload that does not describe a valid result throws `JsonException`; it is never read as a success. That covers a success without `value` or with `error`, a failure without `error` or with `value`, a `null` value, a missing or duplicate `isSuccess`, an error without a non-empty `code` (missing, `null` or empty), and a duplicate metadata key. Writing a `default` result throws `JsonException` too. [Troubleshooting](#jsonexception-when-reading-or-writing-a-result) lists every message.
 
 ## Catch mistakes with the analyzers
 
@@ -1054,7 +1054,8 @@ Each entry quotes the message as the library or the compiler writes it.
 | `Expected an error object.` | `error` is not an object. |
 | `Expected a property name in the error object.` | The error object is malformed. |
 | `Duplicate '<name>' property in the error object.` | A property of the error appears twice. |
-| `The error 'code' must not be empty.` | `code` is empty or whitespace. |
+| `An error requires a non-empty 'code' property.` | `code` is missing, `null`, empty or whitespace, in any error object, a collection's included. |
+| `Duplicate '<key>' key in the error metadata.` | A metadata key appears twice. |
 | `Expected an array of errors.` | `errors` is not an array. |
 | `An error collection cannot be empty.` | `errors` is an empty array. |
 | `Expected a metadata object.` | `metadata` is not an object. |

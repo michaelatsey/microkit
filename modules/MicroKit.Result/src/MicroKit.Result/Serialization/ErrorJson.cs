@@ -85,6 +85,11 @@ internal static class ErrorJson
             }
         }
 
+        // Every error object carries its code, a collection's included: a missing, null or empty code does not
+        // describe a valid error.
+        if (string.IsNullOrWhiteSpace(code))
+            throw new JsonException("An error requires a non-empty 'code' property.");
+
         if (errors is not null)
         {
             if (errors.Count == 0)
@@ -92,15 +97,7 @@ internal static class ErrorJson
             return ErrorCollection.From(errors);
         }
 
-        ErrorCode errorCode;
-        try
-        {
-            errorCode = ErrorCode.From(code ?? "UNKNOWN");
-        }
-        catch (ArgumentException ex)
-        {
-            throw new JsonException("The error 'code' must not be empty.", ex);
-        }
+        var errorCode = ErrorCode.From(code);
 
         var parsedCategory = Enum.TryParse<ErrorCategory>(category, ignoreCase: true, out var c) && Enum.IsDefined(c)
             ? c
@@ -134,6 +131,8 @@ internal static class ErrorJson
         while (reader.Read() && reader.TokenType != JsonTokenType.EndObject)
         {
             var key = reader.GetString()!; // Safe: a property name inside an object, checked by the reader
+            if (metadata.ContainsKey(key))
+                throw new JsonException($"Duplicate '{key}' key in the error metadata.");
             reader.Read();
             metadata[key] = reader.TokenType switch
             {

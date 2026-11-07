@@ -376,10 +376,10 @@ public sealed class ErrorJsonRoundTripTests
     // ── Read defaults and rejections ──────────────────────────────────────
 
     [Fact]
-    public void Read_WhenCodeMessageCategoryAndSeverityMissing_UsesDefaults()
+    public void Read_WhenMessageCategoryAndSeverityMissing_UsesDefaults()
     {
         // Arrange
-        const string json = """{"isSuccess":false,"error":{}}""";
+        const string json = """{"isSuccess":false,"error":{"code":"A.B"}}""";
 
         // Act
         var result = JsonSerializer.Deserialize<Result<int>>(json, DefaultFactoryOptions);
@@ -387,11 +387,32 @@ public sealed class ErrorJsonRoundTripTests
         // Assert
         result.IsFailure.ShouldBeTrue();
         var error = result.Error.ShouldBeOfType<DeserializedError>();
-        error.Code.Value.ShouldBe("UNKNOWN");
+        error.Code.Value.ShouldBe("A.B");
         error.Message.ShouldBe("Unknown error");
         error.Category.ShouldBe(ErrorCategory.Technical);
         error.Severity.ShouldBe(ErrorSeverity.Error);
         error.Metadata.ShouldBeEmpty();
+    }
+
+    [Theory]
+    [InlineData("""{"isSuccess":false,"error":{}}""")]
+    [InlineData("""{"isSuccess":false,"error":{"code":null,"message":"m"}}""")]
+    [InlineData("""{"isSuccess":false,"error":{"code":"","message":"m"}}""")]
+    [InlineData("""{"isSuccess":false,"error":{"message":"m","errors":[{"message":"inner"}]}}""")]
+    public void Read_WhenCodeIsMissingNullOrEmpty_ThrowsJsonException(string json)
+    {
+        // Act + Assert: an error without a code does not describe a valid result
+        Should.Throw<JsonException>(() => JsonSerializer.Deserialize<Result<int>>(json, DefaultFactoryOptions));
+    }
+
+    [Fact]
+    public void Read_WhenMetadataHasADuplicateKey_ThrowsJsonException()
+    {
+        // Arrange
+        const string json = """{"isSuccess":false,"error":{"code":"A.B","message":"m","metadata":{"tenant":"a","tenant":"b"}}}""";
+
+        // Act + Assert
+        Should.Throw<JsonException>(() => JsonSerializer.Deserialize<Result<int>>(json, DefaultFactoryOptions));
     }
 
     [Theory]
