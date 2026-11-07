@@ -64,7 +64,8 @@ Hardening before stable (#184). Breaking changes ship outright on `preview.*` (A
   a `ValueTask<Result<T>>` (or `ValueTask<Result>`) that must be awaited. A statement such as
   `result.Tap(async x => ...);` in a synchronous method now drops that `ValueTask` (CA2012 reports it)
   instead of running an `async void`.
-- `Tap(null!)` is ambiguous (CS0121): cast the argument, `Tap((Action<T>)null!)`.
+- `Tap(null!)` now binds to the awaited `Func<T, Task>` overload. A method group with both a `void` and a
+  `Task`-returning overload is ambiguous (CS0121): pick one with a lambda or a cast.
 - A lambda that only throws (`_ => throw new X()`) binds to the awaited overload: the exception surfaces
   at the await.
 - `result.Equals(null)` no longer compiles (the `null` literal binds to `Equals(Result<T>)` through the

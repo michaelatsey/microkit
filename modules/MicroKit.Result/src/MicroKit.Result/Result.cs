@@ -248,8 +248,9 @@ public readonly struct Result : IEquatable<Result>, IResultMarker
     /// <exception cref="ResultException">Thrown when a result before the first failure is uninitialized (<c>default</c>).</exception>
     public static Result<(T1, T2)> Combine<T1, T2>(Result<T1> first, Result<T2> second)
     {
-        if (first.IsFailure) return Result<(T1, T2)>.Failure(first.Error);
-        if (second.IsFailure) return Result<(T1, T2)>.Failure(second.Error);
+        // !IsSuccess, not IsFailure: Error throws ResultException on a default result
+        if (!first.IsSuccess) return Result<(T1, T2)>.Failure(first.Error);
+        if (!second.IsSuccess) return Result<(T1, T2)>.Failure(second.Error);
         return Result<(T1, T2)>.Success((first.Value, second.Value));
     }
 
@@ -267,9 +268,9 @@ public readonly struct Result : IEquatable<Result>, IResultMarker
     public static Result<(T1, T2, T3)> Combine<T1, T2, T3>(
         Result<T1> first, Result<T2> second, Result<T3> third)
     {
-        if (first.IsFailure) return Result<(T1, T2, T3)>.Failure(first.Error);
-        if (second.IsFailure) return Result<(T1, T2, T3)>.Failure(second.Error);
-        if (third.IsFailure) return Result<(T1, T2, T3)>.Failure(third.Error);
+        if (!first.IsSuccess) return Result<(T1, T2, T3)>.Failure(first.Error);
+        if (!second.IsSuccess) return Result<(T1, T2, T3)>.Failure(second.Error);
+        if (!third.IsSuccess) return Result<(T1, T2, T3)>.Failure(third.Error);
         return Result<(T1, T2, T3)>.Success((first.Value, second.Value, third.Value));
     }
 

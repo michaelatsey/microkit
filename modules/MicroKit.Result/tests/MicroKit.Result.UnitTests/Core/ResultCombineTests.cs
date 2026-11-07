@@ -318,4 +318,16 @@ public sealed class ResultCombineTests
     }
 
     #endregion
+
+    [Fact]
+    public void Combine_Tuple_WhenADefaultComesBeforeAFailure_ThrowsResultException()
+    {
+        // Arrange
+        Result<int> uninitialized = default;
+        var failure = Result.Failure<string>(new TestSupport.OtherError());
+
+        // Act + Assert: the default is not hidden behind the later failure
+        Should.Throw<ResultException>(() => Result.Combine(uninitialized, failure));
+        Should.Throw<ResultException>(() => Result.Combine(uninitialized, failure, Result.Success(1)));
+    }
 }

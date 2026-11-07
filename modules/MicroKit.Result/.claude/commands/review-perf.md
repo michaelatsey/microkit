@@ -9,7 +9,7 @@
 Repère dans un fichier ou répertoire les risques de performance et d'allocations.
 Utilise l'agent `dotnet-reviewer` avec un focus spécifique performance.
 
-Lire le code ne mesure rien : chaque constat est un risque non mesuré, sans chiffre ni estimation d'impact, tant qu'un benchmark BenchmarkDotNet ne le confirme pas. Les benchmarks publiés du module vivent dans `tests/MicroKit.Result.PerformanceTests`, leurs mesures dans `README.md` (Performance Notes).
+Lire le code ne mesure rien : chaque constat est un risque non mesuré, sans chiffre ni estimation d'impact, tant qu'un benchmark BenchmarkDotNet ne le confirme pas. Les benchmarks publiés du module vivent dans `tests/MicroKit.Result.PerformanceTests`, leurs mesures dans `README.md` (Performance).
 
 ## Ce qui est analysé
 
@@ -24,7 +24,7 @@ Lire le code ne mesure rien : chaque constat est un risque non mesuré, sans chi
 - `async` method sans vrai `await` → à signaler. Retirer `async` change le moment où une exception sort : à l'appel plutôt qu'à l'`await`. Le fix ne vaut que si le comportement de chaque chemin d'exception reste celui attendu
 - `await Task.FromResult(x)` → retirer le wrapper
 - `ConfigureAwait(false)` manquant dans la librairie
-- `ValueTask` bloqué ou attendu deux fois (CA2012). Le choix `ValueTask<T>` lui-même suit la convention racine, mesuré face à `Task<T>` dans `README.md` (Performance Notes)
+- `ValueTask` bloqué ou attendu deux fois (CA2012). Le choix `ValueTask<T>` lui-même suit la convention racine, mesuré face à `Task<T>` dans `README.md` (Performance)
 
 ### LINQ
 - `.Where(p).First()` → `.First(p)`, même comportement quand rien ne correspond (`FirstOrDefault` retournerait `default` au lieu de lever)

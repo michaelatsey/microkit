@@ -77,7 +77,7 @@ Result<User> observed = result.TapError(e => logger.OperationFailed(e.Code));
 ```csharp
 // Transformer les deux rails : Map sur le succès, MapError sur l'échec
 // (EnrichedError : erreur applicative qui enveloppe l'erreur d'origine, et en reprend
-// Category, Severity et Metadata ; sinon elle répond 500, samples/.../Readme/Pipelines.cs)
+// Category, Severity et Metadata ; sinon elle répond 500, samples/.../Guide/Composing.cs)
 Result<UserDto> mapped = result
     .Map(v => v.ToDto())
     .MapError(e => new EnrichedError(e, correlationId));

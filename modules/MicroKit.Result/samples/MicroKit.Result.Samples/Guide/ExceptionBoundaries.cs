@@ -1,9 +1,10 @@
 using System.Data.Common;
 using Microsoft.Extensions.Logging;
 
-namespace MicroKit.Result.Samples.Readme;
+namespace MicroKit.Result.Samples.Guide;
 
-// README "Exception Boundaries": its C# blocks are here verbatim, modulo indentation; the rest only makes them build. Keep them identical to README.md.
+// Backs docs/guides/usage.md, "Handle exceptions at a boundary": its C# blocks are here verbatim, modulo indentation;
+// the rest only makes them build. Keep the two identical.
 internal static class ExceptionBoundariesSamples
 {
     internal static async Task MapperSample(IUserRepository repository, ILegacyUserClient legacyClient, ILogger logger, Guid id)

@@ -99,7 +99,7 @@ internal static class ResultGuard
     }
 }
 
-// ✅ Bon: ValueTask (convention racine ; mesuré face à Task dans README.md, Performance Notes),
+// ✅ Bon: ValueTask (convention racine ; mesuré face à Task dans README.md, Performance),
 // ConfigureAwait(false), et l'argument validé avant la partie async : un mapper null lève à l'appel,
 // comme Map (Microsoft Learn, Best practices for exceptions), ce que font les extensions async de src/.
 // Chacune a aussi une forme à CancellationToken dont le délégué retourne un ValueTask (ADR-RESULT-001 D8)

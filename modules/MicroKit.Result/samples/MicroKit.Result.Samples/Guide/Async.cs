@@ -1,27 +1,34 @@
-namespace MicroKit.Result.Samples.Readme;
+namespace MicroKit.Result.Samples.Guide;
 
-// README "Async": its C# blocks are here verbatim, modulo indentation; the rest only makes them build. Keep them identical to README.md.
+// Backs docs/guides/usage.md, "Compose asynchronously": its C# blocks are here verbatim, modulo indentation; the rest
+// only makes them build. Keep the two identical.
 internal static class AsyncSamples
 {
-    internal static async Task AsyncSample(Result<int> result, Result command, CancellationToken ct)
+    internal static async Task AsyncDelegateSample(Result<int> result)
     {
-        // Surface 1: async delegate on Result<T>
         Result<string> mapped = await result.MapAsync(async v => await TransformAsync(v));
         Result<string> chained = await result.BindAsync(async v => await GetNextAsync(v));
         Result<int> recovered = await result.CompensateAsync(async e => await FallbackAsync(e));
         Result<int> finished = await result.FinallyAsync(async r => await LogAsync(r));
 
-        // Surface 2: on Task<Result<T>> (sync delegate — awaits the task first)
+        // Tap, TapError and Finally given an async lambda await the side effect
+        Result<int> audited = await result.Tap(async v => await AuditAsync(v));
+    }
+
+    internal static async Task TaskSurfaceSample()
+    {
+        // On Task<Result<T>> and ValueTask<Result<T>>: a synchronous delegate, applied once the task completes
         Result<string> mappedTask = await GetResultTask().Map(v => Transform(v));
         Result<string> chainedTask = await GetResultTask().Bind(v => GetNext(v));
-
-        // Tap, TapError and Finally given an async lambda await the side effect, on every surface
-        Result<int> audited = await GetResultTask().Tap(async v => await AuditAsync(v));
-
-        // Surface 3: on ValueTask<Result<T>> (sync delegate)
         Result<string> mappedValueTask = await GetResultValueTask().Map(v => Transform(v));
 
-        // CancellationToken form: the delegate takes the token and returns a ValueTask, as a port does
+        // An async side effect is awaited on these surfaces too
+        Result<int> auditedTask = await GetResultTask().Tap(async v => await AuditAsync(v));
+    }
+
+    internal static async Task CancellationSample(Result<int> result, Result command, CancellationToken ct)
+    {
+        // The token form: the delegate takes the token and returns a ValueTask, as a port does
         Result<string> fetched = await result.BindAsync((v, token) => FetchAsync(v, token), ct);
 
         // The non-generic Result has the same operations, in both forms

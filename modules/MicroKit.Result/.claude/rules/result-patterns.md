@@ -95,7 +95,7 @@ Result<Order> enriched = orderResult.MapError(e => new EnrichedError(e, correlat
 Result<Product> product = productResult.Compensate(_ => GetDefaultProduct());
 ```
 
-Une erreur qui en enveloppe une autre reprend sa `Category`, sa `Severity` et ses `Metadata` ; sinon elle vaut `Technical` et répond 500 (`samples/MicroKit.Result.Samples/Readme/Pipelines.cs`).
+Une erreur qui en enveloppe une autre reprend sa `Category`, sa `Severity` et ses `Metadata` ; sinon elle vaut `Technical` et répond 500 (`samples/MicroKit.Result.Samples/Guide/Composing.cs`).
 
 ### ✅ TapError pour gérer les side-effects sur l'échec
 ```csharp
@@ -209,7 +209,7 @@ return Result.Failure(errors);
 public ValueTask<Result<T>> GetAsync(Guid id, CancellationToken ct = default);
 ```
 
-Son coût face à `Task<T>` est mesuré dans `README.md` (Performance Notes) : plus rapide et plus petit en complétion synchrone, un peu plus lent et plus gros quand l'opération cède vraiment.
+Son coût face à `Task<T>` est mesuré dans `README.md` (Performance) : plus rapide et plus petit en complétion synchrone, un peu plus lent et plus gros quand l'opération cède vraiment.
 
 ### ✅ Un ValueTask s'attend directement, une seule fois (CA2012)
 ```csharp

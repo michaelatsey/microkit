@@ -7,7 +7,7 @@ description: Use when making or reviewing an allocation or latency claim about M
 
 ## La règle : toute affirmation est mesurée
 
-`tests/MicroKit.Result.PerformanceTests` est une application BenchmarkDotNet. `README.md` (Performance Notes) publie ses mesures, avec la machine et le SDK, contre ErrorOr et FluentResults : création, chaîne `Map`/`Bind` sur les deux rails, `ValueTask` face à `Task`, `ErrorCollection.From`. Ce skill ne recopie pas les chiffres : il renvoie au README.
+`tests/MicroKit.Result.PerformanceTests` est une application BenchmarkDotNet. `README.md` (Performance) publie ses mesures, avec la machine et le SDK, contre ErrorOr et FluentResults : création, chaîne `Map`/`Bind` sur les deux rails, `ValueTask` face à `Task`, `ErrorCollection.From`. Ce skill ne recopie pas les chiffres : il renvoie au README.
 
 Une affirmation de performance est soit une sortie de BenchmarkDotNet avec sa machine et son SDK, soit une hypothèse présentée comme telle.
 
@@ -106,7 +106,7 @@ public sealed class ErrorCollection : IError, IReadOnlyList<IError>
 ```
 
 ### 5. ValueTask<T>
-`ValueTask<T>` est la convention racine ; son coût face à `Task<T>` est mesuré dans `README.md` (Performance Notes, #184 Phase 7) : plus rapide et plus petit en complétion synchrone, un peu plus lent et plus gros quand l'opération cède vraiment. Il s'attend directement et une seule fois, sans `.Result` ni `.GetAwaiter().GetResult()` avant complétion (CA2012).
+`ValueTask<T>` est la convention racine ; son coût face à `Task<T>` est mesuré dans `README.md` (Performance, #184 Phase 7) : plus rapide et plus petit en complétion synchrone, un peu plus lent et plus gros quand l'opération cède vraiment. Il s'attend directement et une seule fois, sans `.Result` ni `.GetAwaiter().GetResult()` avant complétion (CA2012).
 
 ```csharp
 public async ValueTask<Result<User>> GetUserAsync(Guid id, CancellationToken ct = default)

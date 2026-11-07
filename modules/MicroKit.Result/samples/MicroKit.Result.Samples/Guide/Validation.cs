@@ -1,6 +1,7 @@
-namespace MicroKit.Result.Samples.Readme;
+namespace MicroKit.Result.Samples.Guide;
 
-// README "Validation": its C# blocks are here verbatim, modulo indentation; the rest only makes them build. Keep them identical to README.md.
+// Backs docs/guides/usage.md, "Validate input": its C# blocks are here verbatim, modulo indentation; the rest only
+// makes them build. Keep the two identical.
 internal static class ValidationSamples
 {
     internal static void ValidationErrorFactoriesSample()
@@ -32,7 +33,29 @@ internal static class ValidationSamples
         return CreateOrder(name, age, email);
     }
 
+    internal static Result<Registration> SuccessOrFailureSample(string email, string password)
+    {
+        return new ValidationResult()
+            .AddErrorIf(string.IsNullOrWhiteSpace(email), "Email", "Email is required.")
+            .AddErrorIf(password.Length < 8, "Password", "Password must be at least 8 characters.")
+            .ToResult(new Registration(email, password)); // the value on success, every error on failure
+    }
+
+    internal static Result<EmailAddress> ParseEmail(string input)
+    {
+        if (string.IsNullOrWhiteSpace(input))
+            return ValidationError.Required("Email"); // one validation error converts to a failure
+        if (!input.Contains('@'))
+            return ValidationError.InvalidEmail();
+
+        return new EmailAddress(input);
+    }
+
     internal sealed record Order;
+
+    internal sealed record EmailAddress(string Value);
+
+    internal sealed record Registration(string Email, string Password);
 
     private static Result<Order> CreateOrder(string name, int age, string email) => throw new NotSupportedException();
 }

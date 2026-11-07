@@ -58,7 +58,7 @@ Jamais → méthode qui throw dans un pipeline Result
 
 ### Async
 ```
-Retour → ValueTask<T> (convention racine) ; mesuré face à Task<T> dans README.md (Performance Notes)
+Retour → ValueTask<T> (convention racine) ; mesuré face à Task<T> dans README.md (Performance)
 Jamais → async void
 ```
 
