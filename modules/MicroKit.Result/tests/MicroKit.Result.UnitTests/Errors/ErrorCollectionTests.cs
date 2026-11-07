@@ -671,4 +671,20 @@ public sealed class ErrorCollectionTests
     {
         public override ErrorCategory Category => Kind;
     }
+
+    [Fact]
+    public void From_WhenAnElementIsNull_ThrowsArgumentExceptionNamingErrors()
+    {
+        // Arrange
+        IError valid = new TestSupport.OtherError();
+
+        // Act
+        var fromArray = Should.Throw<ArgumentException>(() => ErrorCollection.From(valid, null!));
+        var fromSequence = Should.Throw<ArgumentException>(() => ErrorCollection.From(new List<IError> { valid, null! }));
+
+        // Assert: not a NullReferenceException from the constructor
+        fromArray.ShouldNotBeOfType<ArgumentNullException>();
+        fromArray.ParamName.ShouldBe("errors");
+        fromSequence.ParamName.ShouldBe("errors");
+    }
 }

@@ -69,13 +69,15 @@ public sealed class ErrorCollection : IError, IReadOnlyList<IError>
     /// </summary>
     /// <param name="errors">The errors to include.</param>
     /// <returns>A new <see cref="ErrorCollection"/>.</returns>
-    /// <exception cref="ArgumentException">Thrown when <paramref name="errors"/> is empty.</exception>
+    /// <exception cref="ArgumentException">Thrown when <paramref name="errors"/> is empty or holds a <see langword="null"/> error.</exception>
     public static ErrorCollection From(params IError[] errors)
     {
         ArgumentNullException.ThrowIfNull(errors);
         if (errors.Length == 0)
             throw new ArgumentException("An ErrorCollection must contain at least one error.", nameof(errors));
-        return new ErrorCollection(ImmutableArray.Create(errors));
+        var array = ImmutableArray.Create(errors);
+        EnsureNoNull(array, nameof(errors));
+        return new ErrorCollection(array);
     }
 
     /// <summary>
@@ -83,13 +85,14 @@ public sealed class ErrorCollection : IError, IReadOnlyList<IError>
     /// </summary>
     /// <param name="errors">The errors to include.</param>
     /// <returns>A new <see cref="ErrorCollection"/>.</returns>
-    /// <exception cref="ArgumentException">Thrown when <paramref name="errors"/> is empty.</exception>
+    /// <exception cref="ArgumentException">Thrown when <paramref name="errors"/> is empty or holds a <see langword="null"/> error.</exception>
     public static ErrorCollection From(IEnumerable<IError> errors)
     {
         ArgumentNullException.ThrowIfNull(errors);
         var array = errors.ToImmutableArray();
         if (array.IsEmpty)
             throw new ArgumentException("An ErrorCollection must contain at least one error.", nameof(errors));
+        EnsureNoNull(array, nameof(errors));
         return new ErrorCollection(array);
     }
 
@@ -182,6 +185,15 @@ public sealed class ErrorCollection : IError, IReadOnlyList<IError>
         return groups.ToDictionary(
             kvp => kvp.Key,
             kvp => (IReadOnlyList<IError>)kvp.Value.AsReadOnly());
+    }
+
+    private static void EnsureNoNull(ImmutableArray<IError> errors, string paramName)
+    {
+        foreach (var error in errors)
+        {
+            if (error is null)
+                throw new ArgumentException("An ErrorCollection cannot contain a null error.", paramName);
+        }
     }
 
     private static ErrorCategory SelectCategory(ImmutableArray<IError> errors)
