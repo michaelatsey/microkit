@@ -19,7 +19,12 @@ internal static class ExceptionBoundariesSamples
         IError ToRemoteCallError(Exception ex)
         {
             logger.RemoteCallFailed(ex);
-            return ex is HttpRequestException ? new RemoteCallError() : new TechnicalError();
+            return ex switch
+            {
+                TaskCanceledException { InnerException: TimeoutException } => new RemoteTimeoutError(), // an HttpClient timeout
+                HttpRequestException => new RemoteCallError(),
+                _ => new TechnicalError(),
+            };
         }
 
         Result<User> loaded = await Result<User>.TryAsync(
@@ -54,6 +59,12 @@ internal static class ExceptionBoundariesSamples
         : Error(ErrorCode.ExternalServiceFailure, "The remote service call failed.")
     {
         public override ErrorCategory Category => ErrorCategory.External;
+    }
+
+    public sealed record RemoteTimeoutError()
+        : Error(ErrorCode.Timeout, "The remote service did not respond in time.")
+    {
+        public override ErrorCategory Category => ErrorCategory.Timeout;
     }
 
     internal sealed record User;

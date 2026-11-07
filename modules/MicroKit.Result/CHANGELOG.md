@@ -32,7 +32,7 @@ First public pre-release of MicroKit.Result.
 - `ExceptionError` (internal) — wraps exceptions caught by `Try` / `TryAsync`
 - `ResultException` for safe unwrap-or-throw scenarios
 - Sync extensions: `Map`, `Bind`, `Tap`, `TapError`, `Ensure`, `Match`, `MapError`, `Compensate`, `Finally`
-- `AsyncResultExtensions` — full `ValueTask<Result<T>>` pipeline (all nine operations)
+- `AsyncResultExtensions` — async counterparts of the nine operations of `Result<T>`, each returning a `ValueTask`: `MapAsync`, `BindAsync`… on `Result<T>` with a `Task`-returning delegate, and `Map`, `Bind`… on `Task<Result<T>>` and `ValueTask<Result<T>>` with a synchronous delegate
 - `ResultCombineExtensions` — `Combine` (fail-fast) and `CombineAll` (collect-all)
 - `ResultEnumerableExtensions` — `Partition`, `Successes`, `Failures`, `Traverse`
 - `ResultLinqExtensions` — LINQ query syntax (`from x in result select ...`)
@@ -40,7 +40,7 @@ First public pre-release of MicroKit.Result.
 - `ValidationError` and `ValidationResult` — structured validation support
 - `ErrorExtensions` — `IsCategory`, `IsCritical`, `IsWarning`, `IsInformation`, `HasMetadata`, `TryGetMetadata`, `ToException`
 - **MicroKit.Result.AspNetCore**: `ResultHttpExtensions`, `ResultProblemDetailsFactory`
-  - Automatic `ErrorCategory` → HTTP status code mapping (404/422/401/403/409/429/500/503)
+  - Automatic `ErrorCategory` → HTTP status code mapping (404/422/401/403/409/429/500/503/502/501/408/499/412)
 - **Serialization**: `ResultJsonConverter<T>` and `ResultJsonConverterFactory` — System.Text.Json converters for `Result<T>`, annotated `[RequiresUnreferencedCode]` / `[RequiresDynamicCode]`
 
 ### Fixed

@@ -22,13 +22,11 @@ Every operation stays on one of these rails: a predictable outcome is a value, n
 - `Result<T>` is a `readonly struct`; whether a pipeline allocates depends on its lambdas and errors (see [Performance Notes](#performance-notes))
 - `byte _tag` discriminator: `default` is neither success nor failure, and reading it throws (with the gaps listed under [Combining Results](#combining-results) and [Enumerable Extensions](#enumerable-extensions))
 - `sealed` by default; throws live in a `ThrowHelper`, outside the calling methods
-- NativeAOT / trim-safe core; reflection is confined to the JSON converters (`MicroKit.Result.Serialization` namespace, annotated `[RequiresUnreferencedCode]` / `[RequiresDynamicCode]`)
+- Trim-safe core, checked by the trim analyzer (`IsTrimmable`); reflection is confined to the JSON converters (`MicroKit.Result.Serialization` namespace, annotated `[RequiresUnreferencedCode]` / `[RequiresDynamicCode]`). NativeAOT compatibility is not checked yet: #184 Phase 2 sets `IsAotCompatible`, so the AOT analyzer guards it
 
 ---
 
 ## Installation
-
-Only prerelease versions are published, so the install needs `--prerelease`:
 
 ```bash
 dotnet add package MicroKit.Result --prerelease
@@ -255,7 +253,7 @@ Result<Order> result = GetOrder(id)
     .MapError(e => new EnrichedError(e, correlationId));
 ```
 
-`EnrichedError` is an application type. A wrapper like it forwards the `Category`, `Severity` and `Metadata` of the error it wraps, or the response falls back to 500 (see `samples/MicroKit.Result.Samples/Readme/Pipelines.cs`). Wrapping an `ErrorCollection` still drops its `errors` list from the `ProblemDetails`.
+`EnrichedError` is an application type. A wrapper like it forwards the `Category`, `Severity` and `Metadata` of the error it wraps, or the response falls back to 500; `EnrichedError` adds its `CorrelationId` to that `Metadata` (see `samples/MicroKit.Result.Samples/Readme/Pipelines.cs`). Wrapping an `ErrorCollection` still drops its `errors` list from the `ProblemDetails`.
 
 ### Compensate — fallback on failure
 
@@ -505,6 +503,12 @@ public sealed record RemoteCallError()
     public override ErrorCategory Category => ErrorCategory.External;
 }
 
+public sealed record RemoteTimeoutError()
+    : Error(ErrorCode.Timeout, "The remote service did not respond in time.")
+{
+    public override ErrorCategory Category => ErrorCategory.Timeout;
+}
+
 internal static partial class InfrastructureLog
 {
     [LoggerMessage(Level = LogLevel.Error, Message = "Database call failed")]
@@ -529,7 +533,12 @@ Result<User> result = Result<User>.Try(() => repository.GetUser(id), ToDatabaseE
 IError ToRemoteCallError(Exception ex)
 {
     logger.RemoteCallFailed(ex);
-    return ex is HttpRequestException ? new RemoteCallError() : new TechnicalError();
+    return ex switch
+    {
+        TaskCanceledException { InnerException: TimeoutException } => new RemoteTimeoutError(), // an HttpClient timeout
+        HttpRequestException => new RemoteCallError(),
+        _ => new TechnicalError(),
+    };
 }
 
 Result<User> loaded = await Result<User>.TryAsync(
@@ -556,7 +565,7 @@ public async ValueTask<Result<User>> GetUserAsync(Guid id, CancellationToken ct 
 
 Current behavior that #184 Phase 2 changes:
 
-- Every `Try` / `TryAsync` overload catches `OperationCanceledException`. Phase 2 makes the overloads without a mapper rethrow it; with a mapper, the mapper decides, and the mappers above turn it into a `TechnicalError`. That is why `Try` / `TryAsync` are kept for calls that take no token.
+- Every `Try` / `TryAsync` overload catches `OperationCanceledException`. Phase 2 makes the overloads without a mapper rethrow it; with a mapper, the mapper decides, and the mappers above turn it into a `TechnicalError`, except an `HttpClient` timeout, which `ToRemoteCallError` turns into a `RemoteTimeoutError`. That is why `Try` / `TryAsync` are kept for calls that take no token.
 - Without a mapper, the error's message is `Exception.Message`. `ToHttpResult()` writes it to `ProblemDetails.Detail`, or to `errors[].message` inside a collection, and `ResultJsonConverter<T>` to `error.message`. Phase 2 replaces it with a generic message.
 
 ---

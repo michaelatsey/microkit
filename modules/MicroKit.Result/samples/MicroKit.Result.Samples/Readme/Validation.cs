@@ -8,15 +8,15 @@ internal static class ValidationSamples
         ValidationError[] errors =
         [
             ValidationError.Required("Email"),
-    ValidationError.MinLength("Password", 8),
-    ValidationError.MaxLength("Username", 50),
-    ValidationError.StringLength("Bio", 10, 500),
-    ValidationError.OutOfRange("Age", min: 0, max: 120),
-    ValidationError.InvalidFormat("PostalCode", hint: "5 digits"),
-    ValidationError.InvalidEmail(),
-    ValidationError.InvalidUrl("WebsiteUrl"),
-    ValidationError.Custom("Field", "Custom message"),
-];
+            ValidationError.MinLength("Password", 8),
+            ValidationError.MaxLength("Username", 50),
+            ValidationError.StringLength("Bio", 10, 500),
+            ValidationError.OutOfRange("Age", min: 0, max: 120),
+            ValidationError.InvalidFormat("PostalCode", hint: "5 digits"),
+            ValidationError.InvalidEmail(),
+            ValidationError.InvalidUrl("WebsiteUrl"),
+            ValidationError.Custom("Field", "Custom message"),
+        ];
     }
 
     internal static void ValidationResultSample(string name, int age, string email)

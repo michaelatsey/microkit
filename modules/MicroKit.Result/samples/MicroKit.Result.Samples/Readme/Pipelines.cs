@@ -98,13 +98,15 @@ internal static class PipelinesSamples
     }
 
     // A wrapper forwards the wrapped error's category, severity and metadata; without them it answers 500.
+    // The correlation id joins the forwarded metadata, which stays in process: ProblemDetails does not emit it.
     internal sealed record EnrichedError(IError Inner, string CorrelationId) : Error(Inner.Code, Inner.Message)
     {
         public override ErrorCategory Category => Inner.Category;
 
         public override ErrorSeverity Severity => Inner.Severity;
 
-        public override IReadOnlyDictionary<string, object?> Metadata => Inner.Metadata;
+        public override IReadOnlyDictionary<string, object?> Metadata =>
+            new ErrorMetadataBuilder().Merge(Inner.Metadata).WithCorrelationId(CorrelationId).Build();
     }
 
     internal sealed class MyException(IError error) : Exception(error.Message);
