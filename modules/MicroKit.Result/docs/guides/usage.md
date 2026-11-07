@@ -568,7 +568,7 @@ IEnumerable<IError> failures = results.Failures();
 Result<IReadOnlyList<OrderDto>> dtos = orderIds.Traverse(id => FindOrder(id).Map(o => o.ToDto()));
 ```
 
-`Combine`, `CombineAll`, `Partition`, `Successes`, `Failures` and `Traverse` throw `ResultException` on a `default` result. They never read it as a success.
+`CombineAll`, `Partition`, `Successes` and `Failures` throw `ResultException` on a `default` result. The fail-fast `Combine` and `Traverse` throw on one they reach, and stop at the first failure, so a `default` after it goes unread. None of them reads a `default` as a success.
 
 ## Handle exceptions at a boundary
 
@@ -760,7 +760,8 @@ A lambda that returns both `ToHttpResult()` and another typed result, such as `T
   "title": "Not Found",
   "status": 404,
   "detail": "User 0b5f8c1e-2d7a-4a8e-9c3b-6f1d2e4a5b6c not found",
-  "errorCode": "USER.NOT_FOUND"
+  "errorCode": "USER.NOT_FOUND",
+  "traceId": "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-00"
 }
 ```
 

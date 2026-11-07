@@ -859,7 +859,7 @@ public sealed class CancellationOverloadTests
         var port = new RecordingPort();
         var result = Result.Success(3);
 
-        // Act — the README pattern: result.BindAsync((u, ct) => repository.GetAsync(u.Id, ct), ct)
+        // Act — the usage guide's token form (docs/guides/usage.md, Compose asynchronously)
         Result<string> bound = await result.BindAsync((v, ct) => port.FindAsync(v, ct), cts.Token);
 
         // Assert
