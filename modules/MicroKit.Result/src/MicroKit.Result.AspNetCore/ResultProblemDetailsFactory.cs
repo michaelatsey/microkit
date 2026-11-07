@@ -20,8 +20,8 @@ public static class ResultProblemDetailsFactory
     /// <see cref="HttpValidationProblemDetails.Errors"/> groups the validation messages by
     /// <see cref="IValidationError.PropertyName"/>, each property's messages in order; other errors are not listed
     /// there. Any other category — a server, access or resource error — never carries field errors, whatever errors a
-    /// collection also holds: an unauthenticated caller, for one, receives no validation detail. Otherwise the result
-    /// is a <see cref="ProblemDetails"/>.
+    /// collection also holds; its <see cref="ProblemDetails.Detail"/> and <c>errorCodes</c> still name every error of
+    /// the collection, validation errors included (below). Otherwise the result is a <see cref="ProblemDetails"/>.
     /// </para>
     /// <para>
     /// <see cref="ProblemDetails.Detail"/> is <see cref="IError.Message"/>, which the error contract keeps safe for

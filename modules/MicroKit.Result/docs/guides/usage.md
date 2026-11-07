@@ -781,7 +781,7 @@ A validation error, alone or in an `ErrorCollection`, answers an `HttpValidation
 }
 ```
 
-Only a `Validation` or `BusinessRule` response carries field errors. An `ErrorCollection` that mixes a validation error with a `Technical` one answers 500, with an `Unauthorized` one 401, with a `NotFound` one 404, each without `errors`: an unauthenticated caller receives no validation detail.
+Only a `Validation` or `BusinessRule` response carries field errors. An `ErrorCollection` that mixes a validation error with a `Technical` one answers 500, with an `Unauthorized` one 401, with a `NotFound` one 404, each without `errors`; `detail` and `errorCodes` still give every error's message and code, the validation ones included.
 
 ### Use the factory directly
 
