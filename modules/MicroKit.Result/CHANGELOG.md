@@ -116,6 +116,12 @@ Hardening before stable (#184). Breaking changes ship outright on `preview.*` (A
 - The non-generic `Result` has a converter, `ResultJsonConverter`, carried by the type: returned as is, it
   serializes as `{"isSuccess":…}` without `metadata`. The factory converts `Result` too.
 
+### Performance (Phase 7)
+- Published BenchmarkDotNet figures in the README (machine and SDK stated), against ErrorOr 2.1.1 and
+  FluentResults 4.0.0, and `ValueTask<Result<T>>` against `Task<Result<T>>`.
+- `ErrorCollection` keeps its `Message` built by `string.Join` over LINQ: the best measured candidate gained
+  18–19 %, under the 20 % the phase required to change the failure-rail path.
+
 ### Removed
 - The internal, unused `ResultState` enum.
 - `ResultCombineExtensions`: its members are on `Result`.

@@ -10,7 +10,7 @@
     <IsTrimmable>false</IsTrimmable>
     <Description>Roslyn analyzers for MicroKit.Result — a discarded Result (MKR001) and an Error subtype that keeps the default Technical category (MKR002).</Description>
     <PackageTags>microkit;result;analyzers;roslyn;railway;dotnet</PackageTags>
-    <!-- NU5128: an analyzer package has no lib/ folder, as in MicroKit.Persistence.Analyzers. -->
+    <!-- NU5128: an analyzer package has no lib/ folder, as in the Persistence analyzers. -->
     <NoWarn>$(NoWarn);NU5128</NoWarn>
     <!-- A build-time package: `dotnet add package` writes PrivateAssets="all" for the consumer. -->
     <DevelopmentDependency>true</DevelopmentDependency>

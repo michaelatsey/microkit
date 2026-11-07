@@ -32,7 +32,7 @@ Un écart déjà nommé par `.claude/CLAUDE.md` avec sa phase de #184 n'est pas 
 ### Performance
 - [ ] Pas d'allocation inutile dans les hot paths (Map, Bind, Match)
 - [ ] `readonly` sur les champs immuables
-- [ ] Pas de `LINQ` sur les collections dans les constructeurs d'Error (le constructeur d'`ErrorCollection` le fait : écart nommé par `.claude/CLAUDE.md`)
+- [ ] Pas de `LINQ` sur les collections dans les constructeurs d'Error (le constructeur d'`ErrorCollection` le fait, mesuré et gardé faute d'un gain de 20 % : `.claude/CLAUDE.md`, garantie performance)
 - [ ] `string.IsNullOrEmpty` pas `== null || == ""` (`IsNullOrWhiteSpace` change le résultat pour `" "`)
 - [ ] Pas de `.ToString()` sur des types value inutilement
 
@@ -99,7 +99,7 @@ internal static class ResultGuard
     }
 }
 
-// ✅ Bon: ValueTask (convention racine ; son gain face à Task n'est pas mesuré, la Phase 7 le mesure),
+// ✅ Bon: ValueTask (convention racine ; mesuré face à Task dans README.md, Performance Notes),
 // ConfigureAwait(false), et l'argument validé avant la partie async : un mapper null lève à l'appel,
 // comme Map (Microsoft Learn, Best practices for exceptions), ce que font les extensions async de src/.
 // Chacune a aussi une forme à CancellationToken dont le délégué retourne un ValueTask (ADR-RESULT-001 D8)

@@ -209,7 +209,7 @@ return Result.Failure(errors);
 public ValueTask<Result<T>> GetAsync(Guid id, CancellationToken ct = default);
 ```
 
-Son gain face à `Task<T>` n'est pas mesuré ; #184 Phase 7 le mesure.
+Son coût face à `Task<T>` est mesuré dans `README.md` (Performance Notes) : plus rapide et plus petit en complétion synchrone, un peu plus lent et plus gros quand l'opération cède vraiment.
 
 ### ✅ Un ValueTask s'attend directement, une seule fois (CA2012)
 ```csharp

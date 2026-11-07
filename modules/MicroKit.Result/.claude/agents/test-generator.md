@@ -18,7 +18,7 @@ Tu lances les tests que tu écris avant de rendre la main.
 - **Mocking**: NSubstitute
 - **Propriétés**: FsCheck.Xunit 3.6.0 (`Directory.Packages.props`), l'intégration xunit v2 qui correspond à xunit 2.9.3 ; `[Property(MaxTest = 100)]` écrit explicitement, comme dans `tests/MicroKit.Result.UnitTests/Properties/MonadLawTests.cs`
 
-Les benchmarks ne sont pas de ton ressort : la Phase 7 les écrit.
+Les benchmarks ne sont pas de ton ressort : ils vivent dans `tests/MicroKit.Result.PerformanceTests` (BenchmarkDotNet).
 
 ## Exécution
 

@@ -6,7 +6,7 @@
     <IsPublishable>false</IsPublishable>
     <IsTestProject>true</IsTestProject>
     <GenerateDocumentationFile>false</GenerateDocumentationFile>
-    <!-- CS0618/NU1701: Microsoft.CodeAnalysis.Testing 1.1.x, as in MicroKit.Persistence.Analyzers.Tests -->
+    <!-- CS0618/NU1701: Microsoft.CodeAnalysis.Testing 1.1.x, as in the Persistence analyzer tests -->
     <NoWarn>$(NoWarn);CS1591;CA1707;CS0618;NU1701</NoWarn>
   </PropertyGroup>
   <ItemGroup>

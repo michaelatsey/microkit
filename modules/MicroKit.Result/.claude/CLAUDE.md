@@ -32,8 +32,8 @@ Une note d'écart décrit le comportement actuel. La PR d'une phase retire ou r�
   - Les convertisseurs JSON conservent sur un aller-retour `Severity`, `PropertyName` et les erreurs d'une `ErrorCollection` (et `Metadata` sur option) ; la lecture reconstruit une `ErrorCollection`, une `DeserializedValidationError` ou une `DeserializedError`. Sérialiser un `default` lève `JsonException` avec un message clair.
   - `ToHttpResult`, `ToCreatedHttpResult` et `ToAcceptedHttpResult` retournent des `TypedResults` ; les problem details passent par l'`IProblemDetailsService` de l'hôte ; `type` est la section qu'ASP.NET Core connaît pour le statut (RFC 9110, RFC 4918 pour 422), absente pour 429 et 499 ; `Timeout` répond 504 (`rules/result-patterns.md`).
 - **Performance : toute affirmation est mesurée.**
-  - Écart : aucun benchmark n'existe, `tests/MicroKit.Result.PerformanceTests` ne contient que son `.csproj`. La Phase 7 publie les mesures. D'ici là, une affirmation de performance est une hypothèse et se présente comme telle.
-  - Écart, Phase 7 : le constructeur d'`ErrorCollection` construit `Message` par LINQ (`ErrorCollection.cs:26`), ce que la checklist de `agents/dotnet-reviewer.md` bloque dans un nouveau code. La Phase 7 mesure ce chemin, et il ne change que si la mesure en montre le coût.
+  - `tests/MicroKit.Result.PerformanceTests` est une application BenchmarkDotNet ; `README.md` (Performance Notes) publie ses mesures avec la machine et le SDK, contre ErrorOr et FluentResults. Une affirmation de performance cite une mesure de ce projet ; sinon c'est une hypothèse, présentée comme telle.
+  - `ErrorCollection` construit `Message` par `string.Join` sur LINQ, ce que la checklist de `agents/dotnet-reviewer.md` bloque dans un nouveau code : mesuré (`ErrorCollectionBenchmarks`), le meilleur candidat ne gagnait que 18–19 % sur le rail d'échec, sous les 20 % que la Phase 7 exigeait pour changer ce chemin. Il reste tel quel.
   - `IsAotCompatible` est actif dans `src/MicroKit.Result/MicroKit.Result.csproj` et `src/MicroKit.Result.AspNetCore/MicroKit.Result.AspNetCore.csproj` : les analyseurs de trimming, de single-file et d'AOT tournent en Release, sans avertissement ; la réflexion reste confinée aux convertisseurs JSON, annotés `[RequiresUnreferencedCode]` / `[RequiresDynamicCode]`.
 
 ## 🏛️ Philosophie Architecturale
@@ -66,7 +66,7 @@ Unit            ← void-safe pour les génériques
 - Nullable Reference Types: `enable`
 - `readonly record struct` pour les value objects sans héritage (`ErrorCode`, `Unit`) : ce module déroge ici à la convention racine, `sealed record` pour les value objects
 - `sealed record` pour les types référence fermés
-- `ValueTask<T>` pour l'async (convention racine). Son gain face à `Task<T>` n'est pas mesuré ; la Phase 7 de #184 le mesure
+- `ValueTask<T>` pour l'async (convention racine) ; son coût face à `Task<T>` est mesuré dans `README.md` (Performance Notes, #184 Phase 7) : plus rapide et plus petit quand l'opération se termine de façon synchrone, jusqu'à 6 % plus lent et 13 % plus gros quand elle cède vraiment. La spec de #184 renvoie hors de l'issue la question de convention que la mesure pose
 
 ### Interdictions
 - ❌ `throw` dans les flux métier normaux
@@ -102,10 +102,12 @@ Les patterns autorisés (`Map`, `Bind`, `Match`, `Tap`, `Ensure`, `MapError`, `C
 
 ## 🚀 Performance
 
-Hypothèses non mesurées, que la Phase 7 de #184 confirme ou infirme :
+Mesuré (`README.md`, Performance Notes, sur la machine qu'il indique) :
 
-1. `Result<T>` étant un struct, `Map` et `Bind` n'allouent rien sur le chemin succès avec une lambda sans capture ; une lambda qui capture alloue à chaque appel
-2. `ValueTask<T>` évite une allocation quand le résultat est disponible de façon synchrone
+1. `Result.Success(value)` et `Result.Failure<T>(error)` n'allouent rien ; `Map` et `Bind` n'allouent rien sur les deux rails avec des lambdas sans capture
+2. `ValueTask<T>` évite une allocation quand le résultat est disponible de façon synchrone (0 B contre 80 B pour un port) ; quand l'opération cède vraiment, `Task<T>` est un peu plus rapide et alloue un peu moins
+
+Hypothèse non mesurée : une lambda qui capture, un `Ensure` dont l'erreur est construite à chaque appel, un `Where` ou une requête LINQ allouent à chaque appel.
 
 Fait de conception : `ErrorCollection` est matérialisée à la construction (`ImmutableArray<IError>`, `Message` calculé une fois) ; ne la créer que sur le rail d'échec.
 

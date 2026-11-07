@@ -590,4 +590,59 @@ public sealed class ErrorCollectionTests
     {
         public override ErrorCategory Category => ErrorCategory.External;
     }
+
+    [Fact]
+    public void Message_WhenAnErrorHasANullMessage_JoinsItAsEmpty()
+    {
+        // Arrange
+        var collection = ErrorCollection.From(new NullMessageError(), new TestSupport.OtherError());
+
+        // Act
+        var message = collection.Message;
+
+        // Assert: as string.Join did before Phase 7
+        message.ShouldBe("; Other error");
+    }
+
+    private sealed class NullMessageError : IError
+    {
+        public ErrorCode Code => ErrorCode.From("TEST.NULL");
+
+        public string Message => null!;
+
+        public ErrorCategory Category => ErrorCategory.Technical;
+
+        public ErrorSeverity Severity => ErrorSeverity.Error;
+
+        public IReadOnlyDictionary<string, object?> Metadata => ErrorMetadata.Empty;
+    }
+
+    [Fact]
+    public void From_WhenMessageIsComputed_ReadsItOnce()
+    {
+        // Arrange
+        var error = new CountingMessageError();
+
+        // Act
+        var collection = ErrorCollection.From(error, new TestSupport.OtherError());
+
+        // Assert: a getter whose value changes between reads cannot break the message
+        error.Reads.ShouldBe(1);
+        collection.Message.ShouldBe("read 1; Other error");
+    }
+
+    private sealed class CountingMessageError : IError
+    {
+        public int Reads { get; private set; }
+
+        public ErrorCode Code => ErrorCode.From("TEST.COUNTING");
+
+        public string Message => $"read {++Reads}";
+
+        public ErrorCategory Category => ErrorCategory.Technical;
+
+        public ErrorSeverity Severity => ErrorSeverity.Error;
+
+        public IReadOnlyDictionary<string, object?> Metadata => ErrorMetadata.Empty;
+    }
 }

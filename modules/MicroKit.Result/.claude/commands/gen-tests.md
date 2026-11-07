@@ -7,7 +7,7 @@
 
 ## Description
 Génère les tests unitaires manquants pour un fichier C# en analysant les membres publics non testés.
-Utilise l'agent `test-generator` pour la logique de génération. Les benchmarks n'en sont pas : #184 Phase 7 les écrit.
+Utilise l'agent `test-generator` pour la logique de génération. Les benchmarks n'en sont pas : ils vivent dans `tests/MicroKit.Result.PerformanceTests` (BenchmarkDotNet).
 
 ## Exemple
 ```

@@ -639,13 +639,45 @@ catch (ResultException ex)
 
 ## Performance Notes
 
-No benchmark exists yet; #184 Phase 7 publishes them, with the machine and the SDK. Until then, these are design facts and unmeasured hypotheses:
+Measured with BenchmarkDotNet on one machine (below), on 2026-11-07. The figures are this machine's, not a promise for yours; run them with `dotnet run -c Release --project tests/MicroKit.Result.PerformanceTests -- --filter '*'`.
 
-- Design: `Result<T>` is a `readonly struct`, passed by value. Hypothesis: `Result.Success(value)` does not allocate.
-- Hypothesis: `Map` and `Bind` do not allocate on the success path when their lambdas capture nothing. A capturing lambda, an `Ensure` whose error is built on every call, a `Where` or a LINQ query may allocate on every call.
-- Design: `ErrorCollection` holds an `ImmutableArray<IError>` and computes its `Message` once, at construction.
-- Design: `ThrowHelper` methods are `[DoesNotReturn]` and `[MethodImpl(NoInlining)]`; their effect on generated code is not measured.
-- Design: every async path uses `ConfigureAwait(false)`, so library code does not resume on the caller's context.
+```
+BenchmarkDotNet v0.15.8, Linux Ubuntu 24.04.4 LTS (Noble Numbat) on WSL2
+AMD Ryzen 9 7940HS w/ Radeon 780M Graphics 3.99GHz, 1 CPU, 16 logical and 8 physical cores
+.NET SDK 10.0.402, .NET 10.0.13, X64 RyuJIT x86-64-v4, DefaultJob
+```
+
+Compared libraries: ErrorOr 2.1.1, FluentResults 4.0.0. Each failure reuses a cached error, so the figures are the result's own cost.
+
+| Creating a result | MicroKit.Result | ErrorOr | FluentResults |
+|---|---|---|---|
+| Success | below resolution (≈ 0 ns), 0 B | below resolution (≈ 0 ns), 0 B | 15.5 ns, 112 B |
+| Failure | below resolution (≈ 0 ns), 0 B | 13.5 ns, 88 B | 18.5 ns, 120 B |
+
+| `Map` → `Bind` → `Map`, lambdas without capture | MicroKit.Result | ErrorOr | FluentResults |
+|---|---|---|---|
+| Success rail | 5.3 ns, 0 B | 3.1 ns, 0 B | 180.9 ns, 832 B |
+| Failure rail | 4.9 ns, 0 B | 3.1 ns, 0 B | 188.3 ns, 896 B |
+
+`ValueTask<Result<T>>`, the async surface of the library and the module convention, against the same shape returning `Task<Result<T>>` (argument check, then an async core). The benchmarks return the `ValueTask` or `Task` itself, so the figures are the operation's own:
+
+| Async case | `ValueTask` | `Task` |
+|---|---|---|
+| `MapAsync`, delegate completes synchronously | 12.6 ns, 72 B | 16.6 ns, 152 B |
+| `MapAsync`, delegate truly yields | 583.7 ns, 246 B | 575.8 ns, 231 B |
+| A port, completes synchronously | below resolution (≈ 0 ns), 0 B | 8.9 ns, 80 B |
+| A port, truly yields | 562.0 ns, 120 B | 528.9 ns, 104 B |
+
+When the operation completes synchronously, `ValueTask` is faster and allocates less (the 72 B of `MapAsync` are the delegate's own `Task.FromResult`); when it truly yields, `Task` is up to 6 % faster and allocates 6–13 % less. Which one the module's ports should return is a convention question, handled outside #184.
+
+| `ErrorCollection.From` | 3 errors | 10 errors |
+|---|---|---|
+| As shipped: `Message` built with `string.Join` over LINQ | 67.8 ns, 280 B | 137.0 ns, 616 B |
+| Candidate: each message read once into a pooled buffer, joined with `string.Create` (not shipped) | 54.7 ns, 232 B | 112.7 ns, 568 B |
+
+The candidate was 18–19 % faster and allocated 8–17 % less. #184 Phase 7 changed the path only for a gain of at least 20 % on both sizes, on the failure rail, so the LINQ path stays.
+
+What the figures confirm, on this machine: `Result.Success(value)` and `Result.Failure<T>(error)` do not allocate; `Map` and `Bind` do not allocate on either rail when their lambdas capture nothing. Not measured: a capturing lambda, an `Ensure` whose error is built on every call, a `Where` or a LINQ query, which may allocate on every call, and the effect of `ThrowHelper`'s `[DoesNotReturn]` / `[MethodImpl(NoInlining)]`.
 
 ---
 
