@@ -117,8 +117,8 @@ Runtime invariants:
   `<scope>` is the issue's `mod:` label suffix. One branch per issue, never reused once merged.
 - Commits follow Conventional Commits, `<type>(<scope>): <subject>`, with `<type>` one of
   `feat fix perf refactor test docs chore build ci`; `!` before the colon marks a break.
-- Claude Code commits on its topic branch. It never pushes, and never opens or merges a pull
-  request.
+- Claude Code commits on its topic branch, then pushes and opens the pull request, asking the
+  user to confirm before each commit, the push and the PR. It never merges.
 - Post-code reviews run in a fresh context, with the module's agents:
   - `api-reviewer` when the public surface changes
   - `dependency-guardian` when a `.csproj` changes
