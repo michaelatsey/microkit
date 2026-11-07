@@ -207,6 +207,8 @@ on `ResultProblemDetailsFactory.ToStatusCode`, in `MicroKit.Result.AspNetCore` (
 HTTP responses would then send `Metadata` to a client, against D1. Therefore `Metadata` is written only when
 the factory is created with an explicit option (for in-process storage, such as `MicroKit.MediatR`'s cache);
 the default factory writes `code`, `message`, `category`, `severity` and the inner errors, never `Metadata`.
+`severity` and a validation error's `propertyName` thus also reach a client through the JSON converters; neither
+is an internal detail (D1 keeps `Severity` out of every decision, not out of sight).
 Phase 5 names the option.
 
 ### Consequences

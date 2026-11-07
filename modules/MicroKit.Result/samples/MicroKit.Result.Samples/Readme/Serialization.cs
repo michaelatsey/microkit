@@ -17,10 +17,14 @@ internal static class SerializationSamples
         builder.Services.AddControllers().AddJsonOptions(o =>
             o.JsonSerializerOptions.Converters.Add(new ResultJsonConverterFactory()));
 
+        // For an in-process store such as a cache, never for a response: also write Metadata
+        var cacheOptions = new System.Text.Json.JsonSerializerOptions();
+        cacheOptions.Converters.Add(new ResultJsonConverterFactory(includeMetadata: true));
+
         // Wire-format (success)
         // {"isSuccess":true,"value":{...}}
 
         // Wire-format (failure)
-        // {"isSuccess":false,"error":{"code":"USER.NOT_FOUND","message":"...","category":"NotFound"}}
+        // {"isSuccess":false,"error":{"code":"USER.NOT_FOUND","message":"...","category":"NotFound","severity":"Error"}}
     }
 }

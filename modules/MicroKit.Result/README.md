@@ -143,7 +143,7 @@ bool ordered = ErrorCode.Conflict < ErrorCode.NotFound;   // ordinal comparison
 | `Forbidden` | 403 | Access denied |
 | `Conflict` | 409 | Resource conflict |
 | `TooManyRequests` | 429 | Rate limit exceeded |
-| `Timeout` | 408 | Operation timed out |
+| `Timeout` | 504 | Operation, typically a call to a dependency, did not complete in time |
 | `Cancelled` | 499 | Operation cancelled, other than by the caller's own cancellation, which propagates instead |
 | `PreconditionFailed` | 412 | Precondition not met |
 | `External` | 502 | External dependency failed |
@@ -166,7 +166,7 @@ IReadOnlyDictionary<string, object?> meta = new ErrorMetadataBuilder()
 
 ### ErrorCollection
 
-Aggregates multiple errors into one `IError`; it is never empty. Its `Category` is the one its errors share; otherwise the first fault of the system (`Technical`, `Unavailable`, `External`, `NotSupported`), so a server fault is never hidden behind a client error; otherwise the first error's.
+Aggregates multiple errors into one `IError`; it is never empty. Its `Category` is the one its errors share; otherwise the first fault of the system (`Technical`, `Unavailable`, `External`, `NotSupported`, `Timeout`), so a server fault is never hidden behind a client error; otherwise the first error's.
 
 ```csharp
 var collection = ErrorCollection.From(error1, error2, error3);
@@ -453,13 +453,21 @@ app.MapGet("/users/{id}", async (Guid id, IUserService svc, CancellationToken ct
 // Result without value (command)
 app.MapDelete("/users/{id}", async (Guid id, IUserService svc, CancellationToken ct) =>
     (await svc.DeleteUserAsync(id, ct)).ToHttpResult());
+
+// 201 Created with the location of the new resource; problem responses declared for OpenAPI
+app.MapPost("/users", async (CreateUser command, IUserService svc, CancellationToken ct) =>
+        (await svc.CreateUserAsync(command, ct)).ToCreatedHttpResult(user => $"/users/{user.Id}"))
+    .ProducesProblem(StatusCodes.Status409Conflict)
+    .ProducesValidationProblem(StatusCodes.Status422UnprocessableEntity);
 ```
 
-`ToHttpResult()` maps `ErrorCategory` to the correct HTTP status code and produces an RFC 9457 `ProblemDetails` body on failure:
+`ToHttpResult()`, `ToCreatedHttpResult(location)` and `ToAcceptedHttpResult(location)` return `TypedResults` (`Results<Ok<T>, ProblemHttpResult>`…): OpenAPI sees the success type. A `ProblemHttpResult` has no fixed status, so an endpoint declares its problem responses with `ProducesProblem` or `ProducesValidationProblem`.
+
+On failure the body is an RFC 9457 `ProblemDetails` with the status of the error's `ErrorCategory`. It is written through the host's `IProblemDetailsService` when `AddProblemDetails()` registers one, so `CustomizeProblemDetails` and the `traceId` apply. `type` is the section ASP.NET Core knows for the status (RFC 9110; RFC 4918 for 422), absent for 429 and 499:
 
 ```json
 {
-  "type": "https://httpstatuses.io/404",
+  "type": "https://tools.ietf.org/html/rfc9110#section-15.5.5",
   "title": "Not Found",
   "status": 404,
   "detail": "User abc123 not found",
@@ -471,7 +479,7 @@ app.MapDelete("/users/{id}", async (Guid id, IUserService svc, CancellationToken
 
 ```json
 {
-  "type": "https://httpstatuses.io/422",
+  "type": "https://tools.ietf.org/html/rfc4918#section-11.2",
   "title": "Validation Failed",
   "status": 422,
   "detail": "Email is required.; Email is not a valid email address.",
@@ -483,9 +491,6 @@ app.MapDelete("/users/{id}", async (Guid id, IUserService svc, CancellationToken
 }
 ```
 
-Current behavior that #184 Phase 5 changes:
-
-- `Timeout` answers 408, `type` links to a third-party site, and results are returned as `IResult`; Phase 5 decides these.
 
 ---
 
@@ -502,17 +507,21 @@ builder.Services.ConfigureHttpJsonOptions(o =>
 builder.Services.AddControllers().AddJsonOptions(o =>
     o.JsonSerializerOptions.Converters.Add(new ResultJsonConverterFactory()));
 
+// For an in-process store such as a cache, never for a response: also write Metadata
+var cacheOptions = new System.Text.Json.JsonSerializerOptions();
+cacheOptions.Converters.Add(new ResultJsonConverterFactory(includeMetadata: true));
+
 // Wire-format (success)
 // {"isSuccess":true,"value":{...}}
 
 // Wire-format (failure)
-// {"isSuccess":false,"error":{"code":"USER.NOT_FOUND","message":"...","category":"NotFound"}}
+// {"isSuccess":false,"error":{"code":"USER.NOT_FOUND","message":"...","category":"NotFound","severity":"Error"}}
 ```
 
-Current behavior:
-
-- The factory converts `Result<T>` only. A non-generic `Result` returned as is from an endpoint is serialized property by property: a failure answers 200 with `error.metadata`, a success answers 500. Return it through `ToHttpResult()`; #184 Phase 5 adds the converter.
-- `Severity`, `Metadata` and the errors of an `ErrorCollection` are not written, a read error becomes a private type, and writing a `default` result throws an unrelated exception. Phase 5 keeps those fields across a round trip and makes writing a `default` fail with a clear error.
+- The error object carries `code`, `message`, `category`, `severity`, `propertyName` for a validation error and `errors` for an `ErrorCollection`, so they survive a round trip. `metadata` is written only by a factory created with `includeMetadata: true`: `Metadata` is in-process context, never sent to a client by default. Its keys survive a round trip, its values come back as JSON primitives: an `int` as a `long`, a `Guid` or a `DateTime` as a `string`, another object as its string.
+- Reading rebuilds an `ErrorCollection`, a `DeserializedValidationError` (which keeps `PropertyName`) or a `DeserializedError`.
+- The non-generic `Result` carries its own reflection-free converter: returned as is from an endpoint, it answers `{"isSuccess":true}` or `{"isSuccess":false,"error":{...}}`, with no `metadata`, whether or not the factory is registered. Prefer `ToHttpResult()`, which answers 204 or problem details.
+- Writing a `default` result throws `JsonException` with a clear message.
 - Reading a payload that does not describe a valid result (a success without `value` or with `error`, a failure without `error` or with `value`, a duplicate `isSuccess`, an empty `code`) throws `JsonException`.
 
 ---

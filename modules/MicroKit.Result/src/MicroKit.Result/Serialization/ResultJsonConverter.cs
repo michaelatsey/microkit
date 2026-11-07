@@ -4,41 +4,51 @@ using System.Text.Json.Serialization;
 namespace MicroKit.Result.Serialization;
 
 /// <summary>
-/// System.Text.Json converter for <see cref="Result{T}"/>.
-/// Serializes as <c>{"isSuccess":true,"value":...}</c> or
-/// <c>{"isSuccess":false,"error":{"code":"...","message":"...","category":"..."}}</c>.
+/// System.Text.Json converter for the non-generic <see cref="Result"/>:
+/// <c>{"isSuccess":true}</c> or <c>{"isSuccess":false,"error":{…}}</c>.
 /// </summary>
-/// <typeparam name="T">The result value type.</typeparam>
-[RequiresUnreferencedCode("JSON serialization of Result<T> may require unreferenced code.")]
-[RequiresDynamicCode("JSON serialization of Result<T> may require runtime code generation.")]
-public sealed class ResultJsonConverter<T> : JsonConverter<Result<T>>
+/// <remarks>
+/// <see cref="Result"/> carries it as its <see cref="JsonConverterAttribute"/>, so a <see cref="Result"/> returned by
+/// an endpoint is written this way even when no converter is registered, and never emits <see cref="IError.Metadata"/>
+/// by default (ADR-RESULT-001 D1, D12). It uses no reflection. The error object holds <c>code</c>, <c>message</c>,
+/// <c>category</c>, <c>severity</c>, <c>propertyName</c> for a validation error, and <c>errors</c> for an
+/// <see cref="ErrorCollection"/>; <c>metadata</c> only when created with <c>includeMetadata</c>.
+/// </remarks>
+public sealed class ResultJsonConverter : JsonConverter<Result>
 {
+    private readonly bool _includeMetadata;
+
+    /// <summary>Initializes a converter that never writes <see cref="IError.Metadata"/>.</summary>
+    public ResultJsonConverter() : this(includeMetadata: false)
+    {
+    }
+
+    /// <summary>Initializes a converter.</summary>
+    /// <param name="includeMetadata">
+    /// <see langword="true"/> to write <see cref="IError.Metadata"/>, for in-process storage such as a cache; never for a
+    /// response sent to a client. Values come back as JSON primitives: an integer as a <see cref="long"/> (or a <see cref="ulong"/>), a non-integer as a <see cref="double"/>, a
+    /// <see cref="Guid"/> or a <see cref="DateTime"/> as a <see cref="string"/>, any other object as its invariant string.
+    /// </param>
+    public ResultJsonConverter(bool includeMetadata) => _includeMetadata = includeMetadata;
+
     /// <inheritdoc/>
-    public override Result<T> Read(
-        ref Utf8JsonReader reader, Type typeToConvert, JsonSerializerOptions options)
+    public override Result Read(ref Utf8JsonReader reader, Type typeToConvert, JsonSerializerOptions options)
     {
         if (reader.TokenType != JsonTokenType.StartObject)
             throw new JsonException("Expected StartObject token.");
 
         bool? isSuccess = null;
-        bool hasValue = false;
-        bool hasError = false;
-        T? value = default;
-        string? errorCode = null;
-        string? errorMessage = null;
-        string? errorCategory = null;
+        IError? error = null;
 
         while (reader.Read())
         {
             if (reader.TokenType == JsonTokenType.EndObject)
                 break;
-
             if (reader.TokenType != JsonTokenType.PropertyName)
                 throw new JsonException("Expected PropertyName token.");
 
             var propertyName = reader.GetString();
             reader.Read();
-
             switch (propertyName)
             {
                 case "isSuccess":
@@ -46,131 +56,45 @@ public sealed class ResultJsonConverter<T> : JsonConverter<Result<T>>
                         throw new JsonException("Duplicate 'isSuccess' property.");
                     isSuccess = reader.GetBoolean();
                     break;
-                case "value":
-                    if (hasValue)
-                        throw new JsonException("Duplicate 'value' property.");
-                    value = JsonSerializer.Deserialize<T>(ref reader, options);
-                    hasValue = true;
-                    break;
                 case "error":
-                    if (hasError)
+                    if (error is not null)
                         throw new JsonException("Duplicate 'error' property.");
-                    ReadErrorObject(ref reader, out errorCode, out errorMessage, out errorCategory);
-                    hasError = true;
+                    error = ErrorJson.Read(ref reader);
                     break;
+                case "value":
+                    throw new JsonException("A non-generic result cannot carry a 'value' property.");
                 default:
                     reader.Skip();
                     break;
             }
         }
 
-        if (isSuccess is null)
-            throw new JsonException("Missing 'isSuccess' property.");
-
         // A payload that does not describe a valid result fails: it is never read as a success.
-        if (isSuccess.Value)
+        return isSuccess switch
         {
-            if (!hasValue)
-                throw new JsonException("A successful result requires a 'value' property.");
-            if (hasError)
-                throw new JsonException("A successful result cannot carry an 'error' property.");
-            try
-            {
-                return Result<T>.Success(value!);
-            }
-            catch (ArgumentException ex) // a null value (ADR-RESULT-001 D6) or a result used as the value
-            {
-                throw new JsonException("The 'value' of a successful result must not be null or a result.", ex);
-            }
-        }
-
-        if (!hasError)
-            throw new JsonException("A failed result requires an 'error' property.");
-        if (hasValue)
-            throw new JsonException("A failed result cannot carry a 'value' property.");
-
-        var category = Enum.TryParse<ErrorCategory>(errorCategory, true, out var parsed)
-            ? parsed
-            : ErrorCategory.Technical;
-
-        ErrorCode code;
-        try
-        {
-            code = ErrorCode.From(errorCode ?? "UNKNOWN");
-        }
-        catch (ArgumentException ex)
-        {
-            throw new JsonException("The error 'code' must not be empty.", ex);
-        }
-
-        return Result<T>.Failure(
-            new DeserializedError(
-                code,
-                errorMessage ?? "Unknown error",
-                category));
+            null => throw new JsonException("Missing 'isSuccess' property."),
+            true when error is not null => throw new JsonException("A successful result cannot carry an 'error' property."),
+            true => Result.Success(),
+            false when error is null => throw new JsonException("A failed result requires an 'error' property."),
+            false => Result.Failure(error),
+        };
     }
 
     /// <inheritdoc/>
-    public override void Write(
-        Utf8JsonWriter writer, Result<T> value, JsonSerializerOptions options)
+    /// <exception cref="JsonException">Thrown when <paramref name="value"/> is uninitialized (<c>default</c>).</exception>
+    public override void Write(Utf8JsonWriter writer, Result value, JsonSerializerOptions options)
     {
+        ArgumentNullException.ThrowIfNull(writer);
+        if (!value.IsSuccess && !value.IsFailure)
+            throw new JsonException("Cannot serialize an uninitialized (default) Result: it is neither a success nor a failure.");
+
         writer.WriteStartObject();
         writer.WriteBoolean("isSuccess", value.IsSuccess);
-
-        if (value.IsSuccess)
+        if (value.IsFailure)
         {
-            writer.WritePropertyName("value");
-            JsonSerializer.Serialize(writer, value.Value, options);
+            writer.WritePropertyName("error");
+            ErrorJson.Write(writer, value.Error, _includeMetadata);
         }
-        else
-        {
-            writer.WriteStartObject("error");
-            writer.WriteString("code", value.Error.Code.Value);
-            writer.WriteString("message", value.Error.Message);
-            writer.WriteString("category", value.Error.Category.ToString());
-            writer.WriteEndObject();
-        }
-
         writer.WriteEndObject();
-    }
-
-    private static void ReadErrorObject(
-        ref Utf8JsonReader reader,
-        out string? code,
-        out string? message,
-        out string? category)
-    {
-        code = null;
-        message = null;
-        category = null;
-
-        if (reader.TokenType != JsonTokenType.StartObject)
-            throw new JsonException("Expected error object.");
-
-        while (reader.Read())
-        {
-            if (reader.TokenType == JsonTokenType.EndObject)
-                break;
-
-            if (reader.TokenType != JsonTokenType.PropertyName)
-                continue;
-
-            var prop = reader.GetString();
-            reader.Read();
-
-            switch (prop)
-            {
-                case "code": code = reader.GetString(); break;
-                case "message": message = reader.GetString(); break;
-                case "category": category = reader.GetString(); break;
-                default: reader.Skip(); break;
-            }
-        }
-    }
-
-    private sealed record DeserializedError(ErrorCode Code, string Message, ErrorCategory Category)
-        : Error(Code, Message)
-    {
-        public override ErrorCategory Category { get; } = Category;
     }
 }

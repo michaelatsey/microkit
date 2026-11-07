@@ -1,6 +1,7 @@
 using MicroKit.Result;
 using MicroKit.Result.AspNetCore;
 using Microsoft.AspNetCore.Builder;
+using Microsoft.AspNetCore.Http;
 
 namespace MicroKit.Result.Samples.Readme;
 
@@ -16,14 +17,24 @@ internal static class AspNetCoreSamples
         // Result without value (command)
         app.MapDelete("/users/{id}", async (Guid id, IUserService svc, CancellationToken ct) =>
             (await svc.DeleteUserAsync(id, ct)).ToHttpResult());
+
+        // 201 Created with the location of the new resource; problem responses declared for OpenAPI
+        app.MapPost("/users", async (CreateUser command, IUserService svc, CancellationToken ct) =>
+                (await svc.CreateUserAsync(command, ct)).ToCreatedHttpResult(user => $"/users/{user.Id}"))
+            .ProducesProblem(StatusCodes.Status409Conflict)
+            .ProducesValidationProblem(StatusCodes.Status422UnprocessableEntity);
     }
 
-    internal sealed record User;
+    internal sealed record User(Guid Id);
+
+    internal sealed record CreateUser(string Email);
 
     internal interface IUserService
     {
         ValueTask<Result<User>> GetUserAsync(Guid id, CancellationToken ct = default);
 
         ValueTask<Result> DeleteUserAsync(Guid id, CancellationToken ct = default);
+
+        ValueTask<Result<User>> CreateUserAsync(CreateUser command, CancellationToken ct = default);
     }
 }

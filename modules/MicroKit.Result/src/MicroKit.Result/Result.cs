@@ -10,6 +10,8 @@ namespace MicroKit.Result;
 /// Result failed = Result.Failure(new MyError());
 /// </code>
 /// </example>
+// The converter is reflection-free: a Result returned by an endpoint never serializes Metadata (ADR-RESULT-001 D12).
+[System.Text.Json.Serialization.JsonConverter(typeof(Serialization.ResultJsonConverter))]
 public readonly struct Result : IEquatable<Result>, IResultMarker
 {
     private const byte TagUninitialized = 0;

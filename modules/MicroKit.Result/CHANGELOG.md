@@ -38,7 +38,7 @@ Hardening before stable (#184). Breaking changes ship outright on `preview.*` (A
   `OfType<TError>` returns `IReadOnlyList<TError>`: a filter that matches nothing returns an empty list,
   never an empty `ErrorCollection`.
 - `ErrorCollection.Category` is the category its errors share; otherwise the first server-fault category
-  (`Technical`, `Unavailable`, `External`, `NotSupported`); otherwise the first error's.
+  (`Technical`, `Unavailable`, `External`, `NotSupported`, and since Phase 5 `Timeout`); otherwise the first error's.
 - `ResultJsonConverter<T>.Read` throws `JsonException` for a payload that does not describe a valid
   result: a success without `value` or with `error`, a failure without `error` or with `value`, a
   duplicate `isSuccess`, an empty `code`.
@@ -64,6 +64,13 @@ Hardening before stable (#184). Breaking changes ship outright on `preview.*` (A
 - `result.Equals(null)` no longer compiles (the `null` literal binds to `Equals(Result<T>)` through the
   conversion from `Error`): write `result.Equals((object?)null)`.
 - `ResultCombineExtensions.Combine(...)` becomes `Result.Combine(...)`.
+- `ToHttpResult()` returns `Results<…>`: assigning it to `IResult` still works, but a lambda without a
+  declared return type that also returns another typed result (`TypedResults.BadRequest()`), or a conditional
+  mixing two `ToHttpResult()` types, no longer compiles. Declare the lambda's return type, or nest the union
+  (`Results<BadRequest, Results<Ok<T>, ProblemHttpResult>>`). A test that casts the value to
+  `IStatusCodeHttpResult` or tests `is ProblemHttpResult` reads `.Result` first.
+- With `includeMetadata: true`, metadata values come back as JSON primitives: `TryGetMetadata<int>` after a
+  round trip reads a `long`, `TryGetMetadata<Guid>` a `string`.
 - `Result<string> r = null;` and `return null;` in a method returning a result no longer compile (CS0037):
   the conversions from `Error` and `ErrorCollection` both accept `null`. They used to give a null success.
 - A record deriving from `Error` with a positional parameter named after a category (`Timeout`,
@@ -87,6 +94,21 @@ Hardening before stable (#184). Breaking changes ship outright on `preview.*` (A
 - `ErrorCollection.FirstOrDefault` is typed `IError` (never `null`).
 - The core's XML docs no longer cite HTTP statuses; the mapping is documented on
   `ResultProblemDetailsFactory.ToStatusCode`.
+
+### Changed (breaking, Phase 5 — HTTP contract)
+- `ToHttpResult()` returns `Results<Ok<T>, ProblemHttpResult>` / `Results<NoContent, ProblemHttpResult>`
+  (`TypedResults`) instead of `IResult`: OpenAPI sees the success type. New `ToCreatedHttpResult(location)`
+  (201) and `ToAcceptedHttpResult(location)` (202).
+- `ErrorCategory.Timeout` answers 504 Gateway Timeout instead of 408, and counts as a server fault in an
+  `ErrorCollection`. `Cancelled` uses `StatusCodes.Status499ClientClosedRequest`.
+- `ProblemDetails.Type` is the section ASP.NET Core knows for the status (RFC 9110; RFC 4918 for 422), absent
+  for 429 and 499, instead of a link to httpstatuses.io.
+- JSON: the error object adds `severity`, `propertyName` and the `errors` of a collection; `metadata` only
+  with `new ResultJsonConverterFactory(includeMetadata: true)`. Reading returns an `ErrorCollection`, a
+  public `DeserializedValidationError` or `DeserializedError`. Writing a `default` result throws
+  `JsonException`.
+- The non-generic `Result` has a converter, `ResultJsonConverter`, carried by the type: returned as is, it
+  serializes as `{"isSuccess":…}` without `metadata`. The factory converts `Result` too.
 
 ### Removed
 - The internal, unused `ResultState` enum.

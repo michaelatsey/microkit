@@ -35,8 +35,8 @@ public sealed class ErrorCollection : IError, IReadOnlyList<IError>
     /// <summary>
     /// Gets the collection's category: the category every contained error shares; otherwise the first category
     /// that reports a fault of the system (<see cref="ErrorCategory.Technical"/>, <see cref="ErrorCategory.Unavailable"/>,
-    /// <see cref="ErrorCategory.External"/>, <see cref="ErrorCategory.NotSupported"/>, or a value the enum does not
-    /// define), so a server fault is never hidden behind a client error; otherwise the first error's category.
+    /// <see cref="ErrorCategory.External"/>, <see cref="ErrorCategory.NotSupported"/>, <see cref="ErrorCategory.Timeout"/>,
+    /// or a value the enum does not define), so a server fault is never hidden behind a client error; otherwise the first error's category.
     /// </summary>
     public ErrorCategory Category { get; }
 

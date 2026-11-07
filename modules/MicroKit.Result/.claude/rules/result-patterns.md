@@ -148,7 +148,7 @@ ErrorCategory.Unavailable       → 503 Service Unavailable
 ErrorCategory.External          → 502 Bad Gateway
 ErrorCategory.BusinessRule      → 422 Unprocessable Entity
 ErrorCategory.NotSupported      → 501 Not Implemented
-ErrorCategory.Timeout           → 408 Request Timeout
+ErrorCategory.Timeout           → 504 Gateway Timeout
 ErrorCategory.Cancelled         → 499 Client Closed Request
 ErrorCategory.PreconditionFailed → 412 Precondition Failed
 toute autre valeur              → 500 Internal Server Error
@@ -158,9 +158,7 @@ L'annulation demandée par l'appelant se propage (`rules/no-exceptions-flow.md`)
 
 Une erreur de validation, seule ou dans une `ErrorCollection`, répond en `HttpValidationProblemDetails` : `errors` regroupe ses messages par `PropertyName` (`{ "Email": ["..."] }`) ; une réponse 5xx n'en porte jamais. Une `ErrorCollection` liste le code de chacune de ses erreurs dans `errorCodes`. Une `ErrorCollection` répond avec la catégorie que partagent ses erreurs ; sinon avec la première faute du système (5xx), pour qu'un 500 ne se cache pas derrière un 422 ; sinon avec celle de sa première erreur.
 
-Comportement actuel, que #184 change :
-
-- Phase 5 : `ErrorCategory.Timeout` répond 408, `type` pointe vers un site tiers, et `ToHttpResult` retourne `Ok` ou `NoContent` en `IResult` plutôt qu'en `TypedResults`.
+`ToHttpResult`, `ToCreatedHttpResult(location)` et `ToAcceptedHttpResult(location)` retournent des `TypedResults` (`Results<Ok<T>, ProblemHttpResult>`…) : OpenAPI voit le type du succès ; les réponses problem se déclarent par `ProducesProblem(status)`. Les problem details passent par l'`IProblemDetailsService` de l'hôte (`AddProblemDetails`), donc `CustomizeProblemDetails` et le `traceId` s'appliquent ; `type` est la section qu'ASP.NET Core connaît pour le statut (RFC 9110, RFC 4918 pour 422), absente pour 429 et 499. `Timeout` répond 504 : l'opération, typiquement un appel à une dépendance, n'a pas abouti à temps ; 408 accuserait la requête du client.
 
 ## Règles d'erreurs
 

@@ -19,6 +19,8 @@ internal sealed class ResultHttpHost : IAsyncDisposable
 
     public HttpClient Client { get; }
 
+    public IServiceProvider Services => _app.Services;
+
     public static async Task<ResultHttpHost> StartAsync(
         Action<IEndpointRouteBuilder> map,
         Action<IServiceCollection>? services = null)

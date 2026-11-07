@@ -40,7 +40,7 @@ public sealed class ResultJsonConverterTests
     }
 
     [Fact]
-    public void Write_WhenFailure_WritesCodeMessageAndCategory()
+    public void Write_WhenFailure_WritesCodeMessageCategoryAndSeverity()
     {
         // Arrange
         var result = Result.Failure<int>(new NotFoundTestError(7));
@@ -49,11 +49,11 @@ public sealed class ResultJsonConverterTests
         var json = JsonSerializer.Serialize(result, Options);
 
         // Assert
-        json.ShouldBe("""{"isSuccess":false,"error":{"code":"TEST.NOT_FOUND","message":"Item 7 not found","category":"NotFound"}}""");
+        json.ShouldBe("""{"isSuccess":false,"error":{"code":"TEST.NOT_FOUND","message":"Item 7 not found","category":"NotFound","severity":"Error"}}""");
     }
 
     [Fact]
-    public void Write_WhenFailureHasSeverityAndMetadata_WritesNeither()
+    public void Write_WhenFailureHasSeverityAndMetadata_WritesSeverityWithoutMetadata()
     {
         // Arrange
         var result = Result.Failure<int>(new CriticalTestError());
@@ -64,12 +64,13 @@ public sealed class ResultJsonConverterTests
         // Assert
         using var document = JsonDocument.Parse(json);
         var error = document.RootElement.GetProperty("error");
-        error.EnumerateObject().Select(p => p.Name).ShouldBe(["code", "message", "category"]);
+        error.EnumerateObject().Select(p => p.Name).ShouldBe(["code", "message", "category", "severity"]);
         error.GetProperty("category").GetString().ShouldBe("Unavailable");
+        error.GetProperty("severity").GetString().ShouldBe("Critical");
     }
 
     [Fact]
-    public void Write_WhenFailureIsErrorCollection_WritesAggregateWithoutInnerErrors()
+    public void Write_WhenFailureIsErrorCollection_WritesAggregateWithInnerErrors()
     {
         // Arrange
         var result = Result.Failure<int>(ErrorCollection.From(new NotFoundTestError(1), new OtherError()));
@@ -78,17 +79,19 @@ public sealed class ResultJsonConverterTests
         var json = JsonSerializer.Serialize(result, Options);
 
         // Assert
-        json.ShouldBe("""{"isSuccess":false,"error":{"code":"MULTI.ERROR","message":"Item 1 not found; Other error","category":"NotFound"}}""");
+        json.ShouldBe(
+            """{"isSuccess":false,"error":{"code":"MULTI.ERROR","message":"Item 1 not found; Other error","category":"NotFound","severity":"Error","errors":[{"code":"TEST.NOT_FOUND","message":"Item 1 not found","category":"NotFound","severity":"Error"},{"code":"TEST.OTHER","message":"Other error","category":"Conflict","severity":"Error"}]}}""");
     }
 
     [Fact]
-    public void Write_WhenDefault_ThrowsResultException()
+    public void Write_WhenDefault_ThrowsJsonException()
     {
         // Arrange
         Result<int> result = default;
 
         // Act + Assert
-        Should.Throw<ResultException>(() => JsonSerializer.Serialize(result, Options));
+        var thrown = Should.Throw<JsonException>(() => JsonSerializer.Serialize(result, Options));
+        thrown.Message.ShouldContain("uninitialized (default) Result<T>");
     }
 
     [Fact]
@@ -101,7 +104,7 @@ public sealed class ResultJsonConverterTests
         var json = JsonSerializer.Serialize(results, Options);
 
         // Assert
-        json.ShouldBe("""[{"isSuccess":true,"value":1},{"isSuccess":false,"error":{"code":"TEST.OTHER","message":"Other error","category":"Conflict"}}]""");
+        json.ShouldBe("""[{"isSuccess":true,"value":1},{"isSuccess":false,"error":{"code":"TEST.OTHER","message":"Other error","category":"Conflict","severity":"Error"}}]""");
     }
 
     // ── Round trip ────────────────────────────────────────────────────────
@@ -139,7 +142,7 @@ public sealed class ResultJsonConverterTests
     }
 
     [Fact]
-    public void RoundTrip_WhenFailureHasSeverityAndMetadata_LosesThem()
+    public void RoundTrip_WhenFailureHasSeverityAndMetadata_KeepsSeverityAndDropsMetadata()
     {
         // Arrange
         var original = Result.Failure<int>(new CriticalTestError());
@@ -151,7 +154,7 @@ public sealed class ResultJsonConverterTests
         // Assert
         read.IsFailure.ShouldBeTrue();
         read.Error.Category.ShouldBe(ErrorCategory.Unavailable);
-        read.Error.Severity.ShouldBe(ErrorSeverity.Error);
+        read.Error.Severity.ShouldBe(ErrorSeverity.Critical);
         read.Error.Metadata.ShouldBeEmpty();
     }
 
@@ -186,7 +189,7 @@ public sealed class ResultJsonConverterTests
     }
 
     [Fact]
-    public void Read_WhenFailure_ReturnsErrorOfPrivateTypeWithCodeMessageAndCategory()
+    public void Read_WhenFailure_ReturnsDeserializedErrorWithCodeMessageAndCategory()
     {
         // Arrange
         const string json = """{"isSuccess":false,"error":{"code":"TEST.NOT_FOUND","message":"Item 7 not found","category":"NotFound"}}""";
@@ -196,8 +199,7 @@ public sealed class ResultJsonConverterTests
 
         // Assert
         result.IsFailure.ShouldBeTrue();
-        result.Error.ShouldNotBeOfType<NotFoundTestError>();
-        result.Error.GetType().IsNestedPrivate.ShouldBeTrue();
+        result.Error.ShouldBeOfType<DeserializedError>();
         result.Error.Code.Value.ShouldBe("TEST.NOT_FOUND");
         result.Error.Message.ShouldBe("Item 7 not found");
         result.Error.Category.ShouldBe(ErrorCategory.NotFound);
@@ -217,9 +219,9 @@ public sealed class ResultJsonConverterTests
                 "severity": "Critical",
                 "code": "TEST.OTHER",
                 "metadata": {"retryAfter": 30},
+                "unknown": {"nested": [true, null]},
                 "message": "Other error",
-                "category": "Conflict",
-                "errors": [{"code": "X"}]
+                "category": "Conflict"
               },
               "trailing": "ignored"
             }
@@ -230,11 +232,46 @@ public sealed class ResultJsonConverterTests
 
         // Assert
         result.IsFailure.ShouldBeTrue();
+        result.Error.ShouldBeOfType<DeserializedError>();
         result.Error.Code.Value.ShouldBe("TEST.OTHER");
         result.Error.Message.ShouldBe("Other error");
         result.Error.Category.ShouldBe(ErrorCategory.Conflict);
-        result.Error.Severity.ShouldBe(ErrorSeverity.Error);
-        result.Error.Metadata.ShouldBeEmpty();
+        result.Error.Severity.ShouldBe(ErrorSeverity.Critical);
+        result.Error.Metadata.ShouldBe(new Dictionary<string, object?> { ["retryAfter"] = 30L });
+    }
+
+    [Fact]
+    public void Read_WhenErrorHasErrorsArray_RebuildsCollectionAndIgnoresOuterFields()
+    {
+        // Arrange
+        const string json = """
+            {
+              "isSuccess": false,
+              "error": {
+                "severity": "Critical",
+                "code": "TEST.OTHER",
+                "metadata": {"retryAfter": 30},
+                "message": "Other error",
+                "category": "Conflict",
+                "errors": [{"code": "X"}]
+              }
+            }
+            """;
+
+        // Act
+        var result = JsonSerializer.Deserialize<Result<int>>(json, Options);
+
+        // Assert
+        result.IsFailure.ShouldBeTrue();
+        var collection = result.Error.ShouldBeOfType<ErrorCollection>();
+        collection.Count.ShouldBe(1);
+        collection.Code.Value.ShouldBe("MULTI.ERROR");
+        collection.Message.ShouldBe("Unknown error");
+        collection.Category.ShouldBe(ErrorCategory.Technical);
+        collection.Severity.ShouldBe(ErrorSeverity.Error);
+        collection.Metadata.ShouldBeEmpty();
+        var inner = collection[0].ShouldBeOfType<DeserializedError>();
+        inner.Code.Value.ShouldBe("X");
     }
 
     [Theory]
@@ -355,10 +392,10 @@ public sealed class ResultJsonConverterTests
     [Theory]
     [InlineData(typeof(Result<int>), true)]
     [InlineData(typeof(Result<string>), true)]
-    [InlineData(typeof(Result), false)]
+    [InlineData(typeof(Result), true)]
     [InlineData(typeof(int), false)]
     [InlineData(typeof(List<int>), false)]
-    public void CanConvert_WhenTypeGiven_AcceptsOnlyResultOfT(Type type, bool expected)
+    public void CanConvert_WhenTypeGiven_AcceptsResultAndResultOfT(Type type, bool expected)
     {
         // Arrange
         var factory = new ResultJsonConverterFactory();

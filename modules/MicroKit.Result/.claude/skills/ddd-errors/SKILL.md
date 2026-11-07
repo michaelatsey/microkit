@@ -12,7 +12,7 @@ description: Use when designing, naming or reviewing a typed domain error for Mi
 
 ## Ce qui atteint le client
 
-`Error.Message` part dans `ProblemDetails.Detail` : il reste sans danger pour le client, et n'est jamais le texte d'une exception. Les détails internes vont dans le log, pas dans `Metadata` : `ProblemDetails` et `ResultJsonConverter<T>` ne l'émettent pas, mais un `Result` non générique retourné tel quel par un endpoint l'émet (Phase 5 de #184), et ADR-RESULT-001 D1 en fait un contexte en mémoire, jamais envoyé au client par défaut (garantie security, `.claude/CLAUDE.md`).
+`Error.Message` part dans `ProblemDetails.Detail` : il reste sans danger pour le client, et n'est jamais le texte d'une exception. Les détails internes vont dans le log, pas dans `Metadata` : `ProblemDetails` et `ResultJsonConverter<T>` ne l'émettent pas, ni le `Result` non générique retourné tel quel, et ADR-RESULT-001 D1 en fait un contexte en mémoire, jamais envoyé au client par défaut (garantie security, `.claude/CLAUDE.md`).
 
 Un paramètre positionnel d'un record est une propriété publique : sérialiser l'erreur elle-même, ou l'afficher par `ToString`, l'émet. Un détail interne n'est donc jamais un paramètre de l'erreur.
 
