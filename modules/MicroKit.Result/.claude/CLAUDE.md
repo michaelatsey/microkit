@@ -41,6 +41,7 @@ Une note d'écart décrit le comportement actuel. La PR d'une phase retire ou r�
 - **Performance : toute affirmation est mesurée.**
   - Écart : aucun benchmark n'existe, `tests/MicroKit.Result.PerformanceTests` ne contient que son `.csproj`. La Phase 7 publie les mesures. D'ici là, une affirmation de performance est une hypothèse et se présente comme telle.
   - Écart, Phase 7 : le constructeur d'`ErrorCollection` construit `Message` par LINQ (`ErrorCollection.cs:27`), ce que la checklist de `agents/dotnet-reviewer.md` bloque dans un nouveau code. La Phase 7 mesure ce chemin, et il ne change que si la mesure en montre le coût.
+  - Écart, Phase 2 : la compatibilité NativeAOT n'est pas vérifiée. Seul l'analyseur de trimming tourne (`IsTrimmable`, `Directory.Build.props` racine) ; la Phase 2 met `IsAotCompatible` dans `src/MicroKit.Result/MicroKit.Result.csproj` et `src/MicroKit.Result.AspNetCore/MicroKit.Result.AspNetCore.csproj`, et l'analyseur AOT la garde. D'ici là, `README.md` la présente comme non vérifiée.
 
 ## 🏛️ Philosophie Architecturale
 
