@@ -170,7 +170,7 @@ public sealed class ResultTests
         result.Error.Severity.ShouldBe(ErrorSeverity.Error);
     }
 
-    [Fact(Skip = "#184 phase 2")]
+    [Fact]
     public void Try_WhenActionThrows_ErrorMetadataDoesNotExposeExceptionType()
     {
         // Act
@@ -181,7 +181,7 @@ public sealed class ResultTests
         result.Error.Metadata.ContainsKey("exceptionType").ShouldBeFalse();
     }
 
-    [Fact(Skip = "#184 phase 2")]
+    [Fact]
     public void Try_WhenActionThrows_ErrorHasExceptionCodeAndGenericMessage()
     {
         // Act
@@ -193,7 +193,7 @@ public sealed class ResultTests
         result.Error.Message.ShouldNotContain(SecretMessage);
     }
 
-    [Fact(Skip = "#184 phase 2")]
+    [Fact]
     public void Try_WithoutMapper_WhenOperationCanceled_RethrowsOperationCanceledException()
     {
         // Act + Assert
@@ -396,7 +396,7 @@ public sealed class ResultTests
         result.Error.Category.ShouldBe(ErrorCategory.Technical);
     }
 
-    [Fact(Skip = "#184 phase 2")]
+    [Fact]
     public async Task TryAsync_WhenActionThrows_ErrorHasExceptionCodeAndGenericMessage()
     {
         // Act
@@ -412,7 +412,7 @@ public sealed class ResultTests
         result.Error.Message.ShouldNotContain(SecretMessage);
     }
 
-    [Fact(Skip = "#184 phase 2")]
+    [Fact]
     public async Task TryAsync_WithoutMapper_WhenOperationCanceled_RethrowsOperationCanceledException()
     {
         // Act + Assert
@@ -424,7 +424,7 @@ public sealed class ResultTests
             }));
     }
 
-    [Fact(Skip = "#184 phase 2")]
+    [Fact]
     public async Task TryAsync_WithoutMapper_WhenCancelled_RethrowsTaskCanceledException()
     {
         // Arrange

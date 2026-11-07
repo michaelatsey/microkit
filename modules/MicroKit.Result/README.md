@@ -20,9 +20,9 @@ Every operation stays on one of these rails: a predictable outcome is a value, n
 
 **Key design principles:**
 - `Result<T>` is a `readonly struct`; whether a pipeline allocates depends on its lambdas and errors (see [Performance Notes](#performance-notes))
-- `byte _tag` discriminator: `default` is neither success nor failure, and reading it throws (with the gaps listed under [Combining Results](#combining-results) and [Enumerable Extensions](#enumerable-extensions))
+- `byte _tag` discriminator: `default` is neither success nor failure, and reading it throws
 - `sealed` by default; throws live in a `ThrowHelper`, outside the calling methods
-- Trim-safe core, checked by the trim analyzer (`IsTrimmable`); reflection is confined to the JSON converters (`MicroKit.Result.Serialization` namespace, annotated `[RequiresUnreferencedCode]` / `[RequiresDynamicCode]`). NativeAOT compatibility is not checked yet: #184 Phase 2 sets `IsAotCompatible`, so the AOT analyzer guards it
+- Trim- and NativeAOT-compatible, checked by the trim, single-file and AOT analyzers (`IsAotCompatible`, no warning); reflection is confined to the JSON converters (`MicroKit.Result.Serialization` namespace, annotated `[RequiresUnreferencedCode]` / `[RequiresDynamicCode]`)
 
 ---
 
@@ -80,7 +80,7 @@ Result<int> failed = Result.Failure<int>(new MyError());
 Result<int> fromValue = 42;
 ```
 
-When `T` is `object`, the conversion also accepts a `Result` or a `Result<T>` as the value, and the outcome is a success even if that result was a failure. #184 Phase 2 removes that.
+The conversion rejects a value that is itself a `Result` or a `Result<T>` (possible when `T` is `object`) with an `ArgumentException`: a failure never becomes a success.
 
 ---
 
@@ -150,16 +150,16 @@ IReadOnlyDictionary<string, object?> meta = new ErrorMetadataBuilder()
 
 ### ErrorCollection
 
-Aggregates multiple errors into one `IError`. A filter that matches nothing currently returns an empty collection, which `From` forbids; #184 Phase 2 changes it.
+Aggregates multiple errors into one `IError`; it is never empty. Its `Category` is the one its errors share; otherwise the first fault of the system (`Technical`, `Unavailable`, `External`, `NotSupported`), so a server fault is never hidden behind a client error; otherwise the first error's.
 
 ```csharp
 var collection = ErrorCollection.From(error1, error2, error3);
 
-// Filter
-ErrorCollection validation = collection.WithCategory(ErrorCategory.Validation);
-ErrorCollection critical = collection.WithSeverity(ErrorSeverity.Critical);
-ErrorCollection notFound = collection.WithCode(ErrorCode.NotFound);
-ErrorCollection typed = collection.OfType<ValidationError>();
+// Filter: a filter may match nothing, so it returns a list, never an empty collection
+IReadOnlyList<IError> validation = collection.WithCategory(ErrorCategory.Validation);
+IReadOnlyList<IError> critical = collection.WithSeverity(ErrorSeverity.Critical);
+IReadOnlyList<IError> notFound = collection.WithCode(ErrorCode.NotFound);
+IReadOnlyList<ValidationError> typed = collection.OfType<ValidationError>();
 bool hasValidation = collection.HasCategory(ErrorCategory.Validation);
 
 // Group
@@ -292,7 +292,7 @@ Result nonGeneric = result.ToResult();  // drops the value, keeps the error
 
 ## Async
 
-The nine pipeline operations of `Result<T>` (`Map`, `Bind`, `Match`, `Tap`, `TapError`, `Ensure`, `MapError`, `Compensate`, `Finally`) have async counterparts on three surfaces. The non-generic `Result` currently has none; #184 Phase 4 adds them.
+The nine pipeline operations of `Result<T>` (`Map`, `Bind`, `Match`, `Tap`, `TapError`, `Ensure`, `MapError`, `Compensate`, `Finally`) have async counterparts on three surfaces. The non-generic `Result` currently has only the awaited `Tap`, `TapError` and `Finally`; #184 Phase 4 adds the others.
 
 ```csharp
 // Surface 1: async delegate on Result<T>
@@ -305,20 +305,21 @@ Result<int> finished = await result.FinallyAsync(async r => await LogAsync(r));
 Result<string> mappedTask = await GetResultTask().Map(v => Transform(v));
 Result<string> chainedTask = await GetResultTask().Bind(v => GetNext(v));
 
-// TapAsync, TapErrorAsync and FinallyAsync exist only on Result<T>: await the task first
-Result<int> awaited = await GetResultTask();
-Result<int> audited = await awaited.TapAsync(async v => await AuditAsync(v));
+// Tap, TapError and Finally given an async lambda await the side effect, on every surface
+Result<int> audited = await GetResultTask().Tap(async v => await AuditAsync(v));
 
 // Surface 3: on ValueTask<Result<T>> (sync delegate)
 Result<string> mappedValueTask = await GetResultValueTask().Map(v => Transform(v));
 ```
 
-All async methods use `ConfigureAwait(false)`. Current behavior:
+All async methods use `ConfigureAwait(false)`, and validate their arguments when called, before anything is awaited: a `null` delegate throws at the call, as in the synchronous methods.
 
-- On `Result<T>` and on both task surfaces, `Tap`, `TapError` and `Finally` take an `Action`. An async lambda passed to them compiles as `async void`: the result comes back before the side effect, and an exception the side effect throws ends the process. Use `TapAsync`, `TapErrorAsync` and `FinallyAsync`. They exist only on `Result<T>`, not on `Task<Result<T>>` or `ValueTask<Result<T>>`: await the task first, then call them on the result, as in the block above. #184 Phase 2 changes this.
+`Tap`, `TapError` and `Finally` given a delegate that returns a `Task`, an async lambda included, bind to an overload that awaits the side effect and returns a `ValueTask`, on `Result<T>`, `Result` and both task surfaces. An `Action` keeps the synchronous overload. A non-async lambda that returns a `ValueTask` binds to that `Action` overload and its `ValueTask` is discarded, which CA2012 reports: write it `async x => await port(x)`.
+
+Current behavior:
+
 - Async delegates return `Task`, never `ValueTask`. A method returning `ValueTask` is passed through an async lambda, as in Surface 1.
 - The async extensions take no `CancellationToken`; a delegate that needs one captures it.
-- The async extensions validate their arguments after the call has started: a `null` delegate throws at the `await`, not at the call. Phase 2 validates them first.
 
 The #184 Phase 3 ADR decides whether the async extensions take a `CancellationToken` and accept `ValueTask` delegates; Phase 4 applies it.
 
@@ -373,7 +374,7 @@ Result<(User, Cart)> pair = ResultCombineExtensions.Combine(getUser, getCart);
 
 Every argument is evaluated before the call: to skip a step after a failure, chain it with `Bind`.
 
-Over `Result` values, and in `CombineAll<T>`, a `default` result currently counts as a success; #184 Phase 2 makes them treat it as invalid. The tuple overloads throw on it.
+Every overload throws `ResultException` on a `default` result.
 
 ---
 
@@ -413,7 +414,7 @@ IEnumerable<IError> errors = results.Failures();
 Result<IReadOnlyList<Dto>> dtos = users.Traverse(u => MapToDto(u));
 ```
 
-`Successes` and `Failures` currently skip a `default` result, while `Partition` throws on it; #184 Phase 2 makes all three treat it alike.
+`Partition`, `Successes` and `Failures` throw `ResultException` on a `default` result.
 
 ---
 
@@ -445,11 +446,24 @@ app.MapDelete("/users/{id}", async (Guid id, IUserService svc, CancellationToken
 }
 ```
 
-Current behavior that #184 changes:
+`detail` is `IError.Message`, which an error keeps safe for a client; `Metadata` is never written. For an `ErrorCollection`, `errorCodes` lists the code of each error, nested collections flattened. A validation error, alone or in an `ErrorCollection`, answers an `HttpValidationProblemDetails` whose `errors` groups its messages by `PropertyName`, so a front end can attach them to form fields; a 5xx response never carries them:
 
-- `detail` is `IError.Message`, and `errors[].message` the message of each error in a collection. For the error `Try` / `TryAsync` build without a mapper, that is `Exception.Message` (see [Exception Boundaries](#exception-boundaries)); Phase 2 removes it from the response.
-- `errors` lists only `code` and `message`, and only for an `ErrorCollection`, so a single `ValidationError` emits none; Phase 2 groups validation errors by property.
-- An `ErrorCollection` answers with its first error's category; Phase 2 makes it the shared category, else the first that maps to 5xx, else the first.
+```json
+{
+  "type": "https://httpstatuses.io/422",
+  "title": "Validation Failed",
+  "status": 422,
+  "detail": "Email is required.; Email is not a valid email address.",
+  "errors": {
+    "Email": ["Email is required.", "Email is not a valid email address."]
+  },
+  "errorCode": "MULTI.ERROR",
+  "errorCodes": ["VALIDATION.EMAIL", "VALIDATION.EMAIL"]
+}
+```
+
+Current behavior that #184 Phase 5 changes:
+
 - `Timeout` answers 408, `type` links to a third-party site, and results are returned as `IResult`; Phase 5 decides these.
 
 ---
@@ -477,9 +491,8 @@ builder.Services.AddControllers().AddJsonOptions(o =>
 Current behavior:
 
 - The factory converts `Result<T>` only. A non-generic `Result` returned as is from an endpoint is serialized property by property: a failure answers 200 with `error.metadata`, a success answers 500. Return it through `ToHttpResult()`; #184 Phase 5 adds the converter.
-- `error.message` is `IError.Message`, so the exception text of a `Try` / `TryAsync` error without a mapper; Phase 2 replaces it.
 - `Severity`, `Metadata` and the errors of an `ErrorCollection` are not written, a read error becomes a private type, and writing a `default` result throws an unrelated exception. Phase 5 keeps those fields across a round trip and makes writing a `default` fail with a clear error.
-- Reading `{"isSuccess":true}` without `value` gives a success with no value; Phase 2 rejects it.
+- Reading a payload that does not describe a valid result (a success without `value` or with `error`, a failure without `error` or with `value`, a duplicate `isSuccess`, an empty `code`) throws `JsonException`.
 
 ---
 
@@ -563,10 +576,9 @@ public async ValueTask<Result<User>> GetUserAsync(Guid id, CancellationToken ct 
 }
 ```
 
-Current behavior that #184 Phase 2 changes:
+Without a mapper, `Try` / `TryAsync` rethrow `OperationCanceledException`, and turn any other exception into an `ExceptionError`: code `EXCEPTION`, the generic message `An unexpected error occurred.`, no metadata. Its `Exception` property keeps the exception in process for logging and is not serialized.
 
-- Every `Try` / `TryAsync` overload catches `OperationCanceledException`. Phase 2 makes the overloads without a mapper rethrow it; with a mapper, the mapper decides, and the mappers above turn it into a `TechnicalError`, except an `HttpClient` timeout, which `ToRemoteCallError` turns into a `RemoteTimeoutError`. That is why `Try` / `TryAsync` are kept for calls that take no token.
-- Without a mapper, the error's message is `Exception.Message`. `ToHttpResult()` writes it to `ProblemDetails.Detail`, or to `errors[].message` inside a collection, and `ResultJsonConverter<T>` to `error.message`. Phase 2 replaces it with a generic message.
+With a mapper, the mapper receives every exception, `OperationCanceledException` included, and decides; the mappers above turn it into a `TechnicalError`, except an `HttpClient` timeout, which `ToRemoteCallError` turns into a `RemoteTimeoutError`. That is why `Try` / `TryAsync` are kept for calls that take no token.
 
 ---
 

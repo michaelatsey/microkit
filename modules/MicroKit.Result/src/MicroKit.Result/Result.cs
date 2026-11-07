@@ -10,7 +10,7 @@ namespace MicroKit.Result;
 /// Result failed = Result.Failure(new MyError());
 /// </code>
 /// </example>
-public readonly struct Result : IEquatable<Result>
+public readonly struct Result : IEquatable<Result>, IResultMarker
 {
     private const byte TagUninitialized = 0;
     private const byte TagSuccess = 1;
@@ -86,10 +86,17 @@ public readonly struct Result : IEquatable<Result>
     public static Result<T> Failure<T>(IError error) => Result<T>.Failure(error);
 
     /// <summary>
-    /// Executes the action and catches exceptions as failures.
+    /// Executes the action and turns an exception it throws into a failure.
     /// </summary>
+    /// <remarks>
+    /// The failure carries an <see cref="ExceptionError"/>: a generic, client-safe message, with the
+    /// exception kept in process for logging. An <see cref="OperationCanceledException"/> is not caught:
+    /// cancellation propagates. Without a token to compare, an <c>HttpClient</c> timeout
+    /// (<see cref="TaskCanceledException"/> with an inner <see cref="TimeoutException"/>) propagates too; a mapper
+    /// overload turns it into an error.
+    /// </remarks>
     /// <param name="action">The action to execute.</param>
-    /// <returns>The result from the action, or a failure wrapping any caught exception.</returns>
+    /// <returns>The result from the action, or a failure wrapping the caught exception.</returns>
     public static Result Try(Func<Result> action)
     {
         ArgumentNullException.ThrowIfNull(action);
@@ -97,18 +104,20 @@ public readonly struct Result : IEquatable<Result>
         {
             return action();
         }
-        catch (Exception ex)
+        catch (Exception ex) when (ex is not OperationCanceledException)
         {
             return Failure(new ExceptionError(ex));
         }
     }
 
     /// <summary>
-    /// Executes the action and catches exceptions, mapping them with the specified function.
+    /// Executes the action and catches every exception, mapping it with the specified function.
     /// </summary>
+    /// <remarks>The mapper receives every exception, <see cref="OperationCanceledException"/> included, and decides.</remarks>
     /// <param name="action">The action to execute.</param>
-    /// <param name="exceptionMapper">Maps caught exceptions to errors.</param>
+    /// <param name="exceptionMapper">Maps caught exceptions to errors; it must not return <see langword="null"/>.</param>
     /// <returns>The result from the action, or a failure wrapping the mapped error.</returns>
+    /// <exception cref="ArgumentNullException">Thrown when <paramref name="exceptionMapper"/> returns <see langword="null"/>.</exception>
     public static Result Try(Func<Result> action, Func<Exception, IError> exceptionMapper)
     {
         ArgumentNullException.ThrowIfNull(action);
@@ -119,47 +128,69 @@ public readonly struct Result : IEquatable<Result>
         }
         catch (Exception ex)
         {
-            return Failure(exceptionMapper(ex));
+            return Failure(ThrowHelper.EnsureMapped(exceptionMapper(ex), ex));
         }
     }
 
     /// <summary>
-    /// Executes the async action and catches exceptions as failures.
+    /// Executes the async action and turns an exception it throws into a failure.
     /// </summary>
+    /// <remarks>
+    /// The failure carries an <see cref="ExceptionError"/>: a generic, client-safe message, with the
+    /// exception kept in process for logging. An <see cref="OperationCanceledException"/> is not caught:
+    /// cancellation propagates. Without a token to compare, an <c>HttpClient</c> timeout
+    /// (<see cref="TaskCanceledException"/> with an inner <see cref="TimeoutException"/>) propagates too; a mapper
+    /// overload turns it into an error. Arguments are validated before the action starts.
+    /// </remarks>
     /// <param name="action">The async action to execute.</param>
-    /// <returns>The result from the action, or a failure wrapping any caught exception.</returns>
-    public static async ValueTask<Result> TryAsync(Func<Task<Result>> action)
+    /// <returns>The result from the action, or a failure wrapping the caught exception.</returns>
+    public static ValueTask<Result> TryAsync(Func<Task<Result>> action)
     {
         ArgumentNullException.ThrowIfNull(action);
-        try
+        return TryCoreAsync(action);
+
+        static async ValueTask<Result> TryCoreAsync(Func<Task<Result>> action)
         {
-            return await action().ConfigureAwait(false);
-        }
-        catch (Exception ex)
-        {
-            return Failure(new ExceptionError(ex));
+            try
+            {
+                return await action().ConfigureAwait(false);
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                return Failure(new ExceptionError(ex));
+            }
         }
     }
 
     /// <summary>
-    /// Executes the async action and catches exceptions, mapping them with the specified function.
+    /// Executes the async action and catches every exception, mapping it with the specified function.
     /// </summary>
+    /// <remarks>
+    /// The mapper receives every exception, <see cref="OperationCanceledException"/> included, and decides.
+    /// Arguments are validated before the action starts.
+    /// </remarks>
     /// <param name="action">The async action to execute.</param>
-    /// <param name="exceptionMapper">Maps caught exceptions to errors.</param>
+    /// <param name="exceptionMapper">Maps caught exceptions to errors; it must not return <see langword="null"/>.</param>
     /// <returns>The result from the action, or a failure wrapping the mapped error.</returns>
-    public static async ValueTask<Result> TryAsync(
+    /// <exception cref="ArgumentNullException">Thrown when <paramref name="exceptionMapper"/> returns <see langword="null"/>.</exception>
+    public static ValueTask<Result> TryAsync(
         Func<Task<Result>> action,
         Func<Exception, IError> exceptionMapper)
     {
         ArgumentNullException.ThrowIfNull(action);
         ArgumentNullException.ThrowIfNull(exceptionMapper);
-        try
+        return TryCoreAsync(action, exceptionMapper);
+
+        static async ValueTask<Result> TryCoreAsync(Func<Task<Result>> action, Func<Exception, IError> exceptionMapper)
         {
-            return await action().ConfigureAwait(false);
-        }
-        catch (Exception ex)
-        {
-            return Failure(exceptionMapper(ex));
+            try
+            {
+                return await action().ConfigureAwait(false);
+            }
+            catch (Exception ex)
+            {
+                return Failure(ThrowHelper.EnsureMapped(exceptionMapper(ex), ex));
+            }
         }
     }
 

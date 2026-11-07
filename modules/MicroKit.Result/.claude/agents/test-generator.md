@@ -131,7 +131,7 @@ Bind, associativité : r.Bind(f).Bind(g) == r.Bind(x => f(x).Bind(g))
 ### Pour les erreurs
 1. Equality — deux records d'erreur aux mêmes valeurs sont égaux. `ErrorCollection` est une classe à égalité de référence : deux collections des mêmes erreurs ne sont pas égales, et aucune phase de #184 ne le change ; le test décrit ce comportement
 2. Metadata — les métadonnées sont accessibles
-3. Serialization — le succès et l'échec sérialisés ont le format du README. Le convertisseur perd aujourd'hui metadata, severity et erreurs internes, la désérialisation produit un type privé, et sérialiser un `default` lève une exception sans rapport ; la Phase 5 le change, donc le test décrit le comportement actuel, sans `Skip`. `{"isSuccess":true}` sans `value` lu comme un succès est un écart de la Phase 2 : `Skip = "#184 phase 2"`
+3. Serialization — le succès et l'échec sérialisés ont le format du README. Le convertisseur perd aujourd'hui metadata, severity et erreurs internes, la désérialisation produit un type privé, et sérialiser un `default` lève une exception sans rapport ; la Phase 5 le change, donc le test décrit le comportement actuel, sans `Skip`. Un contenu qui ne décrit pas un résultat valide (`{"isSuccess":true}` sans `value`, échec sans `error`…) lève `JsonException`
 4. Les tests JSON appellent des API annotées `[RequiresUnreferencedCode]` : `MicroKit.Result.UnitTests` doit ajouter `IL2026` à son `NoWarn`, comme `MicroKit.Result.ArchitectureTests`, sinon ils échouent en Release. Les `JsonSerializerOptions` se créent une fois par classe de test (CA1869)
 
 ### Pour l'async
@@ -142,10 +142,10 @@ Bind, associativité : r.Bind(f).Bind(g) == r.Bind(x => f(x).Bind(g))
 
 ## Défauts listés par #184
 
-Les tests décrivent le comportement actuel. Là où c'est un défaut que la Phase 2 corrige, le test affirme le comportement corrigé et porte `Skip = "#184 phase 2"` ; la Phase 2 retire le skip. Un écart d'une phase ultérieure se teste tel qu'il est, sans `Skip` (`rules/testing.md`) :
+Les tests décrivent le comportement actuel. Un écart d'une phase ultérieure (3 à 7) se teste tel qu'il est, sans `Skip` ; la phase qui le change réécrit le test (`rules/testing.md`). Les défauts de la Phase 2 sont corrigés, et leurs tests passent, par exemple :
 
 ```csharp
-[Fact(Skip = "#184 phase 2")]
+[Fact]
 public async Task TryAsync_WithoutMapper_WhenCancelled_RethrowsOperationCanceledException()
 {
     // Arrange

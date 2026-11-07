@@ -5,6 +5,60 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/) — [Semantic V
 
 ---
 
+## [Unreleased]
+
+Hardening before stable (#184). Breaking changes ship outright on `preview.*` (ADR-GLOBAL-002 D10).
+
+### Added
+- Unit tests of the core (both rails, `default`, async on every surface), FsCheck property tests of the
+  `Map` and `Bind` laws, and HTTP integration tests of the problem-details contract (#184 Phases 1–2).
+- `ExceptionError` is public: the error `Try` / `TryAsync` build without a mapper. Its `Exception`
+  property keeps the exception in process for logging and is not serialized.
+- `Tap`, `TapError` and `Finally` overloads taking a `Task`-returning delegate, on `Result<T>`, `Result`,
+  `Task<Result<T>>` and `ValueTask<Result<T>>`: an async lambda now binds to an overload that awaits it.
+- `IsAotCompatible` on both packages: the trim, single-file and AOT analyzers run, with no warning.
+
+### Changed (breaking)
+- `Try` / `TryAsync` without a mapper rethrow `OperationCanceledException` instead of returning a failure.
+- The error they build has the code `EXCEPTION` and the message `An unexpected error occurred.`, not
+  the exception's message, and no `exceptionType` metadata.
+- `Result<T>.Try` / `TryAsync` with a mapper that returns `null` throw `ArgumentNullException`.
+- The implicit conversion from `T` to `Result<T>` throws `ArgumentException` when the value is itself a
+  `Result` or a `Result<T>` (possible when `T` is `object`).
+- `Combine`, `CombineAll`, `Successes` and `Failures` throw `ResultException` on a `default` result.
+- `ErrorCollection.WithCategory`, `WithSeverity` and `WithCode` return `IReadOnlyList<IError>`, and
+  `OfType<TError>` returns `IReadOnlyList<TError>`: a filter that matches nothing returns an empty list,
+  never an empty `ErrorCollection`.
+- `ErrorCollection.Category` is the category its errors share; otherwise the first server-fault category
+  (`Technical`, `Unavailable`, `External`, `NotSupported`); otherwise the first error's.
+- `ResultJsonConverter<T>.Read` throws `JsonException` for a payload that does not describe a valid
+  result: a success without `value` or with `error`, a failure without `error` or with `value`, a
+  duplicate `isSuccess`, an empty `code`.
+- The async extensions and `TryAsync` validate their arguments, the source task included, when called,
+  before anything is awaited.
+- `ToHttpResult()` / `ResultProblemDetailsFactory.CreateProblemDetails`: a validation error, alone or in
+  an `ErrorCollection`, answers an `HttpValidationProblemDetails` whose `errors` groups the messages by
+  `PropertyName`; a 5xx response carries no field errors. The previous `errors` list of `{ code, message }`
+  is replaced by `errorCodes`, the code of each error of an `ErrorCollection`, nested ones flattened.
+- `Result<T>.Success` (and `Result.Success<T>`) throw `ArgumentException` when the value is itself a result,
+  as the implicit conversion does.
+- `ExceptionError.ToString()` prints its code, message and category, never the exception.
+- A mapper that returns `null` throws `ArgumentNullException` whose `InnerException` is the caught exception.
+
+### Migration notes
+- `Tap`, `TapError` and `Finally` given a `Task`-returning lambda or method group, async or not, now return
+  a `ValueTask<Result<T>>` (or `ValueTask<Result>`) that must be awaited. A statement such as
+  `result.Tap(async x => ...);` in a synchronous method now drops that `ValueTask` (CA2012 reports it)
+  instead of running an `async void`.
+- `Tap(null!)` is ambiguous (CS0121): cast the argument, `Tap((Action<T>)null!)`.
+- A lambda that only throws (`_ => throw new X()`) binds to the awaited overload: the exception surfaces
+  at the await.
+
+### Removed
+- The internal, unused `ResultState` enum.
+
+---
+
 ## [1.0.0-preview.2] — 2026-06-22
 
 ### Added

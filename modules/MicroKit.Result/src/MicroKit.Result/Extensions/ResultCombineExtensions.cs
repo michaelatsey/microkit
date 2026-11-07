@@ -10,12 +10,13 @@ public static class ResultCombineExtensions
     /// </summary>
     /// <param name="results">The results to combine.</param>
     /// <returns>A single successful result, or the first failure encountered.</returns>
+    /// <exception cref="ResultException">Thrown when a result before the first failure is uninitialized (<c>default</c>).</exception>
     public static Result Combine(params ReadOnlySpan<Result> results)
     {
         foreach (var result in results)
         {
-            if (result.IsFailure)
-                return result;
+            if (!result.IsSuccess)
+                return Result.Failure(result.Error); // Error throws ResultException on a default result
         }
         return Result.Success();
     }
@@ -25,15 +26,16 @@ public static class ResultCombineExtensions
     /// </summary>
     /// <param name="results">The results to combine.</param>
     /// <returns>A single successful result, or a failure with all collected errors.</returns>
+    /// <exception cref="ResultException">Thrown when a result is uninitialized (<c>default</c>).</exception>
     public static Result CombineAll(params ReadOnlySpan<Result> results)
     {
         List<IError>? errors = null;
         foreach (var result in results)
         {
-            if (result.IsFailure)
+            if (!result.IsSuccess)
             {
                 errors ??= [];
-                errors.Add(result.Error);
+                errors.Add(result.Error); // throws ResultException on a default result
             }
         }
 
@@ -70,15 +72,16 @@ public static class ResultCombineExtensions
     /// <typeparam name="T">The value type.</typeparam>
     /// <param name="results">The results to combine.</param>
     /// <returns>A single successful result, or a failure with all collected errors.</returns>
+    /// <exception cref="ResultException">Thrown when a result is uninitialized (<c>default</c>).</exception>
     public static Result CombineAll<T>(params ReadOnlySpan<Result<T>> results)
     {
         List<IError>? errors = null;
         foreach (var result in results)
         {
-            if (result.IsFailure)
+            if (!result.IsSuccess)
             {
                 errors ??= [];
-                errors.Add(result.Error);
+                errors.Add(result.Error); // throws ResultException on a default result
             }
         }
 

@@ -10,35 +10,45 @@ namespace MicroKit.Result.AspNetCore;
 public static class ResultProblemDetailsFactory
 {
     /// <summary>
-    /// Creates a <see cref="HttpValidationProblemDetails"/> instance from the specified error.
+    /// Creates the problem details describing the specified error.
     /// </summary>
+    /// <remarks>
+    /// <para>
+    /// When the error is an <see cref="IValidationError"/>, or an <see cref="ErrorCollection"/> that holds some
+    /// (nested collections included), and the status is not a server error (5xx), the result is an
+    /// <see cref="HttpValidationProblemDetails"/> whose <see cref="HttpValidationProblemDetails.Errors"/> groups
+    /// the validation messages by <see cref="IValidationError.PropertyName"/>, each property's messages in order;
+    /// other errors are not
+    /// listed there. A 5xx response never carries field errors: the client has nothing to correct. Otherwise
+    /// the result is a <see cref="ProblemDetails"/>.
+    /// </para>
+    /// <para>
+    /// <see cref="ProblemDetails.Detail"/> is <see cref="IError.Message"/>, which the error contract keeps safe for
+    /// a client; <see cref="IError.Metadata"/> is never emitted. The extension <c>errorCode</c> carries
+    /// <see cref="IError.Code"/>; for an <see cref="ErrorCollection"/>, the extension <c>errorCodes</c> lists the
+    /// codes of its errors, nested collections flattened, in order.
+    /// </para>
+    /// </remarks>
     /// <param name="error">The error to convert.</param>
-    /// <returns>A ProblemDetails instance with the appropriate status code and error details.</returns>
+    /// <returns>The problem details, with the status code of the error's category.</returns>
     public static ProblemDetails CreateProblemDetails(IError error)
     {
         ArgumentNullException.ThrowIfNull(error);
 
         var statusCode = ToStatusCode(error.Category);
+        var fieldErrors = statusCode < StatusCodes.Status500InternalServerError ? GroupValidationErrors(error) : null;
 
-        var problemDetails = new ProblemDetails
-        {
-            Status = statusCode,
-            Title = GetTitle(error.Category),
-            Detail = error.Message,
-            Type = $"https://httpstatuses.io/{statusCode}",
-        };
+        var problemDetails = fieldErrors is null
+            ? new ProblemDetails()
+            : new HttpValidationProblemDetails(fieldErrors);
 
+        problemDetails.Status = statusCode;
+        problemDetails.Title = GetTitle(error.Category);
+        problemDetails.Detail = error.Message;
+        problemDetails.Type = $"https://httpstatuses.io/{statusCode}";
         problemDetails.Extensions["errorCode"] = error.Code.Value;
-
         if (error is ErrorCollection collection)
-        {
-            var errors = new List<object>(collection.Count);
-            foreach (var inner in collection)
-            {
-                errors.Add(new { code = inner.Code.Value, message = inner.Message });
-            }
-            problemDetails.Extensions["errors"] = errors;
-        }
+            problemDetails.Extensions["errorCodes"] = collection.Flatten().Select(e => e.Code.Value).ToArray();
 
         return problemDetails;
     }
@@ -66,6 +76,30 @@ public static class ResultProblemDetailsFactory
         ErrorCategory.PreconditionFailed => StatusCodes.Status412PreconditionFailed,
         _ => StatusCodes.Status500InternalServerError,
     };
+
+    private static Dictionary<string, string[]>? GroupValidationErrors(IError error)
+    {
+        Dictionary<string, List<string>>? groups = null;
+        Collect(error, ref groups);
+        return groups?.ToDictionary(kvp => kvp.Key, kvp => kvp.Value.ToArray(), StringComparer.Ordinal);
+
+        static void Collect(IError error, ref Dictionary<string, List<string>>? groups)
+        {
+            if (error is ErrorCollection collection)
+            {
+                foreach (var inner in collection)
+                    Collect(inner, ref groups);
+            }
+            else if (error is IValidationError validation)
+            {
+                groups ??= new Dictionary<string, List<string>>(StringComparer.Ordinal);
+                var propertyName = validation.PropertyName ?? string.Empty; // a third-party IValidationError may return null
+                if (!groups.TryGetValue(propertyName, out var messages))
+                    groups[propertyName] = messages = [];
+                messages.Add(validation.Message);
+            }
+        }
+    }
 
     private static string GetTitle(ErrorCategory category) => category switch
     {

@@ -221,7 +221,7 @@ public sealed class ResultOfTTests
         result.Value.ShouldBeSameAs(payload);
     }
 
-    [Fact(Skip = "#184 phase 2")]
+    [Fact]
     public void ImplicitConversion_WhenValueIsGenericResultAndTIsObject_ThrowsArgumentException()
     {
         // Arrange
@@ -231,7 +231,7 @@ public sealed class ResultOfTTests
         Should.Throw<ArgumentException>(() => ToObjectResult(failure));
     }
 
-    [Fact(Skip = "#184 phase 2")]
+    [Fact]
     public void ImplicitConversion_WhenValueIsResultAndTIsObject_ThrowsArgumentException()
     {
         // Arrange
@@ -254,7 +254,7 @@ public sealed class ResultOfTTests
         result.Value.ShouldBe(42);
     }
 
-    [Fact(Skip = "#184 phase 2")]
+    [Fact]
     public void Try_WhenFuncThrows_ErrorMetadataDoesNotExposeExceptionType()
     {
         // Act
@@ -277,7 +277,7 @@ public sealed class ResultOfTTests
         result.Error.Severity.ShouldBe(ErrorSeverity.Error);
     }
 
-    [Fact(Skip = "#184 phase 2")]
+    [Fact]
     public void Try_WhenFuncThrows_ErrorHasExceptionCodeAndGenericMessage()
     {
         // Act
@@ -289,7 +289,7 @@ public sealed class ResultOfTTests
         result.Error.Message.ShouldNotContain(SecretMessage);
     }
 
-    [Fact(Skip = "#184 phase 2")]
+    [Fact]
     public void Try_WithoutMapper_WhenOperationCanceled_RethrowsOperationCanceledException()
     {
         // Act + Assert
@@ -363,7 +363,7 @@ public sealed class ResultOfTTests
         result.Error.ShouldBeSameAs(mapped);
     }
 
-    [Fact(Skip = "#184 phase 2")]
+    [Fact]
     public void Try_WithMapper_WhenMapperReturnsNull_ThrowsArgumentNullException()
     {
         // Act + Assert
@@ -463,7 +463,7 @@ public sealed class ResultOfTTests
         result.Error.Category.ShouldBe(ErrorCategory.Technical);
     }
 
-    [Fact(Skip = "#184 phase 2")]
+    [Fact]
     public async Task TryAsync_WhenFuncThrows_ErrorHasExceptionCodeAndGenericMessage()
     {
         // Act
@@ -479,7 +479,7 @@ public sealed class ResultOfTTests
         result.Error.Message.ShouldNotContain(SecretMessage);
     }
 
-    [Fact(Skip = "#184 phase 2")]
+    [Fact]
     public async Task TryAsync_WithoutMapper_WhenOperationCanceled_RethrowsOperationCanceledException()
     {
         // Act + Assert
@@ -491,7 +491,7 @@ public sealed class ResultOfTTests
             }));
     }
 
-    [Fact(Skip = "#184 phase 2")]
+    [Fact]
     public async Task TryAsync_WithoutMapper_WhenCancelled_RethrowsTaskCanceledException()
     {
         // Arrange
@@ -600,7 +600,7 @@ public sealed class ResultOfTTests
         received.ShouldBeOfType<TaskCanceledException>();
     }
 
-    [Fact(Skip = "#184 phase 2")]
+    [Fact]
     public async Task TryAsync_WithMapper_WhenMapperReturnsNull_ThrowsArgumentNullException()
     {
         // Act + Assert
@@ -849,4 +849,26 @@ public sealed class ResultOfTTests
     private static Result<object> ToObjectResult(Result<int> value) => value;
 
     private static Result<object> ToObjectResult(Result value) => value;
+
+    [Fact]
+    public void Success_WhenValueIsAResult_ThrowsArgumentException()
+    {
+        // Arrange
+        object failure = Result.Failure<int>(new TestError());
+
+        // Act + Assert
+        Should.Throw<ArgumentException>(() => Result<object>.Success(failure)).ParamName.ShouldBe("value");
+        Should.Throw<ArgumentException>(() => Result.Success<object>(Result.Success()));
+    }
+
+    [Fact]
+    public void ImplicitConversion_WhenValueIsAnOrdinaryObject_ReturnsSuccess()
+    {
+        // Act
+        Result<object> result = (object)42;
+
+        // Assert
+        result.IsSuccess.ShouldBeTrue();
+        result.Value.ShouldBe(42);
+    }
 }

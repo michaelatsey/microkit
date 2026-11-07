@@ -36,6 +36,7 @@ public static class ResultEnumerableExtensions
     /// <typeparam name="T">The value type.</typeparam>
     /// <param name="results">The results to filter.</param>
     /// <returns>An enumerable of success values.</returns>
+    /// <exception cref="ResultException">Thrown on enumeration when a result is uninitialized (<c>default</c>), as <see cref="Partition{T}"/> does.</exception>
     public static IEnumerable<T> Successes<T>(this IEnumerable<Result<T>> results)
     {
         ArgumentNullException.ThrowIfNull(results);
@@ -44,6 +45,8 @@ public static class ResultEnumerableExtensions
         {
             if (result.IsSuccess)
                 yield return result.Value;
+            else if (!result.IsFailure)
+                ThrowHelper.ThrowResultUninitialized();
         }
     }
 
@@ -53,6 +56,7 @@ public static class ResultEnumerableExtensions
     /// <typeparam name="T">The value type.</typeparam>
     /// <param name="results">The results to filter.</param>
     /// <returns>An enumerable of errors.</returns>
+    /// <exception cref="ResultException">Thrown on enumeration when a result is uninitialized (<c>default</c>), as <see cref="Partition{T}"/> does.</exception>
     public static IEnumerable<IError> Failures<T>(this IEnumerable<Result<T>> results)
     {
         ArgumentNullException.ThrowIfNull(results);
@@ -61,6 +65,8 @@ public static class ResultEnumerableExtensions
         {
             if (result.IsFailure)
                 yield return result.Error;
+            else if (!result.IsSuccess)
+                ThrowHelper.ThrowResultUninitialized();
         }
     }
 

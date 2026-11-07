@@ -135,12 +135,12 @@ L'annulation demandée par l'appelant se propage : on attrape `OperationCanceled
 
 ## `Try` / `TryAsync`
 
-Ils attrapent toute exception, celles que le tableau ci-dessus laisse propager comprises, et la passent au mapper. Ils s'emploient toujours avec un mapper qui journalise l'exception et retourne une erreur au message générique, technique quand l'exception ne vient pas de l'infrastructure (`DatabaseExceptionMapper`, `rules/csharp-style.md`). Quand un bug doit se propager, la frontière est un `catch` ciblé, comme ci-dessus.
+Avec un mapper, ils attrapent toute exception, celles que le tableau ci-dessus laisse propager comprises, et la passent au mapper ; sans mapper, toute exception sauf `OperationCanceledException`. Ils s'emploient toujours avec un mapper qui journalise l'exception et retourne une erreur au message générique, technique quand l'exception ne vient pas de l'infrastructure (`DatabaseExceptionMapper`, `rules/csharp-style.md`). Quand un bug doit se propager, la frontière est un `catch` ciblé, comme ci-dessus.
 
-Ils ne conviennent pas à un appel annulable : leur lambda ne capture pas de `CancellationToken`. Comportement actuel, que #184 Phase 2 change :
+Ils ne conviennent pas à un appel annulable : leur lambda ne capture pas de `CancellationToken`.
 
-- Toutes les surcharges attrapent `OperationCanceledException`. La Phase 2 fait relancer celles sans mapper ; avec un mapper, le mapper décide, et `DatabaseExceptionMapper` en fait une erreur : la Phase 2 n'y change rien.
-- Sans mapper, le message de l'erreur est `Exception.Message`. Il atteint le client par `ProblemDetails.Detail` et `errors[].message` (`ToHttpResult`), et par `error.message` (`ResultJsonConverter<T>`). La Phase 2 le remplace par un message générique.
+- Sans mapper, ils relancent `OperationCanceledException`, et font de toute autre exception une `ExceptionError` : code `ErrorCode.Exception`, message générique, aucune métadonnée. Le texte de l'exception n'atteint pas le client ; `ExceptionError.Exception` la garde en mémoire pour le log.
+- Avec un mapper, le mapper reçoit toute exception, `OperationCanceledException` comprise, et décide : `DatabaseExceptionMapper` en fait une erreur. Un mapper qui retourne `null` fait lever `ArgumentNullException`.
 
 ## Règle des couches
 

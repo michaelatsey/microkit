@@ -101,9 +101,9 @@ internal static class ResultGuard
 
 // ✅ Bon: ValueTask (convention racine ; son gain face à Task n'est pas mesuré, la Phase 7 le mesure),
 // ConfigureAwait(false), et l'argument validé avant la partie async : un mapper null lève à l'appel,
-// comme Map (Microsoft Learn, Best practices for exceptions). Les extensions async de src/ valident
-// dans la partie async (écart, Phase 2) et ne prennent pas de CancellationToken (écart, ADR de la
-// Phase 3 puis Phase 4) : deux écarts nommés par .claude/CLAUDE.md
+// comme Map (Microsoft Learn, Best practices for exceptions), ce que font les extensions async de src/.
+// Elles ne prennent pas de CancellationToken (écart, ADR de la Phase 3 puis Phase 4, nommé par
+// .claude/CLAUDE.md)
 public static ValueTask<Result<TOut>> MapAsync<TIn, TOut>(
     this Result<TIn> result, Func<TIn, Task<TOut>> mapper)
 {

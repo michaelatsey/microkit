@@ -11,7 +11,7 @@
 
 Sans `--category`, la catégorie se déduit du nom (règle 4 ci-dessous) ; si le nom ne la donne pas, la commande la demande. Le template surcharge toujours `Category` : sans surcharge, `Error.Category` vaut `Technical` (HTTP 500), et #184 Phase 3 décide si elle devient obligatoire.
 
-`Validation` n'est pas proposée non plus : une erreur de validation est une `ValidationError` (`ValidationError.Custom(propertyName, message)` ou ses factories), qui implémente `IValidationError`. `ValidationResult.AddError` a deux surcharges : `AddError(IValidationError error)`, et `AddError(string propertyName, string message)`, qui construit une `ValidationError`. L'une comme l'autre portent un `PropertyName`, ce que la Phase 2 regroupe par champ.
+`Validation` n'est pas proposée non plus : une erreur de validation est une `ValidationError` (`ValidationError.Custom(propertyName, message)` ou ses factories), qui implémente `IValidationError`. `ValidationResult.AddError` a deux surcharges : `AddError(IValidationError error)`, et `AddError(string propertyName, string message)`, qui construit une `ValidationError`. L'une comme l'autre portent un `PropertyName` : `ToHttpResult()` regroupe les messages par champ dans `errors`.
 
 `<ErrorSeverity>` : `Information`, `Warning`, `Error`, `Critical`. Sans `--severity`, le template ne surcharge pas `Severity`, qui vaut `Error`.
 

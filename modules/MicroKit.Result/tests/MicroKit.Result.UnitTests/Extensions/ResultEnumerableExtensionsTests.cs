@@ -4,7 +4,6 @@ namespace MicroKit.Result.UnitTests.Extensions;
 
 public sealed class ResultEnumerableExtensionsTests
 {
-    private const string Phase2 = "#184 phase 2";
 
     #region Partition
 
@@ -127,7 +126,7 @@ public sealed class ResultEnumerableExtensionsTests
         thrown.ParamName.ShouldBe("results");
     }
 
-    [Fact(Skip = Phase2)]
+    [Fact]
     public void Successes_WhenSequenceContainsDefault_ThrowsResultException()
     {
         // Arrange
@@ -187,7 +186,7 @@ public sealed class ResultEnumerableExtensionsTests
         thrown.ParamName.ShouldBe("results");
     }
 
-    [Fact(Skip = Phase2)]
+    [Fact]
     public void Failures_WhenSequenceContainsDefault_ThrowsResultException()
     {
         // Arrange

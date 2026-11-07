@@ -43,11 +43,11 @@ internal static class ErrorSystemSamples
     {
         var collection = ErrorCollection.From(error1, error2, error3);
 
-        // Filter
-        ErrorCollection validation = collection.WithCategory(ErrorCategory.Validation);
-        ErrorCollection critical = collection.WithSeverity(ErrorSeverity.Critical);
-        ErrorCollection notFound = collection.WithCode(ErrorCode.NotFound);
-        ErrorCollection typed = collection.OfType<ValidationError>();
+        // Filter: a filter may match nothing, so it returns a list, never an empty collection
+        IReadOnlyList<IError> validation = collection.WithCategory(ErrorCategory.Validation);
+        IReadOnlyList<IError> critical = collection.WithSeverity(ErrorSeverity.Critical);
+        IReadOnlyList<IError> notFound = collection.WithCode(ErrorCode.NotFound);
+        IReadOnlyList<ValidationError> typed = collection.OfType<ValidationError>();
         bool hasValidation = collection.HasCategory(ErrorCategory.Validation);
 
         // Group

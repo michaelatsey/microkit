@@ -15,9 +15,8 @@ internal static class AsyncSamples
         Result<string> mappedTask = await GetResultTask().Map(v => Transform(v));
         Result<string> chainedTask = await GetResultTask().Bind(v => GetNext(v));
 
-        // TapAsync, TapErrorAsync and FinallyAsync exist only on Result<T>: await the task first
-        Result<int> awaited = await GetResultTask();
-        Result<int> audited = await awaited.TapAsync(async v => await AuditAsync(v));
+        // Tap, TapError and Finally given an async lambda await the side effect, on every surface
+        Result<int> audited = await GetResultTask().Tap(async v => await AuditAsync(v));
 
         // Surface 3: on ValueTask<Result<T>> (sync delegate)
         Result<string> mappedValueTask = await GetResultValueTask().Map(v => Transform(v));

@@ -320,7 +320,7 @@ public sealed class ResultJsonConverterTests
         Should.Throw<JsonException>(() => JsonSerializer.Deserialize<Result<int>>(json, Options));
     }
 
-    [Fact(Skip = "#184 phase 2")]
+    [Fact]
     public void Read_WhenSuccessHasNoValue_ThrowsJsonException()
     {
         // Arrange
@@ -330,7 +330,7 @@ public sealed class ResultJsonConverterTests
         Should.Throw<JsonException>(() => JsonSerializer.Deserialize<Result<int>>(json, Options));
     }
 
-    [Fact(Skip = "#184 phase 2")]
+    [Fact]
     public void Read_WhenSuccessAlsoHasError_ThrowsJsonException()
     {
         // Arrange
@@ -340,7 +340,7 @@ public sealed class ResultJsonConverterTests
         Should.Throw<JsonException>(() => JsonSerializer.Deserialize<Result<int>>(json, Options));
     }
 
-    [Fact(Skip = "#184 phase 2")]
+    [Fact]
     public void Read_WhenFailureHasNoError_ThrowsJsonException()
     {
         // Arrange

@@ -242,7 +242,7 @@ public sealed class ErrorCollectionTests
         category.ShouldBe(ErrorCategory.NotFound);
     }
 
-    [Fact(Skip = "#184 phase 2")]
+    [Fact]
     public void Category_WhenValidationThenTechnical_IsTechnical()
     {
         // Arrange
@@ -255,7 +255,7 @@ public sealed class ErrorCollectionTests
         category.ShouldBe(ErrorCategory.Technical);
     }
 
-    [Fact(Skip = "#184 phase 2")]
+    [Fact]
     public void Category_WhenSeveralServerFaults_IsFirstServerFault()
     {
         // Arrange
@@ -287,7 +287,7 @@ public sealed class ErrorCollectionTests
         filtered[1].ShouldBeSameAs(second);
     }
 
-    [Fact(Skip = "#184 phase 2")]
+    [Fact]
     public void WithCategory_WhenNoErrorMatches_ReturnsEmptyNonCollection()
     {
         // Arrange
@@ -318,7 +318,7 @@ public sealed class ErrorCollectionTests
         filtered[1].ShouldBeSameAs(email);
     }
 
-    [Fact(Skip = "#184 phase 2")]
+    [Fact]
     public void WithSeverity_WhenNoErrorMatches_ReturnsEmptyNonCollection()
     {
         // Arrange
@@ -347,7 +347,7 @@ public sealed class ErrorCollectionTests
         filtered.ShouldBe([first, second]);
     }
 
-    [Fact(Skip = "#184 phase 2")]
+    [Fact]
     public void WithCode_WhenNoErrorMatches_ReturnsEmptyNonCollection()
     {
         // Arrange
@@ -393,7 +393,7 @@ public sealed class ErrorCollectionTests
         filtered[0].ShouldBeSameAs(validation);
     }
 
-    [Fact(Skip = "#184 phase 2")]
+    [Fact]
     public void OfType_WhenNoErrorMatches_ReturnsEmptyNonCollection()
     {
         // Arrange

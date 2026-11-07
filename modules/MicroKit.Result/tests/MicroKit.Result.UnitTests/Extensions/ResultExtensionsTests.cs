@@ -4,7 +4,6 @@ namespace MicroKit.Result.UnitTests.Extensions;
 
 public sealed class ResultExtensionsTests
 {
-    private const string Phase2 = "#184 phase 2";
 
     #region Map
 
@@ -522,7 +521,7 @@ public sealed class ResultExtensionsTests
         thrown.ShouldBeSameAs(boom);
     }
 
-    [Fact(Skip = Phase2)]
+    [Fact]
     public async Task Tap_WithAsyncLambda_AwaitsSideEffectBeforeReturning()
     {
         // Arrange
@@ -541,7 +540,7 @@ public sealed class ResultExtensionsTests
         tapped.ShouldBe(result);
     }
 
-    [Fact(Skip = Phase2)]
+    [Fact]
     public async Task Tap_WithAsyncLambda_WhenSideEffectThrows_SurfacesExceptionAtAwait()
     {
         // Arrange
@@ -637,7 +636,7 @@ public sealed class ResultExtensionsTests
         thrown.ShouldBeSameAs(boom);
     }
 
-    [Fact(Skip = Phase2)]
+    [Fact]
     public async Task Tap_NonGenericWithAsyncLambda_AwaitsSideEffectBeforeReturning()
     {
         // Arrange
@@ -656,7 +655,7 @@ public sealed class ResultExtensionsTests
         tapped.ShouldBe(result);
     }
 
-    [Fact(Skip = Phase2)]
+    [Fact]
     public async Task Tap_NonGenericWithAsyncLambda_WhenSideEffectThrows_SurfacesExceptionAtAwait()
     {
         // Arrange
@@ -751,7 +750,7 @@ public sealed class ResultExtensionsTests
         thrown.ShouldBeSameAs(boom);
     }
 
-    [Fact(Skip = Phase2)]
+    [Fact]
     public async Task TapError_WithAsyncLambda_AwaitsSideEffectBeforeReturning()
     {
         // Arrange
@@ -771,7 +770,7 @@ public sealed class ResultExtensionsTests
         tapped.ShouldBe(result);
     }
 
-    [Fact(Skip = Phase2)]
+    [Fact]
     public async Task TapError_WithAsyncLambda_WhenSideEffectThrows_SurfacesExceptionAtAwait()
     {
         // Arrange
@@ -865,7 +864,7 @@ public sealed class ResultExtensionsTests
         thrown.ShouldBeSameAs(boom);
     }
 
-    [Fact(Skip = Phase2)]
+    [Fact]
     public async Task TapError_NonGenericWithAsyncLambda_AwaitsSideEffectBeforeReturning()
     {
         // Arrange
@@ -885,7 +884,7 @@ public sealed class ResultExtensionsTests
         tapped.ShouldBe(result);
     }
 
-    [Fact(Skip = Phase2)]
+    [Fact]
     public async Task TapError_NonGenericWithAsyncLambda_WhenSideEffectThrows_SurfacesExceptionAtAwait()
     {
         // Arrange
@@ -1526,7 +1525,7 @@ public sealed class ResultExtensionsTests
         thrown.ShouldBeSameAs(boom);
     }
 
-    [Fact(Skip = Phase2)]
+    [Fact]
     public async Task Finally_WithAsyncLambda_AwaitsSideEffectBeforeReturning()
     {
         // Arrange
@@ -1545,7 +1544,7 @@ public sealed class ResultExtensionsTests
         finished.ShouldBe(result);
     }
 
-    [Fact(Skip = Phase2)]
+    [Fact]
     public async Task Finally_WithAsyncLambda_WhenSideEffectThrows_SurfacesExceptionAtAwait()
     {
         // Arrange
@@ -1638,7 +1637,7 @@ public sealed class ResultExtensionsTests
         thrown.ShouldBeSameAs(boom);
     }
 
-    [Fact(Skip = Phase2)]
+    [Fact]
     public async Task Finally_NonGenericWithAsyncLambda_AwaitsSideEffectBeforeReturning()
     {
         // Arrange
@@ -1657,7 +1656,7 @@ public sealed class ResultExtensionsTests
         finished.ShouldBe(result);
     }
 
-    [Fact(Skip = Phase2)]
+    [Fact]
     public async Task Finally_NonGenericWithAsyncLambda_WhenSideEffectThrows_SurfacesExceptionAtAwait()
     {
         // Arrange

@@ -12,18 +12,17 @@ public sealed class ErrorCollection : IError, IReadOnlyList<IError>
 
     private ErrorCollection(ImmutableArray<IError> errors)
     {
+        Debug.Assert(!errors.IsEmpty, "An ErrorCollection is never empty.");
         _errors = errors;
         Severity = ErrorSeverity.Error;
-        ErrorCategory? category = null;
 
         foreach (var error in errors)
         {
             if (error.Severity > Severity)
                 Severity = error.Severity;
-            category ??= error.Category;
         }
 
-        Category = category ?? ErrorCategory.Technical;
+        Category = SelectCategory(errors);
         Message = string.Join("; ", errors.Select(e => e.Message));
     }
 
@@ -33,7 +32,12 @@ public sealed class ErrorCollection : IError, IReadOnlyList<IError>
     /// <summary>Gets the combined error message.</summary>
     public string Message { get; }
 
-    /// <summary>Gets the error category from the first contained error.</summary>
+    /// <summary>
+    /// Gets the collection's category: the category every contained error shares; otherwise the first category
+    /// that reports a fault of the system (<see cref="ErrorCategory.Technical"/>, <see cref="ErrorCategory.Unavailable"/>,
+    /// <see cref="ErrorCategory.External"/>, <see cref="ErrorCategory.NotSupported"/>, or a value the enum does not
+    /// define), so a server fault is never hidden behind a client error; otherwise the first error's category.
+    /// </summary>
     public ErrorCategory Category { get; }
 
     /// <summary>Gets the maximum severity across all contained errors.</summary>
@@ -46,7 +50,7 @@ public sealed class ErrorCollection : IError, IReadOnlyList<IError>
     public int Count => _errors.Length;
 
     /// <summary>
-    /// Gets the first error in the collection, or <see langword="null"/> if empty.
+    /// Gets the first error in the collection. Never <see langword="null"/>: a collection is never empty.
     /// </summary>
     public IError? FirstOrDefault => _errors.IsEmpty ? null : _errors[0];
 
@@ -83,31 +87,29 @@ public sealed class ErrorCollection : IError, IReadOnlyList<IError>
         return new ErrorCollection(array);
     }
 
-    private static ErrorCollection FromFiltered(IEnumerable<IError> errors) =>
-        new(errors.ToImmutableArray());
-
     // ── Filter methods ────────────────────────────────────────────────────
+    // A filter may match nothing, and an ErrorCollection is never empty: filters return a read-only list.
 
     /// <summary>
-    /// Returns a new collection containing only errors whose category matches <paramref name="category"/>.
+    /// Returns the errors whose category matches <paramref name="category"/>, in order. The list is empty when none matches.
     /// </summary>
     /// <param name="category">The category to filter by.</param>
-    public ErrorCollection WithCategory(ErrorCategory category) =>
-        FromFiltered(_errors.Where(e => e.Category == category));
+    public IReadOnlyList<IError> WithCategory(ErrorCategory category) =>
+        _errors.Where(e => e.Category == category).ToImmutableArray();
 
     /// <summary>
-    /// Returns a new collection containing only errors whose severity matches <paramref name="severity"/>.
+    /// Returns the errors whose severity matches <paramref name="severity"/>, in order. The list is empty when none matches.
     /// </summary>
     /// <param name="severity">The severity to filter by.</param>
-    public ErrorCollection WithSeverity(ErrorSeverity severity) =>
-        FromFiltered(_errors.Where(e => e.Severity == severity));
+    public IReadOnlyList<IError> WithSeverity(ErrorSeverity severity) =>
+        _errors.Where(e => e.Severity == severity).ToImmutableArray();
 
     /// <summary>
-    /// Returns a new collection containing only errors whose code matches <paramref name="code"/>.
+    /// Returns the errors whose code matches <paramref name="code"/>, in order. The list is empty when none matches.
     /// </summary>
     /// <param name="code">The error code to filter by.</param>
-    public ErrorCollection WithCode(ErrorCode code) =>
-        FromFiltered(_errors.Where(e => e.Code == code));
+    public IReadOnlyList<IError> WithCode(ErrorCode code) =>
+        _errors.Where(e => e.Code == code).ToImmutableArray();
 
     /// <summary>
     /// Returns <see langword="true"/> if any error in this collection has the specified category.
@@ -117,26 +119,27 @@ public sealed class ErrorCollection : IError, IReadOnlyList<IError>
         _errors.Any(e => e.Category == category);
 
     /// <summary>
-    /// Returns a new collection containing only errors of the concrete type <typeparamref name="TError"/>.
+    /// Returns the errors of type <typeparamref name="TError"/>, in order. The list is empty when none matches.
     /// </summary>
-    /// <typeparam name="TError">The concrete error type to filter by.</typeparam>
-    public ErrorCollection OfType<TError>() where TError : IError =>
-        FromFiltered(_errors.OfType<TError>().Cast<IError>());
+    /// <typeparam name="TError">The error type to filter by.</typeparam>
+    public IReadOnlyList<TError> OfType<TError>() where TError : IError =>
+        _errors.OfType<TError>().ToImmutableArray();
 
     /// <summary>
-    /// Returns a new flat collection with all nested <see cref="ErrorCollection"/> instances expanded.
+    /// Returns a new flat collection with all nested <see cref="ErrorCollection"/> instances expanded, in order.
+    /// It is never empty, since no collection is.
     /// </summary>
     public ErrorCollection Flatten()
     {
-        var flat = new List<IError>(_errors.Length);
+        var flat = ImmutableArray.CreateBuilder<IError>(_errors.Length);
         foreach (var error in _errors)
         {
             if (error is ErrorCollection nested)
-                flat.AddRange(nested.Flatten());
+                flat.AddRange(nested.Flatten()._errors);
             else
                 flat.Add(error);
         }
-        return FromFiltered(flat);
+        return new ErrorCollection(flat.ToImmutable());
     }
 
     /// <summary>
@@ -173,6 +176,23 @@ public sealed class ErrorCollection : IError, IReadOnlyList<IError>
         return groups.ToDictionary(
             kvp => kvp.Key,
             kvp => (IReadOnlyList<IError>)kvp.Value.AsReadOnly());
+    }
+
+    private static ErrorCategory SelectCategory(ImmutableArray<IError> errors)
+    {
+        var first = errors[0].Category;
+        ErrorCategory? firstServerFault = null;
+        var shared = true;
+
+        foreach (var error in errors)
+        {
+            var category = error.Category;
+            shared &= category == first;
+            if (firstServerFault is null && ErrorCategoryFacts.IsServerFault(category))
+                firstServerFault = category;
+        }
+
+        return shared ? first : firstServerFault ?? first;
     }
 
     // ── Enumeration ───────────────────────────────────────────────────────

@@ -17,7 +17,7 @@ Result savedAsync = await Result.TryAsync(async () => await riskyCommandAsync(),
 Result<T> loadedAsync = await Result<T>.TryAsync(async () => await riskyQueryAsync(), mapper.Map); // Func<Task<T>>
 ```
 
-`DatabaseExceptionMapper` (`rules/csharp-style.md`) est un tel mapper. Il fait une erreur de toute exception, `OperationCanceledException` comprise : un appel annulable ne passe pas par `Try` / `TryAsync` mais par un `catch` à la frontière (`rules/no-exceptions-flow.md`), qui laisse l'annulation se propager. Le comportement actuel sans mapper, et la Phase 2 de #184 qui le change, sont décrits dans `rules/no-exceptions-flow.md`.
+`DatabaseExceptionMapper` (`rules/csharp-style.md`) est un tel mapper. Il fait une erreur de toute exception, `OperationCanceledException` comprise : un appel annulable ne passe pas par `Try` / `TryAsync` mais par un `catch` à la frontière (`rules/no-exceptions-flow.md`), qui laisse l'annulation se propager. Sans mapper, `Try` / `TryAsync` relancent `OperationCanceledException` et font de toute autre exception une `ExceptionError` au message générique (`rules/no-exceptions-flow.md`).
 
 ### ❌ Ne jamais créer via constructeur
 ```csharp
@@ -71,7 +71,7 @@ Result<User> mutated = userResult.Tap(u => u.Rename(newName));
 Result<User> renamed = userResult.Map(u => u.WithName(newName));
 ```
 
-Un effet async passe par `TapAsync`, `TapErrorAsync` ou `FinallyAsync`. Dans `Tap`, `TapError` ou `Finally`, un lambda async compile en `async void` : le résultat revient avant l'effet, et une exception de l'effet termine le processus (écart, Phase 2 de #184).
+Un effet async passe par `Tap`, `TapError` ou `Finally` avec un lambda async, ou par `TapAsync`, `TapErrorAsync` ou `FinallyAsync` : la surcharge prise attend l'effet et retourne un `ValueTask`, qu'on attend. Une `Action` garde la surcharge synchrone.
 
 ### ✅ Ensure pour les validations inline
 ```csharp
@@ -114,11 +114,11 @@ Result failFast = ResultCombineExtensions.Combine(validateName, validateEmail, v
 Result collected = ResultCombineExtensions.CombineAll(validateName, validateEmail, validateAge);
 ```
 
-Pour qu'une étape ne s'exécute pas après un échec, `Bind` la chaîne : `Combine(Validate(x), Save(x))` exécute `Save`. Sur des `Result`, `Combine` et `CombineAll` lisent aujourd'hui un résultat `default` comme un succès ; la Phase 2 de #184 le corrige. La Phase 3 décide de leur place.
+Pour qu'une étape ne s'exécute pas après un échec, `Bind` la chaîne : `Combine(Validate(x), Save(x))` exécute `Save`. Sur un résultat `default`, `Combine` et `CombineAll` lèvent `ResultException`. La Phase 3 de #184 décide de leur place.
 
 ## `Result` non générique
 
-Il n'a aujourd'hui que `Match`, `Tap`, `TapError` et `Finally`, et aucun async hors `TryAsync` : `Map`, `Bind` et `Ensure` ci-dessus sont des opérations de `Result<T>`. La Phase 4 de #184 lui donne les mêmes opérations, sync et async.
+Il n'a aujourd'hui que `Match`, `Tap`, `TapError` et `Finally`, et aucun async hors `TryAsync` et les surcharges attendues de `Tap`, `TapError` et `Finally` : `Map`, `Bind` et `Ensure` ci-dessus sont des opérations de `Result<T>`. La Phase 4 de #184 lui donne les mêmes opérations, sync et async.
 
 ## Règles de mapping HTTP
 
@@ -151,10 +151,10 @@ toute autre valeur              → 500 Internal Server Error
 
 L'annulation demandée par l'appelant se propage (`rules/no-exceptions-flow.md`) : elle ne devient jamais une erreur `ErrorCategory.Cancelled`.
 
+Une erreur de validation, seule ou dans une `ErrorCollection`, répond en `HttpValidationProblemDetails` : `errors` regroupe ses messages par `PropertyName` (`{ "Email": ["..."] }`) ; une réponse 5xx n'en porte jamais. Une `ErrorCollection` liste le code de chacune de ses erreurs dans `errorCodes`. Une `ErrorCollection` répond avec la catégorie que partagent ses erreurs ; sinon avec la première faute du système (5xx), pour qu'un 500 ne se cache pas derrière un 422 ; sinon avec celle de sa première erreur.
+
 Comportement actuel, que #184 change :
 
-- Phase 2 : `errors` ne liste que `code` et `message`, et seulement pour une `ErrorCollection`, si bien que `IValidationError.PropertyName` se perd et qu'une `ValidationError` seule n'émet rien. La Phase 2 groupe les erreurs de validation par propriété.
-- Phase 2 : une `ErrorCollection` répond avec la catégorie de sa première erreur, si bien que Validation + Technical répond 422 et masque le 500.
 - Phase 5 : `ErrorCategory.Timeout` répond 408, `type` pointe vers un site tiers, et `ToHttpResult` retourne `Ok` ou `NoContent` en `IResult` plutôt qu'en `TypedResults`.
 
 ## Règles d'erreurs
@@ -197,7 +197,7 @@ var errors = ErrorCollection.From(error1, error2, error3);
 return Result.Failure(errors);
 ```
 
-`WithCategory`, `WithSeverity`, `WithCode`, `OfType` et `Flatten` peuvent aujourd'hui construire une collection vide, que `From` interdit ; #184 Phase 2 le change.
+`WithCategory`, `WithSeverity`, `WithCode` et `OfType` retournent une liste, vide quand rien ne correspond : une `ErrorCollection` n'est jamais vide. `Flatten` retourne une `ErrorCollection`.
 
 ## Règles async
 

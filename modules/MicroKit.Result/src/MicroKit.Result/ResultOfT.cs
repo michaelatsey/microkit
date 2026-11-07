@@ -12,7 +12,7 @@ namespace MicroKit.Result;
 /// int value = success.Match(v => v * 2, e => -1); // 84
 /// </code>
 /// </example>
-public readonly struct Result<T> : IEquatable<Result<T>>
+public readonly struct Result<T> : IEquatable<Result<T>>, IResultMarker
 {
     private const byte TagUninitialized = 0;
     private const byte TagSuccess = 1;
@@ -89,7 +89,17 @@ public readonly struct Result<T> : IEquatable<Result<T>>
     /// <summary>Creates a successful result with the specified value.</summary>
     /// <param name="value">The success value.</param>
     /// <returns>A successful <see cref="Result{T}"/>.</returns>
-    public static Result<T> Success(T value) => new(value);
+    /// <exception cref="ArgumentException">
+    /// Thrown when <paramref name="value"/> is itself a <see cref="Result"/> or a <see cref="Result{T}"/>
+    /// (possible when <typeparamref name="T"/> is <see cref="object"/> or <see cref="ValueType"/>): a failure would otherwise become a
+    /// success. Chain a result with <c>Bind</c> instead.
+    /// </exception>
+    public static Result<T> Success(T value)
+    {
+        if (value is IResultMarker)
+            ThrowHelper.ThrowResultAsValue(nameof(value));
+        return new(value);
+    }
 
     /// <summary>
     /// Creates a failed result with the specified error.
@@ -103,10 +113,17 @@ public readonly struct Result<T> : IEquatable<Result<T>>
     }
 
     /// <summary>
-    /// Executes the function and catches exceptions as failures.
+    /// Executes the function and turns an exception it throws into a failure.
     /// </summary>
+    /// <remarks>
+    /// The failure carries an <see cref="ExceptionError"/>: a generic, client-safe message, with the
+    /// exception kept in process for logging. An <see cref="OperationCanceledException"/> is not caught:
+    /// cancellation propagates. Without a token to compare, an <c>HttpClient</c> timeout
+    /// (<see cref="TaskCanceledException"/> with an inner <see cref="TimeoutException"/>) propagates too; a mapper
+    /// overload turns it into an error.
+    /// </remarks>
     /// <param name="func">The function to execute.</param>
-    /// <returns>A successful result with the return value, or a failure wrapping any caught exception.</returns>
+    /// <returns>A successful result with the return value, or a failure wrapping the caught exception.</returns>
     public static Result<T> Try(Func<T> func)
     {
         ArgumentNullException.ThrowIfNull(func);
@@ -114,18 +131,20 @@ public readonly struct Result<T> : IEquatable<Result<T>>
         {
             return new(func());
         }
-        catch (Exception ex)
+        catch (Exception ex) when (ex is not OperationCanceledException)
         {
             return new(new ExceptionError(ex));
         }
     }
 
     /// <summary>
-    /// Executes the function and catches exceptions, mapping them with the specified function.
+    /// Executes the function and catches every exception, mapping it with the specified function.
     /// </summary>
+    /// <remarks>The mapper receives every exception, <see cref="OperationCanceledException"/> included, and decides.</remarks>
     /// <param name="func">The function to execute.</param>
-    /// <param name="exceptionMapper">Maps caught exceptions to errors.</param>
+    /// <param name="exceptionMapper">Maps caught exceptions to errors; it must not return <see langword="null"/>.</param>
     /// <returns>A successful result with the return value, or a failure wrapping the mapped error.</returns>
+    /// <exception cref="ArgumentNullException">Thrown when <paramref name="exceptionMapper"/> returns <see langword="null"/>.</exception>
     public static Result<T> Try(Func<T> func, Func<Exception, IError> exceptionMapper)
     {
         ArgumentNullException.ThrowIfNull(func);
@@ -136,47 +155,69 @@ public readonly struct Result<T> : IEquatable<Result<T>>
         }
         catch (Exception ex)
         {
-            return new(exceptionMapper(ex));
+            return Failure(ThrowHelper.EnsureMapped(exceptionMapper(ex), ex));
         }
     }
 
     /// <summary>
-    /// Executes the async function and catches exceptions as failures.
+    /// Executes the async function and turns an exception it throws into a failure.
     /// </summary>
+    /// <remarks>
+    /// The failure carries an <see cref="ExceptionError"/>: a generic, client-safe message, with the
+    /// exception kept in process for logging. An <see cref="OperationCanceledException"/> is not caught:
+    /// cancellation propagates. Without a token to compare, an <c>HttpClient</c> timeout
+    /// (<see cref="TaskCanceledException"/> with an inner <see cref="TimeoutException"/>) propagates too; a mapper
+    /// overload turns it into an error. Arguments are validated before the function starts.
+    /// </remarks>
     /// <param name="func">The async function to execute.</param>
-    /// <returns>A successful result with the return value, or a failure wrapping any caught exception.</returns>
-    public static async ValueTask<Result<T>> TryAsync(Func<Task<T>> func)
+    /// <returns>A successful result with the return value, or a failure wrapping the caught exception.</returns>
+    public static ValueTask<Result<T>> TryAsync(Func<Task<T>> func)
     {
         ArgumentNullException.ThrowIfNull(func);
-        try
+        return TryCoreAsync(func);
+
+        static async ValueTask<Result<T>> TryCoreAsync(Func<Task<T>> func)
         {
-            return new(await func().ConfigureAwait(false));
-        }
-        catch (Exception ex)
-        {
-            return new(new ExceptionError(ex));
+            try
+            {
+                return new(await func().ConfigureAwait(false));
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                return new(new ExceptionError(ex));
+            }
         }
     }
 
     /// <summary>
-    /// Executes the async function and catches exceptions, mapping them with the specified function.
+    /// Executes the async function and catches every exception, mapping it with the specified function.
     /// </summary>
+    /// <remarks>
+    /// The mapper receives every exception, <see cref="OperationCanceledException"/> included, and decides.
+    /// Arguments are validated before the function starts.
+    /// </remarks>
     /// <param name="func">The async function to execute.</param>
-    /// <param name="exceptionMapper">Maps caught exceptions to errors.</param>
+    /// <param name="exceptionMapper">Maps caught exceptions to errors; it must not return <see langword="null"/>.</param>
     /// <returns>A successful result with the return value, or a failure wrapping the mapped error.</returns>
-    public static async ValueTask<Result<T>> TryAsync(
+    /// <exception cref="ArgumentNullException">Thrown when <paramref name="exceptionMapper"/> returns <see langword="null"/>.</exception>
+    public static ValueTask<Result<T>> TryAsync(
         Func<Task<T>> func,
         Func<Exception, IError> exceptionMapper)
     {
         ArgumentNullException.ThrowIfNull(func);
         ArgumentNullException.ThrowIfNull(exceptionMapper);
-        try
+        return TryCoreAsync(func, exceptionMapper);
+
+        static async ValueTask<Result<T>> TryCoreAsync(Func<Task<T>> func, Func<Exception, IError> exceptionMapper)
         {
-            return new(await func().ConfigureAwait(false));
-        }
-        catch (Exception ex)
-        {
-            return new(exceptionMapper(ex));
+            try
+            {
+                return new(await func().ConfigureAwait(false));
+            }
+            catch (Exception ex)
+            {
+                return Failure(ThrowHelper.EnsureMapped(exceptionMapper(ex), ex));
+            }
         }
     }
 
@@ -184,6 +225,10 @@ public readonly struct Result<T> : IEquatable<Result<T>>
     /// Implicitly converts a value to a successful <see cref="Result{T}"/>.
     /// </summary>
     /// <param name="value">The value to wrap.</param>
+    /// <exception cref="ArgumentException">
+    /// Thrown when <paramref name="value"/> is itself a <see cref="Result"/> or a <see cref="Result{T}"/>
+    /// (possible when <typeparamref name="T"/> is <see cref="object"/> or <see cref="ValueType"/>): a failure would otherwise become a success.
+    /// </exception>
     public static implicit operator Result<T>(T value) => Success(value);
 
     /// <inheritdoc/>

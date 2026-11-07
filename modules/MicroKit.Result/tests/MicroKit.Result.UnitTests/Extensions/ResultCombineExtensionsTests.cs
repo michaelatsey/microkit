@@ -4,7 +4,6 @@ namespace MicroKit.Result.UnitTests.Extensions;
 
 public sealed class ResultCombineExtensionsTests
 {
-    private const string Phase2 = "#184 phase 2";
 
     #region Combine
 
@@ -46,7 +45,7 @@ public sealed class ResultCombineExtensionsTests
         combined.Error.ShouldBeSameAs(first);
     }
 
-    [Fact(Skip = Phase2)]
+    [Fact]
     public void Combine_WhenAnyIsDefault_ThrowsResultException()
     {
         // Arrange
@@ -116,7 +115,7 @@ public sealed class ResultCombineExtensionsTests
         collection.ShouldHaveSingleItem().ShouldBeSameAs(error);
     }
 
-    [Fact(Skip = Phase2)]
+    [Fact]
     public void CombineAll_WhenAnyIsDefault_ThrowsResultException()
     {
         // Arrange
@@ -308,7 +307,7 @@ public sealed class ResultCombineExtensionsTests
         collection[1].ShouldBeSameAs(second);
     }
 
-    [Fact(Skip = Phase2)]
+    [Fact]
     public void CombineAll_GenericWhenAnyIsDefault_ThrowsResultException()
     {
         // Arrange

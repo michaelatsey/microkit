@@ -105,14 +105,14 @@ invoice = await invoice.BindAsync(async i =>
         onFailure: e => Result.Failure<InvoiceDto>(e)));
 ```
 
-Les extensions sur `Task<Result<T>>` et `ValueTask<Result<T>>` prennent des délégués synchrones. Un lambda async y compile quand même :
+Les extensions sur `Task<Result<T>>` et `ValueTask<Result<T>>` prennent des délégués synchrones, sauf `Tap`, `TapError` et `Finally`. Un lambda async y compile quand même :
 
 - dans `Map` ou `Match`, il retourne un `Task` imbriqué dans le résultat ;
-- dans `Tap`, `TapError` ou `Finally`, comme sur `Result<T>`, il compile en `async void` : le résultat revient avant l'effet, et une exception de l'effet termine le processus (écart, Phase 2 de #184).
+- dans `Tap`, `TapError` ou `Finally`, sur `Result<T>`, `Result` ou une tâche, il se lie à la surcharge qui attend l'effet et retourne un `ValueTask` : l'appel s'attend.
 
-Un délégué async passe donc par `MapAsync`, `BindAsync`, `TapAsync`, `EnsureAsync`… sur un `Result<T>` déjà attendu.
+Un délégué async de `Map`, `Bind`, `Ensure`… passe donc par `MapAsync`, `BindAsync`, `EnsureAsync`… sur un `Result<T>` déjà attendu.
 
-Ces opérations existent sur `Result<T>`. Le `Result` non générique n'a aujourd'hui que `Match`, `Tap`, `TapError` et `Finally`, et aucun async hors `TryAsync` ; #184 Phase 4 les ajoute.
+Ces opérations existent sur `Result<T>`. Le `Result` non générique n'a aujourd'hui que `Match`, `Tap`, `TapError` et `Finally`, et aucun async hors `TryAsync` et les surcharges attendues de `Tap`, `TapError` et `Finally` ; #184 Phase 4 ajoute les autres.
 
 ## Pièges courants
 

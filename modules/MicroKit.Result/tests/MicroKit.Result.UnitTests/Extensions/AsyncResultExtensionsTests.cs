@@ -30,7 +30,6 @@ public enum AsyncCompletion
 
 public sealed class AsyncResultExtensionsTests
 {
-    private const string Phase2 = "#184 phase 2";
 
     private static readonly string[] Methods =
         ["Map", "Bind", "Match", "Tap", "TapError", "Ensure", "MapError", "Compensate", "Finally"];
@@ -415,7 +414,7 @@ public sealed class AsyncResultExtensionsTests
         tapped.ShouldBe(default(Result<int>));
     }
 
-    [Theory(Skip = Phase2)]
+    [Theory]
     [MemberData(nameof(TaskSurfaces))]
     public async Task Tap_WithAsyncLambda_AwaitsSideEffectBeforeReturning(AsyncSurface surface)
     {
@@ -435,7 +434,7 @@ public sealed class AsyncResultExtensionsTests
         tapped.ShouldBe(result);
     }
 
-    [Theory(Skip = Phase2)]
+    [Theory]
     [MemberData(nameof(TaskSurfaces))]
     public async Task Tap_WithAsyncLambda_WhenSideEffectThrows_SurfacesExceptionAtAwait(AsyncSurface surface)
     {
@@ -512,7 +511,7 @@ public sealed class AsyncResultExtensionsTests
         tapped.ShouldBe(default(Result<int>));
     }
 
-    [Theory(Skip = Phase2)]
+    [Theory]
     [MemberData(nameof(TaskSurfaces))]
     public async Task TapError_WithAsyncLambda_AwaitsSideEffectBeforeReturning(AsyncSurface surface)
     {
@@ -532,7 +531,7 @@ public sealed class AsyncResultExtensionsTests
         tapped.ShouldBe(result);
     }
 
-    [Theory(Skip = Phase2)]
+    [Theory]
     [MemberData(nameof(TaskSurfaces))]
     public async Task TapError_WithAsyncLambda_WhenSideEffectThrows_SurfacesExceptionAtAwait(AsyncSurface surface)
     {
@@ -849,7 +848,7 @@ public sealed class AsyncResultExtensionsTests
         finished.ShouldBe(default(Result<int>));
     }
 
-    [Theory(Skip = Phase2)]
+    [Theory]
     [MemberData(nameof(TaskSurfaces))]
     public async Task Finally_WithAsyncLambda_AwaitsSideEffectBeforeReturning(AsyncSurface surface)
     {
@@ -869,7 +868,7 @@ public sealed class AsyncResultExtensionsTests
         finished.ShouldBe(result);
     }
 
-    [Theory(Skip = Phase2)]
+    [Theory]
     [MemberData(nameof(TaskSurfaces))]
     public async Task Finally_WithAsyncLambda_WhenSideEffectThrows_SurfacesExceptionAtAwait(AsyncSurface surface)
     {
@@ -987,7 +986,7 @@ public sealed class AsyncResultExtensionsTests
         thrown.ParamName.ShouldBe(ParamNameOf(argument));
     }
 
-    [Theory(Skip = Phase2)]
+    [Theory]
     [MemberData(nameof(NullArgumentsOnAllSurfaces))]
     public void Extension_WithNullArgument_ThrowsBeforeReturningTask(string argument, AsyncSurface surface)
     {

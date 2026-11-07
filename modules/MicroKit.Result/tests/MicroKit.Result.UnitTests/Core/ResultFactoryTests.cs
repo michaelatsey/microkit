@@ -258,7 +258,7 @@ public sealed class ResultFactoryTests
 
     private const string SecretMessage = "secret connection string";
 
-    [Fact(Skip = "#184 phase 2")]
+    [Fact]
     public void Try_WithoutMapper_WhenOperationCanceled_RethrowsOperationCanceledException()
     {
         // Act + Assert
@@ -266,7 +266,7 @@ public sealed class ResultFactoryTests
         Should.Throw<OperationCanceledException>(() => ResultFactory.Try<int>(() => throw new OperationCanceledException()));
     }
 
-    [Fact(Skip = "#184 phase 2")]
+    [Fact]
     public async Task TryAsync_WithoutMapper_WhenOperationCanceled_RethrowsOperationCanceledException()
     {
         // Act + Assert
@@ -284,7 +284,7 @@ public sealed class ResultFactoryTests
             }));
     }
 
-    [Fact(Skip = "#184 phase 2")]
+    [Fact]
     public void Try_WithoutMapper_WhenDelegateThrows_ErrorHasExceptionCodeAndGenericMessage()
     {
         // Act
@@ -300,7 +300,7 @@ public sealed class ResultFactoryTests
         typed.Error.Message.ShouldNotContain(SecretMessage);
     }
 
-    [Fact(Skip = "#184 phase 2")]
+    [Fact]
     public async Task TryAsync_WithoutMapper_WhenDelegateThrows_ErrorHasExceptionCodeAndGenericMessage()
     {
         // Act
