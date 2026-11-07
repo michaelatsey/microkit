@@ -12,7 +12,10 @@ namespace MicroKit.Result;
 /// int value = success.Match(v => v * 2, e => -1); // 84
 /// </code>
 /// </example>
-public readonly struct Result<T> : IEquatable<Result<T>>, IResultMarker
+// Written as the documented envelope even when no converter is registered, without reflection; reading needs
+// ResultJsonConverterFactory or ResultJsonConverter<T> (Serialization.ResultEnvelopeJsonConverterFactory).
+[System.Text.Json.Serialization.JsonConverter(typeof(Serialization.ResultEnvelopeJsonConverterFactory))]
+public readonly struct Result<T> : IEquatable<Result<T>>, IResultMarker, IResultEnvelope
 {
     private const byte TagUninitialized = 0;
     private const byte TagSuccess = 1;
@@ -266,6 +269,9 @@ public readonly struct Result<T> : IEquatable<Result<T>>, IResultMarker
         TagFailure => $"Result {{ Failure: [{_error!.Code}] {_error.Message} }}",
         _ => "Result { Uninitialized }",
     };
+
+    void IResultEnvelope.WriteJson(System.Text.Json.Utf8JsonWriter writer, System.Text.Json.JsonSerializerOptions options) =>
+        Serialization.ResultJsonConverter<T>.WriteEnvelope(writer, this, options, includeMetadata: false);
 
     /// <summary>Determines whether two results are equal.</summary>
     public static bool operator ==(Result<T> left, Result<T> right) => left.Equals(right);

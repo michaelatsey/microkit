@@ -501,9 +501,9 @@ public static partial class AsyncResultExtensions
 
         static async ValueTask<Result<T>> Core(Result<T> result, Func<IError, Task<IError>> mapper)
         {
-            return result.IsFailure
-                ? Result<T>.Failure(await mapper(result.Error).ConfigureAwait(false))
-                : result;
+            return result.IsSuccess
+                ? result
+                : Result<T>.Failure(await mapper(result.Error).ConfigureAwait(false)); // Error throws on a default result
         }
     }
 
@@ -555,9 +555,9 @@ public static partial class AsyncResultExtensions
 
         static async ValueTask<Result<T>> Core(Result<T> result, Func<IError, Task<Result<T>>> fallback)
         {
-            return result.IsFailure
-                ? await fallback(result.Error).ConfigureAwait(false)
-                : result;
+            return result.IsSuccess
+                ? result
+                : await fallback(result.Error).ConfigureAwait(false); // Error throws on a default result
         }
     }
 

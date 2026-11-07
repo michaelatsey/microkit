@@ -123,6 +123,50 @@ Hardening before stable (#184). Breaking changes ship outright on `preview.*` (A
 - The non-generic `Result` has a converter, `ResultJsonConverter`, carried by the type: returned as is, it
   serializes as `{"isSuccess":…}` without `metadata`. The factory converts `Result` too.
 
+### Changed (breaking, #195 — what #184 left open)
+- `ResultProblemDetailsFactory.CreateProblemDetails` / `ToHttpResult()`: from status 500 on (`Technical`,
+  `External`, `Unavailable`, `NotSupported`, `Timeout`, undefined values), `detail` is the generic
+  `"The server could not complete the request."`, never the error's `Message`, collections included;
+  `errorCode` and `errorCodes` are kept. 4xx responses keep the message.
+- `Result.Try` / `TryAsync` throw `ResultException` when the delegate returns a `default` result, outside their
+  `catch` (the mapper never sees it). `MapError`, `Compensate` and every async form throw `ResultException` on a
+  `default` result without calling their delegate, instead of returning it; the async forms when awaited.
+- `GetValueOrThrow(factory)` throws `InvalidOperationException` when the factory returns `null`, instead of a
+  bare `NullReferenceException`.
+- `Select`, `SelectMany` and `Where` report their own parameter names (`selector`, `errorOnFalse`) in
+  `ArgumentNullException.ParamName`.
+- `ErrorCollection.Severity` is the highest severity of its errors: a collection of warnings is a `Warning`,
+  no longer an `Error`.
+- `ErrorMetadata.Create` returns an `ImmutableDictionary` (the return type stays
+  `IReadOnlyDictionary<string, object?>`): a cast no longer lets a caller mutate an error. Its keys no longer
+  enumerate in insertion order.
+- `ValidationError`: `with { PropertyName = … }` recomputes `Code` (`VALIDATION.<NAME>`) and validates the name.
+  `OutOfRange` formats its bounds with the invariant culture.
+- `DeserializedError` and `DeserializedValidationError` compare `Metadata` by content (a `JsonElement` by its
+  JSON), not by reference.
+- `Result<T>` carries `ResultEnvelopeJsonConverterFactory` as its `[JsonConverter]`, reflection-free: with no
+  converter registered, a `Result<T>` (an endpoint's return value included) writes the documented envelope
+  without `metadata` instead of failing with a 500; reading one throws `NotSupportedException` naming
+  `ResultJsonConverterFactory` and `ResultJsonConverter<T>`, instead of silently returning a `default` result.
+  A registered converter still takes precedence.
+- The JSON converters, registered or carried by `Result` and `Result<T>`, write
+  `"The server could not complete the request."` as the `message` of a fault of the system (`Technical`,
+  `External`, `Unavailable`, `Timeout`, `NotSupported`, undefined values), a collection's errors included: their
+  output may reach a client. Only a converter created with `includeMetadata: true`, for in-process storage, writes
+  every message; a default round trip reads the generic message back.
+- `ResultJsonConverter<T>` loses `[RequiresUnreferencedCode]` / `[RequiresDynamicCode]`: it reads and writes the
+  value through `options.GetTypeInfo(typeof(T))` and is NativeAOT safe, registered next to a source-generated
+  context that declares `Result<T>` and `T`. Only `ResultJsonConverterFactory` keeps the annotations.
+- MKR001 reports a side effect (`Tap`, `TapError`, `Finally`) on a computed property: it builds a new result at
+  each read, even when its body only returns a field, as is an abstract or interface property. An
+  auto-property or an indexer still counts as held.
+
+### Added (#195)
+- `ResultEnvelopeJsonConverterFactory` (`MicroKit.Result.Serialization`): the reflection-free converter the
+  result types carry; infrastructure, not meant to be registered.
+- `tests/MicroKit.Result.AotTests`: `System.Text.Json` reflection disabled, trim and AOT analyzers on; a
+  `Result<OrderDto>` round-trips through a source-generated context only.
+
 ### Performance (Phase 7)
 - Published BenchmarkDotNet figures in the README (machine and SDK stated), against ErrorOr 2.1.1 and
   FluentResults 4.0.0, and `ValueTask<Result<T>>` against `Task<Result<T>>`.

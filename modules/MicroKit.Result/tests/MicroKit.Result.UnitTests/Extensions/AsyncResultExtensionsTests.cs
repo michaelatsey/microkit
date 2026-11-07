@@ -687,23 +687,20 @@ public sealed class AsyncResultExtensionsTests
 
     [Theory]
     [MemberData(nameof(AllSurfaces))]
-    public async Task MapError_WhenDefault_ReturnsDefaultWithoutInvokingMapper(
+    public async Task MapError_WhenDefault_ThrowsResultExceptionWithoutInvokingMapper(
         AsyncSurface surface, AsyncCompletion completion)
     {
         // Arrange
         var called = false;
         Result<int> result = default;
 
-        // Act
-        var mapped = await MapErrorOn(surface, completion, result, e =>
+        // Act + Assert
+        await Should.ThrowAsync<ResultException>(async () => await MapErrorOn(surface, completion, result, e =>
         {
             called = true;
             return e;
-        });
-
-        // Assert
+        }));
         called.ShouldBeFalse();
-        mapped.ShouldBe(default(Result<int>));
     }
 
     #endregion
@@ -772,23 +769,20 @@ public sealed class AsyncResultExtensionsTests
 
     [Theory]
     [MemberData(nameof(AllSurfaces))]
-    public async Task Compensate_WhenDefault_ReturnsDefaultWithoutInvokingFallback(
+    public async Task Compensate_WhenDefault_ThrowsResultExceptionWithoutInvokingFallback(
         AsyncSurface surface, AsyncCompletion completion)
     {
         // Arrange
         var called = false;
         Result<int> result = default;
 
-        // Act
-        var compensated = await CompensateOn(surface, completion, result, _ =>
+        // Act + Assert
+        await Should.ThrowAsync<ResultException>(async () => await CompensateOn(surface, completion, result, _ =>
         {
             called = true;
             return Result.Success(0);
-        });
-
-        // Assert
+        }));
         called.ShouldBeFalse();
-        compensated.ShouldBe(default(Result<int>));
     }
 
     #endregion

@@ -10,7 +10,9 @@ namespace MicroKit.Result.Serialization;
 /// <remarks>
 /// <see cref="Result"/> carries it as its <see cref="JsonConverterAttribute"/>, so a <see cref="Result"/> returned by
 /// an endpoint is written this way even when no converter is registered, and never emits <see cref="IError.Metadata"/>
-/// by default (ADR-RESULT-001 D1, D12). It uses no reflection. The error object holds <c>code</c>, <c>message</c>,
+/// by default (ADR-RESULT-001 D1, D12). It uses no reflection. Unless created with <c>includeMetadata</c>, it writes
+/// <c>"The server could not complete the request."</c> as the message of a fault of the system, whose message may
+/// describe it. The error object holds <c>code</c>, <c>message</c>,
 /// <c>category</c>, <c>severity</c>, <c>propertyName</c> for a validation error, and <c>errors</c> for an
 /// <see cref="ErrorCollection"/>; <c>metadata</c> only when created with <c>includeMetadata</c>.
 /// </remarks>
@@ -25,8 +27,11 @@ public sealed class ResultJsonConverter : JsonConverter<Result>
 
     /// <summary>Initializes a converter.</summary>
     /// <param name="includeMetadata">
-    /// <see langword="true"/> to write <see cref="IError.Metadata"/>, for in-process storage such as a cache; never for a
-    /// response sent to a client. Values come back as JSON primitives: an integer as a <see cref="long"/> (or a <see cref="ulong"/>), a non-integer as a <see cref="double"/>, a
+    /// <see langword="true"/> to write <see cref="IError.Metadata"/> and the message of a fault of the system, for
+    /// in-process storage such as a cache; never for a response sent to a client. <see langword="false"/> writes
+    /// <c>"The server could not complete the request."</c> as the message of a fault of the system
+    /// (<see cref="ErrorCategory.Technical"/>, <see cref="ErrorCategory.External"/>, <see cref="ErrorCategory.Unavailable"/>,
+    /// <see cref="ErrorCategory.Timeout"/>, <see cref="ErrorCategory.NotSupported"/>, undefined values). Values come back as JSON primitives: an integer as a <see cref="long"/> (or a <see cref="ulong"/>), a non-integer as a <see cref="double"/>, a
     /// <see cref="Guid"/> or a <see cref="DateTime"/> as a <see cref="string"/>, any other object as its invariant string.
     /// </param>
     public ResultJsonConverter(bool includeMetadata) => _includeMetadata = includeMetadata;

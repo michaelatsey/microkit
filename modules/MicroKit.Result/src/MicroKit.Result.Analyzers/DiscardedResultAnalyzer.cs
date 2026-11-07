@@ -9,8 +9,10 @@ namespace MicroKit.Result.Analyzers;
 /// or a <c>ValueTask</c> of a result discarded where CS4014 does not catch it: outside an async method or lambda, or
 /// through a conditional access or a property inside one. Not reported: an explicit discard (<c>_ = …;</c>) or any assignment;
 /// <c>Tap</c>, <c>TapError</c> and <c>Finally</c> (and their <c>…Async</c> forms, awaited, with or without
-/// <c>ConfigureAwait</c>), alone, chained or through a conditional access (<c>held?.Tap(…)</c>), on a result already held in a local, a parameter, a field, a property
-/// or an array element: the side effect is the point, and the result is still held.
+/// <c>ConfigureAwait</c>), alone, chained or through a conditional access (<c>held?.Tap(…)</c>), on a result already held in a local, a parameter, a field, an
+/// auto-property, an indexer or an array element: the side effect is the point, and the result is still held. A computed
+/// property (a getter with a body) builds a new result at each read: a side effect on it is reported, even when the body
+/// only returns a field (<c>Current =&gt; _current</c>), as is an abstract or interface property, whose storage is unknown.
 /// </remarks>
 [DiagnosticAnalyzer(LanguageNames.CSharp)]
 public sealed class DiscardedResultAnalyzer : DiagnosticAnalyzer
@@ -131,7 +133,8 @@ public sealed class DiscardedResultAnalyzer : DiagnosticAnalyzer
             }
 
             if (receiver is ILocalReferenceOperation or IParameterReferenceOperation or IFieldReferenceOperation
-                or IPropertyReferenceOperation or IArrayElementReferenceOperation)
+                or IArrayElementReferenceOperation
+                || (receiver is IPropertyReferenceOperation { Property: var property } && IsStoredProperty(property)))
             {
                 return true;
             }
@@ -140,5 +143,32 @@ public sealed class DiscardedResultAnalyzer : DiagnosticAnalyzer
         }
 
         return false;
+    }
+
+    // A computed property builds a new result at each read: the one its side effect returns is then discarded. An
+    // auto-property stores its result, and an indexer is element access, like an array's.
+    private static bool IsStoredProperty(IPropertySymbol property)
+    {
+        // The value of a Nullable<T> is the stored struct itself: held?.Value.Tap(…), cached.Value.Tap(…).
+        if (property.IsIndexer
+            || (property.Name == "Value" && property.ContainingType.OriginalDefinition.SpecialType == SpecialType.System_Nullable_T))
+        {
+            return true;
+        }
+
+        // Source, and metadata when private members are imported: the compiler's backing field.
+        foreach (var member in property.OriginalDefinition.ContainingType.GetMembers())
+        {
+            if (member is IFieldSymbol { AssociatedSymbol: { } associated }
+                && SymbolEqualityComparer.Default.Equals(associated.OriginalDefinition, property.OriginalDefinition))
+                return true;
+        }
+
+        // Metadata: the compiler marks an auto-property's accessors [CompilerGenerated].
+        return property.GetMethod?.GetAttributes().Any(a => a.AttributeClass is
+        {
+            Name: "CompilerGeneratedAttribute",
+            ContainingNamespace: { Name: "CompilerServices", ContainingNamespace: { Name: "Runtime", ContainingNamespace.Name: "System" } },
+        }) == true;
     }
 }

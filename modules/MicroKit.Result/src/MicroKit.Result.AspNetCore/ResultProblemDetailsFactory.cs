@@ -9,6 +9,8 @@ namespace MicroKit.Result.AspNetCore;
 /// </summary>
 public static class ResultProblemDetailsFactory
 {
+    private const string ServerFaultDetail = "The server could not complete the request.";
+
     /// <summary>
     /// Creates the problem details describing the specified error.
     /// </summary>
@@ -22,17 +24,21 @@ public static class ResultProblemDetailsFactory
     /// there. Otherwise the result is a <see cref="ProblemDetails"/>.
     /// </para>
     /// <para>
-    /// <see cref="ProblemDetails.Detail"/> is <see cref="IError.Message"/>, which the error contract keeps safe for
-    /// a client; <see cref="IError.Metadata"/> is never emitted. The extension <c>errorCode</c> carries
-    /// <see cref="IError.Code"/>; for an <see cref="ErrorCollection"/>, the extension <c>errorCodes</c> lists the
-    /// codes of its errors, nested collections flattened, in order.
+    /// For a status of 400 to 499, <see cref="ProblemDetails.Detail"/> is <see cref="IError.Message"/>, which the error
+    /// contract keeps safe for a client. For a status of 500 or more (<see cref="ErrorCategory.Technical"/>,
+    /// <see cref="ErrorCategory.External"/>, <see cref="ErrorCategory.Unavailable"/>, <see cref="ErrorCategory.NotSupported"/>,
+    /// <see cref="ErrorCategory.Timeout"/> and any undefined value), it is the generic text
+    /// <c>"The server could not complete the request."</c>, whatever the error: a server fault's message may describe
+    /// the system, and it never reaches the client. <see cref="IError.Metadata"/> is never emitted. The extension
+    /// <c>errorCode</c> carries <see cref="IError.Code"/>; for an <see cref="ErrorCollection"/>, the extension
+    /// <c>errorCodes</c> lists the codes of its errors, nested collections flattened, in order.
     /// </para>
     /// <para>
     /// A response of any other category — a server, access or resource error — says nothing of the request's input,
     /// whatever errors a collection also holds: it carries no field errors, and for an <see cref="ErrorCollection"/>,
     /// <see cref="ProblemDetails.Detail"/> and <c>errorCodes</c> are built only from its errors (nested collections
-    /// flattened, in order) whose category is the collection's: <see cref="ProblemDetails.Detail"/> joins their
-    /// messages with <c>"; "</c>. An unauthenticated caller, for one, receives no validation message, code or
+    /// flattened, in order) whose category is the collection's: below 500, <see cref="ProblemDetails.Detail"/> joins
+    /// their messages with <c>"; "</c>. An unauthenticated caller, for one, receives no validation message, code or
     /// property name.
     /// </para>
     /// <para>
@@ -57,9 +63,13 @@ public static class ResultProblemDetailsFactory
             ? new ProblemDetails()
             : new HttpValidationProblemDetails(fieldErrors);
 
+        // A server fault's message may describe the system (a host, a query, an exception's text): from 500 on,
+        // the client reads a generic text, and the code alone identifies the error.
+        var isServerFault = statusCode >= StatusCodes.Status500InternalServerError;
+
         problemDetails.Status = statusCode;
         problemDetails.Title = GetTitle(error.Category);
-        problemDetails.Detail = error.Message;
+        problemDetails.Detail = isServerFault ? ServerFaultDetail : error.Message;
         problemDetails.Extensions["errorCode"] = error.Code.Value;
         if (error is ErrorCollection collection)
         {
@@ -68,7 +78,8 @@ public static class ResultProblemDetailsFactory
             {
                 var category = collection.Category;
                 named = named.Where(e => e.Category == category).ToArray(); // never empty: the category is a leaf's
-                problemDetails.Detail = string.Join("; ", named.Select(e => e.Message));
+                if (!isServerFault)
+                    problemDetails.Detail = string.Join("; ", named.Select(e => e.Message));
             }
 
             problemDetails.Extensions["errorCodes"] = named.Select(e => e.Code.Value).ToArray();

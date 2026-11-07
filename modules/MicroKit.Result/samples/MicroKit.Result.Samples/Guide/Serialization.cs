@@ -1,4 +1,5 @@
 using System.Text.Json;
+using System.Text.Json.Serialization;
 using MicroKit.Result.Serialization;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.Extensions.DependencyInjection;
@@ -34,5 +35,22 @@ internal static class SerializationSamples
         string command = JsonSerializer.Serialize(Result.Success()); // {"isSuccess":true}
     }
 
+    internal static void NativeAotSample(WebApplicationBuilder builder, Result<OrderDto> order)
+    {
+        string json = JsonSerializer.Serialize(order, AppJsonContext.Default.ResultOrderDto);
+        Result<OrderDto> restored = JsonSerializer.Deserialize(json, AppJsonContext.Default.ResultOrderDto);
+
+        // Minimal APIs: the context resolves the contracts of the endpoints
+        builder.Services.ConfigureHttpJsonOptions(o =>
+            o.SerializerOptions.TypeInfoResolverChain.Insert(0, AppJsonContext.Default));
+    }
+
     internal sealed record Order(Guid Id);
 }
+
+internal sealed record OrderDto(Guid Id, decimal Total);
+
+[JsonSourceGenerationOptions(Converters = [typeof(ResultJsonConverter<OrderDto>)])]
+[JsonSerializable(typeof(Result<OrderDto>))]
+[JsonSerializable(typeof(OrderDto))]
+internal sealed partial class AppJsonContext : JsonSerializerContext;

@@ -9,7 +9,8 @@ namespace MicroKit.Result.Serialization;
 /// </summary>
 /// <remarks>
 /// By default the converters never write <see cref="IError.Metadata"/>, which is in-process context and never sent to
-/// a client (ADR-RESULT-001 D1, D12). Create the factory with <c>includeMetadata: true</c> only for in-process
+/// a client (ADR-RESULT-001 D1, D12), and write a generic message for a fault of the system, whose message may
+/// describe it. Create the factory with <c>includeMetadata: true</c> only for in-process
 /// storage, such as a cache, whose payload never reaches a client.
 /// </remarks>
 /// <example>
@@ -31,8 +32,11 @@ public sealed class ResultJsonConverterFactory : JsonConverterFactory
 
     /// <summary>Initializes a factory.</summary>
     /// <param name="includeMetadata">
-    /// <see langword="true"/> to write <see cref="IError.Metadata"/>, for in-process storage such as a cache; never for a
-    /// response sent to a client. Values come back as JSON primitives: an integer as a <see cref="long"/> (or a <see cref="ulong"/>), a non-integer as a <see cref="double"/>, a
+    /// <see langword="true"/> to write <see cref="IError.Metadata"/> and the message of a fault of the system, for
+    /// in-process storage such as a cache; never for a response sent to a client. <see langword="false"/> writes
+    /// <c>"The server could not complete the request."</c> as the message of a fault of the system
+    /// (<see cref="ErrorCategory.Technical"/>, <see cref="ErrorCategory.External"/>, <see cref="ErrorCategory.Unavailable"/>,
+    /// <see cref="ErrorCategory.Timeout"/>, <see cref="ErrorCategory.NotSupported"/>, undefined values). Values come back as JSON primitives: an integer as a <see cref="long"/> (or a <see cref="ulong"/>), a non-integer as a <see cref="double"/>, a
     /// <see cref="Guid"/> or a <see cref="DateTime"/> as a <see cref="string"/>, any other object as its invariant string.
     /// </param>
     public ResultJsonConverterFactory(bool includeMetadata) => _includeMetadata = includeMetadata;

@@ -78,9 +78,10 @@ public static partial class ResultExtensions
     public static Result MapError(this Result result, Func<IError, IError> mapper)
     {
         ResultGuard.NotNull(mapper);
-        return result.IsFailure
-            ? Result.Failure(mapper(result.Error))
-            : result;
+        // !IsSuccess, not IsFailure: Error throws ResultException on a default result
+        return result.IsSuccess
+            ? result
+            : Result.Failure(mapper(result.Error));
     }
 
     /// <summary>Provides a fallback result when the non-generic result is a failure. A success is returned unchanged.</summary>
@@ -90,8 +91,9 @@ public static partial class ResultExtensions
     public static Result Compensate(this Result result, Func<IError, Result> fallback)
     {
         ResultGuard.NotNull(fallback);
-        return result.IsFailure
-            ? fallback(result.Error)
-            : result;
+        // !IsSuccess, not IsFailure: Error throws ResultException on a default result
+        return result.IsSuccess
+            ? result
+            : fallback(result.Error);
     }
 }

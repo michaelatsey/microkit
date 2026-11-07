@@ -5,7 +5,8 @@ using MicroKit.Result.UnitTests.TestSupport;
 namespace MicroKit.Result.UnitTests.Serialization;
 
 // #184 Phase 5: the non-generic Result has its own reflection-free converter, carried by its [JsonConverter]
-// attribute, so it serializes the same way with or without a registered factory (ADR-RESULT-001 D12).
+// attribute, so it serializes with or without a registered factory, never with metadata (ADR-RESULT-001 D12).
+// #195: without a registered converter, a fault of the system is written with the generic message.
 public sealed class NonGenericResultJsonConverterTests
 {
     private static readonly JsonSerializerOptions FactoryOptions = new()
@@ -89,8 +90,8 @@ public sealed class NonGenericResultJsonConverterTests
         // Act
         var json = JsonSerializer.Serialize(result, FactoryOptions);
 
-        // Assert
-        json.ShouldBe("""{"isSuccess":false,"error":{"code":"TEST.CRITICAL","message":"Critical error","category":"Unavailable","severity":"Critical"}}""");
+        // Assert: #195, a default converter writes a fault of the system with the generic message
+        json.ShouldBe("""{"isSuccess":false,"error":{"code":"TEST.CRITICAL","message":"The server could not complete the request.","category":"Unavailable","severity":"Critical"}}""");
     }
 
     [Fact]
@@ -238,7 +239,7 @@ public sealed class NonGenericResultJsonConverterTests
     }
 
     [Fact]
-    public void RoundTrip_WhenFailure_KeepsCodeMessageCategoryAndSeverity()
+    public void RoundTrip_WhenFailure_KeepsCodeCategoryAndSeverity()
     {
         // Arrange
         var original = Result.Failure(new CriticalTestError());
@@ -247,10 +248,10 @@ public sealed class NonGenericResultJsonConverterTests
         // Act
         var read = JsonSerializer.Deserialize<Result>(json, FactoryOptions);
 
-        // Assert
+        // Assert: #195, a default converter writes a fault of the system (Unavailable) with the generic message
         read.IsFailure.ShouldBeTrue();
         read.Error.Code.Value.ShouldBe("TEST.CRITICAL");
-        read.Error.Message.ShouldBe("Critical error");
+        read.Error.Message.ShouldBe("The server could not complete the request.");
         read.Error.Category.ShouldBe(ErrorCategory.Unavailable);
         read.Error.Severity.ShouldBe(ErrorSeverity.Critical);
         read.Error.Metadata.ShouldBeEmpty();
@@ -300,7 +301,8 @@ public sealed class NonGenericResultJsonConverterTests
         var json = JsonSerializer.Serialize(result, DefaultOptions);
 
         // Assert
-        json.ShouldBe("""{"isSuccess":false,"error":{"code":"TEST.CRITICAL","message":"Critical error","category":"Unavailable","severity":"Critical"}}""");
+        // #195: with no converter registered, a fault of the system (Unavailable) is written with the generic message
+        json.ShouldBe("""{"isSuccess":false,"error":{"code":"TEST.CRITICAL","message":"The server could not complete the request.","category":"Unavailable","severity":"Critical"}}""");
     }
 
     [Fact]
@@ -348,7 +350,8 @@ public sealed class NonGenericResultJsonConverterTests
         var json = JsonSerializer.Serialize(envelope, DefaultOptions);
 
         // Assert
-        json.ShouldBe("""{"Name":"save","Outcome":{"isSuccess":false,"error":{"code":"TEST.CRITICAL","message":"Critical error","category":"Unavailable","severity":"Critical"}}}""");
+        // #195: with no converter registered, a fault of the system (Unavailable) is written with the generic message
+        json.ShouldBe("""{"Name":"save","Outcome":{"isSuccess":false,"error":{"code":"TEST.CRITICAL","message":"The server could not complete the request.","category":"Unavailable","severity":"Critical"}}}""");
     }
 
     [Fact]
@@ -450,6 +453,94 @@ public sealed class NonGenericResultJsonConverterTests
 
         // Assert
         converter.ShouldBeOfType<ResultJsonConverter>();
+    }
+
+    // ── #195: the converter Result carries reaches clients by default ─────
+
+    [Theory]
+    [InlineData(ErrorCategory.Technical)]
+    [InlineData(ErrorCategory.External)]
+    [InlineData(ErrorCategory.Unavailable)]
+    [InlineData(ErrorCategory.Timeout)]
+    [InlineData(ErrorCategory.NotSupported)]
+    [InlineData((ErrorCategory)999)]
+    public void Write_WithoutConverterRegistered_WhenSystemFault_WritesAGenericMessage(ErrorCategory category)
+    {
+        // Arrange
+        var result = Result.Failure(new FaultError(category, "Host db-7 refused the login of sa"));
+
+        // Act
+        var json = JsonSerializer.Serialize(result, DefaultOptions);
+
+        // Assert
+        json.ShouldNotContain("db-7");
+        using var document = JsonDocument.Parse(json);
+        var error = document.RootElement.GetProperty("error");
+        error.GetProperty("message").GetString().ShouldBe("The server could not complete the request.");
+        error.GetProperty("code").GetString().ShouldBe("TEST.FAULT");
+    }
+
+    [Fact]
+    public void Write_WithoutConverterRegistered_WhenNotFound_KeepsItsMessage()
+    {
+        // Arrange
+        var result = Result.Failure(new NotFoundTestError(7));
+
+        // Act
+        var json = JsonSerializer.Serialize(result, DefaultOptions);
+
+        // Assert
+        json.ShouldBe("""{"isSuccess":false,"error":{"code":"TEST.NOT_FOUND","message":"Item 7 not found","category":"NotFound","severity":"Error"}}""");
+    }
+
+    [Fact]
+    public void Write_WithDefaultFactoryRegistered_WhenSystemFault_WritesAGenericMessage()
+    {
+        // Arrange: the factory a host registers for its endpoints writes what a client may read
+        var result = Result.Failure(new FaultError(ErrorCategory.Technical, "Host db-7 refused the login of sa"));
+
+        // Act
+        var json = JsonSerializer.Serialize(result, FactoryOptions);
+
+        // Assert
+        json.ShouldNotContain("db-7");
+    }
+
+    [Theory]
+    [MemberData(nameof(MetadataOptions))]
+    public void Write_WithMetadataConverterRegistered_WhenSystemFault_KeepsItsMessage(JsonSerializerOptions options)
+    {
+        // Arrange: includeMetadata is for in-process storage, never a response: it writes everything
+        var result = Result.Failure(new FaultError(ErrorCategory.Technical, "Host db-7 refused the login of sa"));
+
+        // Act
+        var json = JsonSerializer.Serialize(result, options);
+
+        // Assert
+        json.ShouldContain("Host db-7 refused the login of sa");
+    }
+
+    public static TheoryData<JsonSerializerOptions> MetadataOptions() => new() { MetadataFactoryOptions, MetadataConverterOptions };
+
+    [Fact]
+    public void RoundTrip_WithoutConverterRegistered_WhenSystemFault_ReadsTheGenericMessage()
+    {
+        // Arrange
+        var json = JsonSerializer.Serialize(Result.Failure(new FaultError(ErrorCategory.Technical, "secret")), DefaultOptions);
+
+        // Act
+        var read = JsonSerializer.Deserialize<Result>(json, DefaultOptions);
+
+        // Assert
+        read.IsFailure.ShouldBeTrue();
+        read.Error.Code.ShouldBe(ErrorCode.From("TEST.FAULT"));
+        read.Error.Category.ShouldBe(ErrorCategory.Technical);
+        read.Error.Message.ShouldBe("The server could not complete the request.");
+    }
+
+    private sealed record FaultError(ErrorCategory Kind, string Text) : Error(ErrorCode.From("TEST.FAULT"), Text)
+    {
+        public override ErrorCategory Category => Kind;
     }
 
     private sealed record Envelope(string Name, Result Outcome);

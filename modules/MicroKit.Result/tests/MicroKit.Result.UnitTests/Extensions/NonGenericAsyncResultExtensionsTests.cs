@@ -909,14 +909,14 @@ public sealed class NonGenericAsyncResultExtensionsTests
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
-    public async Task MapErrorAsync_WhenDefault_ReturnsDefaultWithoutCallingMapper(bool tokenForm)
+    public async Task MapErrorAsync_WhenDefault_ThrowsResultExceptionWithoutCallingMapper(bool tokenForm)
     {
         // Arrange
         var called = false;
         Result result = default;
 
-        // Act
-        Result mapped = tokenForm
+        // Act + Assert
+        Func<Task<Result>> act = async () => tokenForm
             ? await result.MapErrorAsync((e, _) =>
             {
                 called = true;
@@ -927,10 +927,7 @@ public sealed class NonGenericAsyncResultExtensionsTests
                 called = true;
                 return Task.FromResult(e);
             });
-
-        // Assert
-        mapped.IsSuccess.ShouldBeFalse();
-        mapped.IsFailure.ShouldBeFalse();
+        await Should.ThrowAsync<ResultException>(act);
         called.ShouldBeFalse();
     }
 
@@ -1014,14 +1011,14 @@ public sealed class NonGenericAsyncResultExtensionsTests
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
-    public async Task CompensateAsync_WhenDefault_ReturnsDefaultWithoutCallingFallback(bool tokenForm)
+    public async Task CompensateAsync_WhenDefault_ThrowsResultExceptionWithoutCallingFallback(bool tokenForm)
     {
         // Arrange
         var called = false;
         Result result = default;
 
-        // Act
-        Result compensated = tokenForm
+        // Act + Assert
+        Func<Task<Result>> act = async () => tokenForm
             ? await result.CompensateAsync((_, _) =>
             {
                 called = true;
@@ -1032,10 +1029,7 @@ public sealed class NonGenericAsyncResultExtensionsTests
                 called = true;
                 return Task.FromResult(Result.Success());
             });
-
-        // Assert
-        compensated.IsSuccess.ShouldBeFalse();
-        compensated.IsFailure.ShouldBeFalse();
+        await Should.ThrowAsync<ResultException>(act);
         called.ShouldBeFalse();
     }
 

@@ -27,3 +27,11 @@ internal sealed record CriticalTestError()
     public override IReadOnlyDictionary<string, object?> Metadata =>
         ErrorMetadata.Create("retryAfter", 30);
 }
+
+internal sealed record InformationTestError(string Detail = "info")
+    : Error(ErrorCode.From("TEST.INFORMATION"), $"Information: {Detail}")
+{
+    public override ErrorCategory Category => ErrorCategory.BusinessRule;
+
+    public override ErrorSeverity Severity => ErrorSeverity.Information;
+}

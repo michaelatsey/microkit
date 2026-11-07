@@ -9,6 +9,11 @@ namespace MicroKit.Result.Serialization;
 /// </summary>
 internal static class ErrorJson
 {
+    // What a client reads instead of a system fault's message, as in MicroKit.Result.AspNetCore's problem details.
+    internal const string SystemFaultMessage = "The server could not complete the request.";
+
+    // includeMetadata is for in-process storage, never a response (ADR-RESULT-001 D12): only then does a fault of the
+    // system keep its message. Every other output may reach a client, which reads the generic text instead.
     internal static void Write(Utf8JsonWriter writer, IError error, bool includeMetadata)
     {
         if (string.IsNullOrWhiteSpace(error.Code.Value))
@@ -16,7 +21,9 @@ internal static class ErrorJson
 
         writer.WriteStartObject();
         writer.WriteString("code", error.Code.Value);
-        writer.WriteString("message", error.Message);
+        writer.WriteString(
+            "message",
+            !includeMetadata && ErrorCategoryFacts.IsSystemFault(error.Category) ? SystemFaultMessage : error.Message);
         writer.WriteString("category", error.Category.ToString());
         writer.WriteString("severity", error.Severity.ToString());
 

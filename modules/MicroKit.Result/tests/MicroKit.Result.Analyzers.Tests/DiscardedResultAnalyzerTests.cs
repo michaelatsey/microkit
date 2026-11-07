@@ -62,7 +62,7 @@ public sealed class DiscardedResultAnalyzerTests
         class Service
         {
             private readonly Result<int> _field = Result.Success(1);
-            Result<int> Property => _field;
+            Result<int> Property { get; } = Result.Success(3);
 
             async Task Run(Result<int> parameter)
             {
@@ -72,6 +72,97 @@ public sealed class DiscardedResultAnalyzerTests
                 _field.Tap(x => System.Console.WriteLine(x));
                 Property.Tap(x => System.Console.WriteLine(x));
                 await local.TapAsync(x => Task.CompletedTask);
+            }
+        }
+        """);
+
+    // #195 item 7: a computed property builds a new result at each read, so a side effect on it discards that result.
+    [Fact]
+    public Task MKR001_WhenTapIsCalledOnAComputedProperty_Reports() => Verify("""
+        class Service
+        {
+            Result<int> Computed => Result.Success(1);
+            Result<int> Block { get { return Result.Success(2); } }
+            Result<int> Accessor { get => Result.Success(3); }
+            static Result<int> StaticComputed => Result.Success(4);
+
+            async Task Run(Service other)
+            {
+                {|MKR001:Computed.Tap(x => { })|};
+                {|MKR001:Block.Tap(x => { })|};
+                {|MKR001:Accessor.TapError(e => { })|};
+                {|MKR001:StaticComputed.Finally(r => { })|};
+                {|MKR001:other.Computed.Tap(x => { })|};
+                {|MKR001:Computed.Tap(x => { }).TapError(e => { })|};
+                {|MKR001:await Computed.TapAsync(x => Task.CompletedTask)|};
+                {|MKR001:await Block.FinallyAsync(r => Task.CompletedTask).ConfigureAwait(false)|};
+            }
+        }
+        """);
+
+    [Fact]
+    public Task MKR001_WhenTapIsCalledOnAnAutoProperty_DoesNotReport() => Verify("""
+        class Service
+        {
+            Result<int> GetOnly { get; } = Result.Success(1);
+            Result<int> GetSet { get; set; } = Result.Success(2);
+            Result<int> GetInit { get; init; } = Result.Success(3);
+            static Result<int> StaticAuto { get; } = Result.Success(4);
+
+            async Task Run(Service other)
+            {
+                GetOnly.Tap(x => { });
+                GetSet.TapError(e => { });
+                GetInit.Finally(r => { });
+                StaticAuto.Tap(x => { });
+                other.GetOnly.Tap(x => { }).TapError(e => { });
+                await GetSet.TapAsync(x => Task.CompletedTask);
+            }
+        }
+        """);
+
+    [Fact]
+    public Task MKR001_WhenTapIsCalledOnAnIndexer_DoesNotReport() => Verify("""
+        class Results
+        {
+            public Result<int> this[int index] => Result.Success(index);
+        }
+        class Service
+        {
+            void Run(Results results)
+            {
+                results[0].Tap(x => { });
+            }
+        }
+        """);
+
+    [Fact]
+    public Task MKR001_WhenTapIsCalledOnTheValueOfANullableHeldResult_DoesNotReport() => Verify("""
+        class Service
+        {
+            private Result<int>? _cached;
+
+            void Run(Result<int>? held)
+            {
+                _cached.Value.Tap(x => { });
+                held.Value.Tap(x => { });
+            }
+        }
+        """);
+
+    [Fact]
+    public Task MKR001_WhenTapIsCalledOnAComputedPropertyThroughConditionalAccess_Reports() => Verify("""
+        class Holder
+        {
+            public Result<int> Computed => Result.Success(1);
+            public Result<int> Auto { get; } = Result.Success(2);
+        }
+        class Service
+        {
+            void Run(Holder? holder)
+            {
+                {|MKR001:holder?.Computed.Tap(x => { })|};
+                holder?.Auto.Tap(x => { });
             }
         }
         """);

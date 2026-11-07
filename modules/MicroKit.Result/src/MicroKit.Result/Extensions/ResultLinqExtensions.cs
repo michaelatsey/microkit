@@ -28,7 +28,10 @@ public static class ResultLinqExtensions
     /// <exception cref="ArgumentException">Thrown when the delegate returns a result as the value; use Bind.</exception>
     public static Result<TOut> Select<TIn, TOut>(
         this Result<TIn> result, Func<TIn, TOut> selector)
-        => result.Map(selector);
+    {
+        ResultGuard.NotNull(selector); // here, so the exception names this method's parameter
+        return result.Map(selector);
+    }
 
     /// <summary>
     /// Enables the LINQ <c>from ... from ... select</c> (monadic bind) on <see cref="Result{T}"/>.
@@ -71,7 +74,10 @@ public static class ResultLinqExtensions
     /// <returns>The result from the selector, or the original failure.</returns>
     public static Result<TOut> SelectMany<TIn, TOut>(
         this Result<TIn> result, Func<TIn, Result<TOut>> selector)
-        => result.Bind(selector);
+    {
+        ResultGuard.NotNull(selector);
+        return result.Bind(selector);
+    }
 
     /// <summary>
     /// Enables LINQ <c>where</c> clause on <see cref="Result{T}"/>.
@@ -87,7 +93,11 @@ public static class ResultLinqExtensions
         this Result<T> result,
         Func<T, bool> predicate,
         IError errorOnFalse)
-        => result.Ensure(predicate, errorOnFalse);
+    {
+        ResultGuard.NotNull(predicate);
+        ResultGuard.NotNull(errorOnFalse);
+        return result.Ensure(predicate, errorOnFalse);
+    }
 
     /// <summary>
     /// Projects the result to an enumerable of zero or one element.

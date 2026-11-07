@@ -32,7 +32,7 @@ dotnet add package MicroKit.Result.AspNetCore --prerelease  # optional: Minimal 
 dotnet add package MicroKit.Result.Analyzers --prerelease   # recommended: build-time checks
 ```
 
-`MicroKit.Result` has no dependency. It is trim and NativeAOT compatible, checked by the trim and AOT analyzers, except for `ResultJsonConverterFactory` and `ResultJsonConverter<T>`, which use reflection and carry `[RequiresUnreferencedCode]` and `[RequiresDynamicCode]`.
+`MicroKit.Result` has no dependency. It is trim and NativeAOT compatible, checked by the trim and AOT analyzers, except for `ResultJsonConverterFactory`, which uses reflection and carries `[RequiresUnreferencedCode]` and `[RequiresDynamicCode]`. Under NativeAOT, [register the closed converter](#serialize-under-native-aot) instead.
 
 `MicroKit.Result.AspNetCore` maps results to HTTP responses. Add it only to the project that hosts the endpoints.
 
@@ -535,7 +535,7 @@ Every argument is evaluated before the call. To skip a step after a failure, cha
 
 ### Work with an ErrorCollection
 
-An `ErrorCollection` is an `IError` that holds other errors. It is never empty. Its code is `MULTI.ERROR`, its message joins the messages with `; `, and its severity is the highest of its errors, at least `Error`.
+An `ErrorCollection` is an `IError` that holds other errors. It is never empty. Its code is `MULTI.ERROR`, its message joins the messages with `; `, and its severity is the highest of its errors: a collection of warnings is a `Warning`.
 
 Its category is the category its errors share; otherwise the one of highest precedence, so the order of the errors never matters. Precedence, highest first: faults of the system (`Technical`, `External`, `Unavailable`, `Timeout`, `NotSupported`, undefined values), then `Unauthorized` and `Forbidden`, then `NotFound`, `Conflict`, `PreconditionFailed` and `TooManyRequests`, then `Cancelled`, then `Validation` and `BusinessRule`; inside a group, the category declared first in `ErrorCategory` wins. A server fault is never hidden behind a client error, nor an access error behind a validation error.
 
@@ -759,7 +759,7 @@ A lambda that returns both `ToHttpResult()` and another typed result, such as `T
 
 ### Read a problem details response
 
-`detail` is the error's `Message`, which an error keeps safe for a client. `errorCode` is its `Code`. `Metadata` is never written. `type` is the section ASP.NET Core knows for the status (RFC 9110, and RFC 4918 for 422); 429 and 499 have none.
+Below 500, `detail` is the error's `Message`, which an error keeps safe for a client. From 500 on (`Technical`, `External`, `Unavailable`, `NotSupported`, `Timeout`, and any undefined value), `detail` is always `"The server could not complete the request."`: a server fault's message may describe the system, so it never reaches the client, and no option exposes it. Log the error to keep its message. `errorCode` is its `Code`, whatever the status. `Metadata` is never written. `type` is the section ASP.NET Core knows for the status (RFC 9110, and RFC 4918 for 422); 429 and 499 have none.
 
 ```json
 {
@@ -788,7 +788,7 @@ A validation error, alone or in an `ErrorCollection`, answers an `HttpValidation
 }
 ```
 
-Only a `Validation` or `BusinessRule` response describes the request's input. An `ErrorCollection` that mixes a validation error with a `Technical` one answers 500, with an `Unauthorized` one 401, with a `NotFound` one 404. That response has no `errors`, and its `detail` and `errorCodes` come only from the errors of the chosen category, nested collections flattened: `detail` joins their messages with `"; "`. An unauthenticated caller receives no validation message, code or property name.
+Only a `Validation` or `BusinessRule` response describes the request's input. An `ErrorCollection` that mixes a validation error with a `Technical` one answers 500, with an `Unauthorized` one 401, with a `NotFound` one 404. That response has no `errors`, and its `detail` and `errorCodes` come only from the errors of the chosen category, nested collections flattened: below 500, `detail` joins their messages with `"; "`; from 500 on, it is the generic text above. An unauthenticated caller receives no validation message, code or property name.
 
 ### Use the factory directly
 
@@ -820,9 +820,9 @@ var cacheOptions = new JsonSerializerOptions();
 cacheOptions.Converters.Add(new ResultJsonConverterFactory(includeMetadata: true));
 ```
 
-By default the converters never write `Metadata`. Create the factory with `includeMetadata: true` only for a payload that stays in process, such as a cache entry. Metadata keys survive a round trip; values come back as JSON primitives. An integer comes back as a `long`, a `Guid` or a `DateTime` as a `string`, another object as its invariant string.
+By default the converters never write `Metadata`, and write `"The server could not complete the request."` as the `message` of a fault of the system (`Technical`, `External`, `Unavailable`, `Timeout`, `NotSupported`, any undefined value), in a collection too: their output may reach a client. Create the factory with `includeMetadata: true` only for a payload that stays in process, such as a cache entry: it writes `Metadata` and every message. Metadata keys survive a round trip; values come back as JSON primitives. An integer comes back as a `long`, a `Guid` or a `DateTime` as a `string`, another object as its invariant string.
 
-The factory uses reflection to build `ResultJsonConverter<T>`, so it is not trim or NativeAOT safe.
+The factory uses reflection to build `ResultJsonConverter<T>`, so it is not trim or NativeAOT safe. Under NativeAOT, register `ResultJsonConverter<T>` itself, as below.
 
 For an HTTP response, prefer `ToHttpResult()`, which answers problem details on failure.
 
@@ -837,7 +837,33 @@ Result<Order> restored = JsonSerializer.Deserialize<Result<Order>>(json, options
 string command = JsonSerializer.Serialize(Result.Success()); // {"isSuccess":true}
 ```
 
-The non-generic `Result` carries `ResultJsonConverter` as its `[JsonConverter]`. It uses no reflection and never writes `Metadata`, whether or not the factory is registered.
+The non-generic `Result` carries its own converter through `[JsonConverter]`. It uses no reflection, reads and writes with or without the factory registered, and never writes `Metadata`.
+
+`Result<T>` carries `ResultEnvelopeJsonConverterFactory`, also without reflection: with no converter registered, it writes the same envelope, without `Metadata`, so a `Result<T>` returned as is by an endpoint never answers 500 for want of a converter.
+
+Like every converter not created with `includeMetadata: true`, they write the generic message for a fault of the system, keeping `code` and `category`. A result returned as is answers the status the endpoint gives it, 200 for a plain value: for a client, prefer `ToHttpResult()`. Reading a `Result<T>` needs a registered converter: without one, it throws `NotSupportedException`, whose message names `ResultJsonConverterFactory` and `ResultJsonConverter<T>`. A registered converter always takes precedence over the type's own.
+
+### Serialize under Native AOT
+
+With reflection disabled, register the closed `ResultJsonConverter<T>` on a source-generated context. The context declares both `Result<T>` and `T`: the converter reads and writes the value through the contract the context provides.
+
+```csharp
+[JsonSourceGenerationOptions(Converters = [typeof(ResultJsonConverter<OrderDto>)])]
+[JsonSerializable(typeof(Result<OrderDto>))]
+[JsonSerializable(typeof(OrderDto))]
+internal sealed partial class AppJsonContext : JsonSerializerContext;
+```
+
+```csharp
+string json = JsonSerializer.Serialize(order, AppJsonContext.Default.ResultOrderDto);
+Result<OrderDto> restored = JsonSerializer.Deserialize(json, AppJsonContext.Default.ResultOrderDto);
+
+// Minimal APIs: the context resolves the contracts of the endpoints
+builder.Services.ConfigureHttpJsonOptions(o =>
+    o.SerializerOptions.TypeInfoResolverChain.Insert(0, AppJsonContext.Default));
+```
+
+`ResultJsonConverter<T>` uses no reflection and carries no trim or AOT annotation; only `ResultJsonConverterFactory` does. The pattern follows Microsoft Learn, *How to use source generation in System.Text.Json* and *ASP.NET Core support for Native AOT*.
 
 ### Wire format
 
@@ -856,7 +882,7 @@ A failure writes `isSuccess` and `error`. The error object carries `code`, `mess
     "code": "MULTI.ERROR",
     "message": "Email is required.; Password must be at least 8 characters.",
     "category": "Validation",
-    "severity": "Error",
+    "severity": "Warning",
     "errors": [
       { "code": "VALIDATION.EMAIL", "message": "Email is required.", "category": "Validation", "severity": "Warning", "propertyName": "Email" },
       { "code": "VALIDATION.PASSWORD", "message": "Password must be at least 8 characters.", "category": "Validation", "severity": "Warning", "propertyName": "Password" }
@@ -865,7 +891,7 @@ A failure writes `isSuccess` and `error`. The error object carries `code`, `mess
 }
 ```
 
-Reading rebuilds an `ErrorCollection`, a `DeserializedValidationError`, which keeps `PropertyName`, or a `DeserializedError`. An unknown category reads as `Technical`, an unknown severity as `Error`.
+Reading rebuilds an `ErrorCollection`, a `DeserializedValidationError`, which keeps `PropertyName`, or a `DeserializedError`. An unknown category reads as `Technical`, an unknown severity as `Error`. Two errors read back compare by content, their `Metadata` included, whatever the dictionary instances.
 
 ### Invalid payloads
 
@@ -884,7 +910,7 @@ It reports an expression statement whose value is a result: a call such as `repo
 It does not report:
 
 - An assignment, an explicit discard `_ = …` included.
-- `Tap`, `TapError` and `Finally` of MicroKit.Result, and their `Async` forms awaited, with or without `ConfigureAwait`, alone, chained or through a conditional access (`held?.Tap(…)`), on a result already held in a local, a parameter, a field, a property or an array element. The side effect is the point, and the result is still held. A method of yours with one of these names is reported.
+- `Tap`, `TapError` and `Finally` of MicroKit.Result, and their `Async` forms awaited, with or without `ConfigureAwait`, alone, chained or through a conditional access (`held?.Tap(…)`), on a result already held in a local, a parameter, a field, an auto-property, an indexer or an array element. The side effect is the point, and the result is still held. A method of yours with one of these names is reported, and so is a side effect on a computed property (a getter with a body): it builds a new result at each read, which the side effect then drops.
 
 To fix it, handle the result. Assign it and check the failure rail, return it, or await it:
 
