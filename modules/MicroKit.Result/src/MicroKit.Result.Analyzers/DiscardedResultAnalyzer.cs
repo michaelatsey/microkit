@@ -9,7 +9,7 @@ namespace MicroKit.Result.Analyzers;
 /// or a <c>ValueTask</c> of a result discarded where CS4014 does not catch it: outside an async method or lambda, or
 /// through a conditional access or a property inside one. Not reported: an explicit discard (<c>_ = …;</c>) or any assignment;
 /// <c>Tap</c>, <c>TapError</c> and <c>Finally</c> (and their <c>…Async</c> forms, awaited, with or without
-/// <c>ConfigureAwait</c>), alone or chained, on a result already held in a local, a parameter, a field, a property
+/// <c>ConfigureAwait</c>), alone, chained or through a conditional access (<c>held?.Tap(…)</c>), on a result already held in a local, a parameter, a field, a property
 /// or an array element: the side effect is the point, and the result is still held.
 /// </remarks>
 [DiagnosticAnalyzer(LanguageNames.CSharp)]
@@ -102,6 +102,14 @@ public sealed class DiscardedResultAnalyzer : DiagnosticAnalyzer
         if (current is IInvocationOperation { TargetMethod.Name: "ConfigureAwait", Instance: { } configured })
             current = configured;
 
+        // held?.Tap(a): the receiver inside WhenNotNull is the conditional access's own operand.
+        IOperation? conditionalOperand = null;
+        if (current is IConditionalAccessOperation conditional)
+        {
+            conditionalOperand = conditional.Operation;
+            current = conditional.WhenNotNull;
+        }
+
         // held.Tap(a).TapError(b): walk down the chain while each step is a side effect.
         while (current is IInvocationOperation invocation
                && SideEffectMethods.Contains(invocation.TargetMethod.Name)
@@ -114,6 +122,13 @@ public sealed class DiscardedResultAnalyzer : DiagnosticAnalyzer
 
             while (receiver is IConversionOperation conversion)
                 receiver = conversion.Operand;
+
+            if (receiver is IConditionalAccessInstanceOperation && conditionalOperand is not null)
+            {
+                receiver = conditionalOperand;
+                while (receiver is IConversionOperation conversion)
+                    receiver = conversion.Operand;
+            }
 
             if (receiver is ILocalReferenceOperation or IParameterReferenceOperation or IFieldReferenceOperation
                 or IPropertyReferenceOperation or IArrayElementReferenceOperation)

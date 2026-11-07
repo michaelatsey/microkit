@@ -877,7 +877,7 @@ It reports an expression statement whose value is a result: a call such as `repo
 It does not report:
 
 - An assignment, an explicit discard `_ = …` included.
-- `Tap`, `TapError` and `Finally` of MicroKit.Result, and their `Async` forms awaited, with or without `ConfigureAwait`, alone or chained, on a result already held in a local, a parameter, a field, a property or an array element. The side effect is the point, and the result is still held. A method of yours with one of these names is reported.
+- `Tap`, `TapError` and `Finally` of MicroKit.Result, and their `Async` forms awaited, with or without `ConfigureAwait`, alone, chained or through a conditional access (`held?.Tap(…)`), on a result already held in a local, a parameter, a field, a property or an array element. The side effect is the point, and the result is still held. A method of yours with one of these names is reported.
 
 To fix it, handle the result. Assign it and check the failure rail, return it, or await it:
 

@@ -187,6 +187,29 @@ public sealed class DiscardedResultAnalyzerTests
         """);
 
     [Fact]
+    public Task MKR001_WhenSideEffectGoesThroughAConditionalAccessOnAHeldResult_DoesNotReport() => Verify("""
+        class Service
+        {
+            private Result<int>? _cached;
+
+            void Run(Result<int>? held)
+            {
+                held?.Tap(x => { });
+                _cached?.Tap(x => { }).TapError(e => { });
+            }
+        }
+        """);
+
+    [Fact]
+    public Task MKR001_WhenSideEffectGoesThroughAConditionalAccessOnAFreshResult_Reports() => Verify("""
+        class Service
+        {
+            Result<int>? Load() => Result.Success(1);
+            void Run() { {|MKR001:Load()?.Tap(x => { })|}; }
+        }
+        """);
+
+    [Fact]
     public Task MKR001_WhenCodeIsGenerated_DoesNotReport()
     {
         var test = new CSharpAnalyzerTest<DiscardedResultAnalyzer, CompatXUnitVerifier>();
