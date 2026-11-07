@@ -6,21 +6,41 @@ Remplace le pattern exception-as-flow par des types expressifs et composables.
 
 ## 🛡️ Garanties du module
 
-Chaque règle, skill, commande et agent de ce dossier sert ces cinq garanties. Où le code s'en écarte, ce fichier le dit et nomme la phase de #184 qui traite l'écart.
+Chaque règle, skill, commande et agent de ce dossier sert ces cinq garanties. Où le code s'en écarte, ce fichier le dit et nomme la phase de #184 qui traite l'écart, ou « hors #184 » quand aucune phase ne le traite : l'écart devient alors sa propre issue. Les autres fichiers peuvent détailler un écart listé ici, jamais en ajouter un qui n'y est pas.
+
+Une note d'écart décrit le comportement actuel. La PR d'une phase retire ou réécrit, dans la même PR, chaque note qu'elle résout : ici, dans `README.md`, `rules/`, `skills/`, `agents/` et `commands/` (`grep -rn "Phase <N>" .claude README.md`). Une note qui décrit un comportement corrigé fait échouer la review de la phase.
 
 - **Correctness : un résultat invalide n'est jamais lu comme un succès.**
-  - `default(Result<T>)` n'est ni succès ni échec : `Value`, `Error`, `Map`, `Bind`, `Match` et `Ensure` lèvent `ResultException`, `TryGetValue` retourne `false`, `Tap` ne fait rien, `GetValueOrDefault(x)` retourne `x`. Sur `default(Result)`, `Error` et `Match` lèvent aussi `ResultException`.
-  - Écarts : `Result.Success<T>(null)` est un succès, et `Error.Category` vaut `Technical` quand elle n'est pas surchargée. La Phase 3 tranche les deux.
+  - `default(Result<T>)`, comme `new Result<T>()`, n'est ni succès ni échec : `Value`, `Error`, `Map`, `Bind`, `Match` et `Ensure` lèvent `ResultException`, `TryGetValue` retourne `false`, `Tap` ne fait rien, `GetValueOrDefault(x)` retourne `x`. Sur `default(Result)`, `Error` et `Match` lèvent aussi `ResultException`.
+  - Écarts, Phase 2 :
+    - `Combine` et `CombineAll` sur des `Result`, et `CombineAll<T>`, lisent un résultat `default` comme un succès ; les surcharges `Combine` à tuple lèvent.
+    - La conversion implicite de `T` vers `Result<T>` (`ResultOfT.cs:187`) accepte un `Result` ou un `Result<T>` comme valeur quand `T` est `object` : `Result<object> r = Result.Failure<int>(error);` est un succès.
+    - `ResultJsonConverter<T>.Read` fait de `{"isSuccess":true}` sans `value` un succès sans valeur, et ignore un `error` à côté d'un `isSuccess` vrai.
+    - `Result<T>.Try` et `TryAsync` avec un mapper qui retourne `null` donnent un échec dont `Error` est `null` (`ResultOfT.cs:139,179`).
+    - Les filtres d'`ErrorCollection` (`WithCategory`, `WithSeverity`, `WithCode`, `OfType`, `Flatten`) peuvent construire une collection vide, que `From` interdit.
+  - Écarts, Phase 3 : `Result.Success<T>(null)` est un succès, et `Error.Category` vaut `Technical` quand elle n'est pas surchargée.
+  - Écart hors #184 : `Successes` et `Failures` ignorent un résultat `default`, que `Partition` refuse en levant.
 - **Security : les détails internes n'atteignent jamais un client par défaut.**
-  - `Error.Message` part dans `ProblemDetails.Detail` : il reste sans danger pour le client. Les détails internes vont dans le log ou dans `Metadata`, que ni `ProblemDetails` ni le JSON n'émettent.
-  - Écart : `Try` / `TryAsync` sans mapper écrivent `Exception.Message` dans `Detail`. La Phase 2 le remplace par un message générique.
+  - `Error.Message` atteint le client : il reste sans danger pour lui. Les détails internes vont dans le log, pas dans `Metadata` : `ProblemDetails` et `ResultJsonConverter<T>` ne l'émettent pas, mais le `Result` non générique l'émet (ci-dessous) et la Phase 3 décide de son rôle.
+  - Écart, Phase 2 : `Try` / `TryAsync` sans mapper font de `Exception.Message` le message de l'erreur. Il atteint le client par `ProblemDetails.Detail` et `errors[].message` (`ToHttpResult`), et par `error.message` (`ResultJsonConverter<T>`). La Phase 2 le remplace par un message générique.
+  - Écart, Phase 5 : le `Result` non générique n'a pas de convertisseur JSON. Retourné tel quel par un endpoint, il est sérialisé propriété par propriété : un échec répond 200 avec `error.metadata`, un succès répond 500. Par `ToHttpResult()`, il n'expose rien de cela.
 - **Predictability : le synchrone et l'asynchrone se comportent de la même façon.**
-  - Écarts : le `Result` non générique n'a que `Match`, `Tap`, `TapError` et `Finally`, et aucun async hors `TryAsync` (Phase 4). `Try` et `TryAsync` capturent tous deux `OperationCanceledException` (Phase 2).
+  - Écarts, Phase 2 :
+    - `Tap`, `TapError` et `Finally` prennent une `Action`, sur `Result<T>` comme sur `Task<Result<T>>` et `ValueTask<Result<T>>` : un lambda async y compile en `async void`, le résultat revient avant l'effet, et une exception de l'effet termine le processus. `TapAsync`, `TapErrorAsync` et `FinallyAsync` l'attendent.
+    - `Try` et `TryAsync` sans mapper capturent `OperationCanceledException` ; la Phase 2 les fait relancer. Avec un mapper, le mapper décide, et `DatabaseExceptionMapper` (`rules/csharp-style.md`) en fait une erreur : `Try` et `TryAsync` ne servent pas un appel annulable, et leur lambda ne capture pas de `CancellationToken`.
+  - Écart, Phase 4 : le `Result` non générique n'a que `Match`, `Tap`, `TapError` et `Finally`, et aucun async hors `TryAsync`.
+  - Écarts hors #184 :
+    - Les délégués async des extensions retournent `Task`, jamais `ValueTask` : un port `ValueTask<Result<T>>` s'y passe par un lambda async, `async x => await port(x, ct)`.
+    - Aucune extension async ne prend de `CancellationToken` : un délégué qui en a besoin le capture.
+    - Les extensions async valident leurs arguments dans leur partie async : `MapAsync(null)` lève à l'`await`, `Map(null)` à l'appel.
 - **Interoperability : les préoccupations HTTP restent hors du cœur.**
   - `MicroKit.Result` ne référence pas ASP.NET Core (test `Core_DoesNotReferenceAspNetCore`) ; le mapping HTTP vit dans `MicroKit.Result.AspNetCore`.
-  - Écarts : la doc XML d'`ErrorCategory` cite des statuts HTTP, et la Phase 3 fixe le rôle de `Category`. Le contrat HTTP lui-même évolue en Phases 2 et 5.
+  - Écarts, Phase 3 : la doc XML d'`ErrorCategory` cite des statuts HTTP et décrit `Cancelled` comme une annulation de l'appelant, que les règles interdisent de convertir en erreur ; la Phase 3 fixe le rôle de `Category`.
+  - Écart hors #184 : `ResultJsonConverter<T>` perd `Severity`, `Metadata` et les erreurs d'une `ErrorCollection` ; il désérialise une erreur en un type privé, et lève en sérialisant un `default`.
+  - Écarts, Phases 2 et 5 : le contrat HTTP lui-même (`rules/result-patterns.md`). En Phase 5 aussi, le commentaire de `ResultProblemDetailsFactory.cs:65` dit qu'aucune constante `StatusCodes` n'existe pour 499, alors que `StatusCodes.Status499ClientClosedRequest` existe.
 - **Performance : toute affirmation est mesurée.**
   - Écart : aucun benchmark n'existe, `tests/MicroKit.Result.PerformanceTests` ne contient que son `.csproj`. La Phase 7 publie les mesures. D'ici là, une affirmation de performance est une hypothèse et se présente comme telle.
+  - Écart hors #184 : le constructeur d'`ErrorCollection` construit `Message` par LINQ (`ErrorCollection.cs:27`), ce que la checklist de `agents/dotnet-reviewer.md` bloque dans un nouveau code.
 
 ## 🏛️ Philosophie Architecturale
 
@@ -50,16 +70,18 @@ Unit            ← void-safe pour les génériques
 - Primary constructors partout où pertinent
 - File-scoped namespaces obligatoires
 - Nullable Reference Types: `enable`
-- `readonly record struct` pour les value objects sans héritage
+- `readonly record struct` pour les value objects sans héritage (`ErrorCode`, `Unit`) : ce module déroge ici à la convention racine, `sealed record` pour les value objects
 - `sealed record` pour les types référence fermés
 - `ValueTask<T>` pour l'async (convention racine). Son gain face à `Task<T>` n'est pas mesuré ; la Phase 7 de #184 le mesure
 
 ### Interdictions
 - ❌ `throw` dans les flux métier normaux
-- ❌ `null` retourné depuis une méthode publique (utiliser `Result` ou `Result<T>`)  
+- ❌ `null` retourné depuis une méthode publique (utiliser `Result` ou `Result<T>`), hors un accès dont le nom dit qu'il peut ne rien trouver : `TryGetMetadata<T>`, `GetValueOrDefault()`, `ErrorCollection.FirstOrDefault`
 - ❌ `Exception` pour représenter une validation ou une règle métier
 - ❌ Réflexion runtime sauf dans la couche Serialization, annotée `[RequiresUnreferencedCode]` / `[RequiresDynamicCode]`
 - ❌ `static` mutable partagé (thread-safety)
+
+`samples/MicroKit.Result.Samples` est une démo console : `Console.WriteLine` y est permis, et nulle part ailleurs (convention racine). Ses ports simulés retournent `Task` là où un délégué async des extensions l'exige.
 
 ### Ce qu'aucun sample ni instruction n'enseigne
 Un contre-exemple marqué ❌ peut les montrer : il définit ce qu'une review bloque.
@@ -82,7 +104,7 @@ public sealed record UserNotFoundError(Guid UserId)
 }
 ```
 
-Les patterns autorisés (`Map`, `Bind`, `Match`, `Tap`, `Ensure`) sont dans `rules/result-patterns.md`, les frontières d'exception dans `rules/no-exceptions-flow.md`, les conventions de test dans `rules/testing.md`.
+Les patterns autorisés (`Map`, `Bind`, `Match`, `Tap`, `Ensure`, `MapError`, `Compensate`) sont dans `rules/result-patterns.md`, les frontières d'exception dans `rules/no-exceptions-flow.md`, les conventions de test dans `rules/testing.md`.
 
 ## 🚀 Performance
 
@@ -104,7 +126,9 @@ dotnet build MicroKit.slnx -c Release -p:WarningsNotAsErrors=NU1902%3BNU1903   #
 dotnet format modules/MicroKit.Result/MicroKit.Result.slnx --verify-no-changes
 ```
 
-`-c Release` toujours : `TreatWarningsAsErrors`, nullable compris, ne s'applique qu'en Release. `dotnet format` échoue aujourd'hui sur `src/MicroKit.Result/Validation/ValidationError.cs:99-101`, déjà présent sur `main` ; la CI ne le lance pas. À partir de la Phase 1, `dotnet test ... --collect:"XPlat Code Coverage"` mesure une couverture de lignes d'au moins 90 % sur `src/MicroKit.Result`.
+`-c Release` toujours : `TreatWarningsAsErrors`, nullable compris, ne s'applique qu'en Release. `dotnet format` échoue aujourd'hui sur `src/MicroKit.Result/Validation/ValidationError.cs:99-101`, déjà présent sur `main`, et seulement là : toute autre ligne signalée est nouvelle. La Phase 2 corrige ces lignes ; la CI ne lance pas `dotnet format`.
+
+À partir de la Phase 1, la couverture de lignes de `src/MicroKit.Result` est d'au moins 90 %. `dotnet test ... --collect:"XPlat Code Coverage"` ne l'impose pas : il sort 0 quel que soit le taux, et écrit un `coverage.cobertura.xml` par projet de test, sous `TestResults/`. Le chiffre est l'attribut `line-rate` du package `MicroKit.Result` dans le fichier de `MicroKit.Result.UnitTests`.
 
 Gates de review, chacun en contexte neuf :
 
@@ -113,7 +137,9 @@ Gates de review, chacun en contexte neuf :
 | `code-review` | Avant le push et sur la pull request |
 | `security-review` | Tout changement sous `src/` |
 | `dependency-guardian` | Tout changement d'un `.csproj` ou de `Directory.Packages.props` |
-| `result-architect` | Tout changement de la surface publique ; ce module n'a pas d'agent `api-reviewer`, `result-architect` tient ce gate |
+| `result-architect` | Tout changement de la surface publique ; ce module n'a pas d'agent `api-reviewer`, `result-architect` tient ce gate. Il n'a pas Bash : l'appelant lui passe le diff (`git diff main...HEAD -- src/`) |
+
+`dotnet-reviewer` n'est pas un gate : `/review-perf` l'appelle, ou une demande explicite.
 
 Avant une pull request :
 

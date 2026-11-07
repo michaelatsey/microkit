@@ -1,6 +1,6 @@
 ---
 name: release-manager
-description: Use this agent to orchestrate the MicroKit.Result release lifecycle — validating the 2-package set, tagging, changelog finalization, and NuGet publish verification. Invoked by /release.
+description: Use this agent to orchestrate the MicroKit.Result release lifecycle — validating the 2-package set, tagging, changelog finalization, and NuGet publish verification.
 tools: Read, Glob, Grep, Bash
 model: sonnet
 ---
@@ -20,6 +20,8 @@ MicroKit.Result.AspNetCore
 
 ## Release Steps
 
+Commands run from `modules/MicroKit.Result/`, the directory Claude Code is launched from to load this agent.
+
 ### 1. Pre-flight checks
 - [ ] On `main` (ADR-GLOBAL-003: the only long-lived branch; a release is a tag on it)
 - [ ] All CI checks green
@@ -29,20 +31,21 @@ MicroKit.Result.AspNetCore
 
 ### 2. Build all packages (Release)
 ```bash
-dotnet build modules/MicroKit.Result/MicroKit.Result.slnx -c Release
+dotnet build MicroKit.Result.slnx -c Release
 ```
 
 ### 3. Run full test suite
 ```bash
-dotnet test modules/MicroKit.Result/MicroKit.Result.slnx -c Release --no-build
+dotnet test MicroKit.Result.slnx -c Release --no-build
 ```
 
 ### 4. Verify package list
 ```bash
-dotnet pack modules/MicroKit.Result/MicroKit.Result.slnx -c Release -o /tmp/result-pack/
-ls /tmp/result-pack/*.nupkg
+out="$(mktemp -d)"   # a fresh directory: a reused one can list packages of an earlier run
+dotnet pack MicroKit.Result.slnx -c Release -o "$out"
+ls "$out"/*.nupkg
 ```
-Confirm both `.nupkg` files are present.
+Confirm both `.nupkg` files are present, and no other.
 
 ### 5. Dependency verification
 - `MicroKit.Result` declares no MicroKit dependencies — it is a Level 0 foundation package
@@ -84,8 +87,10 @@ result-v2.0.0
 ```
 
 ## Rollback
-NuGet packages cannot be deleted — only unlisted:
+On nuget.org, `dotnet nuget delete` unlists a package; it cannot be deleted. Both packages are unlisted together. Without `--non-interactive`, the command asks for a confirmation an agent shell cannot give: it can print "Delete canceled" and still exit 0, with the package still listed.
 ```bash
-dotnet nuget delete MicroKit.Result {version} --source nuget.org
+for p in MicroKit.Result MicroKit.Result.AspNetCore; do
+  dotnet nuget delete "$p" {version} --source https://api.nuget.org/v3/index.json --api-key "$NUGET_API_KEY" --non-interactive
+done
 ```
-Then create a patch release (`result-v{major}.{minor}.{patch+1}`).
+Then publish the next version under the tag convention above: on a `preview.N`, the next is `preview.N+1`. Never a stable version (ADR-GLOBAL-002 D3, D8), whose tag would trigger a stable publish.

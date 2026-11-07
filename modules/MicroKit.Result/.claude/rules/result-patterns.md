@@ -9,24 +9,26 @@ Result<T> value = Result.Success(input);
 Result failed = Result.Failure(error);
 Result<T> failedValue = Result.Failure<T>(error);
 
-// mapper : journalise l'exception et retourne une erreur au message générique
+// mapper : journalise l'exception et retourne une erreur au message générique.
+// Les appels ne prennent pas de CancellationToken, et le lambda n'en capture pas.
 Result saved = Result.Try(() => riskyCommand(), mapper.Map);                                  // Func<Result>
 Result<T> loaded = Result<T>.Try(() => riskyQuery(), mapper.Map);                             // Func<T>
 Result savedAsync = await Result.TryAsync(async () => await riskyCommandAsync(), mapper.Map);  // Func<Task<Result>>
 Result<T> loadedAsync = await Result<T>.TryAsync(async () => await riskyQueryAsync(), mapper.Map); // Func<Task<T>>
 ```
 
-`DatabaseExceptionMapper` (`rules/csharp-style.md`) est un tel mapper. Le comportement actuel sans mapper, et la Phase 2 de #184 qui le change, sont décrits dans `rules/no-exceptions-flow.md`.
+`DatabaseExceptionMapper` (`rules/csharp-style.md`) est un tel mapper. Il fait une erreur de toute exception, `OperationCanceledException` comprise : un appel annulable ne passe pas par `Try` / `TryAsync` mais par un `catch` à la frontière (`rules/no-exceptions-flow.md`), qui laisse l'annulation se propager. Le comportement actuel sans mapper, et la Phase 2 de #184 qui le change, sont décrits dans `rules/no-exceptions-flow.md`.
 
-### ❌ Ne jamais créer via constructeur public
+### ❌ Ne jamais créer via constructeur
 ```csharp
-// ❌ Interdit — les constructeurs de Result<T> sont privés
-new Result<T>(value);
+// ❌ new Result<T>(value) ne compile pas : Result<T> n'a pas de constructeur public à argument
+// ❌ new Result<T>() compile, et donne l'état non initialisé de default : ni succès ni échec
+Result<T> invalid = new Result<T>();
 ```
 
 ## Règles de consommation
 
-### ✅ Toujours consommer via Match pour les flux de contrôle
+### ✅ Consommer via Match, ou TryGetValue avec retour anticipé (anti-patterns ci-dessous)
 ```csharp
 return result.Match(
     onSuccess: value => ProcessValue(value),
@@ -60,12 +62,40 @@ internal static partial class UserLog
 Result<User> withLog = userResult.Tap(u => logger.UserLoaded(u.Id));
 ```
 
+`Tap` ne transforme pas : il ne modifie ni la valeur ni l'objet qu'elle référence. Une transformation passe par `Map` ou `Bind`, qui retournent la nouvelle valeur.
+
+```csharp
+// ❌ Tap qui modifie la valeur
+Result<User> mutated = userResult.Tap(u => u.Rename(newName));
+// ✅
+Result<User> renamed = userResult.Map(u => u.WithName(newName));
+```
+
+Un effet async passe par `TapAsync`, `TapErrorAsync` ou `FinallyAsync`. Dans `Tap`, `TapError` ou `Finally`, un lambda async compile en `async void` : le résultat revient avant l'effet, et une exception de l'effet termine le processus (écart, Phase 2 de #184).
+
 ### ✅ Ensure pour les validations inline
 ```csharp
 Result<User> active = userResult
     .Ensure(u => u.IsActive, new UserInactiveError(userId))
     .Ensure(u => u.IsEmailVerified, new EmailNotVerifiedError());
 ```
+
+`Ensure` reçoit l'erreur déjà construite : elle l'est à chaque appel, succès compris, avec son message interpolé. Quand la construire coûte, `Bind` ne la construit que sur l'échec :
+
+```csharp
+Result<User> activeLazy = userResult
+    .Bind(u => u.IsActive ? Result.Success(u) : Result.Failure<User>(new UserInactiveError(u.Id)));
+```
+
+### ✅ MapError et Compensate sur le rail d'échec
+```csharp
+// MapError : transformer l'erreur, sans changer de rail
+Result<Order> enriched = orderResult.MapError(e => new EnrichedError(e, correlationId));
+// Compensate : revenir sur le rail de succès par une valeur de repli
+Result<Product> product = productResult.Compensate(_ => GetDefaultProduct());
+```
+
+Une erreur qui en enveloppe une autre reprend sa `Category`, sa `Severity` et ses `Metadata` ; sinon elle vaut `Technical` et répond 500 (`samples/MicroKit.Result.Samples/Readme/Pipelines.cs`).
 
 ### ✅ TapError pour gérer les side-effects sur l'échec
 ```csharp
@@ -77,14 +107,14 @@ Result<User> monitored = userResult
 
 ### ✅ Combine pour valider plusieurs résultats
 ```csharp
-// Fail-fast: arrête au premier échec
+// Fail-fast : retourne le premier échec ; les arguments sont tous évalués avant l'appel
 Result failFast = ResultCombineExtensions.Combine(validateName, validateEmail, validateAge);
 
 // Collect-all: collecte toutes les erreurs dans une ErrorCollection
 Result collected = ResultCombineExtensions.CombineAll(validateName, validateEmail, validateAge);
 ```
 
-La Phase 3 de #184 décide de la place de `Combine` et `CombineAll`.
+Pour qu'une étape ne s'exécute pas après un échec, `Bind` la chaîne : `Combine(Validate(x), Save(x))` exécute `Save`. Sur des `Result`, `Combine` et `CombineAll` lisent aujourd'hui un résultat `default` comme un succès ; la Phase 2 de #184 le corrige. La Phase 3 décide de leur place.
 
 ## `Result` non générique
 
@@ -94,9 +124,11 @@ Il n'a aujourd'hui que `Match`, `Tap`, `TapError` et `Finally`, et aucun async h
 
 ### ✅ ToHttpResult() pour les minimal APIs
 ```csharp
-app.MapGet("/users/{id}", async (Guid id, IUserService svc) =>
-    (await svc.GetUserAsync(id)).ToHttpResult());
+app.MapGet("/users/{id}", async (Guid id, IUserService svc, CancellationToken ct) =>
+    (await svc.GetUserAsync(id, ct)).ToHttpResult());
 ```
+
+Le `CancellationToken` d'un endpoint minimal API est celui de la requête, annulé quand le client abandonne.
 
 ### ✅ Mapping implicite des ErrorCategory vers HTTP
 ```
@@ -197,6 +229,8 @@ public async ValueTask<Result<T>> ProcessAsync(
     CancellationToken ct = default)  // ← toujours avec default
 ```
 
+La règle vaut pour le code qui appelle la librairie et pour une nouvelle méthode qui fait elle-même un appel annulable. Les extensions async de la librairie (`MapAsync`, `BindAsync`…) ne prennent pas de `CancellationToken` : un délégué qui en a besoin le capture (écart hors #184, `.claude/CLAUDE.md`).
+
 ## Anti-patterns stricts
 
 ```csharp
@@ -206,7 +240,7 @@ catch (Exception ex) { return Result.Failure<T>(new GenericError(ErrorCode.Failu
 // ✅ Utiliser Result<T>.Try() avec un mapper — Result.Try() n'accepte que Func<Result>
 return Result<T>.Try(() => Compute(), mapper.Map);
 
-// ❌ .Value sans vérification (sauf après Match)
+// ❌ .Value sans vérification préalable du succès
 var value = result.Value; // throw si failure
 // ✅ Try pattern : l'erreur reste sur le rail d'échec
 if (!result.TryGetValue(out var user))

@@ -7,7 +7,7 @@ internal static class CombiningResultsSamples
         Result validateName, Result validateEmail, Result validateAge,
         Result<User> getUser, Result<Cart> getCart)
     {
-        // Fail-fast — stops at first failure
+        // Fail-fast — returns the first failure
         Result combined = ResultCombineExtensions.Combine(validateName, validateEmail, validateAge);
 
         // Collect-all — returns ErrorCollection with ALL errors

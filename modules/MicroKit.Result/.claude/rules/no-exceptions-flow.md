@@ -9,7 +9,7 @@
 |-----------|----------------|----------|
 | Entity non trouvée | `throw new NotFoundException()` | `return Result.Failure(new UserNotFoundError(id))` |
 | Validation échouée | `throw new ValidationException()` | `return Result.Failure(ValidationError.Required("Email"))` |
-| Utilisateur non autorisé | `throw new UnauthorizedException()` | `return Result.Failure(new UnauthorizedOperationError(operation, userId))` |
+| Utilisateur identifié, opération refusée | `throw new UnauthorizedException()` | `return Result.Failure(new OperationForbiddenError(operation, userId))` |
 | Règle métier violée | `throw new DomainException()` | `return Result.Failure(new OrderAlreadyShippedError(orderId, shippedAt))` |
 | Ressource indisponible | `throw new ServiceUnavailableException()` | `return Result.Failure(new PaymentGatewayUnavailableError(gateway))` |
 | Conflit de données | `throw new ConflictException()` | `return Result.Failure(new EmailAlreadyRegisteredError(email))` |
@@ -29,11 +29,18 @@ Hormis `ValidationError` et `ErrorCollection`, la librairie ne fournit aucun typ
 
 ## Frontière infrastructure
 
-Les appels d'infrastructure (DB, HTTP, files) doivent être wrappés. Une erreur technique porte un message générique, sans danger pour le client ; l'exception part dans le log :
+Les appels d'infrastructure (DB, HTTP, files) doivent être wrappés. Une erreur technique porte un message générique, sans danger pour le client ; l'exception part dans le log.
+
+On n'attrape que les exceptions de l'infrastructure. Un bug (`NullReferenceException`, `InvalidOperationException`…), une ressource épuisée et l'annulation de l'appelant se propagent : Microsoft Learn, *Best practices for exceptions* : « When your code can't recover from an exception, don't catch that exception. »
 
 ```csharp
+using System.Data.Common;
+
 public sealed record DatabaseError()
     : Error(ErrorCode.From("INFRA.DATABASE.FAILURE"), "A database error occurred.");
+
+public sealed record TechnicalError()
+    : Error(ErrorCode.Internal, "An internal error occurred.");
 
 internal static partial class InfrastructureLog
 {
@@ -49,11 +56,7 @@ public async ValueTask<Result<User>> GetUserAsync(Guid id, CancellationToken ct 
     {
         entity = await _dbContext.Users.FindAsync([id], ct).ConfigureAwait(false);
     }
-    catch (OperationCanceledException) when (ct.IsCancellationRequested)
-    {
-        throw; // annulation demandée par l'appelant : elle se propage
-    }
-    catch (Exception ex)
+    catch (DbException ex) // exception du fournisseur ADO.NET ; l'annulation et les bugs se propagent
     {
         _logger.DatabaseCallFailed(ex);
         return Result.Failure<User>(new DatabaseError());
@@ -83,21 +86,21 @@ public sealed record RemoteTimeoutError()
     public override ErrorCategory Category => ErrorCategory.Timeout;
 }
 
-public sealed record TechnicalError()
-    : Error(ErrorCode.Internal, "An internal error occurred.");
-
 // ✅ Mapper les exceptions d'infra en Result à la frontière
+// typeInfo vient d'un JsonSerializerContext généré (AppJsonContext.Default.UserDto) : la surcharge
+// sans lui passe par la réflexion, IL2026 en Release, que .claude/CLAUDE.md interdit hors Serialization
 public static partial class HttpClientResultExtensions
 {
     public static async ValueTask<Result<T>> GetAsResultAsync<T>(
         this HttpClient client,
         string url,
+        JsonTypeInfo<T> typeInfo,
         ILogger logger,
         CancellationToken ct = default)
     {
         try
         {
-            T? value = await client.GetFromJsonAsync<T>(url, ct).ConfigureAwait(false);
+            T? value = await client.GetFromJsonAsync(url, typeInfo, ct).ConfigureAwait(false);
             return value is null
                 ? Result.Failure<T>(new RemoteCallError(null))
                 : Result.Success(value);
@@ -116,10 +119,10 @@ public static partial class HttpClientResultExtensions
             logger.RemoteCallFailed(ex, url);
             return Result.Failure<T>(new RemoteCallError(ex.StatusCode));
         }
-        catch (Exception ex)
+        catch (JsonException ex) // corps illisible (JSON malformé, page HTML) : la défaillance est distante
         {
             logger.RemoteCallFailed(ex, url);
-            return Result.Failure<T>(new TechnicalError());
+            return Result.Failure<T>(new RemoteCallError(null));
         }
     }
 
@@ -132,10 +135,12 @@ L'annulation demandée par l'appelant se propage : on attrape `OperationCanceled
 
 ## `Try` / `TryAsync`
 
-Ils ne conviennent pas à un appel annulable, et s'emploient toujours avec un mapper qui journalise l'exception et retourne une erreur au message générique (`DatabaseExceptionMapper`, `rules/csharp-style.md`). Comportement actuel, que #184 Phase 2 change :
+Ils attrapent toute exception, celles que le tableau ci-dessus laisse propager comprises, et la passent au mapper. Ils s'emploient toujours avec un mapper qui journalise l'exception et retourne une erreur au message générique, technique quand l'exception ne vient pas de l'infrastructure (`DatabaseExceptionMapper`, `rules/csharp-style.md`). Quand un bug doit se propager, la frontière est un `catch` ciblé, comme ci-dessus.
 
-- Toutes les surcharges attrapent `OperationCanceledException`. La Phase 2 fait relancer celles sans mapper ; avec un mapper, le mapper décide.
-- Sans mapper, le message de l'erreur est `Exception.Message`, et `ResultProblemDetailsFactory` l'écrit dans `ProblemDetails.Detail`. La Phase 2 le remplace par un message générique.
+Ils ne conviennent pas à un appel annulable : leur lambda ne capture pas de `CancellationToken`. Comportement actuel, que #184 Phase 2 change :
+
+- Toutes les surcharges attrapent `OperationCanceledException`. La Phase 2 fait relancer celles sans mapper ; avec un mapper, le mapper décide, et `DatabaseExceptionMapper` en fait une erreur : la Phase 2 n'y change rien.
+- Sans mapper, le message de l'erreur est `Exception.Message`. Il atteint le client par `ProblemDetails.Detail` et `errors[].message` (`ToHttpResult`), et par `error.message` (`ResultJsonConverter<T>`). La Phase 2 le remplace par un message générique.
 
 ## Règle des couches
 

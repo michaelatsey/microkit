@@ -9,21 +9,21 @@ internal static class AspNetCoreSamples
 {
     internal static void AspNetCoreSample(WebApplication app)
     {
-        // Minimal API
-        app.MapGet("/users/{id}", async (Guid id, IUserService svc) =>
-            (await svc.GetUserAsync(id)).ToHttpResult());
+        // Minimal API; ct is the request's token, cancelled when the client goes away
+        app.MapGet("/users/{id}", async (Guid id, IUserService svc, CancellationToken ct) =>
+            (await svc.GetUserAsync(id, ct)).ToHttpResult());
 
         // Result without value (command)
-        app.MapDelete("/users/{id}", async (Guid id, IUserService svc) =>
-            (await svc.DeleteUserAsync(id)).ToHttpResult());
+        app.MapDelete("/users/{id}", async (Guid id, IUserService svc, CancellationToken ct) =>
+            (await svc.DeleteUserAsync(id, ct)).ToHttpResult());
     }
 
     internal sealed record User;
 
     internal interface IUserService
     {
-        ValueTask<Result<User>> GetUserAsync(Guid id);
+        ValueTask<Result<User>> GetUserAsync(Guid id, CancellationToken ct = default);
 
-        ValueTask<Result> DeleteUserAsync(Guid id);
+        ValueTask<Result> DeleteUserAsync(Guid id, CancellationToken ct = default);
     }
 }

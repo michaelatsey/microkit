@@ -38,7 +38,8 @@ result.Error.ShouldBeOfType<UserNotFoundError>();
 
 - Tests unitaires de `Result`, `Result<T>`, chaque extension de `Extensions/`, `ErrorCollection`, `ValidationResult`, `ValidationError`, `ErrorMetadataBuilder` et du convertisseur JSON : les deux rails de chaque opération, plus `default(Result)` et `default(Result<T>)`.
 - Tests de propriétés, au moins 100 cas chacun, pour les lois ci-dessous. La Phase 1 ajoute FsCheck (l'intégration qui correspond à la version épinglée de xunit) ; il n'est pas encore référencé.
-- Les tests décrivent le comportement actuel. Là où c'est un défaut listé par #184, le test affirme le comportement corrigé et porte `Skip = "#184 phase 2"` ; la Phase 2 retire le skip.
+- Les tests décrivent le comportement actuel. Là où c'est un défaut que la Phase 2 de #184 corrige (sa liste dans l'issue, et les écarts « Phase 2 » de `.claude/CLAUDE.md`), le test affirme le comportement corrigé et porte `Skip = "#184 phase 2"` ; la Phase 2 retire le skip, et sa vérification exige que ces tests passent alors.
+- Un écart qu'une phase ultérieure traite (3, 4, 5), ou qu'aucune phase ne traite, n'a pas encore de comportement corrigé décidé : le test décrit le comportement actuel, sans `Skip`, et la phase qui le change réécrit le test.
 - Couverture de lignes de `src/MicroKit.Result` d'au moins 90 %.
 
 ```

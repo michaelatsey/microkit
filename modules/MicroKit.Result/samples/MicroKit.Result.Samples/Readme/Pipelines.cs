@@ -38,6 +38,12 @@ internal static class PipelinesSamples
             .Ensure(u => u.IsEmailVerified, new EmailNotVerifiedError());
     }
 
+    internal static void EnsureLazySample(Guid id)
+    {
+        Result<User> activeLazy = GetUser(id)
+            .Bind(u => u.IsActive ? Result.Success(u) : Result.Failure<User>(new UserInactiveError(id)));
+    }
+
     internal static void MapErrorSample(Guid id, string correlationId)
     {
         Result<Order> result = GetOrder(id)
@@ -81,11 +87,25 @@ internal static class PipelinesSamples
 
     internal sealed record Product;
 
-    internal sealed record UserInactiveError(Guid UserId) : Error(ErrorCode.From("USER.INACTIVE"), $"User {UserId} is inactive");
+    internal sealed record UserInactiveError(Guid UserId) : Error(ErrorCode.From("USER.INACTIVE"), $"User {UserId} is inactive")
+    {
+        public override ErrorCategory Category => ErrorCategory.BusinessRule;
+    }
 
-    internal sealed record EmailNotVerifiedError() : Error(ErrorCode.From("USER.EMAIL_NOT_VERIFIED"), "Email is not verified");
+    internal sealed record EmailNotVerifiedError() : Error(ErrorCode.From("USER.EMAIL_NOT_VERIFIED"), "Email is not verified")
+    {
+        public override ErrorCategory Category => ErrorCategory.BusinessRule;
+    }
 
-    internal sealed record EnrichedError(IError Inner, string CorrelationId) : Error(Inner.Code, Inner.Message);
+    // A wrapper forwards the wrapped error's category, severity and metadata; without them it answers 500.
+    internal sealed record EnrichedError(IError Inner, string CorrelationId) : Error(Inner.Code, Inner.Message)
+    {
+        public override ErrorCategory Category => Inner.Category;
+
+        public override ErrorSeverity Severity => Inner.Severity;
+
+        public override IReadOnlyDictionary<string, object?> Metadata => Inner.Metadata;
+    }
 
     internal sealed class MyException(IError error) : Exception(error.Message);
 

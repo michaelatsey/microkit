@@ -24,17 +24,7 @@ D'ici là, ce skill ne donne aucun chiffre. Une affirmation de performance est s
 
 ## Techniques employées
 
-### 1. readonly record struct pour Unit
-```csharp
-// Toutes les valeurs sont égales (record struct sans champ)
-public readonly record struct Unit
-{
-    public static readonly Unit Value;
-    public override string ToString() => "()";
-}
-```
-
-### 2. ThrowHelper pour les guards
+### 1. ThrowHelper pour les guards
 ```csharp
 // Le throw vit hors de la méthode appelante. [DoesNotReturn] sert l'analyse null-state du compilateur
 // (Microsoft Learn, "Attributes for null-state static analysis"), pas le JIT. Gain non mesuré.
@@ -62,7 +52,7 @@ public static Result<TOut> Map<TIn, TOut>(this Result<TIn> result, Func<TIn, TOu
 }
 ```
 
-### 3. Attributs JIT
+### 2. Attributs JIT
 `src/` emploie `AggressiveInlining` sur ses accesseurs et guards ; son effet n'est pas mesuré. Microsoft Learn (*MethodImplOptions*) :
 
 - `AggressiveInlining` : un usage inutile peut dégrader les performances. « Always measure performance to ensure it's helpful to apply this attribute. »
@@ -70,20 +60,20 @@ public static Result<TOut> Map<TIn, TOut>(this Result<TIn> result, Func<TIn, TOu
 
 Pas de nouvel attribut sans benchmark avant et après.
 
-### 4. Éviter le boxing des value types
+### 3. Éviter le boxing dans les erreurs et leurs métadonnées
 ```csharp
 // ❌ Boxing: ErrorCode (struct) → object (dans Dictionary)
 var metadata = new Dictionary<string, object?> { ["code"] = errorCode };
 
 // ✅ Pas de boxing: utiliser le type string directement
 var metadata = new Dictionary<string, object?> { ["code"] = errorCode.Value };
-
-// ❌ Boxing via interface
-IError error = new MyError(); // si MyError est un struct
-// ✅ Utiliser sealed record (reference type) pour les erreurs
+// …mais le type stocké change ce qui se relit : TryGetMetadata<ErrorCode>("code") retourne
+// alors default, il faut TryGetMetadata<string>("code"). Le lecteur et l'écrivain s'accordent.
 ```
 
-### 5. ImmutableArray vs List pour ErrorCollection
+Une erreur est un `sealed record`, donc un type référence : elle est allouée une fois, et la voir comme `IError` ne la boxe pas. Un `struct` qui implémenterait `IError` serait boxé à chaque passage en `IError`, ce que fait tout `Result.Failure` : rien à y gagner.
+
+### 4. ImmutableArray vs List pour ErrorCollection
 ```csharp
 // ImmutableArray<T>:
 //  ✅ Wrapper struct autour d'un array
@@ -115,7 +105,7 @@ public sealed class ErrorCollection : IError, IReadOnlyList<IError>
 }
 ```
 
-### 6. ValueTask<T>
+### 5. ValueTask<T>
 `ValueTask<T>` est la convention racine ; son gain face à `Task<T>` n'est pas mesuré, la Phase 7 le mesure. Il s'attend directement et une seule fois, sans `.Result` ni `.GetAwaiter().GetResult()` avant complétion (CA2012).
 
 ```csharp
@@ -131,28 +121,42 @@ public async ValueTask<Result<User>> GetUserAsync(Guid id, CancellationToken ct 
 }
 ```
 
-### 7. Éviter les closures qui capturent `this`
+### 6. Closures et délégués : des hypothèses à mesurer
+Une lambda qui capture crée un délégué, et souvent une closure, à chaque appel. Que cela alloue sur le tas dépend du contexte : .NET 10 peut allouer sur la pile un délégué qui ne s'échappe pas, selon ce que le JIT inline. Chaque forme ci-dessous est donc une hypothèse, qu'un benchmark confirme dans le contexte réel d'appel.
+
 ```csharp
-// ❌ Capture de this → un délégué alloué à chaque appel
+// ⚠️ Capture de this : un délégué par appel, peut-être alloué sur le tas
 public Result<UserDto> ToDto(Result<User> result)
     => result.Map(u => _mapper.Map(u));
 
-// ❌ Capture d'un paramètre → une closure + un délégué à chaque appel
+// ⚠️ Capture d'un paramètre : une closure et un délégué par appel, peut-être sur le tas
 public static Result<UserDto> ToDto(Result<User> result, IMapper mapper)
     => result.Map(u => mapper.Map(u));
 
-// ❌ Method group d'instance → un délégué à chaque appel aussi
+// ⚠️ Method group d'instance : un délégué par appel, peut-être sur le tas
 public static Result<UserDto> ToDtoGroup(Result<User> result, IMapper mapper)
     => result.Map(mapper.Map);
 
-// ✅ Lambda statique (aucune capture) → délégué mis en cache par le compilateur
+// ✅ Lambda statique (aucune capture) : délégué mis en cache par le compilateur.
+// Équivalent aux formes ci-dessus seulement si le mapping n'a besoin d'aucun état
 public static Result<UserDto> ToDtoStatic(Result<User> result)
-    => result.Map(static u => new UserDto(u.Id, u.Name));
+    => result.Map(static u => UserMapper.ToDto(u));
 ```
 
 ## Écrire un benchmark
 
 Point de départ pour mesurer une hypothèse. Les benchmarks publiés et leur périmètre relèvent de la Phase 7.
+
+`tests/MicroKit.Result.PerformanceTests` ne produit aujourd'hui aucune mesure : le Test SDK y génère un `Main` vide, si bien que `dotnet run` sort 0 sans rien afficher et que `dotnet test` ne trouve aucun test. Pour mesurer, le projet doit porter `<GenerateProgramFile>false</GenerateProgramFile>` (sinon un `Main` à soi échoue en CS7022) et un `Program.cs` qui lance BenchmarkDotNet. Ce changement du `.csproj` appartient à la Phase 7. Une fois fait, depuis `modules/MicroKit.Result/` :
+
+```csharp
+// Program.cs
+BenchmarkSwitcher.FromAssembly(typeof(ResultCoreBenchmarks).Assembly).Run(args);
+```
+
+```bash
+dotnet run -c Release --project tests/MicroKit.Result.PerformanceTests -- --filter '*'
+```
 
 ```csharp
 [MemoryDiagnoser]
@@ -164,8 +168,9 @@ public class ResultCoreBenchmarks
     private readonly Result<int> _successResult = Result.Success(42);
     private readonly Result<int> _failureResult = Result.Failure<int>(new BenchmarkError());
 
-    [Benchmark(Baseline = true)]
-    public int DirectCall() => _value * 2; // baseline: pure computation
+    // Pas de Baseline : sur un calcul proche de zéro, chaque ratio s'afficherait « ? »
+    [Benchmark]
+    public int DirectCall() => _value * 2;
 
     [Benchmark]
     public Result<int> Map_Success() => _successResult.Map(x => x * 2);

@@ -2,17 +2,17 @@
 
 ## Usage
 ```
-/impl-result <ServiceName> --operation <description> [--input <Type>] [--output <Type>] [--async] [--api]
+/impl-result <ServiceName> --operation <description> [--input <Type>] [--output <Type>] [--api]
 ```
 
 ## Description
-Génère le squelette complet d'un service/handler utilisant Result, avec les erreurs associées,
+Génère le squelette complet d'un service/handler asynchrone utilisant Result, avec les erreurs associées,
 le test correspondant et le mapping HTTP si applicable.
 
 ## Exemple
 ```
-/impl-result UserService --operation "get user by id" --input "Guid userId" --output UserDto --async
-/impl-result OrderHandler --operation "create order from cart" --input CreateOrderCommand --output OrderId --async
+/impl-result UserService --operation "get user by id" --input "Guid userId" --output UserDto
+/impl-result OrderHandler --operation "create order from cart" --input CreateOrderCommand --output OrderId --api
 ```
 
 ## Ce qui est généré
@@ -47,7 +47,7 @@ Génère automatiquement les erreurs probables selon le contexte:
 - `{Entity}NotFoundError` si lecture
 - `{Entity}AlreadyExistsError` si création
 - `{Entity}ConflictError` si update
-- `Unauthorized{Operation}Error` si opération sensible
+- `{Operation}ForbiddenError` (catégorie `Forbidden`) si opération sensible refusée à un utilisateur identifié
 
 ### 3. Test skeleton
 ```csharp
@@ -88,7 +88,7 @@ public sealed class {ServiceName}Tests
 }
 ```
 
-Mêmes structures pour les autres cas : `{MethodName}Async_WhenValid_ReturnsSuccess`, `{MethodName}Async_WhenUnauthorized_ReturnsFailure`.
+Mêmes structures pour les autres cas : `{MethodName}Async_WhenValid_ReturnsSuccess`, `{MethodName}Async_WhenForbidden_ReturnsFailure`.
 
 ### 4. Endpoint minimal API (si --api flag)
 ```csharp
@@ -100,7 +100,7 @@ app.MapGet("/api/{entity}/{id}", async (
 ```
 
 ## Conventions appliquées
-- `async` → `ValueTask<Result<T>>` (convention racine ; son gain face à `Task<T>` n'est pas mesuré, #184 Phase 7 le mesure)
+- `async` → `ValueTask<Result<T>>` (convention racine ; son gain face à `Task<T>` n'est pas mesuré, #184 Phase 7 le mesure). Les délégués async des extensions (`BindAsync`, `MapAsync`…) retournent `Task` : un port généré s'y compose par un lambda async, `BindAsync(async x => await svc.{MethodName}Async(x, ct))` (écart, `.claude/CLAUDE.md`)
 - `CancellationToken` toujours en dernier paramètre avec default, transmis aux appels ; l'annulation de l'appelant se propage
 - Guard null en entrée via `ArgumentNullException.ThrowIfNull`
 - Pas d'exception dans l'implémentation métier

@@ -19,7 +19,7 @@ Les dossiers ne créent pas de namespace : tous les types du cœur sont dans `Mi
 
 ### Record structs (value objects immuables)
 ```csharp
-// ✅ Pour les types valeur sans héritage polymorphique
+// ✅ Pour les types valeur sans héritage polymorphique ; membres dans l'ordre de la fin de ce fichier
 public readonly record struct ErrorCode(string Value) : IComparable<ErrorCode>
 {
     public static ErrorCode From(string value)
@@ -28,9 +28,16 @@ public readonly record struct ErrorCode(string Value) : IComparable<ErrorCode>
         return new(value);
     }
 
-    public static implicit operator string(ErrorCode code) => code.Value;
     public int CompareTo(ErrorCode other) => StringComparer.Ordinal.Compare(Value, other.Value);
     public override string ToString() => Value;
+
+    // IComparable<T> sans opérateurs de comparaison : CA1036, une erreur en Release
+    public static bool operator <(ErrorCode left, ErrorCode right) => left.CompareTo(right) < 0;
+    public static bool operator <=(ErrorCode left, ErrorCode right) => left.CompareTo(right) <= 0;
+    public static bool operator >(ErrorCode left, ErrorCode right) => left.CompareTo(right) > 0;
+    public static bool operator >=(ErrorCode left, ErrorCode right) => left.CompareTo(right) >= 0;
+
+    public static implicit operator string(ErrorCode code) => code.Value;
 }
 ```
 
@@ -56,15 +63,17 @@ internal static class ResultGuard { }
 ### Primary constructors (C# 12+)
 ```csharp
 // ✅ Primary constructor pour DI et value objects
+// DatabaseCallFailed ([LoggerMessage]), DatabaseError et TechnicalError : rules/no-exceptions-flow.md
 public sealed class DatabaseExceptionMapper(ILogger<DatabaseExceptionMapper> logger)
 {
     public IError Map(Exception ex)
     {
-        logger.DatabaseCallFailed(ex); // méthode [LoggerMessage], déclarée dans rules/no-exceptions-flow.md
-        return new DatabaseError();
+        logger.DatabaseCallFailed(ex);
+        // Try attrape toute exception : seule une exception du fournisseur se lit comme une panne de la base
+        return ex is DbException ? new DatabaseError() : new TechnicalError();
     }
 }
-// Usage : Result<User> user = Result<User>.Try(() => repository.Load(id), mapper.Map);
+// Usage, pour un appel sans CancellationToken : Result<User> user = Result<User>.Try(() => repository.Load(id), mapper.Map);
 ```
 
 ### Validation des arguments
@@ -104,11 +113,17 @@ public override string ToString() => "()"; // Unit
 
 ### Pattern matching (préféré au casting)
 ```csharp
-// ✅ L'ordre d'évaluation des sous-patterns n'est pas garanti : pas de .Value dans un pattern
-if (result.TryGetValue(out var value)) { }
+// ✅ Type pattern plutôt qu'un cast, une fois l'échec vérifié
+if (result.IsFailure && result.Error is ValidationError validation)
+    return validation.PropertyName;
 
-// ❌
-if (result.IsSuccess) { var value = (SomeType)result.Value; }
+// ❌ Cast
+var validation = (ValidationError)result.Error;
+
+// ❌ .Value dans un property pattern : l'ordre d'évaluation des sous-patterns n'est pas garanti
+if (result is { IsSuccess: true, Value: var value }) { }
+// ✅ Lecture vérifiée : TryGetValue, ou .Value après un test de IsSuccess
+if (result.TryGetValue(out var user)) { }
 ```
 
 ## Null handling

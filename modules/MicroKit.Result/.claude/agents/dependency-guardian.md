@@ -11,17 +11,10 @@ You run fast. Your job is binary: **PASS** or **BLOCK** with a clear reason.
 
 ## Dependency Rules
 
-### MicroKit.Result.Abstractions (absent at HEAD — rules apply if it is ever added)
-Allowed:
-- BCL types only — no external NuGet packages
-
-Forbidden:
-- Any NuGet package (including other MicroKit modules)
-- Any `ProjectReference`
+The module ships two packages, `MicroKit.Result` and `MicroKit.Result.AspNetCore`. A new `src/` project is a public-surface change: BLOCK, and route it to the `result-architect` gate.
 
 ### MicroKit.Result (core)
 Allowed:
-- `MicroKit.Result.Abstractions` (project ref, intra-module; absent at HEAD — rules apply if it is ever added)
 - BCL types only — no external NuGet packages
 
 Forbidden:
@@ -38,13 +31,22 @@ Forbidden:
 - EF Core packages
 
 ### Test projects (`tests/`)
-Allowed:
+Allowed in every test project:
 - `ProjectReference` to this module's `src/` projects
-- The test stack already referenced: `Microsoft.NET.Test.Sdk`, `xunit`, `xunit.runner.visualstudio`, `Shouldly`, `NSubstitute`, `coverlet.collector`, `NetArchTest.Rules` (architecture tests), `BenchmarkDotNet` (performance tests)
-- FsCheck in `MicroKit.Result.UnitTests`, added by #184 Phase 1, with its entry in `Directory.Packages.props`
+- The test stack: `Microsoft.NET.Test.Sdk`, `xunit`, `xunit.runner.visualstudio`, `Shouldly`, `NSubstitute`, `coverlet.collector`
+
+Allowed in one project only, each with its entry in the root `Directory.Packages.props`:
+
+| Package | Project | Why |
+|---|---|---|
+| `NetArchTest.Rules` | `MicroKit.Result.ArchitectureTests` | Architecture tests |
+| `FsCheck` (the integration matching the pinned xunit) | `MicroKit.Result.UnitTests` | #184 Phase 1: property tests |
+| `BenchmarkDotNet` | `MicroKit.Result.PerformanceTests` | #184 Phase 7: benchmarks |
+| `ErrorOr`, `FluentResults` | `MicroKit.Result.PerformanceTests` | #184 Phase 7: compared libraries |
 
 Forbidden:
 - Any other MicroKit module
+- A package of the table above in another project, or any package not listed here
 
 ### MicroKit.Result.Samples (`samples/`)
 Allowed:
@@ -62,18 +64,30 @@ Forbidden:
 
 ## Workflow
 
+Run from `modules/MicroKit.Result/`, the directory Claude Code is launched from to load this agent. A command that fails (exit 2, file not found) is not a PASS: fix the path and rerun.
+
 ```bash
-# Check for inline version attributes in every csproj of the module (any output is a BLOCK)
-grep -rE 'PackageReference.*Version(Override)?="' modules/MicroKit.Result/ --include="*.csproj"
+# Inline versions in every csproj of the module, attribute or element, Version or VersionOverride,
+# on any line (any output is a BLOCK)
+grep -rnP '\bVersion(Override)?\s*=|<Version(Override)?>' --include="*.csproj" .
 
-# Banned test libraries: run the detection commands of the root rule .claude/rules/testing-libraries.md
+# Banned test library (root rule .claude/rules/testing-libraries.md), scoped to this module
+# and to the central file (any output is a BLOCK). NetArchTest's fluent assertion calls and the
+# architecture tests that check FluentAssertions is absent are not references.
+grep -rnE 'Include="FluentAssertions' --include="*.csproj" . ../../Directory.Packages.props
+grep -rnE '^\s*(global )?using FluentAssertions' --include="*.cs" .
 
-# Check for forbidden cross-module MicroKit references in every csproj (any output is a BLOCK).
+# Forbidden cross-module MicroKit references in every csproj (any output is a BLOCK).
 # The lookahead applies to each match, so the path grep prefixes to every line cannot hide one.
-grep -rnP '\bMicroKit\.(?!Result\b)' modules/MicroKit.Result/ --include="*.csproj"
+grep -rnP '\bMicroKit\.(?!Result\b)' --include="*.csproj" .
+
+# Central versions changed by the branch: every added or changed PackageVersion is a package the
+# rules above allow, for the project that references it
+git diff main...HEAD -- ../../Directory.Packages.props
+grep -rn 'PackageReference' --include="*.csproj" .
 
 # Inspect reference graph
-for p in modules/MicroKit.Result/src/*/*.csproj; do dotnet reference list --project "$p"; done
+for p in src/*/*.csproj; do dotnet reference list --project "$p"; done
 ```
 
 ## Cross-Module Reference Pattern

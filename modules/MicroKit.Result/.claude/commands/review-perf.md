@@ -16,19 +16,19 @@ Lire le code ne mesure rien : chaque constat est un risque non mesuré, sans chi
 ### Allocations
 - `new List<T>()` dans des méthodes appelées souvent → ne créer que sur le rail d'échec, ou partir de `ImmutableArray<T>.Empty`
 - `string.Format` / interpolation dans des hot paths → ne construire le message que sur le rail d'échec
-- Closures qui capturent `this` inutilement → extraire en méthode statique avec param
+- Lambdas qui capturent (`this`, un paramètre, un method group d'instance) → risque à mesurer. Capturer un paramètre plutôt que `this` n'évite rien : `Map` n'a pas de surcharge à état, le paramètre est capturé à son tour. Seule une lambda `static`, quand le mapping n'a besoin d'aucun état, supprime la capture (`skills/dotnet-performance/SKILL.md`)
 - `.ToList()` / `.ToArray()` intermédiaires inutiles
 - Boxing de value types (struct → object, struct → interface)
 
 ### Async overhead
-- `async` method sans vrai `await` → retirer `async`, retourner `ValueTask.FromResult`
+- `async` method sans vrai `await` → à signaler. Retirer `async` change le moment où une exception sort : à l'appel plutôt qu'à l'`await`. Le fix ne vaut que si le comportement de chaque chemin d'exception reste celui attendu
 - `await Task.FromResult(x)` → retirer le wrapper
 - `ConfigureAwait(false)` manquant dans la librairie
 - `ValueTask` bloqué ou attendu deux fois (CA2012). Le choix `ValueTask<T>` lui-même suit la convention racine ; son gain face à `Task<T>` n'est pas mesuré, la Phase 7 le mesure
 
 ### LINQ
-- `.Where().First()` → `.FirstOrDefault(predicate)`
-- `.Select().Where()` → `.Where().Select()` (filtre avant transformation)
+- `.Where(p).First()` → `.First(p)`, même comportement quand rien ne correspond (`FirstOrDefault` retournerait `default` au lieu de lever)
+- `.Select(f).Where(p)` → `.Where(…).Select(f)` seulement en réécrivant le prédicat sur la valeur d'origine : `p` porte sur la valeur projetée, et l'inverser tel quel change le résultat
 - LINQ dans les constructeurs ou propriétés → matérialiser une fois
 
 ### JIT hints
@@ -46,7 +46,7 @@ Ne jamais les proposer sans mesure : Microsoft Learn (*MethodImplOptions*) deman
 
 🟡 Async overhead (non mesuré) :
   Ligne 78: async sans await réel
-  Fix: retirer async, retourner ValueTask.FromResult(result)
+  Fix possible : retirer async, retourner ValueTask.FromResult(result) ; une exception sortirait alors à l'appel
 
 🧪 À mesurer :
   Benchmark à écrire pour confirmer l'effet de chaque fix proposé

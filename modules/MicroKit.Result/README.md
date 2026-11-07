@@ -19,18 +19,20 @@ Railway-Oriented Programming for .NET 10. Explicit success/failure without excep
 Every operation stays on one of these rails: a predictable outcome is a value, not a stack unwind. Exceptions remain for misuse, such as reading `.Value` on a failure (see [Exception Handling](#exception-handling)).
 
 **Key design principles:**
-- `Result<T>` is a `readonly struct` — zero heap allocation on the success path
-- `byte _tag` discriminator: no `bool` ambiguity, safe with `default`
-- `sealed` by default; `ThrowHelper` keeps hot paths JIT-inlineable
+- `Result<T>` is a `readonly struct`; whether a pipeline allocates depends on its lambdas and errors (see [Performance Notes](#performance-notes))
+- `byte _tag` discriminator: `default` is neither success nor failure, and reading it throws (with the gaps listed under [Combining Results](#combining-results) and [Enumerable Extensions](#enumerable-extensions))
+- `sealed` by default; throws live in a `ThrowHelper`, outside the calling methods
 - NativeAOT / trim-safe core; reflection is confined to the JSON converters (`MicroKit.Result.Serialization` namespace, annotated `[RequiresUnreferencedCode]` / `[RequiresDynamicCode]`)
 
 ---
 
 ## Installation
 
+Only prerelease versions are published, so the install needs `--prerelease`:
+
 ```bash
-dotnet add package MicroKit.Result
-dotnet add package MicroKit.Result.AspNetCore  # optional — Minimal APIs / MVC
+dotnet add package MicroKit.Result --prerelease
+dotnet add package MicroKit.Result.AspNetCore --prerelease  # optional — Minimal APIs / MVC
 ```
 
 ---
@@ -78,6 +80,8 @@ Result<int> failed = Result.Failure<int>(new MyError());
 Result<int> fromValue = 42;
 ```
 
+When `T` is `object`, the conversion also accepts a `Result` or a `Result<T>` as the value, and the outcome is a success even if that result was a failure. #184 Phase 2 removes that.
+
 ---
 
 ## Error System
@@ -124,12 +128,14 @@ bool ordered = ErrorCode.Conflict < ErrorCode.NotFound;   // ordinal comparison
 | `Conflict` | 409 | Resource conflict |
 | `TooManyRequests` | 429 | Rate limit exceeded |
 | `Timeout` | 408 | Operation timed out |
-| `Cancelled` | 499 | Request cancelled by caller |
+| `Cancelled` | 499 | Operation cancelled, other than by the caller's own cancellation, which propagates instead |
 | `PreconditionFailed` | 412 | Precondition not met |
 | `External` | 502 | External dependency failed |
 | `NotSupported` | 501 | Operation not supported |
 | `Unavailable` | 503 | Service temporarily unavailable |
 | `Technical` | 500 | Internal error (default) |
+
+The XML doc of `ErrorCategory.Cancelled` still describes it as a caller cancellation; #184 Phase 3 settles the role of `Category`.
 
 ### ErrorMetadataBuilder
 
@@ -233,12 +239,21 @@ Result<User> active = GetUser(id)
     .Ensure(u => u.IsEmailVerified, new EmailNotVerifiedError());
 ```
 
+`Ensure` takes the error already built, so it is built on every call, success included, interpolated message and all. When that costs, `Bind` builds it only on failure:
+
+```csharp
+Result<User> activeLazy = GetUser(id)
+    .Bind(u => u.IsActive ? Result.Success(u) : Result.Failure<User>(new UserInactiveError(id)));
+```
+
 ### MapError — transform the error
 
 ```csharp
 Result<Order> result = GetOrder(id)
     .MapError(e => new EnrichedError(e, correlationId));
 ```
+
+`EnrichedError` is an application type. A wrapper like it forwards the `Category`, `Severity` and `Metadata` of the error it wraps, or the response falls back to 500 (see `samples/MicroKit.Result.Samples/Readme/Pipelines.cs`). Wrapping an `ErrorCollection` still drops its `errors` list from the `ProblemDetails`.
 
 ### Compensate — fallback on failure
 
@@ -247,7 +262,7 @@ Result<Product> product = GetProduct(id)
     .Compensate(_ => GetDefaultProduct());
 ```
 
-### ValueAccess — safe value retrieval
+### ValueAccess — read the value, with a fallback or a throw
 
 ```csharp
 int value = result.GetValueOrDefault(0);
@@ -259,11 +274,13 @@ if (result.TryGetValue(out var v))
     Process(v);
 ```
 
-### Finally — always-execute cleanup
+### Finally — act on the result, whatever its rail
 
 ```csharp
 Result<int> completed = result.Finally(r => logger.Completed(r.IsSuccess));
 ```
+
+`Finally` runs only when a result reaches it. An exception thrown earlier in the chain, a `default` result that an earlier step reads, or a faulted task skips it: it does not replace `try` / `finally` for cleanup.
 
 ### Conversion
 
@@ -292,7 +309,11 @@ Result<string> chainedTask = await GetResultTask().Bind(v => GetNext(v));
 Result<string> mappedValueTask = await GetResultValueTask().Map(v => Transform(v));
 ```
 
-All async methods use `ConfigureAwait(false)`.
+All async methods use `ConfigureAwait(false)`. Current behavior:
+
+- On `Result<T>` and on both task surfaces, `Tap`, `TapError` and `Finally` take an `Action`. An async lambda passed to them compiles as `async void`: the result comes back before the side effect, and an exception the side effect throws ends the process. Use `TapAsync`, `TapErrorAsync` and `FinallyAsync`; #184 Phase 2 changes this.
+- Async delegates return `Task`, never `ValueTask`. A method returning `ValueTask` is passed through an async lambda, as in Surface 1.
+- The async extensions take no `CancellationToken`; a delegate that needs one captures it.
 
 ---
 
@@ -321,11 +342,11 @@ ValidationError[] errors =
 var validation = new ValidationResult()
     .AddErrorIf(string.IsNullOrEmpty(name), "Name", "Name is required.")
     .AddErrorIf(age < 0, "Age", "Age must be non-negative.")
-    .AddError(ValidationError.InvalidEmail());
+    .AddErrorIf(!email.Contains('@'), "Email", "Email is not a valid email address.");
 
 Result<Order> result = validation.IsValid
-    ? CreateOrder(name, age)
-    : validation.ToResult<Order>(default!);
+    ? CreateOrder(name, age, email)
+    : Result.Failure<Order>(validation.ToResult().Error);
 ```
 
 ---
@@ -333,7 +354,7 @@ Result<Order> result = validation.IsValid
 ## Combining Results
 
 ```csharp
-// Fail-fast — stops at first failure
+// Fail-fast — returns the first failure
 Result combined = ResultCombineExtensions.Combine(validateName, validateEmail, validateAge);
 
 // Collect-all — returns ErrorCollection with ALL errors
@@ -342,6 +363,10 @@ Result allErrors = ResultCombineExtensions.CombineAll(validateName, validateEmai
 // Tuple combination (up to 3)
 Result<(User, Cart)> pair = ResultCombineExtensions.Combine(getUser, getCart);
 ```
+
+Every argument is evaluated before the call: to skip a step after a failure, chain it with `Bind`.
+
+Over `Result` values, and in `CombineAll<T>`, a `default` result currently counts as a success; #184 Phase 2 makes them treat it as invalid. The tuple overloads throw on it.
 
 ---
 
@@ -381,6 +406,8 @@ IEnumerable<IError> errors = results.Failures();
 Result<IReadOnlyList<Dto>> dtos = users.Traverse(u => MapToDto(u));
 ```
 
+`Successes` and `Failures` currently skip a `default` result, while `Partition` throws on it; no #184 phase changes this yet.
+
 ---
 
 ## ASP.NET Core
@@ -390,13 +417,13 @@ using MicroKit.Result;
 using MicroKit.Result.AspNetCore;
 using Microsoft.AspNetCore.Builder;
 
-// Minimal API
-app.MapGet("/users/{id}", async (Guid id, IUserService svc) =>
-    (await svc.GetUserAsync(id)).ToHttpResult());
+// Minimal API; ct is the request's token, cancelled when the client goes away
+app.MapGet("/users/{id}", async (Guid id, IUserService svc, CancellationToken ct) =>
+    (await svc.GetUserAsync(id, ct)).ToHttpResult());
 
 // Result without value (command)
-app.MapDelete("/users/{id}", async (Guid id, IUserService svc) =>
-    (await svc.DeleteUserAsync(id)).ToHttpResult());
+app.MapDelete("/users/{id}", async (Guid id, IUserService svc, CancellationToken ct) =>
+    (await svc.DeleteUserAsync(id, ct)).ToHttpResult());
 ```
 
 `ToHttpResult()` maps `ErrorCategory` to the correct HTTP status code and produces an RFC 9457 `ProblemDetails` body on failure:
@@ -413,7 +440,7 @@ app.MapDelete("/users/{id}", async (Guid id, IUserService svc) =>
 
 Current behavior that #184 changes:
 
-- `detail` is `IError.Message`. For the error `Try` / `TryAsync` build without a mapper, that is `Exception.Message` (see [Exception Boundaries](#exception-boundaries)); Phase 2 removes it from the response.
+- `detail` is `IError.Message`, and `errors[].message` the message of each error in a collection. For the error `Try` / `TryAsync` build without a mapper, that is `Exception.Message` (see [Exception Boundaries](#exception-boundaries)); Phase 2 removes it from the response.
 - `errors` lists only `code` and `message`, and only for an `ErrorCollection`, so a single `ValidationError` emits none; Phase 2 groups validation errors by property.
 - An `ErrorCollection` answers with its first error's category; Phase 2 makes it the shared category, else the first that maps to 5xx, else the first.
 - `Timeout` answers 408, `type` links to a third-party site, and results are returned as `IResult`; Phase 5 decides these.
@@ -425,9 +452,13 @@ Current behavior that #184 changes:
 ```csharp
 using MicroKit.Result.Serialization;
 
-// Register globally
+// Register for Minimal APIs
 builder.Services.ConfigureHttpJsonOptions(o =>
     o.SerializerOptions.Converters.Add(new ResultJsonConverterFactory()));
+
+// Register for MVC controllers, which do not read the Minimal API options
+builder.Services.AddControllers().AddJsonOptions(o =>
+    o.JsonSerializerOptions.Converters.Add(new ResultJsonConverterFactory()));
 
 // Wire-format (success)
 // {"isSuccess":true,"value":{...}}
@@ -436,6 +467,13 @@ builder.Services.ConfigureHttpJsonOptions(o =>
 // {"isSuccess":false,"error":{"code":"USER.NOT_FOUND","message":"...","category":"NotFound"}}
 ```
 
+Current behavior:
+
+- The factory converts `Result<T>` only. A non-generic `Result` returned as is from an endpoint is serialized property by property: a failure answers 200 with `error.metadata`, a success answers 500. Return it through `ToHttpResult()`; #184 Phase 5 adds the converter.
+- `error.message` is `IError.Message`, so the exception text of a `Try` / `TryAsync` error without a mapper; Phase 2 replaces it.
+- `Severity`, `Metadata` and the errors of an `ErrorCollection` are not written, a read error becomes a private type, and writing a `default` result throws.
+- Reading `{"isSuccess":true}` without `value` gives a success with no value; Phase 2 rejects it.
+
 ---
 
 ## Exception Boundaries
@@ -443,10 +481,14 @@ builder.Services.ConfigureHttpJsonOptions(o =>
 A technical error carries a generic, client-safe message. The exception itself goes to the log:
 
 ```csharp
+using System.Data.Common;
 using Microsoft.Extensions.Logging;
 
 public sealed record DatabaseError()
     : Error(ErrorCode.From("INFRA.DATABASE.FAILURE"), "A database error occurred.");
+
+public sealed record TechnicalError()
+    : Error(ErrorCode.Internal, "An internal error occurred.");
 
 internal static partial class InfrastructureLog
 {
@@ -455,23 +497,23 @@ internal static partial class InfrastructureLog
 }
 ```
 
-For a call that takes no caller `CancellationToken`, use `Try` / `TryAsync` with a mapper:
+For a call that takes no caller `CancellationToken`, such as a third-party client without one, use `Try` / `TryAsync` with a mapper. They catch every exception, a programming error included, and hand it to the mapper:
 
 ```csharp
-IError ToDatabaseError(Exception ex)
+IError ToInfrastructureError(Exception ex)
 {
     logger.DatabaseCallFailed(ex);
-    return new DatabaseError();
+    return ex is DbException ? new DatabaseError() : new TechnicalError();
 }
 
-Result<User> result = Result<User>.Try(() => repository.GetUser(id), ToDatabaseError);
+Result<User> result = Result<User>.Try(() => repository.GetUser(id), ToInfrastructureError);
 
 Result<User> loaded = await Result<User>.TryAsync(
-    async () => await repository.GetUserAsync(id),
-    ToDatabaseError);
+    async () => await legacyClient.FetchUserAsync(id), // a third-party API with no CancellationToken
+    ToInfrastructureError);
 ```
 
-For a call that takes one, catch at the boundary so that caller cancellation propagates:
+For a call that takes one, catch only the infrastructure's exceptions at the boundary. Caller cancellation and programming errors then propagate; Microsoft's guidance is not to catch an exception your code cannot recover from:
 
 ```csharp
 public async ValueTask<Result<User>> GetUserAsync(Guid id, CancellationToken ct = default)
@@ -480,11 +522,7 @@ public async ValueTask<Result<User>> GetUserAsync(Guid id, CancellationToken ct 
     {
         return Result.Success(await repository.GetUserAsync(id, ct).ConfigureAwait(false));
     }
-    catch (OperationCanceledException) when (ct.IsCancellationRequested)
-    {
-        throw;
-    }
-    catch (Exception ex)
+    catch (DbException ex) // the ADO.NET provider's exception; cancellation and bugs propagate
     {
         logger.DatabaseCallFailed(ex);
         return Result.Failure<User>(new DatabaseError());
@@ -494,8 +532,8 @@ public async ValueTask<Result<User>> GetUserAsync(Guid id, CancellationToken ct 
 
 Current behavior that #184 Phase 2 changes:
 
-- Every `Try` / `TryAsync` overload catches `OperationCanceledException`. Phase 2 makes the overloads without a mapper rethrow it; with a mapper, the mapper decides.
-- Without a mapper, the error's message is `Exception.Message`, and `ToHttpResult()` writes it to `ProblemDetails.Detail`. Phase 2 replaces it with a generic message.
+- Every `Try` / `TryAsync` overload catches `OperationCanceledException`. Phase 2 makes the overloads without a mapper rethrow it; with a mapper, the mapper decides, and the mapper above turns it into a `TechnicalError`. That is why `Try` / `TryAsync` are kept for calls that take no token.
+- Without a mapper, the error's message is `Exception.Message`. `ToHttpResult()` writes it to `ProblemDetails.Detail`, or to `errors[].message` inside a collection, and `ResultJsonConverter<T>` to `error.message`. Phase 2 replaces it with a generic message.
 
 ---
 
@@ -519,12 +557,13 @@ catch (ResultException ex)
 
 ## Performance Notes
 
-- `Result<T>` is a `readonly struct` — passes by value, no heap allocation
-- `byte _tag` discriminator: `default(Result<T>)` is an uninitialized state that throws on access
-- `Map` and `Bind` are zero-allocation on the success path when lambdas don't capture
-- `ErrorCollection` uses `ImmutableArray<IError>` for zero-copy iteration
-- `ThrowHelper` methods are `[MethodImpl(NoInlining)]` — cold paths stay off the hot path
-- `ConfigureAwait(false)` on all async paths to avoid context capture overhead
+No benchmark exists yet; #184 Phase 7 publishes them, with the machine and the SDK. Until then, these are design facts and unmeasured hypotheses:
+
+- Design: `Result<T>` is a `readonly struct`, passed by value. Hypothesis: `Result.Success(value)` does not allocate.
+- Hypothesis: `Map` and `Bind` do not allocate on the success path when their lambdas capture nothing. A capturing lambda, an `Ensure` whose error is built on every call, a `Where` or a LINQ query may allocate on every call.
+- Design: `ErrorCollection` holds an `ImmutableArray<IError>` and computes its `Message` once, at construction.
+- Design: `ThrowHelper` methods are `[DoesNotReturn]` and `[MethodImpl(NoInlining)]`; their effect on generated code is not measured.
+- Design: every async path uses `ConfigureAwait(false)`, so library code does not resume on the caller's context.
 
 ---
 

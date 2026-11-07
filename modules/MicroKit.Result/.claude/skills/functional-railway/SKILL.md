@@ -6,10 +6,8 @@ description: Use when composing MicroKit.Result pipelines with Map, Bind, Tap, E
 # Skill: Functional Railway-Oriented Programming
 
 ## Quand activer ce skill
-- Quand on conçoit un nouveau pipeline de transformation
-- Quand on chaîne des opérations Result
-- Quand on adapte des patterns F# au C#
-- Quand on débug un pipeline qui ne compose pas bien
+- Quand on compose un pipeline avec `Map`, `Bind`, `Tap`, `Ensure`, `Match`, `Combine` ou leurs variantes async
+- Quand on débug un pipeline qui ne compose pas
 
 ## Concepts fondamentaux
 
@@ -38,7 +36,7 @@ return Result.Failure<C>(result.Error);
 // Avec Bind : un délégué async part d'un Result<T> (BindAsync) ;
 // sur un Task/ValueTask<Result<T>>, Bind n'accepte qu'un délégué synchrone
 var final = await GetUser(id)
-    .BindAsync(u => GetCartAsync(u.CartId))
+    .BindAsync(async u => await GetCartAsync(u.CartId, ct))
     .Bind(c => ValidateCart(c))
     .Bind(c => CreateOrder(c));
 ```
@@ -51,6 +49,8 @@ var final = await GetUser(id)
 | Opération qui peut échouer | Bind | `A → Result<B>` |
 | Side-effect (log, event) | Tap | `A → void` |
 | Validation | Ensure | `A → bool` + error |
+| Transformer l'erreur | MapError | `Error → Error` |
+| Repli sur échec | Compensate | `Error → Result<A>` |
 | Consommation finale | Match | `A → C, Error → C` |
 
 ### Parallel composition (Combine)
@@ -73,31 +73,44 @@ var result = ResultCombineExtensions.CombineAll(
 Result<User> observed = result.TapError(e => logger.OperationFailed(e.Code));
 ```
 
-### Doubling the track (Map + pattern)
+### Doubling the track (Map + MapError)
 ```csharp
-// Transformer les deux rails simultanément
-// (EnrichedError : erreur applicative qui enveloppe l'erreur d'origine)
-Result<UserDto> mapped = result.Match(
-    onSuccess: v => Result.Success(v.ToDto()),
-    onFailure: e => Result.Failure<UserDto>(new EnrichedError(e, correlationId))
-);
+// Transformer les deux rails : Map sur le succès, MapError sur l'échec
+// (EnrichedError : erreur applicative qui enveloppe l'erreur d'origine, et en reprend
+// Category, Severity et Metadata ; sinon elle répond 500, samples/.../Readme/Pipelines.cs)
+Result<UserDto> mapped = result
+    .Map(v => v.ToDto())
+    .MapError(e => new EnrichedError(e, correlationId));
 ```
 
 ### Async railway
 ```csharp
-// Pipeline async — les extensions sur Task/ValueTask<Result<T>> n'acceptent que des délégués
-// synchrones ; un délégué async (BindAsync, MapAsync, EnsureAsync, TapAsync…) part d'un
-// Result<T> déjà attendu, et doit retourner un Task (pas un ValueTask).
-Result<User> user = await GetUserAsync(userId);
-Result<Cart> cart = await user.BindAsync(u => GetActiveCartAsync(u.Id));
+// Les ports retournent ValueTask<Result<T>> (convention racine), les délégués async des
+// extensions retournent Task : chaque port s'y passe par un lambda async, qui capture ct
+// (les extensions ne prennent pas de CancellationToken).
+Result<User> user = await GetUserAsync(userId, ct);
+Result<Cart> cart = await user.BindAsync(async u => await GetActiveCartAsync(u.Id, ct));
 Result<Cart> discounted = await cart
-    .Ensure(c => !c.IsEmpty, new EmptyCartError())
-    .BindAsync(c => ApplyDiscountsAsync(c, promoCode));
+    .Ensure(c => !c.IsEmpty, new EmptyCartError())   // erreur construite à chaque appel
+    .BindAsync(async c => await ApplyDiscountsAsync(c, promoCode, ct));
 Result<InvoiceDto> invoice = await discounted
-    .BindAsync(c => CreateInvoiceAsync(c))
+    .BindAsync(async c => await CreateInvoiceAsync(c, ct))
     .Map(i => i.ToDto());
-invoice = await invoice.TapAsync(i => PublishInvoiceCreatedEventAsync(i));
+
+// Un effet qui retourne un Result passe par BindAsync : TapAsync prend un Func<T, Task>,
+// et y jetterait l'échec de la publication sans diagnostic
+invoice = await invoice.BindAsync(async i =>
+    (await PublishInvoiceCreatedEventAsync(i, ct)).Match(
+        onSuccess: () => Result.Success(i),
+        onFailure: e => Result.Failure<InvoiceDto>(e)));
 ```
+
+Les extensions sur `Task<Result<T>>` et `ValueTask<Result<T>>` prennent des délégués synchrones. Un lambda async y compile quand même :
+
+- dans `Map` ou `Match`, il retourne un `Task` imbriqué dans le résultat ;
+- dans `Tap`, `TapError` ou `Finally`, comme sur `Result<T>`, il compile en `async void` : le résultat revient avant l'effet, et une exception de l'effet termine le processus (écart, Phase 2 de #184).
+
+Un délégué async passe donc par `MapAsync`, `BindAsync`, `TapAsync`, `EnsureAsync`… sur un `Result<T>` déjà attendu.
 
 Ces opérations existent sur `Result<T>`. Le `Result` non générique n'a aujourd'hui que `Match`, `Tap`, `TapError` et `Finally`, et aucun async hors `TryAsync` ; #184 Phase 4 les ajoute.
 
@@ -111,7 +124,15 @@ Result<Result<User>> nested = outer.Map(x => GetUser(x.Id));
 Result<User> flat = outer.Bind(x => GetUser(x.Id));
 ```
 
-Les usages attendus de `Tap` et `Ensure` sont dans `rules/result-patterns.md`.
+### Le Tap qui transforme
+```csharp
+// ❌ Tap modifie la valeur : le rail de succès porte un objet changé en douce
+Result<User> mutated = result.Tap(u => u.Rename(newName));
+// ✅ Map retourne la nouvelle valeur
+Result<User> renamed = result.Map(u => u.WithName(newName));
+```
+
+Les autres usages attendus de `Tap` et `Ensure` sont dans `rules/result-patterns.md`.
 
 ## Composition avec LINQ Query Syntax
 
@@ -122,5 +143,6 @@ var result =
     from cart in GetCart(user.CartId)
     from order in CreateOrder(cart)
     select order.ToDto();
-// Équivalent au Bind chain ci-dessus
+// Équivaut à GetUser(id).Bind(u => GetCart(u.CartId)).Bind(c => CreateOrder(c)).Map(o => o.ToDto()) :
+// synchrone, et sans l'étape ValidateCart de la chaîne plus haut
 ```

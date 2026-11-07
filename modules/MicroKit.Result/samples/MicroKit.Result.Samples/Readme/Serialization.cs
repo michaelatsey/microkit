@@ -9,9 +9,13 @@ internal static class SerializationSamples
 {
     internal static void SerializationSample(WebApplicationBuilder builder)
     {
-        // Register globally
+        // Register for Minimal APIs
         builder.Services.ConfigureHttpJsonOptions(o =>
             o.SerializerOptions.Converters.Add(new ResultJsonConverterFactory()));
+
+        // Register for MVC controllers, which do not read the Minimal API options
+        builder.Services.AddControllers().AddJsonOptions(o =>
+            o.JsonSerializerOptions.Converters.Add(new ResultJsonConverterFactory()));
 
         // Wire-format (success)
         // {"isSuccess":true,"value":{...}}

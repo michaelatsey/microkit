@@ -56,4 +56,5 @@ First public pre-release of MicroKit.Result.
 
 ---
 
+[1.0.0-preview.2]: https://github.com/michaelatsey/MicroKit/releases/tag/result-v1.0.0-preview.2
 [1.0.0-preview.1]: https://github.com/michaelatsey/MicroKit/releases/tag/result-v1.0.0-preview.1

@@ -6,14 +6,17 @@ description: Use when designing, naming or reviewing a typed domain error for Mi
 # Skill: DDD Error Design
 
 ## Quand activer ce skill
-- Conception d'une nouvelle erreur métier
+- Conception ou nommage d'une nouvelle erreur de domaine
 - Review d'erreurs existantes
-- Mapping entre domaines / bounded contexts
-- Traduction d'erreurs vers l'API externe
+- Traduction d'erreurs entre bounded contexts
 
 ## Ce qui atteint le client
 
-`Error.Message` part dans `ProblemDetails.Detail` : il reste sans danger pour le client, et n'est jamais le texte d'une exception. Les détails internes vont dans `Metadata`, que ni `ProblemDetails` ni le JSON n'émettent aujourd'hui, ou dans le log (garantie security, `.claude/CLAUDE.md`).
+`Error.Message` part dans `ProblemDetails.Detail` : il reste sans danger pour le client, et n'est jamais le texte d'une exception. Les détails internes vont dans le log, pas dans `Metadata` : `ProblemDetails` et `ResultJsonConverter<T>` ne l'émettent pas, mais un `Result` non générique retourné tel quel par un endpoint l'émet (Phase 5 de #184), et la Phase 3 décide de son rôle (garantie security, `.claude/CLAUDE.md`).
+
+Un paramètre positionnel d'un record est une propriété publique : sérialiser l'erreur elle-même, ou l'afficher par `ToString`, l'émet. Un détail interne n'est donc jamais un paramètre de l'erreur.
+
+Un id interpolé dans le message s'affiche par son `ToString`. Les ids de ce skill (`OrderId`, `ProductId`) le surchargent pour n'afficher que leur valeur, comme ceux de MicroKit.Domain ; sans cela, le message porte le texte généré du record (`OrderId { Value = … }`).
 
 `Category` vaut `Technical` (HTTP 500) quand elle n'est pas surchargée ; #184 Phase 3 décide si elle devient obligatoire.
 
@@ -40,7 +43,7 @@ public sealed record InsufficientInventoryError(
     : Error(ErrorCode.From("INVENTORY.STOCK.INSUFFICIENT"),
             $"Product {ProductId}: requested {Requested}, available {Available}")
 {
-    public override ErrorCategory Category => ErrorCategory.Conflict;
+    public override ErrorCategory Category => ErrorCategory.BusinessRule;
 }
 ```
 
@@ -49,36 +52,35 @@ Représentent des problèmes de workflow ou de coordination.
 
 ```csharp
 public sealed record UserNotFoundError(Guid UserId)
-    : Error(ErrorCode.From("USER.QUERY.NOT_FOUND"),
+    : Error(ErrorCode.From("USER.NOT_FOUND"),
             $"User with ID {UserId} was not found")
 {
     public override ErrorCategory Category => ErrorCategory.NotFound;
     public override ErrorSeverity Severity => ErrorSeverity.Information;
 }
 
-public sealed record UnauthorizedOperationError(string Operation, Guid UserId)
-    : Error(ErrorCode.From("AUTH.OPERATION.UNAUTHORIZED"),
-            $"User {UserId} is not authorized to perform '{Operation}'")
+// Utilisateur identifié, opération refusée : Forbidden (403). Unauthorized (401) signifie
+// « authentification requise » et appelle un en-tête WWW-Authenticate (RFC 9110, 15.5.2)
+public sealed record OperationForbiddenError(string Operation, Guid UserId)
+    : Error(ErrorCode.From("AUTH.OPERATION.FORBIDDEN"),
+            $"User {UserId} is not allowed to perform '{Operation}'")
 {
-    public override ErrorCategory Category => ErrorCategory.Unauthorized;
+    public override ErrorCategory Category => ErrorCategory.Forbidden;
 }
 ```
 
 ### Niveau 3: Erreurs d'infrastructure (frontière)
-Capturées à la frontière, converties en erreurs techniques.
+Créées par la frontière qui attrape l'exception (`rules/no-exceptions-flow.md`). Ce skill n'en conçoit que le message, générique et sans danger pour le client.
 
 ```csharp
-public sealed record DatabaseUnavailableError(string DataSource, string Details)
+// Aucun paramètre : la source et le détail technique partent dans le log, par [LoggerMessage],
+// à la frontière qui crée l'erreur
+public sealed record DatabaseUnavailableError()
     : Error(ErrorCode.From("INFRA.DATABASE.UNAVAILABLE"),
             "Database connection failed")
 {
     public override ErrorCategory Category => ErrorCategory.Technical;
     public override ErrorSeverity Severity => ErrorSeverity.Critical;
-    
-    // Les détails techniques ne sont PAS dans le message public
-    // Ils sont en metadata pour les logs internes
-    public override IReadOnlyDictionary<string, object?> Metadata =>
-        ErrorMetadata.Create(new("dataSource", DataSource), new("details", Details));
 }
 ```
 
@@ -127,14 +129,14 @@ public Dictionary<string, object?> Metadata { get; set; } = new();
 public override IReadOnlyDictionary<string, object?> Metadata =>
     ErrorMetadata.Create("userId", UserId);
 
-// ❌ Exception convertie sans enrichissement, ex.Message exposé au client
+// ❌ Erreur qui porte le texte d'une exception : ex.Message atteint le client
 // (GenericError : type défini par l'application, déclaré dans rules/result-patterns.md)
-catch (SqlException ex) 
-{ return Result.Failure(new GenericError(ErrorCode.Failure, ex.Message)); }
-// ✅ Erreur typée avec contexte
-catch (SqlException ex) when (ex.Number == 2627) // unique constraint
-{ return Result.Failure(new EntityAlreadyExistsError(entityType, entityId)); }
+new GenericError(ErrorCode.Failure, ex.Message);
+// ✅ Erreur typée, dont le message ne dit que ce que le client peut savoir
+new EntityAlreadyExistsError(entityType, entityId);
 ```
+
+Où et comment attraper l'exception qui conduit à ces erreurs relève de `rules/no-exceptions-flow.md`.
 
 ## Traduction entre bounded contexts
 
@@ -142,16 +144,19 @@ catch (SqlException ex) when (ex.Number == 2627) // unique constraint
 // Les erreurs ne doivent pas traverser les frontières de BC directement
 // Translator pattern:
 
-public sealed class OrderErrorTranslator
+public static class OrderErrorTranslator
 {
     public static IError Translate(IError paymentError) => paymentError switch
     {
         PaymentDeclinedError e => new OrderPaymentFailedError(e.OrderId, e.Reason),
         PaymentGatewayTimeoutError => new OrderProcessingDelayedError(),
-        _ => new OrderTechnicalError(paymentError.Code)
+        PaymentValidationError => new OrderPaymentRejectedError(),   // reste une erreur 422
+        _ => new OrderTechnicalError()  // ni le code ni le message du BC Payment ne traversent
     };
 }
 ```
+
+Le repli efface la catégorie de l'erreur d'origine : une erreur que l'appelant doit distinguer (validation, refus) se traduit par sa propre branche. L'appelant journalise l'erreur d'origine avant de la traduire, par `[LoggerMessage]`.
 
 ## Erreurs et observabilité
 
@@ -164,8 +169,9 @@ public static class ErrorActivityExtensions
     {
         yield return new("error.code", error.Code.Value);
         yield return new("error.category", error.Category.ToString());
-        foreach (var (key, value) in error.Metadata)
-            yield return new($"error.{key}", value);
+        yield return new("error.severity", error.Severity.ToString());
     }
 }
 ```
+
+`Metadata` n'est pas exporté : la Phase 3 de #184 décide de son rôle, et une trace part souvent vers un service tiers.
