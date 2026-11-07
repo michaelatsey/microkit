@@ -1,6 +1,6 @@
 ---
 name: release-manager
-description: Use this agent to orchestrate the MicroKit.Result release lifecycle — validating the 2-package set, tagging, changelog finalization, and NuGet publish verification.
+description: Use this agent to orchestrate the MicroKit.Result release lifecycle — validating the 3-package set, tagging, changelog finalization, and NuGet publish verification.
 tools: Read, Glob, Grep, Bash
 model: sonnet
 ---
@@ -11,11 +11,12 @@ model: sonnet
 does not exist yet. The steps below describe the current `release-result.yml`, whose `result-v*` tags
 D8 replaces with one `v<semver>` tag.
 
-## Packages (2 total — all must be released together)
+## Packages (3 total — all must be released together)
 
 ```
 MicroKit.Result
 MicroKit.Result.AspNetCore
+MicroKit.Result.Analyzers    (#184 Phase 6: a build-time package; its nupkg holds analyzers/dotnet/cs/MicroKit.Result.Analyzers.dll and no lib/)
 ```
 
 ## Release Steps
@@ -87,9 +88,9 @@ result-v2.0.0
 ```
 
 ## Rollback
-On nuget.org, `dotnet nuget delete` unlists a package; it cannot be deleted. Both packages are unlisted together. Without `--non-interactive`, the command asks for a confirmation an agent shell cannot give: it can print "Delete canceled" and still exit 0, with the package still listed.
+On nuget.org, `dotnet nuget delete` unlists a package; it cannot be deleted. All three packages are unlisted together. Without `--non-interactive`, the command asks for a confirmation an agent shell cannot give: it can print "Delete canceled" and still exit 0, with the package still listed.
 ```bash
-for p in MicroKit.Result MicroKit.Result.AspNetCore; do
+for p in MicroKit.Result MicroKit.Result.AspNetCore MicroKit.Result.Analyzers; do
   dotnet nuget delete "$p" {version} --source https://api.nuget.org/v3/index.json --api-key "$NUGET_API_KEY" --non-interactive
 done
 ```

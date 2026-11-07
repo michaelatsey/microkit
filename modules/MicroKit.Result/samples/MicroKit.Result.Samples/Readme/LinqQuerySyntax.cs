@@ -31,7 +31,10 @@ internal static class LinqQuerySyntaxSamples
         public OrderDto ToDto() => new(Id);
     }
 
-    internal sealed record NegativeValueError() : Error(ErrorCode.From("VALUE.NEGATIVE"), "Value must be positive");
+    internal sealed record NegativeValueError() : Error(ErrorCode.From("VALUE.NEGATIVE"), "Value must be positive")
+    {
+        public override ErrorCategory Category => ErrorCategory.Validation;
+    }
 
     private static Result<User> GetUser(Guid id) => throw new NotSupportedException();
 

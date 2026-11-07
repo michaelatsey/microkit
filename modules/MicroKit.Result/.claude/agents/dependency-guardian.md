@@ -11,7 +11,7 @@ You run fast. Your job is binary: **PASS** or **BLOCK** with a clear reason.
 
 ## Dependency Rules
 
-The module ships two packages, `MicroKit.Result` and `MicroKit.Result.AspNetCore`. A new `src/` project is a public-surface change: BLOCK, and route it to the `result-architect` gate.
+The module ships three packages, `MicroKit.Result`, `MicroKit.Result.AspNetCore` and `MicroKit.Result.Analyzers` (#184 Phase 6). Any other new `src/` project is a public-surface change: BLOCK, and route it to the `result-architect` gate.
 
 ### MicroKit.Result (core)
 Allowed:
@@ -20,6 +20,14 @@ Allowed:
 Forbidden:
 - Any other MicroKit module — Result is Level 0 (foundation)
 - Any framework-specific packages (ASP.NET Core, EF Core, etc.) in the core package
+
+### MicroKit.Result.Analyzers
+Allowed:
+- `Microsoft.CodeAnalysis.CSharp`, the Roslyn API, nothing else: `netstandard2.0`, `EnforceExtendedAnalyzerRules`, as `MicroKit.Persistence.Analyzers`
+
+Forbidden:
+- Any `ProjectReference`, `MicroKit.Result` included: the analyzers resolve its types by metadata name
+- `Microsoft.CodeAnalysis.CSharp.Workspaces` (no code fix in this package)
 
 ### MicroKit.Result.AspNetCore
 Allowed:
@@ -43,6 +51,7 @@ Allowed in one project only, each with its entry in the root `Directory.Packages
 | `FsCheck.Xunit` (3.6.0, the xunit v2 integration matching the pinned xunit 2.9.3; not `FsCheck.Xunit.v3`) | `MicroKit.Result.UnitTests` | #184 Phase 1: property tests |
 | `BenchmarkDotNet` | `MicroKit.Result.PerformanceTests` | #184 Phase 7: benchmarks |
 | `ErrorOr`, `FluentResults` | `MicroKit.Result.PerformanceTests` | #184 Phase 7: compared libraries |
+| `Microsoft.CodeAnalysis.CSharp.Analyzer.Testing` | `MicroKit.Result.Analyzers.Tests` | #184 Phase 6: analyzer tests (a bare `Xunit.Assert` is allowed there, root testing rule) |
 
 Forbidden:
 - Any other MicroKit module

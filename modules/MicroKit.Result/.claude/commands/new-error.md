@@ -9,7 +9,7 @@
 
 `<ErrorCategory>` : `NotFound`, `Unauthorized`, `Forbidden`, `Conflict`, `TooManyRequests`, `Technical`, `Unavailable`, `External`, `BusinessRule`, `NotSupported`, `Timeout`, `PreconditionFailed`. `Cancelled` n'est pas proposée : l'annulation demandée par l'appelant se propage, elle ne devient pas une erreur.
 
-Sans `--category`, la catégorie se déduit du nom (règle 4 ci-dessous) ; si le nom ne la donne pas, la commande la demande. Le template surcharge toujours `Category` : sans surcharge, `Error.Category` vaut `Technical` (HTTP 500), et ADR-RESULT-001 D5 la garde facultative : la Phase 6 ajoute un avertissement d'analyseur pour une sous-classe qui l'oublie.
+Sans `--category`, la catégorie se déduit du nom (règle 4 ci-dessous) ; si le nom ne la donne pas, la commande la demande. Le template surcharge toujours `Category` : sans surcharge, `Error.Category` vaut `Technical` (HTTP 500), et ADR-RESULT-001 D5 la garde facultative : l'analyseur `MKR002` signale une sous-classe qui l'oublie.
 
 `Validation` n'est pas proposée non plus : une erreur de validation est une `ValidationError` (`ValidationError.Custom(propertyName, message)` ou ses factories), qui implémente `IValidationError`. `ValidationResult.AddError` a deux surcharges : `AddError(IValidationError error)`, et `AddError(string propertyName, string message)`, qui construit une `ValidationError`. L'une comme l'autre portent un `PropertyName` : `ToHttpResult()` regroupe les messages par champ dans `errors`.
 

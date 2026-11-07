@@ -19,5 +19,9 @@
   <ItemGroup>
     <ProjectReference Include="..\..\src\MicroKit.Result\MicroKit.Result.csproj" />
     <ProjectReference Include="..\..\src\MicroKit.Result.AspNetCore\MicroKit.Result.AspNetCore.csproj" />
+    <!-- The samples are the analyzers' corpus of valid usage against the real library: a Release build fails on
+         any MKR001/MKR002 they report (#184 Phase 6). -->
+    <ProjectReference Include="..\..\src\MicroKit.Result.Analyzers\MicroKit.Result.Analyzers.csproj"
+                      OutputItemType="Analyzer" ReferenceOutputAssembly="false" />
   </ItemGroup>
 </Project>

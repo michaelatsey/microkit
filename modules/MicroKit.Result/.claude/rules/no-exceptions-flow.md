@@ -37,10 +37,16 @@ On n'attrape que les exceptions de l'infrastructure. Un bug (`NullReferenceExcep
 using System.Data.Common;
 
 public sealed record DatabaseError()
-    : Error(ErrorCode.From("INFRA.DATABASE.FAILURE"), "A database error occurred.");
+    : Error(ErrorCode.From("INFRA.DATABASE.FAILURE"), "A database error occurred.")
+{
+    public override ErrorCategory Category => ErrorCategory.Technical; // explicit: an internal fault (MKR002)
+}
 
 public sealed record TechnicalError()
-    : Error(ErrorCode.Internal, "An internal error occurred.");
+    : Error(ErrorCode.Internal, "An internal error occurred.")
+{
+    public override ErrorCategory Category => ErrorCategory.Technical; // explicit: an internal fault (MKR002)
+}
 
 internal static partial class InfrastructureLog
 {

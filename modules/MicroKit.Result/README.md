@@ -31,6 +31,7 @@ Every operation stays on one of these rails: a predictable outcome is a value, n
 ```bash
 dotnet add package MicroKit.Result --prerelease
 dotnet add package MicroKit.Result.AspNetCore --prerelease  # optional — Minimal APIs / MVC
+dotnet add package MicroKit.Result.Analyzers --prerelease   # recommended — MKR001 discarded result, MKR002 default category
 ```
 
 The published previews predate this documentation; releases are governed by ADR-GLOBAL-002.
@@ -151,7 +152,7 @@ bool ordered = ErrorCode.Conflict < ErrorCode.NotFound;   // ordinal comparison
 | `Unavailable` | 503 | Service temporarily unavailable |
 | `Technical` | 500 | Internal error (default) |
 
-A domain error that does not override `Category` is `Technical`, so a 500; #184 Phase 6 adds an analyzer warning for it.
+A domain error that does not override `Category` is `Technical`, so a 500: the analyzer `MKR002` of `MicroKit.Result.Analyzers` reports it.
 
 ### ErrorMetadataBuilder
 
@@ -535,10 +536,16 @@ using System.Data.Common;
 using Microsoft.Extensions.Logging;
 
 public sealed record DatabaseError()
-    : Error(ErrorCode.From("INFRA.DATABASE.FAILURE"), "A database error occurred.");
+    : Error(ErrorCode.From("INFRA.DATABASE.FAILURE"), "A database error occurred.")
+{
+    public override ErrorCategory Category => ErrorCategory.Technical; // explicit: an internal fault (MKR002)
+}
 
 public sealed record TechnicalError()
-    : Error(ErrorCode.Internal, "An internal error occurred.");
+    : Error(ErrorCode.Internal, "An internal error occurred.")
+{
+    public override ErrorCategory Category => ErrorCategory.Technical; // explicit: an internal fault (MKR002)
+}
 
 public sealed record RemoteCallError()
     : Error(ErrorCode.ExternalServiceFailure, "The remote service call failed.")
@@ -648,6 +655,7 @@ No benchmark exists yet; #184 Phase 7 publishes them, with the machine and the S
 |---------|-------------|
 | `MicroKit.Result` | Core — zero dependencies |
 | `MicroKit.Result.AspNetCore` | `ToHttpResult()`, `ProblemDetails` factory |
+| `MicroKit.Result.Analyzers` | Roslyn analyzers, build time only: `MKR001` (a discarded result), `MKR002` (an error that keeps the default `Technical` category) |
 
 ---
 

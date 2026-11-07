@@ -18,7 +18,7 @@ Un paramètre positionnel d'un record est une propriété publique : sérialiser
 
 Un id interpolé dans le message s'affiche par son `ToString`. Les ids de ce skill (`OrderId`, `ProductId`) le surchargent pour n'afficher que leur valeur, comme ceux de MicroKit.Domain ; sans cela, le message porte le texte généré du record (`OrderId { Value = … }`).
 
-`Category` vaut `Technical` (HTTP 500) quand elle n'est pas surchargée : ADR-RESULT-001 D5 la garde facultative dans le code, et la Phase 6 de #184 ajoute un avertissement d'analyseur pour une sous-classe qui l'oublie.
+`Category` vaut `Technical` (HTTP 500) quand elle n'est pas surchargée : ADR-RESULT-001 D5 la garde facultative dans le code, et l'analyseur `MKR002` (`MicroKit.Result.Analyzers`) signale une sous-classe qui l'oublie.
 
 ## Taxonomie des erreurs DDD
 

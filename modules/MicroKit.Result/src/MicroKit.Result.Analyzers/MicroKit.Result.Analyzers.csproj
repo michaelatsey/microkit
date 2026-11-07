@@ -1,0 +1,33 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <AssemblyName>MicroKit.Result.Analyzers</AssemblyName>
+    <RootNamespace>MicroKit.Result.Analyzers</RootNamespace>
+    <!-- Roslyn analyzer packages must target netstandard2.0 for cross-SDK compatibility -->
+    <TargetFramework>netstandard2.0</TargetFramework>
+    <IncludeBuildOutput>false</IncludeBuildOutput>
+    <EnforceExtendedAnalyzerRules>true</EnforceExtendedAnalyzerRules>
+    <!-- Not meaningful for netstandard2.0 analyzer DLLs -->
+    <IsTrimmable>false</IsTrimmable>
+    <Description>Roslyn analyzers for MicroKit.Result — a discarded Result (MKR001) and an Error subtype that keeps the default Technical category (MKR002).</Description>
+    <PackageTags>microkit;result;analyzers;roslyn;railway;dotnet</PackageTags>
+    <!-- NU5128: an analyzer package has no lib/ folder, as in MicroKit.Persistence.Analyzers. -->
+    <NoWarn>$(NoWarn);NU5128</NoWarn>
+    <!-- A build-time package: `dotnet add package` writes PrivateAssets="all" for the consumer. -->
+    <DevelopmentDependency>true</DevelopmentDependency>
+    <IncludeSymbols>false</IncludeSymbols>
+  </PropertyGroup>
+  <ItemGroup>
+    <!-- No code fixes in this package: CSharp (not Workspaces) is sufficient -->
+    <!-- PrivateAssets: the Roslyn API is the host compiler's; it must not become a dependency of the consumer. -->
+    <PackageReference Include="Microsoft.CodeAnalysis.CSharp" PrivateAssets="all" />
+  </ItemGroup>
+  <!-- Release tracking (RS2008): the diagnostic IDs are a contract. -->
+  <ItemGroup>
+    <AdditionalFiles Include="AnalyzerReleases.Shipped.md" />
+    <AdditionalFiles Include="AnalyzerReleases.Unshipped.md" />
+  </ItemGroup>
+  <!-- Place the analyzer DLL in the NuGet package's analyzer folder -->
+  <ItemGroup>
+    <None Include="$(OutputPath)\$(AssemblyName).dll" Pack="true" PackagePath="analyzers/dotnet/cs" Visible="false" />
+  </ItemGroup>
+</Project>

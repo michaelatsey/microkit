@@ -17,6 +17,12 @@ Hardening before stable (#184). Breaking changes ship outright on `preview.*` (A
 - `Tap`, `TapError` and `Finally` overloads taking a `Task`-returning delegate, on `Result<T>`, `Result`,
   `Task<Result<T>>` and `ValueTask<Result<T>>`: an async lambda now binds to an overload that awaits it.
 - `IsAotCompatible` on both packages: the trim, single-file and AOT analyzers run, with no warning.
+- `MicroKit.Result.Analyzers` (#184 Phase 6), a build-time package (`DevelopmentDependency`): `MKR001`
+  reports a `Result` or `Result<T>` returned and then discarded (a call, an `await`, a conditional access), and
+  a `Task` of a result discarded outside an async context; side effects (`Tap`, `TapError`, `Finally`) on a
+  held result are not reported; `MKR002` reports a concrete `Error` subtype that keeps the default
+  `Technical` category (ADR-RESULT-001 D5). Reading `.Value` without a prior check has no analyzer: a check in a
+  helper is invisible to an analysis limited to one method.
 - ADR-RESULT-001, the error model (#184 Phase 3), implemented by Phase 4:
   - `CategorizedError` and one factory per category on `Error` (`Error.NotFound(code, message)`…).
   - Implicit conversions from `Error` and `ErrorCollection` to `Result<T>` and to `Result` (a failure).

@@ -19,5 +19,8 @@ internal static class CoreTypesSamples
         Result commandFailed = new MyError();
     }
 
-    internal sealed record MyError() : Error(ErrorCode.From("SAMPLE.ERROR"), "Sample error");
+    internal sealed record MyError() : Error(ErrorCode.From("SAMPLE.ERROR"), "Sample error")
+    {
+        public override ErrorCategory Category => ErrorCategory.BusinessRule;
+    }
 }
