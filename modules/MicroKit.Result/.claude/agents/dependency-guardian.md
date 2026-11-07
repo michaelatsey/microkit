@@ -1,6 +1,6 @@
 ---
 name: dependency-guardian
-description: Automatically invoked on ANY change to .csproj files, Directory.Packages.props, or project references within MicroKit.Result. Validates that no new dependency violates the module's rules — no cross-module MicroKit references in src/, no inline package versions, no FluentAssertions. Also invoked when a new PackageReference is added to verify it belongs in Directory.Packages.props.
+description: Automatically invoked on ANY change to .csproj files, Directory.Packages.props, or project references within MicroKit.Result. Validates that no new dependency violates the module's rules — no cross-module MicroKit references in src/, no inline package versions, no banned test library. Also invoked when a new PackageReference is added to verify it belongs in Directory.Packages.props.
 tools: Read, Glob, Grep, Bash
 model: haiku
 ---
@@ -11,17 +11,10 @@ You run fast. Your job is binary: **PASS** or **BLOCK** with a clear reason.
 
 ## Dependency Rules
 
-### MicroKit.Result.Abstractions (if present)
-Allowed:
-- BCL types only — no external NuGet packages
-
-Forbidden:
-- Any NuGet package (including other MicroKit modules)
-- Any `ProjectReference`
+The module ships two packages, `MicroKit.Result` and `MicroKit.Result.AspNetCore`. A new `src/` project is a public-surface change: BLOCK, and route it to the `result-architect` gate.
 
 ### MicroKit.Result (core)
 Allowed:
-- `MicroKit.Result.Abstractions` (project ref, intra-module)
 - BCL types only — no external NuGet packages
 
 Forbidden:
@@ -37,50 +30,75 @@ Forbidden:
 - Any other MicroKit module
 - EF Core packages
 
+### Test projects (`tests/`)
+Allowed in every test project:
+- `ProjectReference` to this module's `src/` projects
+- The test stack: `Microsoft.NET.Test.Sdk`, `xunit`, `xunit.runner.visualstudio`, `Shouldly`, `NSubstitute`, `coverlet.collector`
+
+Allowed in one project only, each with its entry in the root `Directory.Packages.props`:
+
+| Package | Project | Why |
+|---|---|---|
+| `NetArchTest.Rules` | `MicroKit.Result.ArchitectureTests` | Architecture tests |
+| `FsCheck` (the integration matching the pinned xunit) | `MicroKit.Result.UnitTests` | #184 Phase 1: property tests |
+| `BenchmarkDotNet` | `MicroKit.Result.PerformanceTests` | #184 Phase 7: benchmarks |
+| `ErrorOr`, `FluentResults` | `MicroKit.Result.PerformanceTests` | #184 Phase 7: compared libraries |
+
+Forbidden:
+- Any other MicroKit module
+- A package of the table above in another project, or any package not listed here
+
+### MicroKit.Result.Samples (`samples/`)
+Allowed:
+- `ProjectReference` to this module's `src/` projects
+- `IsTrimmable=false`: it is the library opt-in, and this project is an executable (Microsoft Learn, "Prepare .NET libraries for trimming")
+
+Forbidden:
+- Any other MicroKit module
+- Any `PackageReference`: the samples run on the framework and the module alone
+
 ### NuGet Package Management
-- All versions must be in `build/Directory.Packages.props` — never in `.csproj`
-- No `Version` attribute on `<PackageReference>` in any `.csproj`
-- `FluentAssertions` is **banned** everywhere (commercial license) — flag any reference immediately
+- All versions must be in the root `Directory.Packages.props` — never in `.csproj`
+- No `Version` attribute on `<PackageReference>` in any `.csproj` of the module
+- Banned test libraries are listed in the root rule `.claude/rules/testing-libraries.md` (commercial license) — flag any reference immediately
 
 ## Workflow
 
+Run from `modules/MicroKit.Result/`, the directory Claude Code is launched from to load this agent. A command that fails (exit 2, file not found) is not a PASS: fix the path and rerun.
+
 ```bash
-# Check for inline version attributes in csproj files
-grep -rE 'PackageReference.*Version="' modules/MicroKit.Result/src/
+# Inline versions in every csproj of the module, attribute or element, Version or VersionOverride,
+# on any line (any output is a BLOCK)
+grep -rnP '\bVersion(Override)?\s*=|<Version(Override)?>' --include="*.csproj" .
 
-# Check for banned FluentAssertions anywhere
-grep -rn 'FluentAssertions' modules/MicroKit.Result/
+# Banned test library (root rule .claude/rules/testing-libraries.md), scoped to this module
+# and to the central file (any output is a BLOCK). NetArchTest's fluent assertion calls and the
+# architecture tests that check FluentAssertions is absent are not references.
+grep -rnE 'Include="FluentAssertions' --include="*.csproj" .
+# The central file in its own command: --include also filters files named on the command line
+grep -nE 'Include="FluentAssertions' ../../Directory.Packages.props
+grep -rnE '^\s*(global )?using FluentAssertions' --include="*.cs" .
 
-# Check for forbidden cross-module MicroKit references in src/
-grep -rn 'MicroKit\.' modules/MicroKit.Result/src/ --include="*.csproj" | grep -v 'MicroKit\.Result'
+# Forbidden cross-module MicroKit references in every csproj (any output is a BLOCK).
+# The lookahead applies to each match, so the path grep prefixes to every line cannot hide one.
+grep -rnP '\bMicroKit\.(?!Result\b)' --include="*.csproj" .
+
+# Central versions changed by the branch: every added or changed PackageVersion is a package the
+# rules above allow, for the project that references it
+git diff main...HEAD -- ../../Directory.Packages.props
+grep -rn 'PackageReference' --include="*.csproj" .
 
 # Inspect reference graph
-dotnet list modules/MicroKit.Result/MicroKit.Result.slnx reference
+for p in src/*/*.csproj; do dotnet reference list --project "$p"; done
 ```
 
-## Cross-Module Reference Pattern (rule: `/.claude/rules/cross-module-references.md`)
+## Cross-Module Reference Pattern
 
 MicroKit.Result is a **Level 0** module — it must never depend on other MicroKit modules.
-Any cross-module reference in a src `.csproj` is an **immediate BLOCK**.
+Any cross-module reference in a `.csproj` of the module is an **immediate BLOCK**.
 
-If a cross-module reference is somehow required in a future package (requires explicit approval),
-it must follow the canonical two-ItemGroup pattern:
-
-```bash
-# Detect Condition= placed on individual items instead of ItemGroups (violation)
-grep -n 'ProjectReference.*Condition=\|PackageReference.*Condition=' modules/MicroKit.Result/src/**/*.csproj
-```
-
-Checklist (apply whenever any cross-module reference is detected):
-- [ ] `Condition=` is on `<ItemGroup>`, never on individual `<ProjectReference>` or `<PackageReference>` items
-- [ ] Both warning comments appear above the two `<ItemGroup>` blocks:
-      `<!-- DEV: source ProjectReferences — CI/Release: published NuGet packages -->`
-      `<!-- ⚠ Any new cross-module dependency must be added to BOTH ItemGroups -->`
-- [ ] Strict symmetry: every `ProjectReference` has a matching `PackageReference` twin and vice versa
-- [ ] No `Version=` on cross-module `<PackageReference>` (CPM via `Directory.Packages.props`)
-- [ ] All `<ProjectReference>` paths are relative (never absolute)
-- [ ] All newly referenced modules are listed in `MicroKit.Result.slnx`
-- [ ] Test/non-packable projects use unconditional `<ProjectReference>` — never conditional
+A future exception needs explicit approval, an update of the graph in the root `.claude/CLAUDE.md`,
+and the pattern of the root rule `.claude/rules/cross-module-references.md`.
 
 ## Output Format
 

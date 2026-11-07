@@ -29,19 +29,19 @@ First public pre-release of MicroKit.Result.
 - Error hierarchy: `IError`, `Error`, `ErrorCode`, `ErrorCategory`, `ErrorSeverity`
 - `ErrorCollection` for aggregating multiple errors
 - `ErrorMetadata` and `ErrorMetadataBuilder` for structured error context
-- `ExceptionError`, `OperationCancelledError` — infrastructure edge cases
+- `ExceptionError` (internal) — wraps exceptions caught by `Try` / `TryAsync`
 - `ResultException` for safe unwrap-or-throw scenarios
 - Sync extensions: `Map`, `Bind`, `Tap`, `TapError`, `Ensure`, `Match`, `MapError`, `Compensate`, `Finally`
-- `AsyncResultExtensions` — full `ValueTask<Result<T>>` pipeline (all nine operations)
+- `AsyncResultExtensions` — async counterparts of the nine operations of `Result<T>`, each returning a `ValueTask`: `MapAsync`, `BindAsync`… on `Result<T>` with a `Task`-returning delegate, and `Map`, `Bind`… on `Task<Result<T>>` and `ValueTask<Result<T>>` with a synchronous delegate
 - `ResultCombineExtensions` — `Combine` (fail-fast) and `CombineAll` (collect-all)
-- `ResultEnumerableExtensions` — `FirstOrFailure`, `WhereSuccess`, `SelectResults`
+- `ResultEnumerableExtensions` — `Partition`, `Successes`, `Failures`, `Traverse`
 - `ResultLinqExtensions` — LINQ query syntax (`from x in result select ...`)
-- `ResultFactory` — `Result.Try()` and `Result.TryAsync()` for exception boundary wrapping
+- `Try` / `TryAsync` on `Result` and `Result<T>`, mirrored by `ResultFactory` — exception boundary wrapping
 - `ValidationError` and `ValidationResult` — structured validation support
-- `ErrorExtensions` — `WithMetadata`, `ToCollection`, `IsCategory`, `IsSeverity`
+- `ErrorExtensions` — `IsCategory`, `IsCritical`, `IsWarning`, `IsInformation`, `HasMetadata`, `TryGetMetadata`, `ToException`
 - **MicroKit.Result.AspNetCore**: `ResultHttpExtensions`, `ResultProblemDetailsFactory`
-  - Automatic `ErrorCategory` → HTTP status code mapping (404/422/401/403/409/429/500/503)
-- **Serialization**: `ResultJsonConverter` and `ResultJsonConverterFactory` — NativeAOT-safe JSON round-trip
+  - Automatic `ErrorCategory` → HTTP status code mapping (404/422/401/403/409/429/500/503/502/501/408/499/412)
+- **Serialization**: `ResultJsonConverter<T>` and `ResultJsonConverterFactory` — System.Text.Json converters for `Result<T>`, annotated `[RequiresUnreferencedCode]` / `[RequiresDynamicCode]`
 
 ### Fixed
 - `[RequiresDynamicCode]` attribute added to `ResultJsonConverterFactory` for NativeAOT compliance
@@ -56,4 +56,5 @@ First public pre-release of MicroKit.Result.
 
 ---
 
+[1.0.0-preview.2]: https://github.com/michaelatsey/MicroKit/releases/tag/result-v1.0.0-preview.2
 [1.0.0-preview.1]: https://github.com/michaelatsey/MicroKit/releases/tag/result-v1.0.0-preview.1

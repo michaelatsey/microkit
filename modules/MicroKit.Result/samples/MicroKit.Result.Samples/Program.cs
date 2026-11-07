@@ -7,55 +7,69 @@ Console.WriteLine("═══ MicroKit.Result Samples ═══\n");
 
 // 1. Happy path
 Console.WriteLine("── 1. Successful order ──");
-OrderService.PlaceOrder(new(FakeDb.WidgetId, 2, "user@example.com", "4111111111111111"))
-    .Tap(o => Console.WriteLine($"  Confirmed: {o.Total:C}"))
-    .TapError(e => Console.WriteLine($"  Failed: {e.Message}"));
+var placed = OrderService.PlaceOrder(new(FakeDb.WidgetId, 2, "user@example.com", "4111111111111111"));
+Console.WriteLine(placed.Match(
+    onSuccess: o => $"  Confirmed: {o.Total:C}",
+    onFailure: e => $"  Failed: {e.Message}"));
 
 // 2. Product not found → HTTP 404
 Console.WriteLine("\n── 2. Product not found → HTTP 404 ──");
 var notFound = OrderService.PlaceOrder(new(Guid.NewGuid(), 1, "user@example.com", "4111111111111111"));
-Console.WriteLine($"  HTTP {ResultProblemDetailsFactory.ToStatusCode(notFound.Error.Category)}");
+if (notFound.IsFailure)
+    Console.WriteLine($"  HTTP {ResultProblemDetailsFactory.ToStatusCode(notFound.Error.Category)}");
 
-// 3. Validation errors (multiple, collected)
-Console.WriteLine("\n── 3. Validation errors (collected) ──");
+// 3. Insufficient stock → HTTP 422
+Console.WriteLine("\n── 3. Insufficient stock → HTTP 422 ──");
+var outOfStock = OrderService.PlaceOrder(new(FakeDb.WidgetId, 50, "user@example.com", "4111111111111111"));
+if (outOfStock.IsFailure)
+    Console.WriteLine($"  HTTP {ResultProblemDetailsFactory.ToStatusCode(outOfStock.Error.Category)}: {outOfStock.Error.Message}");
+
+// 4. Payment declined → HTTP 422
+Console.WriteLine("\n── 4. Payment declined → HTTP 422 ──");
+var declined = OrderService.PlaceOrder(new(FakeDb.WidgetId, 1, "user@example.com", "4000000000000002"));
+if (declined.IsFailure)
+    Console.WriteLine($"  HTTP {ResultProblemDetailsFactory.ToStatusCode(declined.Error.Category)}: {declined.Error.Message}");
+
+// 5. Validation errors (multiple, collected)
+Console.WriteLine("\n── 5. Validation errors (collected) ──");
 var invalid = OrderService.PlaceOrder(new(Guid.NewGuid(), -1, "not-an-email", "0000"));
-if (invalid.Error is ErrorCollection col)
+if (invalid.IsFailure && invalid.Error is ErrorCollection col)
 {
     Console.WriteLine($"  {col.Count} errors:");
     foreach (var e in col)
         Console.WriteLine($"  • {e.Code}: {e.Message}");
 }
 
-// 4. Compensate — recover from failure with a fallback
-Console.WriteLine("\n── 4. Compensate (fallback on failure) ──");
+// 6. Compensate — recover from failure with a fallback
+Console.WriteLine("\n── 6. Compensate (fallback on failure) ──");
 var product = FakeDb.FindProduct(Guid.NewGuid())
     .Compensate(_ => Result.Success(new Product(Guid.Empty, "Default", 0m, 0)))
     .Map(p => p.Name);
 Console.WriteLine($"  Got: {product.GetValueOrDefault("N/A")}");
 
-// 5. LINQ query syntax
-Console.WriteLine("\n── 5. LINQ query syntax ──");
+// 7. LINQ query syntax
+Console.WriteLine("\n── 7. LINQ query syntax ──");
 var priceWithTax =
     from p in FakeDb.FindProduct(FakeDb.WidgetId)
     from taxed in Result.Success(p.Price * 1.2m)
     select $"{p.Name}: {taxed:C} (inc. VAT)";
 Console.WriteLine($"  {priceWithTax.GetValueOrDefault("unavailable")}");
 
-// 6. ErrorCode predefined constants + comparison
-Console.WriteLine("\n── 6. ErrorCode predefined + comparison ──");
+// 8. ErrorCode predefined constants + comparison
+Console.WriteLine("\n── 8. ErrorCode predefined + comparison ──");
 Console.WriteLine($"  ErrorCode.NotFound  = {ErrorCode.NotFound}");
 Console.WriteLine($"  ErrorCode.Timeout   = {ErrorCode.Timeout}");
 Console.WriteLine($"  Conflict < NotFound : {ErrorCode.Conflict < ErrorCode.NotFound}");
 
-// 7. ValidationError factories
-Console.WriteLine("\n── 7. ValidationError factories ──");
+// 9. ValidationError factories
+Console.WriteLine("\n── 9. ValidationError factories ──");
 Console.WriteLine($"  {ValidationError.Required("Name")}");
 Console.WriteLine($"  {ValidationError.MinLength("Password", 8)}");
 Console.WriteLine($"  {ValidationError.OutOfRange("Age", min: 0, max: 120)}");
 Console.WriteLine($"  {ValidationError.InvalidEmail()}");
 
-// 8. ErrorMetadataBuilder
-Console.WriteLine("\n── 8. ErrorMetadataBuilder ──");
+// 10. ErrorMetadataBuilder
+Console.WriteLine("\n── 10. ErrorMetadataBuilder ──");
 var meta = new ErrorMetadataBuilder()
     .WithTimestamp()
     .WithCorrelationId("req-abc-123")
@@ -64,8 +78,8 @@ var meta = new ErrorMetadataBuilder()
 foreach (var (k, v) in meta)
     Console.WriteLine($"  {k}: {v}");
 
-// 9. ErrorCollection filter + group
-Console.WriteLine("\n── 9. ErrorCollection filter + group ──");
+// 11. ErrorCollection filter + group
+Console.WriteLine("\n── 11. ErrorCollection filter + group ──");
 var errors = ErrorCollection.From(
     ValidationError.Required("Email"),
     ValidationError.MinLength("Password", 8),
@@ -75,11 +89,11 @@ Console.WriteLine($"  Validation only: {errors.WithCategory(ErrorCategory.Valida
 foreach (var (cat, group) in errors.GroupByCategory())
     Console.WriteLine($"  {cat}: {group.Count} error(s)");
 
-// 10. TryGetValue + Finally
-Console.WriteLine("\n── 10. TryGetValue + Finally ──");
+// 12. TryGetValue + Finally
+Console.WriteLine("\n── 12. TryGetValue + Finally ──");
 Result<string> maybe = Result.Success("hello");
-maybe.Finally(r => Console.WriteLine($"  Finally — IsSuccess: {r.IsSuccess}"));
-if (maybe.TryGetValue(out var val))
+var observed = maybe.Finally(r => Console.WriteLine($"  Finally — IsSuccess: {r.IsSuccess}"));
+if (observed.TryGetValue(out var val))
     Console.WriteLine($"  Got: {val}");
 
 Console.WriteLine("\n═══ Done ═══");
@@ -102,7 +116,8 @@ sealed record InsufficientStockError(Guid ProductId, int Requested, int Availabl
 sealed record PaymentDeclinedError(string Reason)
     : Error(ErrorCode.From("PAYMENT.DECLINED"), $"Payment declined: {Reason}")
 {
-    public override ErrorCategory Category => ErrorCategory.External;
+    // The issuer answered and refused: a business outcome (422), not a failed dependency (502)
+    public override ErrorCategory Category => ErrorCategory.BusinessRule;
 }
 
 // ─── Domain models ────────────────────────────────────────────────────────────
@@ -147,11 +162,13 @@ static class OrderService
             .AddErrorIf(!IsValidEmail(req.Email), nameof(req.Email), "Email is not a valid address.");
 
         if (!validation.IsValid)
-            return validation.ToResult<Order>(default!);
+            return Result.Failure<Order>(validation.ToResult().Error);
 
+        // Bind, not Ensure: the error reads p.Stock, which exists only once the product is found
         return FakeDb.FindProduct(req.ProductId)
-            .Ensure(p => p.Stock >= req.Quantity,
-                new InsufficientStockError(req.ProductId, req.Quantity, 0))
+            .Bind(p => p.Stock >= req.Quantity
+                ? Result.Success(p)
+                : Result.Failure<Product>(new InsufficientStockError(req.ProductId, req.Quantity, p.Stock)))
             .Bind(product => FakePayment.Charge(req.CardNumber, product.Price * req.Quantity)
                 .Match(
                     onSuccess: () => Result.Success(

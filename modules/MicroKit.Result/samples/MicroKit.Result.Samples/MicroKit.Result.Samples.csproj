@@ -9,6 +9,11 @@
     <RootNamespace>MicroKit.Result.Samples</RootNamespace>
     <IsPackable>false</IsPackable>
     <IsPublishable>false</IsPublishable>
+    <!-- IsTrimmable is the library opt-in for trim compatibility (Microsoft Learn, "Prepare .NET
+         libraries for trimming"). This project is an executable that is never trimmed, and its README
+         samples call trim-unsafe APIs on purpose (MapGet/MapDelete with a delegate,
+         ResultJsonConverterFactory), so it opts out of the root IsTrimmable=true. -->
+    <IsTrimmable>false</IsTrimmable>
   </PropertyGroup>
 
   <ItemGroup>
