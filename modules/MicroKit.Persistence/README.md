@@ -49,16 +49,15 @@ calls `IUnitOfWork.CommitAsync`.
 `ProviderOptions` is off by default:
 
 - `Retry` — a `RetryOnFailureOptions(maxRetryCount = 6, maxRetryDelay = 30 s)` turns on the provider's
-  retrying execution strategy. The strategy then rejects a transaction opened with
-  `Database.BeginTransaction` outside it: the next query or save on that context throws
-  `InvalidOperationException`. Code that opens its own transaction must do so inside
-  `Database.CreateExecutionStrategy().ExecuteAsync` ([connection
-  resiliency](https://learn.microsoft.com/ef/core/miscellaneous/connection-resiliency#execution-strategies-and-transactions));
-  `ExecuteAsync` already does. In this version, `MicroKit.Messaging.EntityFrameworkCore`'s outbox and
-  inbox stores do not, so leave `Retry` off on a context they share. Register each context once: EF Core
-  applies every registration's configuration in order, so a second `UsePostgreSQL`, `UseSqlServer` or
-  `AddDbContext` for the same context merges into the first (the last connection string wins), and a
-  `PoolSize` given after a plain registration does not pool the context.
+  retrying execution strategy. Open transactions through `ITransactionalContext.ExecuteAsync`, which
+  runs them inside the execution strategy, never with `Database.BeginTransactionAsync` directly: the
+  retrying strategy rejects a transaction opened outside it, and the next query or save on that context
+  throws `InvalidOperationException` ([connection
+  resiliency](https://learn.microsoft.com/ef/core/miscellaneous/connection-resiliency#execution-strategies-and-transactions)).
+  Register each context once: EF Core applies every registration's configuration in order, so a second
+  `UsePostgreSQL`, `UseSqlServer` or `AddDbContext` for the same context merges into the first (the
+  last connection string wins), and a `PoolSize` given after a plain registration does not pool the
+  context.
 - `PoolSize` — registers the context with `AddDbContextPool`. A pooled context's constructor-injected
   scoped services are resolved once from the root provider and shared by every lease ("scoped services
   injected into the context will only be resolved once from the initial scope", [`AddDbContextPool`

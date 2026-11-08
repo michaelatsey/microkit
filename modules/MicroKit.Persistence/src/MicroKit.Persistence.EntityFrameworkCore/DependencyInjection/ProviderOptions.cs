@@ -13,13 +13,12 @@ public sealed record ProviderOptions
     /// provider's non-retrying execution strategy.
     /// </summary>
     /// <remarks>
-    /// With retries on, the provider's strategy rejects a transaction a caller opens itself with
-    /// <c>Database.BeginTransaction</c> outside the strategy: the next query or save on that context
-    /// throws <see cref="InvalidOperationException"/>. Such code must open its transaction inside
-    /// <c>Database.CreateExecutionStrategy().ExecuteAsync</c>
-    /// (https://learn.microsoft.com/ef/core/miscellaneous/connection-resiliency#execution-strategies-and-transactions).
-    /// <see cref="ITransactionalContext.ExecuteAsync{TState}"/> runs its transaction inside the
-    /// strategy and retries it as a whole. A retried operation runs again from the start: it must be
+    /// Open transactions through <see cref="ITransactionalContext.ExecuteAsync{TState}"/>, which runs
+    /// them inside the execution strategy and retries them as a whole, never with
+    /// <c>Database.BeginTransactionAsync</c> directly: with retries on, the provider's strategy rejects
+    /// a transaction opened outside it, and the next query or save on that context throws
+    /// <see cref="InvalidOperationException"/>
+    /// (https://learn.microsoft.com/ef/core/miscellaneous/connection-resiliency#execution-strategies-and-transactions). A retried operation runs again from the start: it must be
     /// idempotent.
     /// </remarks>
     public RetryOnFailureOptions? Retry { get; init; }
