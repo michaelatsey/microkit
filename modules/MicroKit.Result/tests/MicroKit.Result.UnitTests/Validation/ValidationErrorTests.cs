@@ -494,4 +494,24 @@ public sealed class ValidationErrorTests
         // Act + Assert
         Should.Throw<ArgumentException>(() => error with { Code = ErrorCode.From("VALIDATION.NAME"), PropertyName = "Name" });
     }
+
+    [Fact]
+    public void With_WhenCodeIsDefaultThroughTheSubtype_ThrowsArgumentException()
+    {
+        // Arrange
+        var error = new ValidationError("Email", "Email is required.");
+
+        // Act + Assert
+        Should.Throw<ArgumentException>(() => error with { Code = default });
+    }
+
+    [Fact]
+    public void With_WhenCodeIsDefaultThroughError_ThrowsArgumentException()
+    {
+        // Arrange
+        Error error = new ValidationError("Email", "Email is required.");
+
+        // Act + Assert
+        Should.Throw<ArgumentException>(() => error with { Code = default });
+    }
 }

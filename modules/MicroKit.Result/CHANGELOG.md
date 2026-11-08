@@ -174,7 +174,8 @@ Hardening before stable (#184). Breaking changes ship outright on `preview.*` (A
   expression, an object initializer); the property itself stays non-virtual. `ValidationError` overrides
   `ValidateCode`: `with { Code = … }`, through `ValidationError` or through `Error`, throws `ArgumentException`
   unless the code is the one its `PropertyName` gives. Members of a `with` are set in order: set `PropertyName`
-  alone.
+  alone. `CategorizedError` overrides it too: a `with` that sets an uninitialized, empty or whitespace code throws
+  `ArgumentException`, as its constructor does.
 
 ### Added (#195)
 - `ResultJsonView` (`MicroKit.Result.Serialization`): `Client`, the default, and `Full`, the view the result

@@ -146,7 +146,8 @@ public abstract record Error(ErrorCode Code, string Message) : IError
     /// <summary>
     /// Validates a code set after construction, in a <see langword="with"/> expression or an object initializer. Does
     /// nothing by default; <see cref="ValidationError"/>, whose code follows its <see cref="ValidationError.PropertyName"/>,
-    /// rejects any other.
+    /// rejects any other, and <see cref="CategorizedError"/> rejects an uninitialized, empty or whitespace code, as its
+    /// constructor does.
     /// </summary>
     /// <param name="code">The code being set.</param>
     /// <exception cref="ArgumentException">Thrown by an override that rejects <paramref name="code"/>.</exception>
