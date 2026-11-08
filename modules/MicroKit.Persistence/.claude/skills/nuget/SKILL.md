@@ -9,7 +9,7 @@ How to manage packages in MicroKit.Persistence.
 
 ## Central Package Management (CPM)
 
-All package versions are in `build/Directory.Packages.props` at the monorepo root.
+All package versions are in `Directory.Packages.props` at the monorepo root.
 
 ```xml
 <!-- ✅ Version in Directory.Packages.props -->
@@ -18,7 +18,7 @@ All package versions are in `build/Directory.Packages.props` at the monorepo roo
 <!-- ✅ Reference without version in .csproj -->
 <PackageReference Include="Microsoft.EntityFrameworkCore" />
 
-<!-- ❌ Version in .csproj — CPM violation blocked by dependency-check hook -->
+<!-- ❌ Version in .csproj — CPM violation (dependency-guardian BLOCK) -->
 <PackageReference Include="Microsoft.EntityFrameworkCore" Version="10.x.x" />
 ```
 

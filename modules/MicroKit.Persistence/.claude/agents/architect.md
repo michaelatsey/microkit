@@ -36,8 +36,10 @@ You arbitrate all design decisions in MicroKit.Persistence.
 ### 1. Does this contract belong in Abstractions or Core?
 ```
 Abstractions: only what a consuming module needs to compile
-  - IRepository<T>, IReadRepository<T>, IUnitOfWork, ITransactionalContext
-  - IPagedResult<T>, ITransaction, ITransactionManager, PersistenceException
+  - IRepository<T> (→ IRepository<TAggregate, TId> in #196 phase 2), IUnitOfWork, ITransactionalContext
+  - IPagedResult<T>, PersistenceException
+  - IReadRepository<T> marker, ITransaction, ITransactionManager — deleted in #196 phase 2 (D8, D12);
+    the full IReadRepository<T> lives in Core because it needs QueryOptions
   - Nothing EF Core, nothing Specification evaluator, nothing IQueryable
 
 Core: internal plumbing the application uses but not through contracts
@@ -76,25 +78,27 @@ IReadRepository<T> must never:
   - Expose SaveChanges, CommitAsync, or any mutation method
   - Track entities (AsNoTracking enforced)
   - Be injected with IUnitOfWork
-Analyzer PRDANA003 blocks IReadRepository with mutation methods.
+Analyzers MKP001/MKP002 block a read repository that commits or mutates.
 ```
 
 ### 6. Is the analyzer catching the right violations?
 ```
-PRDANA001: DbContext injected directly into a Query handler
-PRDANA002: SaveChanges(Async) called in a read repository
-PRDANA003: Missing AsNoTracking on a read repository query
-All three must be build-time errors, not warnings.
+MKP001 (Error): read repository calls CommitAsync / SaveChangesAsync
+MKP002 (Error): read repository declares or calls a write method
+MKP003 (Warning): SaveChanges(Async) called directly on a DbContext outside IUnitOfWork
+MKP004 (Warning): DbContext injected outside the infrastructure layer
+MKP005 (Error): repository method returns IQueryable<T>
+See .claude/rules/analyzers.md.
 ```
 
 ## Decision table
 
 | Situation | Decision |
 |---|---|
-| New aggregate needs persistence | `IRepository<T>` in Abstractions + `EfRepository<T>` in EFCore |
+| New aggregate needs persistence | `IRepository<T>` + `EfRepository<T, TContext>` (→ `IRepository<TAggregate, TId>` + `EfRepository<TAggregate, TId, TContext>` in #196 phase 2) |
 | New read projection | `IReadRepository<T>` with custom finder methods |
 | Cross-aggregate query | `IReadRepository` with composite QueryOptions |
-| Ambient transaction needed | `ITransactionalContext` injected; wraps in `BeginTransactionAsync` |
+| Ambient transaction needed | `ITransactionalContext.ExecuteAsync` — begins a transaction inside the execution strategy; #196 phase 1 (D4) makes it join an open one |
 | Provider-specific optimization (PostgreSQL) | New extension in provider project, never in Core |
 | Specification with business logic | Lives in Domain — never in Persistence |
 | QueryOptions extension | Lives in `MicroKit.Persistence.Specifications` |

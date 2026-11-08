@@ -43,9 +43,9 @@ The `.slnx` solution file respects this order automatically.
 |-------|-------|-----|
 | `CS1591` in src/ | Missing XML doc on public member | Add `<summary>` tag |
 | `PackageReference` with `Version=` | CPM violation | Move to `Directory.Packages.props` |
-| `PRDANA001` | DbContext in query handler | Inject typed repository instead |
-| `PRDANA002` | SaveChanges in read repo | Remove mutation call |
-| `PRDANA003` | Missing AsNoTracking | Add `.AsNoTracking()` |
+| `MKP004` | DbContext injected outside the infrastructure layer (warning) | Inject typed repository instead |
+| `MKP001` | CommitAsync / SaveChanges in read repo | Remove mutation call |
+| `MKP005` | Repository method returns `IQueryable<T>` | Return `IReadOnlyList<T>` / `IPagedResult<T>` |
 | EF Core type not found | Wrong project reference | Check layer — EF stays out of Abstractions |
 | `NETSDK1004` | Missing global.json SDK | Check `global.json` at monorepo root |
 

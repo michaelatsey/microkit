@@ -13,7 +13,7 @@
 
 - **xUnit** — test framework
 - **Shouldly** — all assertions — see root `.claude/rules/testing-libraries.md`
-- **FluentAssertions is banned** — any `.Should()` call blocks the build
+- **FluentAssertions is banned** (commercial licence). Nothing enforces it automatically — review and `dependency-guardian` catch it
 - **NSubstitute** — all mocks and stubs
 - **MicroKit.Persistence.Testing** — `InMemoryRepository<T>`, `InMemoryUnitOfWork`
 - **NetArchTest.Rules** — architecture tests only

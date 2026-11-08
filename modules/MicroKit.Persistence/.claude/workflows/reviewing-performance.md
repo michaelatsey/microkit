@@ -10,18 +10,18 @@ Step-by-step guide for auditing query performance in MicroKit.Persistence.
 
 ## Steps
 
-### 1. Run `/review-performance`
+### 1. Invoke the `performance-reviewer` agent
 
 The `performance-reviewer` agent audits the changed files against:
 - `.claude/rules/performance.md`
 - `.claude-context/standards/performance-budget.md`
 
-### 2. Run `/audit-queries`
+### 2. Audit the queries
 
 Detects at the code level:
-- Missing `AsNoTracking()` — Analyzer PRDANA003
-- `SaveChanges` in read repos — Analyzer PRDANA002
-- `DbContext` in query handlers — Analyzer PRDANA001
+- Missing `AsNoTracking()` — no analyzer; review it
+- `SaveChanges` in read repos — analyzer MKP001
+- `DbContext` in query handlers — analyzer MKP004 (heuristic)
 - Navigation properties accessed without explicit `.Include()` (potential lazy load)
 
 ### 3. Run Benchmarks

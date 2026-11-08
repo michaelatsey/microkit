@@ -59,8 +59,8 @@ reportgenerator -reports:"coverage/**/*.xml" -targetdir:"coverage/report" -repor
 | Failure type | Likely cause | First action |
 |-------------|-------------|-------------|
 | `ArchitectureTests` fail | EF type in Abstractions, or mutation in IReadRepository | Check recent `.csproj` changes |
-| `PRDANA001` build error | DbContext injected into a handler | Replace with typed repository |
-| `PRDANA002` build error | SaveChanges in read repo | Remove the call |
+| `MKP004` warning | DbContext injected outside the infrastructure layer | Replace with typed repository |
+| `MKP001` build error | CommitAsync / SaveChanges in read repo | Remove the call |
 | `.Should()` compile error | FluentAssertions slipped in | Replace with Shouldly |
 | Integration test fails | DB schema mismatch | Check migration is up to date |
 

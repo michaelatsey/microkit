@@ -4,27 +4,29 @@
 
 ## Repository Pattern
 
-### Write side — `IRepository<TAggregate>`
+### Write side — `IRepository<TAggregate, TId>` (from #196 phase 2, D9–D11)
+Until phase 2 lands, the code still has `IRepository<TAggregate>` with `AddAsync`, `UpdateAsync`,
+`DeleteAsync` and `CommitAsync`. Phase 2 replaces it with:
 ```csharp
-// ✅ Aggregate root constraint — only aggregates are persisted directly
-public interface IRepository<TAggregate>
-    where TAggregate : IAggregateRoot
+// ✅ The only write-side contract. No CommitAsync (committing belongs to IUnitOfWork only),
+//    no UpdateAsync (a tracked aggregate needs no call).
+public interface IRepository<TAggregate, TId>
+    where TAggregate : class, IAggregateRoot
+    where TId : IEntityId
 {
-    ValueTask<TAggregate?> FindAsync(/* id */, CancellationToken ct = default);
+    ValueTask<TAggregate?> FindAsync(TId id, CancellationToken ct = default); // whole aggregate, tracked
     ValueTask AddAsync(TAggregate aggregate, CancellationToken ct = default);
-    ValueTask UpdateAsync(TAggregate aggregate, CancellationToken ct = default);
     ValueTask DeleteAsync(TAggregate aggregate, CancellationToken ct = default);
-    ValueTask CommitAsync(CancellationToken ct = default);
 }
 
 // ✅ Custom repository extends the base
-public interface IUserRepository : IRepository<User>
+public interface IUserRepository : IRepository<User, UserId>
 {
     ValueTask<User?> FindByEmailAsync(Email email, CancellationToken ct = default);
 }
 
 // ❌ Persisting a non-aggregate entity directly
-public interface IOrderLineRepository : IRepository<OrderLine> // ❌ OrderLine is not an aggregate root
+public interface IOrderLineRepository : IRepository<OrderLine, OrderLineId> // ❌ OrderLine is not an aggregate root
 ```
 
 ### Read side — `IReadRepository<TAggregate>`

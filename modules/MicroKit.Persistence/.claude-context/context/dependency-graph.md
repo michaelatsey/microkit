@@ -3,7 +3,7 @@
 **Current state of all project dependencies within MicroKit.Persistence.**
 
 Updated whenever a `<ProjectReference>` or significant `<PackageReference>` is added.
-The `dependency-guardian` agent and `dependency-check` hook validate against this graph.
+The `dependency-guardian` agent validates against this graph.
 
 ---
 
@@ -12,11 +12,10 @@ The `dependency-guardian` agent and `dependency-check` hook validate against thi
 ```
 MicroKit.Persistence.Abstractions
 │   └── [no project references — package refs only]
-│   └── NuGet: MicroKit.Result, MicroKit.Domain.Abstractions
+│   └── Cross-module: MicroKit.Domain, MicroKit.Result (removed by #196 D17)
 │
 MicroKit.Persistence (core)
-│   ├── → MicroKit.Persistence.Abstractions
-│   └── NuGet: MicroKit.Logging.Abstractions
+│   └── → MicroKit.Persistence.Abstractions
 │
 MicroKit.Persistence.EntityFrameworkCore
 │   ├── → MicroKit.Persistence (core)
@@ -68,15 +67,14 @@ MicroKit.Persistence is a **Level 2** module:
 ```
 Level 0: Domain · Result
 Level 1: Logging → Result(opt) | Caching → Result | Auth → Result+Domain
-Level 2: MediatR → Result+Domain+Logging.Abs | Persistence → Result+Domain+Logging.Abs
+Level 2: MediatR → Result+Domain+Logging.Abs | Persistence → Domain (+Result until #196 D17)
 ```
 
 Allowed cross-module references (via PackageReference, never ProjectReference):
 
 ```
-MicroKit.Persistence.Abstractions → MicroKit.Result               (production — IRepository returns Result<T>)
-MicroKit.Persistence.Abstractions → MicroKit.Domain.Abstractions  (IAggregateRoot generic constraint)
-MicroKit.Persistence (core)       → MicroKit.Logging.Abstractions (structured log property names in evaluator)
+MicroKit.Persistence.Abstractions → MicroKit.Domain  (IAggregateRoot generic constraint)
+MicroKit.Persistence.Abstractions → MicroKit.Result  (a global using only — removed by #196 D17, phase 2)
 ```
 
 **Incoming cross-module reference:**
@@ -95,21 +93,22 @@ module's Abstractions. Full cross-module integration: `.claude-context/context/t
 
 ## MicroKit.Result Dependency
 
-`MicroKit.Result` is referenced from Abstractions because repository methods in consuming
-handlers commonly return `Result<T>`. This mirrors the same decision in `MicroKit.MediatR.Abstractions`
-(ADR-001 in that module). It is a permanent, justified production dependency.
+> **Superseded by #196 D17.** The original reasoning — "`MicroKit.Result` is referenced from
+> Abstractions because repository methods in consuming handlers commonly return `Result<T>`; a
+> permanent, justified production dependency" — did not hold: no Abstractions type uses
+> `MicroKit.Result`, only a `global using` does. Phase 2 removes the reference; #197 phase 3 adds it to
+> `MicroKit.Persistence.EntityFrameworkCore`, where a `Result`-returning path will live.
 
 ---
 
 ## NuGet Package Versions
 
-> Canonical versions in `build/Directory.Packages.props`.
+> Canonical versions in the root `Directory.Packages.props`.
 
 | Package | Used By | Notes |
 |---------|---------|-------|
-| `MicroKit.Result` | Abstractions | `IRepository` method return types |
-| `MicroKit.Domain.Abstractions` | Abstractions | `IAggregateRoot` constraint |
-| `MicroKit.Logging.Abstractions` | Core | Structured log property names in evaluator |
+| `MicroKit.Domain` | Abstractions | `IAggregateRoot` constraint |
+| `MicroKit.Result` | Abstractions | Removed by #196 D17 (unused) |
 | `Microsoft.EntityFrameworkCore` | EntityFrameworkCore | ORM |
 | `Npgsql.EntityFrameworkCore.PostgreSQL` | PostgreSql | Provider |
 | `Microsoft.EntityFrameworkCore.SqlServer` | SqlServer | Provider |

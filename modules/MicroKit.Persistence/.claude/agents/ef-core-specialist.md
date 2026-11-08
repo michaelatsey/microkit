@@ -74,13 +74,10 @@ public async ValueTask<IReadOnlyList<UserDto>> ListAsync(
 }
 ```
 
-### Write Queries (with tracking, CommitAsync)
+### Write Queries (with tracking; commit through IUnitOfWork only)
 ```csharp
-// ✅ IRepository implementations track; handler calls CommitAsync once
-public async ValueTask<User?> FindAsync(UserId id, CancellationToken ct = default)
-    => await _context.Users
-        .FindAsync([id], ct)                        // ← tracked by default (write path)
-        .ConfigureAwait(false);
+// ✅ The write side loads a whole, tracked aggregate by its typed id (#196 D10):
+//    IRepository<TAggregate, TId>.FindAsync(TId id, ct). The repository never commits.
 
 // ✅ Handler pattern
 var user = await _repo.FindAsync(cmd.UserId, ct);
@@ -157,10 +154,10 @@ builder.Property(u => u.RowVersion).IsRowVersion();
 ## Anti-Patterns (flag immediately)
 
 ```csharp
-// ❌ DbContext in a Query handler — PRDANA001
+// ❌ DbContext in a Query handler — MKP004 (heuristic)
 public sealed class GetUsersHandler(AppDbContext ctx) : IQueryHandler<...>
 
-// ❌ SaveChanges in a read repository — PRDANA002
+// ❌ SaveChanges in a read repository — MKP001
 public async ValueTask<User?> FindAsync(...)
 {
     var user = await _context.Users.FindAsync(...);
@@ -168,7 +165,7 @@ public async ValueTask<User?> FindAsync(...)
     return user;
 }
 
-// ❌ Missing AsNoTracking in read repository — PRDANA003
+// ❌ Missing AsNoTracking in read repository — no analyzer; review it
 var users = await _context.Users.Where(u => u.IsActive).ToListAsync(); // no AsNoTracking ❌
 
 // ❌ IQueryable<T> on a public IReadRepository method

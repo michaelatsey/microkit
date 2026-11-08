@@ -1,6 +1,6 @@
 ---
 name: test-generator
-description: Use this agent to generate test suites for MicroKit.Persistence repositories, specifications, and UoW patterns. Produces Shouldly + NSubstitute test files using InMemoryRepository from MicroKit.Persistence.Testing. Invoked by /new-repository-tests.
+description: Use this agent to generate test suites for MicroKit.Persistence repositories, specifications, and UoW patterns. Produces Shouldly + NSubstitute test files using InMemoryRepository from MicroKit.Persistence.Testing. 
 tools: Read, Glob, Grep
 model: sonnet
 ---
@@ -10,9 +10,9 @@ model: sonnet
 ## Stack (non-negotiable)
 - **xUnit** — test framework
 - **Shouldly** — all assertions (`result.ShouldBe(...)`, `result.ShouldNotBeNull()`)
-- **FluentAssertions is banned** — any `.Should()` triggers a build error
+- **FluentAssertions is banned** (commercial licence) — never reference it
 - **NSubstitute** — mocks for external dependencies
-- **MicroKit.Persistence.Testing** — `InMemoryRepository<T>` for repository isolation
+- **MicroKit.Persistence.Testing** — `InMemoryRepository<T>` for repository isolation (`InMemoryRepository<TAggregate, TId>` from #196 phase 2)
 
 ## Context to load
 - `.claude/rules/testing.md`
@@ -24,10 +24,9 @@ model: sonnet
 ### Per Repository
 - [ ] `FindAsync_WhenExists_ReturnsAggregate`
 - [ ] `FindAsync_WhenNotFound_ReturnsNull`
-- [ ] `AddAsync_ThenCommit_PersistsAggregate`
-- [ ] `UpdateAsync_ThenCommit_UpdatesAggregate`
-- [ ] `DeleteAsync_ThenCommit_RemovesAggregate`
-- [ ] `CommitAsync_WhenCancelled_ThrowsOperationCancelled`
+- [ ] `AddAsync_ThenUnitOfWorkCommit_PersistsAggregate`
+- [ ] `FindAsync_ThenMutateThenUnitOfWorkCommit_PersistsChange` (`UpdateAsync` is removed by #196 D11, phase 2)
+- [ ] `DeleteAsync_ThenUnitOfWorkCommit_RemovesAggregate`
 
 ### Per ReadRepository
 - [ ] `ListAsync_WithSpec_FiltersCorrectly`
@@ -38,8 +37,9 @@ model: sonnet
 
 ### Per UnitOfWork / Transaction
 - [ ] `CommitAsync_CommitsAllPendingChanges`
-- [ ] `BeginTransactionAsync_ThenRollback_RevertsPendingChanges`
-- [ ] `NestedCommit_IdempotentWithinTransaction`
+- [ ] `CommitAsync_WhenCancelled_ThrowsOperationCancelled`
+- [ ] `ExecuteAsync_WhenOperationThrows_RollsBack` (PostgreSQL)
+- [ ] `ExecuteAsync_InsideOpenTransaction_JoinsIt` (PostgreSQL — from #196 phase 1, D4)
 
 ## Test Pattern
 

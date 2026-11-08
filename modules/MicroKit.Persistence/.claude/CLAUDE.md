@@ -20,6 +20,10 @@ MicroKit.Domain              ← defines IAggregateRoot, Specification<T>
 
 ---
 
+> **Issue #196 is being delivered on this branch, one commit per phase.** Where this brain and the
+> code disagree, the code is authoritative; lines marked "#196 phase N" describe a change that phase
+> makes. Each phase updates these files as its code lands.
+
 ## 🗺️ Navigation
 
 Always load the relevant file before working on a specific concern:
@@ -34,8 +38,8 @@ Always load the relevant file before working on a specific concern:
 | EF Core concern (mapping, migration, query) | `.claude/rules/ef-core-patterns.md` + `.claude/skills/ef-core-patterns/SKILL.md` | `ef-core-specialist` |
 | Performance concern | `.claude/rules/performance.md` + `.claude/skills/benchmarking/SKILL.md` | `performance-reviewer` |
 | Public API change | `.claude/rules/abstractions.md` + `.claude/rules/naming.md` | `api-reviewer` — required before merge |
-| Dependency / `.csproj` change | `.claude/rules/dependencies.md` + `.claude-context/context/dependency-graph.md` | `dependency-guardian` — auto on `.csproj` edit |
-| Generating tests | `.claude/rules/testing.md` + `/new-repository-tests` | `test-generator` |
+| Dependency / `.csproj` change | `.claude/rules/dependencies.md` + `.claude-context/context/dependency-graph.md` | `dependency-guardian` — after every `.csproj` change |
+| Generating tests | `.claude/rules/testing.md` | `test-generator` |
 | Transaction behavior integration | `.claude-context/context/transaction-behavior-integration.md` | `architect` + `ef-core-specialist` |
 | Release | `.claude/workflows/releasing-module.md` + `/release` | `release-manager` |
 
@@ -46,7 +50,7 @@ Always load the relevant file before working on a specific concern:
 ```
 MicroKit.Persistence/
 ├── src/
-│   ├── MicroKit.Persistence.Abstractions/        ← IRepository, IReadRepository, IUnitOfWork,
+│   ├── MicroKit.Persistence.Abstractions/        ← IRepository, IReadRepository (marker), IUnitOfWork,
 │   │                                                ITransactionalContext, IPagedResult<T>,
 │   │                                                ITransaction, ITransactionManager, PersistenceException
 │   ├── MicroKit.Persistence/                      ← ISpecificationEvaluator, QueryOptions,
@@ -72,9 +76,9 @@ MicroKit.Persistence/
 ## 📦 Dependency Graph
 
 ```
-MicroKit.Persistence.Abstractions  ← MicroKit.Result, MicroKit.Domain.Abstractions
+MicroKit.Persistence.Abstractions  ← MicroKit.Domain, MicroKit.Result (removed by #196 D17)
         ↑
-MicroKit.Persistence (core)        ← Abstractions + MicroKit.Logging.Abstractions
+MicroKit.Persistence (core)        ← Abstractions
         ↑
 MicroKit.Persistence.EntityFrameworkCore  ← Core + Microsoft.EntityFrameworkCore
         ↑
@@ -86,7 +90,7 @@ MicroKit.Persistence.Analyzers        ← Microsoft.CodeAnalysis.CSharp (build-t
 ```
 
 **Cross-module:** MicroKit.Persistence is a **Level 2** module — may depend on Level 0
-(`MicroKit.Result`, `MicroKit.Domain.Abstractions`). Full graph: `.claude-context/context/dependency-graph.md`.
+(`MicroKit.Domain`, `MicroKit.Result`). Intra-module references are unconditional `ProjectReference` (ADR-GLOBAL-002 D5). Full graph: `.claude-context/context/dependency-graph.md`.
 
 ---
 
@@ -94,9 +98,10 @@ MicroKit.Persistence.Analyzers        ← Microsoft.CodeAnalysis.CSharp (build-t
 
 ### Write side
 ```csharp
-IRepository<TAggregate>       // FindAsync, AddAsync, UpdateAsync, DeleteAsync, CommitAsync
-IUnitOfWork                   // CommitAsync(CancellationToken) — prefer over SaveChangesAsync
-ITransactionalContext         // BeginTransactionAsync, CommitTransactionAsync, RollbackTransactionAsync
+IRepository<TAggregate>       // AddAsync, UpdateAsync, DeleteAsync, CommitAsync
+                              // → #196 phase 2: IRepository<TAggregate, TId> { FindAsync(TId), AddAsync, DeleteAsync }
+IUnitOfWork                   // CommitAsync(CancellationToken), DiscardChanges() — source-compatible, frozen
+ITransactionalContext         // ExecuteAsync<TState>(…) / ExecuteAsync<TState, TResult>(…) — frozen
 ```
 
 ### Read side
@@ -186,24 +191,14 @@ var result = await _repo.ListAsync(opts, ct);
 | `performance-reviewer` | Sonnet | Query hot-path, allocations, tracking overhead, N+1 regressions |
 | `dependency-guardian` | Haiku | Any `.csproj` / project-reference change — fast PASS/BLOCK |
 | `release-manager` | Sonnet | `/release` — 8-package release lifecycle |
-| `test-generator` | Sonnet | `/new-repository-tests` — generates Shouldly + NSubstitute suites |
+| `test-generator` | Sonnet | Generates Shouldly + NSubstitute suites |
 
 ---
 
 ## ⚡ Available Commands
 
-| Command | Purpose |
-|---------|---------|
-| `/new-repository` | Scaffold a typed repository pair (IRepo + EfRepo) |
-| `/new-read-repository` | Scaffold a read-only projection repository |
-| `/new-provider` | Scaffold a new EF Core provider project |
-| `/new-specification` | Scaffold a domain specification + QueryOptions wrapper |
-| `/new-repository-tests` | Generate repository test suite (Shouldly + NSubstitute) |
-| `/audit-queries` | Detect N+1, missing AsNoTracking, SaveChanges in read repos |
-| `/review-architecture` | Run the architect agent against the module |
-| `/review-performance` | Run the performance-reviewer agent on query-path code |
-| `/generate-benchmarks` | Generate a BenchmarkDotNet suite for repository operations |
-| `/release` | Prepare and validate a release |
+This module defines no slash commands. The repository root provides `/release`,
+`/audit-dependencies`, `/bootstrap-module-claude` and `/new-module`.
 
 ---
 

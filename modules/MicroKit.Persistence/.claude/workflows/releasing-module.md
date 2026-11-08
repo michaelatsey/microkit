@@ -34,8 +34,8 @@ Verify all 8 packages are present:
 
 ### 3. Verify Dependency Graph
 
-- `Abstractions` declares only `MicroKit.Result` + `MicroKit.Domain.Abstractions`
-- `Core` adds `MicroKit.Logging.Abstractions`
+- `Abstractions` declares only `MicroKit.Domain` + `MicroKit.Result` (`MicroKit.Result` removed by #196 D17)
+- `Core` declares `MicroKit.Persistence.Abstractions` only
 - `EntityFrameworkCore` adds `Microsoft.EntityFrameworkCore`
 - Provider packages add only their provider NuGet
 - `Testing` declares `NSubstitute`

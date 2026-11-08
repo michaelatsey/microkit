@@ -25,8 +25,6 @@
 | Type | Convention | Example |
 |---|---|---|
 | Context interface | `ITransactionalContext` | |
-| Transaction value | `ITransaction` | |
-| Manager interface | `ITransactionManager` | |
 
 ## QueryOptions and Pagination
 

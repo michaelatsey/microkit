@@ -38,25 +38,24 @@ renaming it is a breaking change that affects every consumer.
 - [ ] `CancellationToken ct = default` last on every async method
 - [ ] `PersistenceException` is the only exception type declared here
 
-### IRepository<TAggregate>
-- [ ] `FindAsync`, `AddAsync`, `UpdateAsync`, `DeleteAsync` present
-- [ ] `CommitAsync(CancellationToken)` present (not `SaveChangesAsync`)
-- [ ] Constrained to `where TAggregate : IAggregateRoot`
+### Write-side repository
+Review against the phase being committed. Until #196 phase 2 the code has `IRepository<TAggregate>`
+with `AddAsync`, `UpdateAsync`, `DeleteAsync`, `CommitAsync`. From phase 2 (D9–D11):
+- [ ] Exactly one write-side interface: `IRepository<TAggregate, TId>` (`TAggregate : class, IAggregateRoot`, `TId : IEntityId`)
+- [ ] `FindAsync(TId id, ct)`, `AddAsync`, `DeleteAsync` — no `CommitAsync` (committing belongs to `IUnitOfWork` only), no `UpdateAsync`
 - [ ] No `IQueryable<T>` return types
 
 ### IReadRepository<TAggregate>
+- [ ] From #196 phase 2 (D8): declared once, in Core (`MicroKit.Persistence`); until then an empty marker also exists in Abstractions
 - [ ] No `AddAsync`, `UpdateAsync`, `DeleteAsync`, `CommitAsync`
-- [ ] `ListAsync(QueryOptions<T>)`, `FindAsync(...)`, `AnyAsync(...)`, `CountAsync(...)` present
-- [ ] Returns `IReadOnlyList<T>` not `List<T>` or `IQueryable<T>`
+- [ ] Returns `IReadOnlyList<T>` / `IPagedResult<T>`, never `List<T>` or `IQueryable<T>`
 
-### IUnitOfWork
-- [ ] Only `CommitAsync(CancellationToken ct = default)` — nothing else
-- [ ] Returns `ValueTask`
+### IUnitOfWork — source-compatible, frozen
+- [ ] Exactly `ValueTask CommitAsync(CancellationToken ct = default)` and `void DiscardChanges()`
 
-### ITransactionalContext
-- [ ] `BeginTransactionAsync`, `CommitTransactionAsync`, `RollbackTransactionAsync`
-- [ ] All return `ValueTask`
-- [ ] `IAsyncDisposable` implemented (transactions must be cleaned up)
+### ITransactionalContext — source-compatible, frozen
+- [ ] Exactly the two `ExecuteAsync<TState>` / `ExecuteAsync<TState, TResult>` overloads returning `Task` / `Task<TResult>`
+- [ ] No Begin/Commit/Rollback members. `ITransaction` / `ITransactionManager` are deleted by #196 D12 (phase 2)
 
 ### Naming
 - [ ] Repository interfaces: `IXxxRepository<T>` or `IXxxReadRepository<T>`

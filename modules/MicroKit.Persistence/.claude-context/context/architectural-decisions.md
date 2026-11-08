@@ -24,7 +24,7 @@ directive to `MicroKit.Persistence.Abstractions`.
    This is an infrastructure concern. The domain layer (aggregates, value objects, domain events)
    should have no knowledge of how persistence works or when changes are committed.
 2. **Avoiding circular-ish coupling.** If `MicroKit.Domain` declares `IUnitOfWork` and
-   `MicroKit.Persistence.Abstractions` depends on `MicroKit.Domain.Abstractions` (for
+   `MicroKit.Persistence.Abstractions` depends on `MicroKit.Domain` (for
    `IAggregateRoot`), then `IUnitOfWork` lives at Level 0. But the *implementation* of that contract
    (`EfUnitOfWork`) lives at Level 2. This is fine for the interface, but it puts a persistence
    concept in the domain layer, which erodes the clean separation between domain and infrastructure.
@@ -145,7 +145,7 @@ NOT in Abstractions:
 - `QueryOptions<T>` lives in Core.
 - Consumers that want `QueryOptions<T>` depend on Core, not just Abstractions — this is expected
   and acceptable (most consumers will want both).
-- The `dependency-check` hook and `dependency-guardian` agent enforce this automatically.
+- The `dependency-guardian` agent checks this on every `.csproj` change.
 
 ---
 

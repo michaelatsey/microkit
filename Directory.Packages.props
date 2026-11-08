@@ -42,6 +42,12 @@
     <PackageVersion Include="Microsoft.EntityFrameworkCore.Sqlite" Version="10.0.9" />
     <PackageVersion Include="Microsoft.EntityFrameworkCore.SqlServer" Version="10.0.9" />
     <PackageVersion Include="Npgsql.EntityFrameworkCore.PostgreSQL" Version="10.0.2" />
+    <!-- Transitive pin (CentralPackageTransitivePinningEnabled): Microsoft.EntityFrameworkCore.SqlServer
+         → Microsoft.Data.SqlClient 6.1.1 → System.Security.Cryptography.Pkcs 9.0.4, vulnerable to
+         GHSA-2fmv-rv2c-59x7 and GHSA-846f-f764-76mx. 9.0.21 is the lowest version patching both.
+         Repository-wide effect: transitive pinning also lifts the Pkcs 5.0.0 that NuGet.Packaging brings
+         into the analyzer test projects (Logging, Persistence, Result, Tenancy) to 9.0.21. -->
+    <PackageVersion Include="System.Security.Cryptography.Pkcs" Version="9.0.21" />
   </ItemGroup>
   <ItemGroup Label="MediatR">
     <PackageVersion Include="MediatR" Version="12.4.1" />

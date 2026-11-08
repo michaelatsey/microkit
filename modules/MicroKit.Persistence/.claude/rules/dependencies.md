@@ -2,7 +2,7 @@
 
 ## Central Package Management (CPM)
 
-All NuGet versions live in `build/Directory.Packages.props`. Never set `Version=` on a
+All NuGet versions live in the repository-root `Directory.Packages.props`. Never set `Version=` on a
 `PackageReference` in a `.csproj`.
 
 ## The 8-Project Layer Graph
@@ -25,9 +25,9 @@ MicroKit.Persistence.Analyzers         ← build-time only (no runtime dependenc
 
 | Project | Allowed Packages |
 |---------|-----------------|
-| `Abstractions` | `MicroKit.Result`, `MicroKit.Domain.Abstractions` |
-| `Core` | Abstractions (project) + `MicroKit.Logging.Abstractions` |
-| `EntityFrameworkCore` | Core (project) + `Microsoft.EntityFrameworkCore` + `Microsoft.Extensions.DependencyInjection.Abstractions` |
+| `Abstractions` | `MicroKit.Domain`, `MicroKit.Result` (`MicroKit.Result` is removed by #196 D17, phase 2) |
+| `Core` | Abstractions (project) — no extra packages |
+| `EntityFrameworkCore` | Core (project) + `Microsoft.EntityFrameworkCore` + `Microsoft.EntityFrameworkCore.Relational` + `Microsoft.Extensions.DependencyInjection.Abstractions` |
 | `PostgreSql` | EntityFrameworkCore (project) + `Npgsql.EntityFrameworkCore.PostgreSQL` |
 | `SqlServer` | EntityFrameworkCore (project) + `Microsoft.EntityFrameworkCore.SqlServer` |
 | `Specifications` | Core (project) — no extra packages |
@@ -47,6 +47,10 @@ Testing        → Core
 Analyzers      → (no project references — standalone Roslyn package)
 ```
 
+Every reference between this module's own projects is an **unconditional** `ProjectReference`,
+in every build mode (ADR-GLOBAL-002 D5). Only cross-module references use the two-ItemGroup
+`CIReleaseBuild` pattern.
+
 ### Sibling Isolation
 `Specifications`, `Testing`, `PostgreSql`, and `SqlServer` are siblings — none references another.
 `Testing` must not reference `Specifications` and vice versa.
@@ -56,9 +60,8 @@ Analyzers      → (no project references — standalone Roslyn package)
 MicroKit.Persistence is a **Level 2** module:
 
 ```
-MicroKit.Persistence.Abstractions → MicroKit.Result              (production)
-MicroKit.Persistence.Abstractions → MicroKit.Domain.Abstractions (IAggregateRoot constraint)
-MicroKit.Persistence (core)       → MicroKit.Logging.Abstractions (structured log property names)
+MicroKit.Persistence.Abstractions → MicroKit.Domain (IAggregateRoot / IEntityId constraints)
+MicroKit.Persistence.Abstractions → MicroKit.Result (global using only — removed by #196 D17, phase 2)
 ```
 
 > Any addition to Abstractions requires explicit `api-reviewer` approval.

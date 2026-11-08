@@ -1,6 +1,6 @@
 ---
 name: dependency-guardian
-description: Use this agent on any .csproj or project-reference change in MicroKit.Persistence. Fast PASS/BLOCK verdict. Automatically invoked by the dependency-check hook on every .csproj edit. Checks CPM compliance, layer isolation (EF Core out of Abstractions), package confinement (Npgsql/SqlServer only in providers, NSubstitute only in Testing, Analyzers as build-only).
+description: Use this agent on any .csproj or project-reference change in MicroKit.Persistence. Fast PASS/BLOCK verdict. Invoke it after every .csproj or Directory.Packages.props change. Checks CPM compliance, layer isolation (EF Core out of Abstractions), package confinement (Npgsql/SqlServer only in providers, NSubstitute only in Testing, Analyzers as build-only).
 tools: Read, Glob, Grep
 model: haiku
 ---
@@ -30,8 +30,13 @@ model: haiku
 
 ## Cross-Module Reference Pattern (rule: `/.claude/rules/cross-module-references.md`)
 
-MicroKit.Persistence.Abstractions depends on `MicroKit.Result` and `MicroKit.Domain.Abstractions`;
-Core depends on `MicroKit.Logging.Abstractions`. All must follow the canonical two-ItemGroup pattern.
+The only cross-module references in this module's `src/` are `MicroKit.Persistence.Abstractions` →
+`MicroKit.Domain` and → `MicroKit.Result` (the latter removed by #196 D17 in phase 2); Core
+references nothing outside the module. Cross-module references in `src/` follow the canonical
+two-ItemGroup pattern; test and other non-packable projects use an unconditional
+`ProjectReference` instead (e.g. `IntegrationTests` → `MicroKit.Domain`), which is correct.
+**Intra-module** references (between this module's own projects) are always unconditional
+`ProjectReference` (ADR-GLOBAL-002 D5) — a `CIReleaseBuild` condition on one is a BLOCK.
 Run on every cross-module reference found:
 
 ```bash
@@ -56,4 +61,4 @@ Checklist:
 ❌ BLOCK [ProjectName]: <rule violated> — <fix>
 ```
 
-One line per project reviewed. Exit code 2 on any BLOCK.
+One line per project reviewed.

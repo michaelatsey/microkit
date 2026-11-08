@@ -100,62 +100,28 @@ var opts = new QueryOptions<User>(spec)
 // ✅ Composite interface — EF-specific, not in Abstractions
 public interface ITransactionalUnitOfWork : IUnitOfWork, ITransactionalContext { }
 
-public sealed class EfUnitOfWork(AppDbContext ctx) : ITransactionalUnitOfWork
-{
-    private IDbContextTransaction? _currentTransaction;
-
-    public async ValueTask CommitAsync(CancellationToken ct = default)
-    {
-        try
-        {
-            await ctx.SaveChangesAsync(ct).ConfigureAwait(false);
-        }
-        catch (DbUpdateConcurrencyException ex)
-        {
-            throw new PersistenceException("Concurrency conflict during commit.", ex);
-        }
-        catch (DbUpdateException ex)
-        {
-            throw new PersistenceException("Database error during commit.", ex);
-        }
-    }
-
-    public async ValueTask<ITransaction> BeginTransactionAsync(CancellationToken ct = default)
-    {
-        _currentTransaction = await ctx.Database.BeginTransactionAsync(ct).ConfigureAwait(false);
-        return new EfTransaction(_currentTransaction);
-    }
-
-    public async ValueTask CommitTransactionAsync(CancellationToken ct = default)
-    {
-        await ctx.SaveChangesAsync(ct).ConfigureAwait(false);
-        await _currentTransaction!.CommitAsync(ct).ConfigureAwait(false);
-    }
-
-    public async ValueTask RollbackTransactionAsync(CancellationToken ct = default)
-    {
-        if (_currentTransaction is not null)
-            await _currentTransaction.RollbackAsync(ct).ConfigureAwait(false);
-    }
-
-    public async ValueTask DisposeAsync()
-    {
-        if (_currentTransaction is not null)
-            await _currentTransaction.DisposeAsync().ConfigureAwait(false);
-    }
-}
+// EfUnitOfWork<TContext> implements it. Today:
+// - CommitAsync = SaveChangesAsync, translating DbUpdateException → PersistenceException.
+// - ExecuteAsync always runs begin → operation → commit inside the provider's execution strategy,
+//   and rolls back with the caller's token on failure.
+// #196 phase 1 changes ExecuteAsync, each change behind a test that fails first:
+// - D4: join an open Database.CurrentTransaction (no strategy, no begin/commit/rollback);
+// - D3 (if the retry harness proves no retry happens): unwrap PersistenceException(DbUpdateException)
+//   inside the strategy so a transient failure is retried;
+// - D5: roll back with CancellationToken.None, never masking the in-flight exception.
+// There is no BeginTransactionAsync API: transactions are internal to ExecuteAsync.
 ```
 
 ## Anti-Patterns
 
 ```csharp
-// ❌ PRDANA001: DbContext in query handler
+// ❌ MKP004: DbContext in query handler
 public sealed class GetUsersHandler(AppDbContext ctx) { }
 
-// ❌ PRDANA002: SaveChanges in read repository
+// ❌ MKP001: SaveChanges in read repository
 await _context.SaveChangesAsync(); // inside IReadRepository
 
-// ❌ PRDANA003: Missing AsNoTracking
+// ❌ Missing AsNoTracking (no analyzer — review it)
 _context.Users.Where(u => u.IsActive).ToListAsync(); // no AsNoTracking
 
 // ❌ IQueryable<T> on public interface

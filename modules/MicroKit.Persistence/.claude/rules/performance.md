@@ -11,7 +11,7 @@ by database request rate — it must be invisible.
 var query = _context.Set<User>().AsNoTracking();
 
 // ❌ Missing AsNoTracking in a read repository — change-tracker overhead + memory leak risk
-var query = _context.Set<User>(); // Analyzer PRDANA003 flags this
+var query = _context.Set<User>(); // no analyzer flags this — review it
 ```
 
 ### ValueTask over Task
