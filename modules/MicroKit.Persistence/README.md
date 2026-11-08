@@ -242,6 +242,7 @@ public sealed class ListOpenOrders(IReadRepository<Order> orders)
         orders.ListPagedAsync(
             new QueryOptions<Order>(new OpenOrdersSpec())
                 .WithOrderByDescending(o => o.CreatedAt)
+                .WithThenBy(o => o.Id) // a unique tie-breaker: stable page boundaries
                 .WithPagination(page, pageSize: 20),
             ct);
 }

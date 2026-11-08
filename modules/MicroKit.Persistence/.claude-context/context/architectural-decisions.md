@@ -492,7 +492,10 @@ choice. All 8 packages share one version — whichever number is chosen, all 8 r
    - a new one wrapping `RetryLimitExceededException`, when retries are exhausted;
    - a new one wrapping the `DbException`, for a failure of the transaction itself (BEGIN, COMMIT,
      a deferred constraint) or of raw SQL the operation ran, or the provider's
-     `InvalidOperationException` wrapper of a transient one.
+     `InvalidOperationException` wrapper of a transient one;
+   - a new one wrapping the `DbUpdateException` (or the provider's `InvalidOperationException`
+     wrapper of it), when the operation flushed through the `DbContext` itself rather than
+     `CommitAsync`.
 3. **Join (D4).** While `Database.CurrentTransaction` is not null — an enclosing `ExecuteAsync`, or
    a transaction the caller opened — `ExecuteAsync` runs the operation directly: no execution
    strategy (a retrying one throws on an existing transaction, `ExecutionStrategy.OnFirstExecution`),

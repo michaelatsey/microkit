@@ -2,8 +2,10 @@ namespace MicroKit.Persistence.EntityFrameworkCore;
 
 /// <summary>
 /// Generic EF Core read-side repository base implementing <see cref="IReadRepository{TAggregate}"/>.
-/// Enforces <c>AsNoTracking()</c> on all queries; uses <see cref="ISpecificationEvaluator"/> for
-/// all <see cref="QueryOptions{TAggregate}"/>-based transformations.
+/// List, any and count queries run with <c>AsNoTracking()</c>, or with <c>AsTracking()</c> after
+/// <c>WithTracking()</c>, whatever the context's default <see cref="QueryTrackingBehavior"/>; uses
+/// <see cref="ISpecificationEvaluator"/> for all <see cref="QueryOptions{TAggregate}"/>-based
+/// transformations.
 /// </summary>
 /// <typeparam name="TAggregate">
 /// The aggregate root type. Must be a reference type implementing <see cref="IAggregateRoot"/>.
@@ -226,7 +228,7 @@ public class EfReadRepository<TAggregate, TContext>(
     private IQueryable<TAggregate> GetBaseQuery(QueryOptions<TAggregate> opts)
         => opts.AsNoTrackingEnabled
             ? Context.Set<TAggregate>().AsNoTracking()
-            : Context.Set<TAggregate>().AsQueryable();
+            : Context.Set<TAggregate>().AsTracking(); // overrides a context configured as NoTracking
 
     private static QueryOptions<TAggregate> AsCountQuery(QueryOptions<TAggregate> opts)
         => opts with { Includes = null, OrderBy = null, Pagination = null, AsSplitQueryEnabled = false };

@@ -135,7 +135,8 @@ public sealed class EfUnitOfWork<TContext>(TContext context)
     /// <exception cref="ArgumentNullException"><paramref name="operation"/> is <see langword="null"/>.</exception>
     /// <exception cref="PersistenceException">
     /// The commit, or the transaction itself (begin, commit, a deferred constraint), failed and was
-    /// not, or could no longer be, retried. In the join path, the operation's exceptions propagate
+    /// not, or could no longer be, retried. A write the operation flushed through the
+    /// <see cref="DbContext"/> itself, rather than <see cref="CommitAsync"/>, is translated the same way. In the join path, the operation's exceptions propagate
     /// unchanged: the transaction's owner handles them.
     /// </exception>
     public Task ExecuteAsync<TState>(
@@ -201,13 +202,23 @@ public sealed class EfUnitOfWork<TContext>(TContext context)
             ExceptionDispatchInfo.Throw(original);
             throw; // unreachable
         }
+        catch (DbUpdateConcurrencyException ex)
+        {
+            // The operation flushed through the DbContext itself rather than CommitAsync.
+            throw new PersistenceException("Optimistic concurrency conflict during the transaction.", ex);
+        }
+        catch (DbUpdateException ex)
+        {
+            // The operation flushed through the DbContext itself rather than CommitAsync.
+            throw new PersistenceException("Database error during the transaction.", ex);
+        }
         catch (DbException ex)
         {
             // A failure of the transaction itself (BEGIN, or COMMIT — e.g. a deferred constraint),
             // or of raw SQL the operation ran, that the strategy did not retry.
             throw new PersistenceException("Database error during the transaction.", ex);
         }
-        catch (InvalidOperationException ex) when (ex.InnerException is DbException)
+        catch (InvalidOperationException ex) when (ex.InnerException is DbException or DbUpdateException)
         {
             // A provider's non-retrying strategy wraps a failure it classifies as transient.
             throw new PersistenceException(

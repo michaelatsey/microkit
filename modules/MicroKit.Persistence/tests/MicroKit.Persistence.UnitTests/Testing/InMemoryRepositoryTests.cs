@@ -81,6 +81,15 @@ public sealed class InMemoryRepositoryWriteTests
         await Should.ThrowAsync<NotSupportedException>(
             async () => await _repo.FindAsync([new TestItemId(Guid.NewGuid()), new TestItemId(Guid.NewGuid())]));
     }
+
+    [Fact]
+    public async Task FindAsync_WithANullKeyValue_ReturnsNull()
+    {
+        await _repo.AddAsync(new TestItem("Alice"));
+
+        // EfReadRepository.FindAsync answers null for a null key value, as DbSet.Find does.
+        (await _repo.FindAsync([null!])).ShouldBeNull();
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -230,6 +239,15 @@ public sealed class InMemoryReadRepositoryTests
         var found = await repo.FindAsync([new TestItemId(Guid.NewGuid())]);
 
         found.ShouldBeNull();
+    }
+
+    [Fact]
+    public async Task FindAsync_WithANullKeyValue_ReturnsNull()
+    {
+        var repo = new InMemoryReadRepository<TestItem>([new TestItem("Alice")]);
+
+        // EfReadRepository.FindAsync answers null for a null key value, as DbSet.Find does.
+        (await repo.FindAsync([null!])).ShouldBeNull();
     }
 
     [Fact]

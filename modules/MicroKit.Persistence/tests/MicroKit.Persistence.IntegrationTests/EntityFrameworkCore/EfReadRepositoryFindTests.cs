@@ -138,6 +138,21 @@ public sealed class EfReadRepositoryFindTests
     }
 
     [Fact]
+    public async Task FindAsync_OnAConvertedKey_WithTheProviderValueInsteadOfTheKeyType_ThrowsArgumentException()
+    {
+        await using var connection = new SqliteConnection("DataSource=:memory:");
+        await connection.OpenAsync();
+        var options = new DbContextOptionsBuilder<PlainKeyDbContext>().UseSqlite(connection).Options;
+        await using var context = new PlainKeyDbContext(options);
+        await context.Database.EnsureCreatedAsync();
+        var sut = new EfReadRepository<PlainKeyAggregate, PlainKeyDbContext>(
+            context, new EfSpecificationEvaluator(), PaginationLimits.Default);
+
+        // The key's CLR type is PlainKey; its column holds a Guid. Passing the Guid is a caller error.
+        await Should.ThrowAsync<ArgumentException>(async () => await sut.FindAsync([Guid.NewGuid()]));
+    }
+
+    [Fact]
     public async Task FindAsync_WithAStructKeyThatDefinesNoEqualityOperator_FindsTheAggregate()
     {
         await using var connection = new SqliteConnection("DataSource=:memory:");

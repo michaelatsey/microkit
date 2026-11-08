@@ -87,6 +87,36 @@ public sealed class EfUnitOfWorkRetryTests(PostgreSqlFixture fixture)
         state.Attempts.ShouldBe(1, "a non-transient failure is never retried");
     }
 
+    [DockerRequiredTheory]
+    [InlineData(null)]
+    [InlineData(3)]
+    public async Task ExecuteAsync_WhenTheOperationSavesDirectlyAndTheWriteFails_ThrowsPersistenceException(int? maxRetryCount)
+    {
+        await using var database = await ExecutionDatabase.CreateAsync(fixture);
+        var existingId = Guid.NewGuid();
+        await using (var seed = database.CreateContext())
+        {
+            seed.Rows.Add(new ExecutionRow { Id = existingId, Name = "existing" });
+            await seed.SaveChangesAsync();
+        }
+
+        await using var context = database.CreateContext(maxRetryCount);
+        var sut = new EfUnitOfWork<ExecutionDbContext>(context);
+        var attempts = 0;
+
+        // The operation flushes through the DbContext itself, not through CommitAsync: the
+        // DbUpdateException never passes through CommitAsync's translation.
+        var thrown = await Should.ThrowAsync<PersistenceException>(() => sut.ExecuteAsync(static async (s, ct) =>
+        {
+            s.Attempts();
+            s.Context.Rows.Add(new ExecutionRow { Id = s.Id, Name = "duplicate" }); // duplicate primary key: 23505
+            await s.Context.SaveChangesAsync(ct);
+        }, (Context: context, Id: existingId, Attempts: (Action)(() => attempts++))));
+
+        thrown.InnerException.ShouldBeAssignableTo<DbUpdateException>();
+        attempts.ShouldBe(1, "a non-transient failure is never retried");
+    }
+
     [DockerRequiredFact]
     public async Task ExecuteAsync_WithTheDefaultStrategy_WhenCommitFailsWithAProviderTransientError_ThrowsPersistenceException()
     {

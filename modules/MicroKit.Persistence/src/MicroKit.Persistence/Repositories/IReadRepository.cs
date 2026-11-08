@@ -32,8 +32,13 @@ public interface IReadRepository<TAggregate>
     where TAggregate : class, IAggregateRoot
 {
     /// <summary>
-    /// Finds an aggregate by its primary key without change tracking.
+    /// Finds an aggregate by its primary key.
     /// </summary>
+    /// <remarks>
+    /// An aggregate the current unit of work already tracks is returned as is — same instance, same
+    /// state — so its pending change still reaches the next commit. Any other aggregate is loaded
+    /// without change tracking. A <see langword="null"/> key value matches nothing.
+    /// </remarks>
     /// <param name="keyValues">
     /// The primary key values. Pass a single-element array for simple PKs;
     /// multiple elements for composite PKs, in the same order as the key definition.

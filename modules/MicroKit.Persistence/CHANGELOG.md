@@ -80,6 +80,11 @@ compile in `samples/MicroKit.Persistence.Samples`.
 - **D15** — with a retrying strategy, `CommitAsync` called outside `ExecuteAsync` leaked `RetryLimitExceededException` once the retries were exhausted, instead of the documented `PersistenceException`.
 - **D4** — `ExecuteAsync` inside an open transaction (nested, or caller-owned) threw `InvalidOperationException` ("The connection is already in a transaction").
 - **D5** — the rollback after a failed operation ran with the caller's token, so after a cancellation it threw `OperationCanceledException` and masked the original exception; a failing rollback masked it too.
+- `ExecuteAsync` let a raw `DbUpdateException` escape when the operation flushed through the `DbContext` itself rather than `CommitAsync`, instead of the documented `PersistenceException`.
+- `EfReadRepository` list, paged list, any and count queries with `WithTracking()` ran untracked on a context configured with `QueryTrackingBehavior.NoTracking`, so changes to the aggregates they returned were silently lost at commit.
+
+#### MicroKit.Persistence.Testing
+- `InMemoryReadRepository.FindAsync` and `InMemoryRepository.FindAsync(object[])` threw `ArgumentNullException` for a null key value, where `EfReadRepository.FindAsync` returns `null`.
 
 #### MicroKit.Persistence.Abstractions
 - A command that failed its business rule could persist its data anyway. `TransactionBehavior` correctly skipped the flush on failure, but the entities the handler staged stayed in the scoped `DbContext`'s change tracker; the next successful command in the same scope wrote them along with its own. Identical on the exception path — EF Core's transaction rollback does not reset the change tracker. The failure was silent: no error, no log, and nothing distinguishing it from correct operation. `IUnitOfWork` had no way to express "abandon this change set", so no consumer could fix it without reaching past the abstraction into EF Core.

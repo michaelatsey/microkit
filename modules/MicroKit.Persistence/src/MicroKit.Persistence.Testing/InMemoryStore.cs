@@ -52,7 +52,8 @@ internal sealed class InMemoryStore<TAggregate>
                 $"InMemoryRepository does not support composite primary keys. " +
                 $"Received {keys.Length} key values for '{typeof(TAggregate).Name}'.");
 
-        return Find(keys[0]);
+        // A null key value matches nothing, as EfReadRepository.FindAsync and DbSet.Find answer.
+        return keys[0] is { } key ? Find(key) : null;
     }
 
     internal void AddNew(TAggregate item)
