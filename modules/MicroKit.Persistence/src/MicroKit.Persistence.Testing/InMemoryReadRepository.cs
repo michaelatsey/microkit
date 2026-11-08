@@ -24,6 +24,16 @@ public sealed class InMemoryReadRepository<TAggregate> : IReadRepository<TAggreg
         _store = new InMemoryStore<TAggregate>(seed);
 
     /// <summary>
+    /// Initializes a read repository seeded with the supplied aggregates that enforces
+    /// <paramref name="paginationLimits"/>, as the EF Core read repository does.
+    /// </summary>
+    /// <param name="seed">The aggregates to pre-load into the store.</param>
+    /// <param name="paginationLimits">The page sizes to enforce.</param>
+    public InMemoryReadRepository(IEnumerable<TAggregate> seed, PaginationLimits paginationLimits) =>
+        _store = new InMemoryStore<TAggregate>(seed, paginationLimits: paginationLimits
+            ?? throw new ArgumentNullException(nameof(paginationLimits)));
+
+    /// <summary>
     /// Initializes a read repository seeded with the supplied aggregates using an explicit
     /// key selector.
     /// </summary>
@@ -35,6 +45,20 @@ public sealed class InMemoryReadRepository<TAggregate> : IReadRepository<TAggreg
         IEnumerable<TAggregate> seed,
         Func<TAggregate, object> keySelector) =>
         _store = new InMemoryStore<TAggregate>(seed, keySelector);
+
+    /// <summary>
+    /// Initializes a read repository seeded with the supplied aggregates using an explicit key
+    /// selector and enforcing <paramref name="paginationLimits"/>.
+    /// </summary>
+    /// <param name="seed">The aggregates to pre-load into the store.</param>
+    /// <param name="keySelector">Extracts the identity key.</param>
+    /// <param name="paginationLimits">The page sizes to enforce.</param>
+    public InMemoryReadRepository(
+        IEnumerable<TAggregate> seed,
+        Func<TAggregate, object> keySelector,
+        PaginationLimits paginationLimits) =>
+        _store = new InMemoryStore<TAggregate>(seed, keySelector, paginationLimits
+            ?? throw new ArgumentNullException(nameof(paginationLimits)));
 
     /// <inheritdoc/>
     /// <remarks>

@@ -98,7 +98,7 @@ See .claude/rules/analyzers.md.
 | New aggregate needs persistence | `IRepository<T>` + `EfRepository<T, TContext>` (→ `IRepository<TAggregate, TId>` + `EfRepository<TAggregate, TId, TContext>` in #196 phase 2) |
 | New read projection | `IReadRepository<T>` with custom finder methods |
 | Cross-aggregate query | `IReadRepository` with composite QueryOptions |
-| Ambient transaction needed | `ITransactionalContext.ExecuteAsync` — begins a transaction inside the execution strategy; #196 phase 1 (D4) makes it join an open one |
+| Ambient transaction needed | `ITransactionalContext.ExecuteAsync` — joins an open transaction, otherwise begins one inside the execution strategy (#196 D4) |
 | Provider-specific optimization (PostgreSQL) | New extension in provider project, never in Core |
 | Specification with business logic | Lives in Domain — never in Persistence |
 | QueryOptions extension | Lives in `MicroKit.Persistence.Specifications` |

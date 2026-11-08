@@ -56,6 +56,14 @@ public interface IReadRepository<TAggregate>
     /// A read-only list of matching aggregates. Returns an empty list (never
     /// <see langword="null"/>) when no aggregates match.
     /// </returns>
+    /// <remarks>
+    /// Without <see cref="QueryOptions{TAggregate}.Pagination"/> every matching aggregate is
+    /// returned; use <see cref="ListPagedAsync"/> for a bounded page.
+    /// </remarks>
+    /// <exception cref="ArgumentOutOfRangeException">
+    /// <see cref="QueryOptions{TAggregate}.Pagination"/> asks for more than the configured
+    /// <see cref="PaginationLimits.MaxPageSize"/> items.
+    /// </exception>
     ValueTask<IReadOnlyList<TAggregate>> ListAsync(
         QueryOptions<TAggregate> opts,
         CancellationToken ct = default);
@@ -65,13 +73,19 @@ public interface IReadRepository<TAggregate>
     /// <see cref="QueryOptions{TAggregate}"/>.
     /// </summary>
     /// <param name="opts">
-    /// The query options. <see cref="QueryOptions{TAggregate}.Pagination"/> must be set.
+    /// The query options. When <see cref="QueryOptions{TAggregate}.Pagination"/> is not set, the
+    /// first page of <see cref="PaginationLimits.DefaultPageSize"/> items is returned — never the
+    /// whole result set.
     /// </param>
     /// <param name="ct">Propagates notification that operations should be cancelled.</param>
     /// <returns>
     /// An <see cref="IPagedResult{TAggregate}"/> containing the current page of results
     /// and the total count across all pages.
     /// </returns>
+    /// <exception cref="ArgumentOutOfRangeException">
+    /// <see cref="QueryOptions{TAggregate}.Pagination"/> asks for more than the configured
+    /// <see cref="PaginationLimits.MaxPageSize"/> items.
+    /// </exception>
     ValueTask<IPagedResult<TAggregate>> ListPagedAsync(
         QueryOptions<TAggregate> opts,
         CancellationToken ct = default);

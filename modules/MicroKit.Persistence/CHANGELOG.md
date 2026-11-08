@@ -2,7 +2,23 @@
 
 ## [Unreleased]
 
+Issue #196 settles the module before 2.0.0 stable. The entries below are grouped by package; the
+decision number (D1–D17) points at the issue.
+
 ### Breaking Changes
+
+#### MicroKit.Persistence (Core)
+- **D1** — `QueryOptions<T>.IncludeDeleted` and `QueryOptionsExtensions.IncludeSoftDeleted()` are removed. They called the parameterless `IgnoreQueryFilters()`, which disables **every** query filter of the model — a tenant filter included — while the module owns no soft delete. #197 reintroduces the flag on a *named* filter.
+- **D6** — `PaginationOptions` is no longer a positional record: `new PaginationOptions(page, pageSize)` validates `page >= 1`, `pageSize >= 1` and that the offset fits in an `int`, and `Page`, `PageSize`, `Skip` are get-only (no `Deconstruct`, no `with { Page = … }`). Named arguments change from `Page:`/`PageSize:` to `page:`/`pageSize:`.
+
+#### MicroKit.Persistence.EntityFrameworkCore
+- **D6** — `EfReadRepository<TAggregate, TContext>` takes a third, required constructor parameter `PaginationLimits paginationLimits`; typed subclasses forward it (the container resolves the registered instance).
+- **D6** — `ListPagedAsync` without pagination returns page 1 of `PaginationLimits.DefaultPageSize` (50) items instead of the whole result set; a requested page size above `PaginationLimits.MaxPageSize` (500) throws `ArgumentOutOfRangeException` from `ListAsync` and `ListPagedAsync`.
+- **D2** — `EfReadRepository.FindAsync` returns an aggregate the unit of work already tracks as is (same instance, same state) instead of detaching it, and loads any other aggregate with a no-tracking query instead of tracking then detaching it.
+- **D3–D5** — `EfUnitOfWork.ExecuteAsync` joins an open `Database.CurrentTransaction`; exhausted retries surface as `PersistenceException` (inner `RetryLimitExceededException`) instead of `RetryLimitExceededException`; failures of the transaction itself surface as `PersistenceException`; a failed attempt clears the change tracker. See ADR-006.
+
+#### MicroKit.Persistence.Testing
+- **D6** — `InMemoryRepository<T>` and `InMemoryReadRepository<T>` enforce `PaginationLimits` like the EF Core read repository (new constructor overloads take one); `ListPagedAsync` without pagination returns the default page.
 
 #### MicroKit.Persistence.Abstractions
 - `IUnitOfWork` gains `void DiscardChanges()` — abandons the pending change set without writing it. Every implementer must add the member. Consumers that only inject `IUnitOfWork` are unaffected: the member is called by `TransactionBehavior`, not by handlers.
@@ -21,13 +37,25 @@
 
 ### Added
 
+#### MicroKit.Persistence (Core)
+- **D6** — `PaginationLimits` (default page 50, maximum 500), validated on construction.
+
 #### MicroKit.Persistence.EntityFrameworkCore
+- **D6** — `EfCoreBuilder.ConfigurePagination(PaginationLimits)`; `AddEntityFrameworkCore()` registers `PaginationLimits.Default`.
 - `EfDomainEventsProvider<TContext>` — change-tracker-backed `IDomainEventsProvider` that aggregates domain events across every entity tracked by `TContext`. Candidates are detected on `IHasDomainEvents` (the read contract); draining requires `IDomainEventsProvider`, so an entity that exposes events without implementing the drain contract is reported by `DomainEvents` but skipped by `DrainDomainEvents`. Reads the in-memory change tracker only — never queries the database.
 
 #### MicroKit.Persistence.Testing
 - `InMemoryUnitOfWork.DiscardChanges()` and `DiscardCount`, symmetric with `CommitCount`, so tests can assert that a failed command discarded exactly once.
 
 ### Fixed
+
+#### MicroKit.Persistence.EntityFrameworkCore
+- **D1** — a query with `IncludeDeleted = true` returned other tenants' rows (the parameterless `IgnoreQueryFilters()` disabled the tenant filter). An architecture test now fails on any library call to it.
+- **D2** — reading an aggregate the current command had added, modified or deleted through `EfReadRepository.FindAsync` detached it, and the next commit silently wrote nothing. Loading an untracked one could also wire it into tracked entities' navigations before detaching it, so a later commit tried to insert it.
+- **D3** — a transient failure of the command's `SaveChangesAsync` inside `ExecuteAsync` was never retried: `CommitAsync`'s `PersistenceException` hid the `DbUpdateException` from the execution strategy. A failure of the transaction's COMMIT left the attempt's accepted changes tracked, so a retry could apply them twice.
+- **D3** — with a provider's default (non-retrying) strategy, `CommitAsync` leaked `InvalidOperationException` for a transient write failure instead of `PersistenceException`.
+- **D4** — `ExecuteAsync` inside an open transaction (nested, or caller-owned) threw `InvalidOperationException` ("The connection is already in a transaction").
+- **D5** — the rollback after a failed operation ran with the caller's token, so after a cancellation it threw `OperationCanceledException` and masked the original exception; a failing rollback masked it too.
 
 #### MicroKit.Persistence.Abstractions
 - A command that failed its business rule could persist its data anyway. `TransactionBehavior` correctly skipped the flush on failure, but the entities the handler staged stayed in the scoped `DbContext`'s change tracker; the next successful command in the same scope wrote them along with its own. Identical on the exception path — EF Core's transaction rollback does not reset the change tracker. The failure was silent: no error, no log, and nothing distinguishing it from correct operation. `IUnitOfWork` had no way to express "abandon this change set", so no consumer could fix it without reaching past the abstraction into EF Core.

@@ -22,9 +22,8 @@ namespace MicroKit.Persistence.Testing;
 /// cancellation only — use <see cref="InMemoryUnitOfWork"/> to track commit boundaries.
 /// </para>
 /// <para>
-/// <see cref="QueryOptions{TAggregate}.Includes"/>, <see cref="QueryOptions{TAggregate}.AsNoTrackingEnabled"/>,
-/// <see cref="QueryOptions{TAggregate}.AsSplitQueryEnabled"/>, and
-/// <see cref="QueryOptions{TAggregate}.IncludeDeleted"/> are accepted but ignored — they are
+/// <see cref="QueryOptions{TAggregate}.Includes"/>, <see cref="QueryOptions{TAggregate}.AsNoTrackingEnabled"/>
+/// and <see cref="QueryOptions{TAggregate}.AsSplitQueryEnabled"/> are accepted but ignored — they are
 /// EF Core execution concerns with no in-memory equivalent.
 /// </para>
 /// </remarks>
@@ -42,6 +41,16 @@ public sealed class InMemoryRepository<TAggregate>
     public InMemoryRepository() => _store = new InMemoryStore<TAggregate>();
 
     /// <summary>
+    /// Initializes an empty repository that enforces <paramref name="paginationLimits"/>, as the
+    /// EF Core read repository does. The aggregate's identity is extracted from its conventional
+    /// public <c>Id</c> property.
+    /// </summary>
+    /// <param name="paginationLimits">The page sizes to enforce.</param>
+    public InMemoryRepository(PaginationLimits paginationLimits) =>
+        _store = new InMemoryStore<TAggregate>(paginationLimits: paginationLimits
+            ?? throw new ArgumentNullException(nameof(paginationLimits)));
+
+    /// <summary>
     /// Initializes an empty repository using an explicit key selector.
     /// </summary>
     /// <param name="keySelector">
@@ -50,6 +59,16 @@ public sealed class InMemoryRepository<TAggregate>
     /// </param>
     public InMemoryRepository(Func<TAggregate, object> keySelector) =>
         _store = new InMemoryStore<TAggregate>(keySelector);
+
+    /// <summary>
+    /// Initializes an empty repository using an explicit key selector and enforcing
+    /// <paramref name="paginationLimits"/>.
+    /// </summary>
+    /// <param name="keySelector">Extracts the identity key used for storage and lookup.</param>
+    /// <param name="paginationLimits">The page sizes to enforce.</param>
+    public InMemoryRepository(Func<TAggregate, object> keySelector, PaginationLimits paginationLimits) =>
+        _store = new InMemoryStore<TAggregate>(keySelector, paginationLimits
+            ?? throw new ArgumentNullException(nameof(paginationLimits)));
 
     /// <summary>Gets a snapshot of all aggregates currently in the store.</summary>
     public IReadOnlyCollection<TAggregate> All => _store.All;

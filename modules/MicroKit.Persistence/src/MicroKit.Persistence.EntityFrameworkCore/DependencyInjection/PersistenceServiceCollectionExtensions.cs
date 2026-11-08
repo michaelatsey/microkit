@@ -26,7 +26,9 @@ public static class PersistenceServiceCollectionExtensions
     /// <summary>
     /// Adds EF Core persistence services and returns an <see cref="EfCoreBuilder"/> for
     /// further configuration. Registers <see cref="EfSpecificationEvaluator"/> as a singleton
-    /// <see cref="ISpecificationEvaluator"/> (idempotent — safe to call multiple times).
+    /// <see cref="ISpecificationEvaluator"/> and <see cref="PaginationLimits.Default"/> as the
+    /// singleton <see cref="PaginationLimits"/> (idempotent — safe to call multiple times; use
+    /// <see cref="ConfigurePagination"/> to change the limits).
     /// </summary>
     /// <param name="builder">The parent persistence builder.</param>
     /// <param name="configure">Optional delegate to configure EF Core services.</param>
@@ -37,9 +39,28 @@ public static class PersistenceServiceCollectionExtensions
     {
         ArgumentNullException.ThrowIfNull(builder);
         builder.Services.TryAddSingleton<ISpecificationEvaluator, EfSpecificationEvaluator>();
+        builder.Services.TryAddSingleton(PaginationLimits.Default);
         var efBuilder = new EfCoreBuilder(builder);
         configure?.Invoke(efBuilder);
         return efBuilder;
+    }
+
+    /// <summary>
+    /// Replaces the <see cref="PaginationLimits"/> the read repositories enforce
+    /// (<see cref="PaginationLimits.Default"/> unless configured).
+    /// </summary>
+    /// <param name="builder">The EF Core builder.</param>
+    /// <param name="limits">
+    /// The default and maximum page sizes. Its constructor validates them, so an invalid
+    /// configuration fails here, at registration, not on the first query.
+    /// </param>
+    /// <returns><paramref name="builder"/> for fluent chaining.</returns>
+    public static EfCoreBuilder ConfigurePagination(this EfCoreBuilder builder, PaginationLimits limits)
+    {
+        ArgumentNullException.ThrowIfNull(builder);
+        ArgumentNullException.ThrowIfNull(limits);
+        builder.Services.Replace(ServiceDescriptor.Singleton(limits));
+        return builder;
     }
 
     /// <summary>

@@ -39,7 +39,7 @@ model: sonnet
 - [ ] `CommitAsync_CommitsAllPendingChanges`
 - [ ] `CommitAsync_WhenCancelled_ThrowsOperationCancelled`
 - [ ] `ExecuteAsync_WhenOperationThrows_RollsBack` (PostgreSQL)
-- [ ] `ExecuteAsync_InsideOpenTransaction_JoinsIt` (PostgreSQL — from #196 phase 1, D4)
+- [ ] `ExecuteAsync_InsideOpenTransaction_JoinsIt` (PostgreSQL — #196 D4)
 
 ## Test Pattern
 

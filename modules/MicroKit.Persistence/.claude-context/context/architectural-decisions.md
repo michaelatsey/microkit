@@ -352,6 +352,12 @@ revision of this ADR asserted the opposite ("navigation fixup stops and lazy loa
 wrong on both halves, and the correction is recorded here because the claim had already been copied
 into the `IUnitOfWork.DiscardChanges` XML documentation.
 
+> **Superseded in part by #196 D4.** The paragraph below says nested dispatch "is already blocked
+> upstream — EF Core rejects `BeginTransactionAsync` while a transaction is open". Since #196 D4,
+> `ExecuteAsync` joins an open transaction instead of beginning one, so nothing blocks a nested
+> command any more, and its `DiscardChanges` on an inner failure still clears the outer command's
+> staged work. The consequence is recorded in ADR-006; the original reasoning is kept below.
+
 **Nested command dispatch stays unsupported, now for a second reason.** A command dispatched from
 inside another command's handler would, on inner failure, clear the outer command's staged work. This
 is already blocked upstream — EF Core rejects `BeginTransactionAsync` while a transaction is open on
@@ -433,9 +439,86 @@ choice. All 8 packages share one version — whichever number is chosen, all 8 r
 
 ---
 
+## ADR-006: Transaction Semantics of EfUnitOfWork — Retry, Join, Rollback (#196 D3–D5)
+
+**Status:** Accepted
+**Date:** 2026-11-08
+**Source:** Issue #196, phase 1 (D3, D4, D5). Supersedes DN-001.
+
+### Decision
+
+`EfUnitOfWork<TContext>` keeps its public surface (`IUnitOfWork`, `ITransactionalContext` and
+`ITransactionalUnitOfWork` are frozen) and changes behaviour as follows.
+
+1. **Translation (D3).** `CommitAsync` always translates to `PersistenceException`: a
+   `DbUpdateException`, and the `InvalidOperationException(DbUpdateException)` that a provider's
+   non-retrying strategy (Npgsql, SQL Server) raises inside `SaveChangesAsync` for a failure it
+   classifies as transient.
+2. **Retry (D3).** Inside the execution-strategy delegate, `ExecuteAsync` unwraps a
+   `PersistenceException` whose inner exception is a `DbUpdateException` and rethrows that inner
+   exception, so the strategy can classify it — `ExecutionStrategy.CallOnWrappedException` only
+   looks through exceptions EF Core created. Once the strategy gives up, the outermost call surfaces
+   a `PersistenceException` only:
+   - the original one, for a non-transient commit failure;
+   - a new one wrapping `RetryLimitExceededException`, when retries are exhausted;
+   - a new one wrapping the `DbException`, for a failure of the transaction itself (BEGIN, COMMIT,
+     a deferred constraint) or of raw SQL the operation ran, or the provider's
+     `InvalidOperationException` wrapper of a transient one.
+3. **Join (D4).** While `Database.CurrentTransaction` is not null — an enclosing `ExecuteAsync`, or
+   a transaction the caller opened — `ExecuteAsync` runs the operation directly: no execution
+   strategy (a retrying one throws on an existing transaction, `ExecutionStrategy.OnFirstExecution`),
+   no begin, commit or rollback, no translation. The transaction's owner commits, rolls back,
+   retries and translates. An ambient `System.Transactions` transaction is not joined.
+4. **Failed attempt (D5).** The rollback runs with `CancellationToken.None`; rollback and dispose
+   failures are swallowed, so the exception in flight is never replaced. The change tracker is then
+   cleared: the database was rolled back, so a retried attempt must start from a clean tracker
+   (otherwise a change `SaveChanges` already accepted before a failed COMMIT is applied twice).
+
+### Rationale
+
+- **The presumption was proven** (`EfUnitOfWorkRetryTests`, retrying strategy, PostgreSQL): before
+  the change, a transient `SaveChangesAsync` failure inside `ExecuteAsync` ran once and surfaced
+  `PersistenceException → DbUpdateException → transient cause`; it was never retried.
+- **Unwrap inside, not "don't translate while running"**: the issue first proposed that `CommitAsync`
+  stop translating while an `ExecuteAsync` runs. That would hand a handler that catches
+  `PersistenceException` a raw `DbUpdateException`, breaking `IUnitOfWork.CommitAsync`'s documented
+  contract. Unwrapping in `ExecuteAsync` gets the retry without touching `CommitAsync`'s contract.
+- **The original instance is surfaced** for a non-transient failure, so a handler that recorded it
+  (for logging, for mapping) sees the same exception the caller sees.
+- **Joining** gives nested `ExecuteAsync` calls and caller-owned transactions a defined behaviour
+  instead of the `InvalidOperationException` EF Core raised from `BeginTransactionAsync`
+  ("The connection is already in a transaction").
+
+### Consequences
+
+- **At-least-once.** With a retrying strategy the whole operation re-runs after a transient
+  failure. A failure of the COMMIT itself is ambiguous (the database may have committed);
+  `verifySucceeded` is not used, so a non-idempotent operation (store-generated keys, external side
+  effects) can apply twice. Keep retries off for those, or make them idempotent.
+- **Nested command dispatch is no longer blocked (finding for `MicroKit.MediatR`).**
+  `TransactionBehavior.cs:65-68` states that nested dispatch is unsupported and that EF Core rejects
+  it upstream because `BeginTransactionAsync` throws while a transaction is open. After D4 nothing
+  rejects it: the inner command's `ExecuteAsync` joins the outer transaction. On an inner business
+  failure (`TransactionBehavior.cs:129`) or exception (`:149`), the inner behaviour calls
+  `DiscardChanges()`, which clears the whole scoped change tracker — including the outer command's
+  staged aggregates and their events. If the outer handler continues and returns success, its
+  commit writes only what was staged after the discard, and the transaction commits: the outer
+  command's earlier work is lost without an error. A pipeline that discards per command must
+  detect the nesting (an open transaction) and either reject it or discard only at the outermost
+  level. This module leaves `TransactionBehavior` untouched (#196 perimeter).
+- **Tests.** `EfUnitOfWorkRetryTests`, `EfUnitOfWorkJoinTests` (each case under the default and a
+  retrying strategy), `EfUnitOfWorkRollbackTests` — all against PostgreSQL.
+
+---
+
 ## DN-001: Execution Strategy Coverage Gap in EfUnitOfWork.CommitAsync
 
-**Status:** Deferred (v1.1 candidate)
+**Status:** Superseded by ADR-006 (#196). Its observation was wrong: outside a transaction,
+`SaveChangesAsync` already runs through the provider's execution strategy, so a direct `CommitAsync`
+was retried. The real gap was the opposite path — inside `ExecuteAsync`, where `CommitAsync`'s
+translation hid the `DbUpdateException` from the strategy. The original note is kept below.
+
+**Original status:** Deferred (v1.1 candidate)
 **Date:** 2026-05-31
 **Source:** Architect pre-release review — NOTE 7
 
@@ -484,7 +567,11 @@ A guard is required: skip the inner strategy when a transaction is already activ
 
 ## DN-002: ListPagedAsync Fallback PageSize When totalCount Is Zero
 
-**Status:** Deferred (v1.1 candidate)
+**Status:** Superseded by #196 D6. `ListPagedAsync` without pagination no longer returns the whole
+result set as one page: it returns page 1 of `PaginationLimits.DefaultPageSize` items (50 unless
+configured), so `PageSize` always reports the page size applied. The original note is kept below.
+
+**Original status:** Deferred (v1.1 candidate)
 **Date:** 2026-05-31
 **Source:** Architect pre-release review — NOTE 9
 

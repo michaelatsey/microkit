@@ -130,6 +130,32 @@ public sealed class EfDomainEventsProviderTests
         resolved.ShouldBeOfType<EfDomainEventsProvider<TestDbContext>>();
     }
 
+    /// <summary>
+    /// #196 D7 probe: a drain pays at most one full <c>DetectChanges</c>, whatever the number of
+    /// tracked aggregates. Kept as a regression guard.
+    /// </summary>
+    [Fact]
+    public void DrainDomainEvents_RunsAtMostOneFullDetectChanges()
+    {
+        using var context = CreateContext();
+        for (var i = 0; i < 3; i++)
+        {
+            var aggregate = new TestAggregate();
+            aggregate.Raise(new TestEvent($"event-{i}", DateTimeOffset.UtcNow));
+            context.Add(aggregate);
+            context.Add(new TestEntityWithoutEvents());
+        }
+
+        var sut = new EfDomainEventsProvider<TestDbContext>(context);
+        var fullDetections = 0;
+        context.ChangeTracker.DetectingAllChanges += (_, _) => fullDetections++;
+
+        var drained = sut.DrainDomainEvents();
+
+        drained.Count.ShouldBe(3);
+        fullDetections.ShouldBeLessThanOrEqualTo(1);
+    }
+
     // The connection is never opened: the model is built, nothing is executed.
     private const string InMemoryConnectionString = "DataSource=:memory:";
 

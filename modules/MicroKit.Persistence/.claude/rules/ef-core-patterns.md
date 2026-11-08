@@ -100,15 +100,15 @@ var opts = new QueryOptions<User>(spec)
 // ✅ Composite interface — EF-specific, not in Abstractions
 public interface ITransactionalUnitOfWork : IUnitOfWork, ITransactionalContext { }
 
-// EfUnitOfWork<TContext> implements it. Today:
-// - CommitAsync = SaveChangesAsync, translating DbUpdateException → PersistenceException.
-// - ExecuteAsync always runs begin → operation → commit inside the provider's execution strategy,
-//   and rolls back with the caller's token on failure.
-// #196 phase 1 changes ExecuteAsync, each change behind a test that fails first:
-// - D4: join an open Database.CurrentTransaction (no strategy, no begin/commit/rollback);
-// - D3 (if the retry harness proves no retry happens): unwrap PersistenceException(DbUpdateException)
-//   inside the strategy so a transient failure is retried;
-// - D5: roll back with CancellationToken.None, never masking the in-flight exception.
+// EfUnitOfWork<TContext> implements it (#196 D3–D5):
+// - CommitAsync = SaveChangesAsync, always translating to PersistenceException: DbUpdateException,
+//   and the InvalidOperationException(DbUpdateException) a non-retrying provider strategy raises
+//   for a failure it classifies as transient.
+// - ExecuteAsync joins an open Database.CurrentTransaction (no strategy, no begin/commit/rollback);
+//   otherwise it runs begin → operation → commit inside the provider's execution strategy,
+//   unwrapping PersistenceException(DbUpdateException) so the strategy can retry a transient one,
+//   and surfaces PersistenceException once the strategy gives up.
+// - Rollback runs with CancellationToken.None and never masks the in-flight exception.
 // There is no BeginTransactionAsync API: transactions are internal to ExecuteAsync.
 ```
 

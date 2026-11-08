@@ -70,21 +70,10 @@ public sealed class EfUserReadRepository(AppDbContext ctx, ISpecificationEvaluat
 
 ## Custom Evaluator Extensions
 
-To add custom query logic (e.g., soft-delete global filter), extend the evaluator:
+Wrap `ISpecificationEvaluator` to add query logic every repository query needs (decorate the
+registered `EfSpecificationEvaluator`; never replace the criteria step).
 
-```csharp
-public sealed class SoftDeleteSpecificationEvaluator : ISpecificationEvaluator
-{
-    private readonly ISpecificationEvaluator _inner;
-
-    public IQueryable<T> GetQuery<T>(IQueryable<T> inputQuery, QueryOptions<T> opts)
-        where T : class, IAggregateRoot
-    {
-        // Add soft-delete filter before delegating
-        if (inputQuery is IQueryable<ISoftDeletable> softDeletable && !opts.IncludeDeleted)
-            inputQuery = (IQueryable<T>)softDeletable.Where(e => !e.IsDeleted);
-
-        return _inner.GetQuery(inputQuery, opts);
-    }
-}
-```
+Never bypass the model's query filters from library code: the parameterless
+`IgnoreQueryFilters()` disables every filter, a tenant filter included, and
+`IlCallScanTests` fails the build on any library call to it (#196 D1). The module owns no soft
+delete; #197 reintroduces `IncludeDeleted` on a *named* filter (`IgnoreQueryFilters(["<name>"])`).
