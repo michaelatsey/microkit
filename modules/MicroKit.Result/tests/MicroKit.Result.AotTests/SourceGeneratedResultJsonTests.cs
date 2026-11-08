@@ -88,16 +88,17 @@ public sealed class SourceGeneratedResultJsonTests
     }
 
     [Fact]
-    public void Deserialize_ThroughUnregisteredContext_ThrowsNotSupportedExceptionNamingTheFactory()
+    public void Deserialize_ThroughUnregisteredContext_ThrowsJsonExceptionNamingTheFactory()
     {
         // Arrange
         const string json = """{"isSuccess":true,"value":{"Id":7,"Name":"Pen"}}""";
 
         // Act
-        var exception = Should.Throw<NotSupportedException>(() =>
+        var exception = Record.Exception(() =>
             JsonSerializer.Deserialize(json, UnregisteredJsonContext.Default.ResultOrderDto));
 
-        // Assert: the serializer may wrap the converter's exception; its message, or an inner one, names the factory
-        exception.ToString().ShouldContain(nameof(ResultJsonConverterFactory));
+        // Assert: an unreadable payload, as the module's rule has it
+        exception.ShouldBeOfType<JsonException>();
+        exception.Message.ShouldContain(nameof(ResultJsonConverterFactory));
     }
 }

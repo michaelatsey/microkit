@@ -29,16 +29,11 @@ public sealed record ValidationError(string PropertyName, string Message)
         get;
         init
         {
-            Code = CodeFor(value); // validates; the code always follows the name
+            var code = CodeFor(value); // validates; the code always follows the name
             field = value;
+            Code = code;
         }
     } = PropertyName; // the base constructor already computed the code from this parameter
-
-    private static ErrorCode CodeFor(string propertyName)
-    {
-        ArgumentException.ThrowIfNullOrWhiteSpace(propertyName);
-        return ErrorCode.From($"VALIDATION.{propertyName.ToUpperInvariant()}");
-    }
 
     /// <summary>Gets the error category. Always <see cref="ErrorCategory.Validation"/>.</summary>
     public override ErrorCategory Category => ErrorCategory.Validation;
@@ -108,7 +103,33 @@ public sealed record ValidationError(string PropertyName, string Message)
     /// <summary>Returns a string representation of this validation error.</summary>
     public override string ToString() => $"ValidationError[{PropertyName}]: {Message}";
 
+    // ── Protected methods ─────────────────────────────────────────────────
+
+    /// <summary>
+    /// Rejects a code other than <c>VALIDATION.&lt;PROPERTYNAME&gt;</c>: a <see langword="with"/> expression that sets
+    /// <see cref="Error.Code"/>, through this type or through <see cref="Error"/>, accepts only the code of
+    /// <see cref="PropertyName"/>. Set <see cref="PropertyName"/> alone to change both; members of a
+    /// <see langword="with"/> expression are set in the order they are written.
+    /// </summary>
+    /// <param name="code">The code being set.</param>
+    /// <exception cref="ArgumentException">Thrown when <paramref name="code"/> is not the code of <see cref="PropertyName"/>.</exception>
+    protected override void ValidateCode(ErrorCode code)
+    {
+        if (code != CodeFor(PropertyName))
+        {
+            throw new ArgumentException(
+                $"The code of a ValidationError is {CodeFor(PropertyName)}, computed from its PropertyName; set PropertyName instead.",
+                nameof(code));
+        }
+    }
+
     // ── Private helpers ───────────────────────────────────────────────────
+
+    private static ErrorCode CodeFor(string propertyName)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(propertyName);
+        return ErrorCode.From($"VALIDATION.{propertyName.ToUpperInvariant()}");
+    }
 
     // The invariant culture: the message reads the same whatever the server's culture (CA1305).
     private static string BuildRangeMessage(string propertyName, object? min, object? max) =>

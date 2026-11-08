@@ -10,8 +10,8 @@ namespace MicroKit.Result.Serialization;
 /// <remarks>
 /// By default the converters never write <see cref="IError.Metadata"/>, which is in-process context and never sent to
 /// a client (ADR-RESULT-001 D1, D12), and write a generic message for a fault of the system, whose message may
-/// describe it. Create the factory with <c>includeMetadata: true</c> only for in-process
-/// storage, such as a cache, whose payload never reaches a client.
+/// describe it: the <see cref="ResultJsonView.Client"/> view. Create the factory with <see cref="ResultJsonView.Full"/>
+/// only for in-process storage, such as a cache, whose payload never reaches a client.
 /// </remarks>
 /// <example>
 /// <code>
@@ -23,23 +23,20 @@ namespace MicroKit.Result.Serialization;
 [RequiresDynamicCode("Creating ResultJsonConverter<T> requires runtime code generation via MakeGenericType.")]
 public sealed class ResultJsonConverterFactory : JsonConverterFactory
 {
-    private readonly bool _includeMetadata;
+    private readonly ResultJsonView _view;
 
-    /// <summary>Initializes a factory whose converters never write <see cref="IError.Metadata"/>.</summary>
-    public ResultJsonConverterFactory() : this(includeMetadata: false)
+    /// <summary>Initializes a factory whose converters write the <see cref="ResultJsonView.Client"/> view.</summary>
+    public ResultJsonConverterFactory() : this(ResultJsonView.Client)
     {
     }
 
     /// <summary>Initializes a factory.</summary>
-    /// <param name="includeMetadata">
-    /// <see langword="true"/> to write <see cref="IError.Metadata"/> and the message of a fault of the system, for
-    /// in-process storage such as a cache; never for a response sent to a client. <see langword="false"/> writes
-    /// <c>"The server could not complete the request."</c> as the message of a fault of the system
-    /// (<see cref="ErrorCategory.Technical"/>, <see cref="ErrorCategory.External"/>, <see cref="ErrorCategory.Unavailable"/>,
-    /// <see cref="ErrorCategory.Timeout"/>, <see cref="ErrorCategory.NotSupported"/>, undefined values). Values come back as JSON primitives: an integer as a <see cref="long"/> (or a <see cref="ulong"/>), a non-integer as a <see cref="double"/>, a
-    /// <see cref="Guid"/> or a <see cref="DateTime"/> as a <see cref="string"/>, any other object as its invariant string.
+    /// <param name="view">
+    /// <see cref="ResultJsonView.Client"/> for anything a client may read; <see cref="ResultJsonView.Full"/> only for
+    /// in-process storage, such as a cache, whose payload never reaches a client.
     /// </param>
-    public ResultJsonConverterFactory(bool includeMetadata) => _includeMetadata = includeMetadata;
+    /// <exception cref="ArgumentOutOfRangeException">Thrown when <paramref name="view"/> is not a defined <see cref="ResultJsonView"/>.</exception>
+    public ResultJsonConverterFactory(ResultJsonView view) => _view = ResultGuard.DefinedView(view);
 
     /// <inheritdoc/>
     public override bool CanConvert(Type typeToConvert) =>
@@ -51,12 +48,11 @@ public sealed class ResultJsonConverterFactory : JsonConverterFactory
         Type typeToConvert, JsonSerializerOptions options)
     {
         if (typeToConvert == typeof(Result))
-            return new ResultJsonConverter(_includeMetadata);
+            return new ResultJsonConverter(_view);
 
         var valueType = typeToConvert.GetGenericArguments()[0];
         var converterType = typeof(ResultJsonConverter<>).MakeGenericType(valueType);
-        // An array: a lone bool binds to CreateInstance(Type, bool nonPublic). The ! is safe: CreateInstance of a class
-        // never returns null.
-        return (JsonConverter)Activator.CreateInstance(converterType, [_includeMetadata])!;
+        // The ! is safe: CreateInstance of a class never returns null.
+        return (JsonConverter)Activator.CreateInstance(converterType, [_view])!;
     }
 }

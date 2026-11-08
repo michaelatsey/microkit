@@ -1,4 +1,5 @@
 using System.Globalization;
+using System.Text;
 using System.Text.Json;
 
 namespace MicroKit.Result.Serialization;
@@ -9,37 +10,64 @@ namespace MicroKit.Result.Serialization;
 /// </summary>
 internal static class ErrorJson
 {
-    // What a client reads instead of a system fault's message, as in MicroKit.Result.AspNetCore's problem details.
-    internal const string SystemFaultMessage = "The server could not complete the request.";
-
-    // includeMetadata is for in-process storage, never a response (ADR-RESULT-001 D12): only then does a fault of the
-    // system keep its message. Every other output may reach a client, which reads the generic text instead.
-    internal static void Write(Utf8JsonWriter writer, IError error, bool includeMetadata)
+    // ResultJsonView.Full is for in-process storage, never a response (ADR-RESULT-001 D12): only then is every message,
+    // error and metadata written. The Client view may reach a client, which reads what ToHttpResult shows it.
+    internal static void Write(Utf8JsonWriter writer, IError error, ResultJsonView view)
     {
         if (string.IsNullOrWhiteSpace(error.Code.Value))
             throw new JsonException($"Cannot serialize an error of type {error.GetType().Name} with an uninitialized code.");
 
+        // For a client (the Client view), the error says what ToHttpResult's problem details say: a collection whose
+        // category does not describe the input names only its errors of that category, nested collections flattened,
+        // and its message joins theirs; a field is named only by a Validation or BusinessRule error.
+        var forClient = view == ResultJsonView.Client;
+        List<IError>? named = null;
+        var message = error.Message;
+        var severity = error.Severity;
+        var redacted = forClient && error.Category.IsSystemFault();
+        if (forClient && error is ErrorCollection filtered && !filtered.Category.DescribesInput())
+        {
+            // One pass over the leaves: the errors of the collection's category (never none: the category is a
+            // leaf's), their highest severity and, unless redacted, their joined messages.
+            var category = filtered.Category;
+            named = [];
+            var joined = redacted ? null : new StringBuilder();
+            foreach (var leaf in filtered.Flatten())
+            {
+                if (leaf.Category != category)
+                    continue;
+                if (named.Count == 0 || leaf.Severity > severity)
+                    severity = leaf.Severity;
+                joined?.Append(named.Count == 0 ? "" : "; ").Append(leaf.Message);
+                named.Add(leaf);
+            }
+
+            if (joined is not null)
+                message = joined.ToString();
+        }
+
+        if (redacted)
+            message = ErrorCategoryExtensions.SystemFaultMessage;
+
         writer.WriteStartObject();
         writer.WriteString("code", error.Code.Value);
-        writer.WriteString(
-            "message",
-            !includeMetadata && ErrorCategoryFacts.IsSystemFault(error.Category) ? SystemFaultMessage : error.Message);
+        writer.WriteString("message", message);
         writer.WriteString("category", error.Category.ToString());
-        writer.WriteString("severity", error.Severity.ToString());
+        writer.WriteString("severity", severity.ToString());
 
-        if (error is IValidationError validation)
+        if (error is IValidationError validation && (!forClient || error.Category.DescribesInput()))
             writer.WriteString("propertyName", validation.PropertyName);
 
         if (error is ErrorCollection collection)
         {
             writer.WriteStartArray("errors");
-            foreach (var inner in collection)
-                Write(writer, inner, includeMetadata);
+            foreach (var inner in (IEnumerable<IError>?)named ?? collection)
+                Write(writer, inner, view);
             writer.WriteEndArray();
         }
 
         // Metadata is in-process context, never sent to a client by default (ADR-RESULT-001 D1, D12).
-        if (includeMetadata && error.Metadata.Count > 0)
+        if (view == ResultJsonView.Full && error.Metadata.Count > 0)
         {
             writer.WriteStartObject("metadata");
             foreach (var pair in error.Metadata)

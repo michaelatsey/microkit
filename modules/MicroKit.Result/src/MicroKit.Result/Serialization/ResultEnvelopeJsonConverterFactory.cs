@@ -13,12 +13,10 @@ namespace MicroKit.Result.Serialization;
 /// </summary>
 /// <remarks>
 /// <para>
-/// That output reaches clients by default: the <c>message</c> of a fault of the system
-/// (<see cref="ErrorCategory.Technical"/>, <see cref="ErrorCategory.External"/>, <see cref="ErrorCategory.Unavailable"/>,
-/// <see cref="ErrorCategory.Timeout"/>, <see cref="ErrorCategory.NotSupported"/>, undefined values), a collection's
-/// and its errors' included, is the generic <c>"The server could not complete the request."</c>; <c>code</c> and
-/// <c>category</c> are kept, as by every converter not created with <c>includeMetadata</c>. A returned result answers
-/// the status the endpoint gives it (200 for a plain value):
+/// That output reaches clients by default: it is the <see cref="ResultJsonView.Client"/> view, the message of a fault
+/// of the system (<see cref="ErrorCategoryExtensions.IsSystemFault"/>) being <see cref="ErrorCategoryExtensions.SystemFaultMessage"/>,
+/// <c>code</c> and <c>category</c> kept. A returned result answers the status the endpoint gives it (200 for a plain
+/// value):
 /// for a client, map a failure to problem details with <c>ToHttpResult</c> (<c>MicroKit.Result.AspNetCore</c>).
 /// </para>
 /// <para>
@@ -28,8 +26,8 @@ namespace MicroKit.Result.Serialization;
 /// <see cref="ResultJsonConverter{T}"/>).
 /// </para>
 /// <para>
-/// Reading a <see cref="Result{T}"/> needs one of them: without it, it throws <see cref="NotSupportedException"/>,
-/// whose message names the fix. Register <see cref="ResultJsonConverterFactory"/>, or, under source generation and
+/// Reading a <see cref="Result{T}"/> needs one of them: without it, it throws <see cref="JsonException"/>, as for any
+/// payload this module cannot read, and the message names the fix. Register <see cref="ResultJsonConverterFactory"/>, or, under source generation and
 /// Native AOT, <see cref="ResultJsonConverter{T}"/>. It is not meant to be registered itself.
 /// </para>
 /// </remarks>
@@ -57,7 +55,9 @@ public sealed class ResultEnvelopeJsonConverterFactory : JsonConverterFactory
         public override IResultEnvelope Read(ref Utf8JsonReader reader, Type typeToConvert, JsonSerializerOptions options)
         {
             var valueType = resultType.GetGenericArguments()[0].Name;
-            throw new NotSupportedException(
+            // A JsonException, as for any payload this module cannot read: a reader that catches it (a cache, a
+            // request binder) treats the entry as unreadable.
+            throw new JsonException(
                 $"Reading a Result<{valueType}> needs a converter: register ResultJsonConverterFactory in " +
                 "JsonSerializerOptions.Converters (ConfigureHttpJsonOptions for Minimal APIs, AddJsonOptions for MVC), " +
                 $"or, under source generation and Native AOT, ResultJsonConverter<{valueType}> in the context's " +

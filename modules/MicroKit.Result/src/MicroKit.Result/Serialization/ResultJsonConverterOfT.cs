@@ -9,9 +9,10 @@ namespace MicroKit.Result.Serialization;
 /// <c>{"isSuccess":false,"error":{…}}</c>.
 /// </summary>
 /// <remarks>
-/// The error object holds <c>code</c>, <c>message</c>, <c>category</c>, <c>severity</c>, <c>propertyName</c> for a
-/// validation error and <c>errors</c> for an <see cref="ErrorCollection"/>; <c>metadata</c> only when created with
-/// <c>includeMetadata</c> (ADR-RESULT-001 D12). Reading rebuilds an <see cref="ErrorCollection"/>, a
+/// By default it writes the <see cref="ResultJsonView.Client"/> view, which that member documents: what a client may
+/// read. Created with <see cref="ResultJsonView.Full"/>, the error object holds <c>code</c>, <c>message</c>,
+/// <c>category</c>, <c>severity</c>, <c>propertyName</c> for a validation error, <c>errors</c> for an
+/// <see cref="ErrorCollection"/>, and <c>metadata</c> (ADR-RESULT-001 D12). Reading rebuilds an <see cref="ErrorCollection"/>, a
 /// <see cref="DeserializedValidationError"/> or a <see cref="DeserializedError"/>. A payload that does not describe a
 /// valid result fails with <see cref="JsonException"/>, and writing a <c>default</c> result too.
 /// <para>
@@ -24,23 +25,20 @@ namespace MicroKit.Result.Serialization;
 /// <typeparam name="T">The result value type.</typeparam>
 public sealed class ResultJsonConverter<T> : JsonConverter<Result<T>>
 {
-    private readonly bool _includeMetadata;
+    private readonly ResultJsonView _view;
 
-    /// <summary>Initializes a converter that never writes <see cref="IError.Metadata"/>.</summary>
-    public ResultJsonConverter() : this(includeMetadata: false)
+    /// <summary>Initializes a converter that writes the <see cref="ResultJsonView.Client"/> view.</summary>
+    public ResultJsonConverter() : this(ResultJsonView.Client)
     {
     }
 
     /// <summary>Initializes a converter.</summary>
-    /// <param name="includeMetadata">
-    /// <see langword="true"/> to write <see cref="IError.Metadata"/> and the message of a fault of the system, for
-    /// in-process storage such as a cache; never for a response sent to a client. <see langword="false"/> writes
-    /// <c>"The server could not complete the request."</c> as the message of a fault of the system
-    /// (<see cref="ErrorCategory.Technical"/>, <see cref="ErrorCategory.External"/>, <see cref="ErrorCategory.Unavailable"/>,
-    /// <see cref="ErrorCategory.Timeout"/>, <see cref="ErrorCategory.NotSupported"/>, undefined values). Values come back as JSON primitives: an integer as a <see cref="long"/> (or a <see cref="ulong"/>), a non-integer as a <see cref="double"/>, a
-    /// <see cref="Guid"/> or a <see cref="DateTime"/> as a <see cref="string"/>, any other object as its invariant string.
+    /// <param name="view">
+    /// <see cref="ResultJsonView.Client"/> for anything a client may read; <see cref="ResultJsonView.Full"/> only for
+    /// in-process storage, such as a cache, whose payload never reaches a client.
     /// </param>
-    public ResultJsonConverter(bool includeMetadata) => _includeMetadata = includeMetadata;
+    /// <exception cref="ArgumentOutOfRangeException">Thrown when <paramref name="view"/> is not a defined <see cref="ResultJsonView"/>.</exception>
+    public ResultJsonConverter(ResultJsonView view) => _view = ResultGuard.DefinedView(view);
 
     /// <inheritdoc/>
     public override Result<T> Read(
@@ -121,11 +119,11 @@ public sealed class ResultJsonConverter<T> : JsonConverter<Result<T>>
     /// <exception cref="JsonException">Thrown when <paramref name="value"/> is uninitialized (<c>default</c>).</exception>
     public override void Write(
         Utf8JsonWriter writer, Result<T> value, JsonSerializerOptions options) =>
-        WriteEnvelope(writer, value, options, _includeMetadata);
+        WriteEnvelope(writer, value, options, _view);
 
     // Also the writer Result<T> carries by its own [JsonConverter], with no converter registered (never metadata).
     internal static void WriteEnvelope(
-        Utf8JsonWriter writer, Result<T> value, JsonSerializerOptions options, bool includeMetadata)
+        Utf8JsonWriter writer, Result<T> value, JsonSerializerOptions options, ResultJsonView view)
     {
         ArgumentNullException.ThrowIfNull(writer);
         ArgumentNullException.ThrowIfNull(options);
@@ -143,7 +141,7 @@ public sealed class ResultJsonConverter<T> : JsonConverter<Result<T>>
         else
         {
             writer.WritePropertyName("error");
-            ErrorJson.Write(writer, value.Error, includeMetadata);
+            ErrorJson.Write(writer, value.Error, view);
         }
 
         writer.WriteEndObject();

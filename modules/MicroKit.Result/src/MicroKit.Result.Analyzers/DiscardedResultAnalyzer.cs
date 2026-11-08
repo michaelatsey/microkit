@@ -11,8 +11,10 @@ namespace MicroKit.Result.Analyzers;
 /// <c>Tap</c>, <c>TapError</c> and <c>Finally</c> (and their <c>…Async</c> forms, awaited, with or without
 /// <c>ConfigureAwait</c>), alone, chained or through a conditional access (<c>held?.Tap(…)</c>), on a result already held in a local, a parameter, a field, an
 /// auto-property, an indexer or an array element: the side effect is the point, and the result is still held. A computed
-/// property (a getter with a body) builds a new result at each read: a side effect on it is reported, even when the body
-/// only returns a field (<c>Current =&gt; _current</c>), as is an abstract or interface property, whose storage is unknown.
+/// property declared in source (a getter with a body) builds a new result at each read: a side effect on it is
+/// reported, even when the body only returns a field (<c>Current =&gt; _current</c>). A property from metadata
+/// (<c>KeyValuePair&lt;TKey, TValue&gt;.Value</c>, <c>Nullable&lt;T&gt;.Value</c>), or an abstract, virtual or overriding
+/// one, is held: its storage cannot be seen.
 /// </remarks>
 [DiagnosticAnalyzer(LanguageNames.CSharp)]
 public sealed class DiscardedResultAnalyzer : DiagnosticAnalyzer
@@ -134,7 +136,7 @@ public sealed class DiscardedResultAnalyzer : DiagnosticAnalyzer
 
             if (receiver is ILocalReferenceOperation or IParameterReferenceOperation or IFieldReferenceOperation
                 or IArrayElementReferenceOperation
-                || (receiver is IPropertyReferenceOperation { Property: var property } && IsStoredProperty(property)))
+                || (receiver is IPropertyReferenceOperation { Property: var property } && IsHeldProperty(property)))
             {
                 return true;
             }
@@ -145,30 +147,28 @@ public sealed class DiscardedResultAnalyzer : DiagnosticAnalyzer
         return false;
     }
 
-    // A computed property builds a new result at each read: the one its side effect returns is then discarded. An
-    // auto-property stores its result, and an indexer is element access, like an array's.
-    private static bool IsStoredProperty(IPropertySymbol property)
+    // A computed property builds a new result at each read: the one its side effect returns is then discarded. Only a
+    // property declared in source with a getter body is known to compute: a property from metadata
+    // (KeyValuePair<,>.Value, Nullable<T>.Value), an abstract, interface, virtual or overriding one, an indexer
+    // (element access, like an array's) and an auto-property are held. Reporting what cannot be seen would fail a build that discards nothing.
+    private static bool IsHeldProperty(IPropertySymbol property)
     {
-        // The value of a Nullable<T> is the stored struct itself: held?.Value.Tap(…), cached.Value.Tap(…).
-        if (property.IsIndexer
-            || (property.Name == "Value" && property.ContainingType.OriginalDefinition.SpecialType == SpecialType.System_Nullable_T))
+        var definition = property.OriginalDefinition;
+        // Virtual or overridden: the call may reach another declaration (an auto-property override, for one).
+        if (definition.IsIndexer || definition.IsAbstract || definition.IsVirtual || definition.IsOverride
+            || definition.IsExtern || definition.DeclaringSyntaxReferences.IsEmpty)
         {
             return true;
         }
 
-        // Source, and metadata when private members are imported: the compiler's backing field.
-        foreach (var member in property.OriginalDefinition.ContainingType.GetMembers())
+        // The compiler's backing field: an auto-property, or a property whose accessors use the field keyword.
+        foreach (var member in definition.ContainingType.GetMembers())
         {
             if (member is IFieldSymbol { AssociatedSymbol: { } associated }
-                && SymbolEqualityComparer.Default.Equals(associated.OriginalDefinition, property.OriginalDefinition))
+                && SymbolEqualityComparer.Default.Equals(associated.OriginalDefinition, definition))
                 return true;
         }
 
-        // Metadata: the compiler marks an auto-property's accessors [CompilerGenerated].
-        return property.GetMethod?.GetAttributes().Any(a => a.AttributeClass is
-        {
-            Name: "CompilerGeneratedAttribute",
-            ContainingNamespace: { Name: "CompilerServices", ContainingNamespace: { Name: "Runtime", ContainingNamespace.Name: "System" } },
-        }) == true;
+        return false;
     }
 }

@@ -380,4 +380,43 @@ public sealed class DeserializedErrorEqualityTests
         else
             lower.Equals(upper).ShouldBeFalse();
     }
+
+    [Fact]
+    public void EqualsAndGetHashCode_WhenPropertyNameIsNull_DoNotThrow()
+    {
+        // Arrange: the record's own members accepted null; equality must never throw
+        var left = new DeserializedValidationError(
+            ErrorCode.From("TEST.CODE"), "m", ErrorCategory.Validation, ErrorSeverity.Warning, ErrorMetadata.Empty, null!);
+        var right = new DeserializedValidationError(
+            ErrorCode.From("TEST.CODE"), "m", ErrorCategory.Validation, ErrorSeverity.Warning, ErrorMetadata.Empty, null!);
+
+        // Act
+        var hash = Record.Exception(() => left.GetHashCode());
+        var equal = left.Equals(right);
+
+        // Assert
+        hash.ShouldBeNull();
+        equal.ShouldBeTrue();
+    }
+
+    [Fact]
+    public void EqualsAndGetHashCode_WhenMetadataIsNull_DoNotThrow()
+    {
+        // Arrange
+        var withNull = new DeserializedError(ErrorCode.From("TEST.CODE"), "m", ErrorCategory.NotFound, ErrorSeverity.Error, null!);
+        var withEmpty = new DeserializedError(ErrorCode.From("TEST.CODE"), "m", ErrorCategory.NotFound, ErrorSeverity.Error, ErrorMetadata.Empty);
+        var alsoNull = new DeserializedError(ErrorCode.From("TEST.CODE"), "m", ErrorCategory.NotFound, ErrorSeverity.Error, null!);
+
+        // Act
+        var hash = Record.Exception(() => withNull.GetHashCode());
+        var nullVersusEmpty = Record.Exception(() => withNull.Equals(withEmpty));
+        var emptyVersusNull = Record.Exception(() => withEmpty.Equals(withNull));
+
+        // Assert
+        hash.ShouldBeNull();
+        nullVersusEmpty.ShouldBeNull();
+        emptyVersusNull.ShouldBeNull();
+        withNull.Equals(alsoNull).ShouldBeTrue();
+        withNull.Equals(withEmpty).ShouldBe(withEmpty.Equals(withNull));
+    }
 }

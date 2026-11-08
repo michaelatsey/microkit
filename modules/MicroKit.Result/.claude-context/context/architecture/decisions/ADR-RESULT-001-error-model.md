@@ -211,6 +211,23 @@ the default factory writes `code`, `message`, `category`, `severity` and the inn
 is an internal detail (D1 keeps `Severity` out of every decision, not out of sight).
 Phase 5 names the option.
 
+*Amended by #195 and #198 (2026-11-08): the option selects a view.* `ResultProblemDetailsFactory` no longer
+writes a fault of the system's message (#195 item 1), and a result returned as is reaches a client through the
+converters that `Result` and `Result<T>` carry (#195 item 6): the default converters must then say no more than
+the problem details do. The option is `ResultJsonView`, on `ResultJsonConverterFactory`, `ResultJsonConverter<T>`
+and `ResultJsonConverter`:
+
+- `ResultJsonView.Client`, the default, writes what `ToHttpResult` shows a client: no `Metadata`; the message of
+  a fault of the system (`ErrorCategoryExtensions.IsSystemFault()`) is `ErrorCategoryExtensions.SystemFaultMessage`,
+  in a collection too; a collection whose category does not describe the input
+  (`ErrorCategoryExtensions.DescribesInput()`) names only its errors of that category, nested collections
+  flattened; `propertyName` is written only in an input category. A round trip reads that view back.
+- `ResultJsonView.Full` writes everything, `Metadata`, every message and every error, for in-process storage that
+  never reaches a client; a round trip returns the result as it was.
+
+The core owns both predicates and the text; `MicroKit.Result.AspNetCore` uses them, so the two client views cannot
+drift.
+
 ### Consequences
 
 - Breaking for consumers (allowed on `preview.*`, ADR-GLOBAL-002 D10): `ResultCombineExtensions` disappears

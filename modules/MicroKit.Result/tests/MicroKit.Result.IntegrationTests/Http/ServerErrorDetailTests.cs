@@ -186,4 +186,41 @@ public sealed class ServerErrorDetailTests
     {
         public override ErrorCategory Category => Kind;
     }
+
+    // #198 review: one definition of a server fault, and of its text, owned by the core
+
+    [Theory]
+    [InlineData(ErrorCategory.NotFound)]
+    [InlineData(ErrorCategory.Validation)]
+    [InlineData(ErrorCategory.Unauthorized)]
+    [InlineData(ErrorCategory.Forbidden)]
+    [InlineData(ErrorCategory.Conflict)]
+    [InlineData(ErrorCategory.TooManyRequests)]
+    [InlineData(ErrorCategory.Technical)]
+    [InlineData(ErrorCategory.Unavailable)]
+    [InlineData(ErrorCategory.External)]
+    [InlineData(ErrorCategory.BusinessRule)]
+    [InlineData(ErrorCategory.NotSupported)]
+    [InlineData(ErrorCategory.Timeout)]
+    [InlineData(ErrorCategory.Cancelled)]
+    [InlineData(ErrorCategory.PreconditionFailed)]
+    [InlineData((ErrorCategory)999)]
+    public void ToStatusCode_ForEveryCategory_Is5xxExactlyWhenTheCoreCallsItASystemFault(ErrorCategory category)
+    {
+        // Act
+        var is5xx = ResultProblemDetailsFactory.ToStatusCode(category) >= 500;
+
+        // Assert
+        is5xx.ShouldBe(category.IsSystemFault());
+    }
+
+    [Fact]
+    public void CreateProblemDetails_WhenSystemFault_DetailIsTheCoreSystemFaultMessage()
+    {
+        // Act
+        var problem = ResultProblemDetailsFactory.CreateProblemDetails(Error.Technical(ErrorCode.From("DB.FAIL"), "internal"));
+
+        // Assert
+        problem.Detail.ShouldBe(ErrorCategoryExtensions.SystemFaultMessage);
+    }
 }

@@ -92,23 +92,26 @@ public sealed record DeserializedValidationError(
     /// <inheritdoc/>
     public override int GetHashCode() =>
         HashCode.Combine(
-            base.GetHashCode(), Category, Severity, StringComparer.Ordinal.GetHashCode(PropertyName),
+            base.GetHashCode(), Category, Severity, PropertyName is null ? 0 : StringComparer.Ordinal.GetHashCode(PropertyName),
             MetadataComparer.GetHashCode(Metadata));
 }
 
 // Compares metadata read back from JSON by content: the converters build a new dictionary for every read.
 internal static class MetadataComparer
 {
-    internal static bool Equal(IReadOnlyDictionary<string, object?> left, IReadOnlyDictionary<string, object?> right)
+    // Null-safe, as the record members these replace were: equality never throws.
+    internal static bool Equal(IReadOnlyDictionary<string, object?>? left, IReadOnlyDictionary<string, object?>? right)
     {
         if (ReferenceEquals(left, right))
             return true;
+        if (left is null || right is null)
+            return false;
         return left.Count == right.Count && Contains(left, right) && Contains(right, left); // both ways: symmetric
     }                                                                                         // whatever the comparers
 
     // The count only: equal metadata always has the same count, whatever the key comparers of the two dictionaries
     // (the public constructors accept any) and whatever the JsonElement values, which have no content hash.
-    internal static int GetHashCode(IReadOnlyDictionary<string, object?> metadata) => metadata.Count;
+    internal static int GetHashCode(IReadOnlyDictionary<string, object?>? metadata) => metadata?.Count ?? 0;
 
     private static bool Contains(IReadOnlyDictionary<string, object?> source, IReadOnlyDictionary<string, object?> target)
     {

@@ -271,7 +271,7 @@ public readonly struct Result<T> : IEquatable<Result<T>>, IResultMarker, IResult
     };
 
     void IResultEnvelope.WriteJson(System.Text.Json.Utf8JsonWriter writer, System.Text.Json.JsonSerializerOptions options) =>
-        Serialization.ResultJsonConverter<T>.WriteEnvelope(writer, this, options, includeMetadata: false);
+        Serialization.ResultJsonConverter<T>.WriteEnvelope(writer, this, options, Serialization.ResultJsonView.Client);
 
     /// <summary>Determines whether two results are equal.</summary>
     public static bool operator ==(Result<T> left, Result<T> right) => left.Equals(right);

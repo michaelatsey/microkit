@@ -18,12 +18,12 @@ public sealed class NonGenericResultJsonConverterTests
 
     private static readonly JsonSerializerOptions MetadataFactoryOptions = new()
     {
-        Converters = { new ResultJsonConverterFactory(includeMetadata: true) },
+        Converters = { new ResultJsonConverterFactory(ResultJsonView.Full) },
     };
 
     private static readonly JsonSerializerOptions MetadataConverterOptions = new()
     {
-        Converters = { new ResultJsonConverter(includeMetadata: true) },
+        Converters = { new ResultJsonConverter(ResultJsonView.Full) },
     };
 
     // ── Write ─────────────────────────────────────────────────────────────
@@ -68,7 +68,7 @@ public sealed class NonGenericResultJsonConverterTests
     }
 
     [Fact]
-    public void Write_WhenFailureIsErrorCollection_WritesInnerErrors()
+    public void Write_WhenFailureIsErrorCollection_WritesTheErrorsOfItsCategory()
     {
         // Arrange
         var result = Result.Failure(ErrorCollection.From(new NotFoundTestError(1), new OtherError()));
@@ -76,9 +76,9 @@ public sealed class NonGenericResultJsonConverterTests
         // Act
         var json = JsonSerializer.Serialize(result, FactoryOptions);
 
-        // Assert
+        // Assert: #198 review, a default converter names what ToHttpResult names: the NotFound errors only
         json.ShouldBe(
-            """{"isSuccess":false,"error":{"code":"MULTI.ERROR","message":"Item 1 not found; Other error","category":"NotFound","severity":"Error","errors":[{"code":"TEST.NOT_FOUND","message":"Item 1 not found","category":"NotFound","severity":"Error"},{"code":"TEST.OTHER","message":"Other error","category":"Conflict","severity":"Error"}]}}""");
+            """{"isSuccess":false,"error":{"code":"MULTI.ERROR","message":"Item 1 not found","category":"NotFound","severity":"Error","errors":[{"code":"TEST.NOT_FOUND","message":"Item 1 not found","category":"NotFound","severity":"Error"}]}}""");
     }
 
     [Fact]
@@ -510,7 +510,7 @@ public sealed class NonGenericResultJsonConverterTests
     [MemberData(nameof(MetadataOptions))]
     public void Write_WithMetadataConverterRegistered_WhenSystemFault_KeepsItsMessage(JsonSerializerOptions options)
     {
-        // Arrange: includeMetadata is for in-process storage, never a response: it writes everything
+        // Arrange: ResultJsonView.Full is for in-process storage, never a response: it writes everything
         var result = Result.Failure(new FaultError(ErrorCategory.Technical, "Host db-7 refused the login of sa"));
 
         // Act

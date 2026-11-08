@@ -10,7 +10,7 @@ public sealed class UnregisteredResultConverterTests
 {
     private static readonly JsonSerializerOptions MetadataFactoryOptions = new()
     {
-        Converters = { new ResultJsonConverterFactory(includeMetadata: true) },
+        Converters = { new ResultJsonConverterFactory(ResultJsonView.Full) },
     };
 
     private static readonly JsonSerializerOptions ClosedConverterOptions = new()
@@ -90,16 +90,31 @@ public sealed class UnregisteredResultConverterTests
     }
 
     [Fact]
-    public void Deserialize_WithoutOptions_ThrowsNotSupportedExceptionNamingTheFactory()
+    public void Deserialize_WithoutOptions_ThrowsJsonExceptionNamingTheFactory()
     {
-        // Arrange
+        // Arrange: #198 review, what it wrote must fail on read as an unreadable payload does, a JsonException,
+        // which a reader that catches JsonException (a cache, a request binder) handles as an unreadable entry
         const string json = """{"isSuccess":true,"value":42}""";
 
         // Act
-        var exception = Should.Throw<NotSupportedException>(() => JsonSerializer.Deserialize<Result<int>>(json));
+        var exception = Record.Exception(() => JsonSerializer.Deserialize<Result<int>>(json));
 
-        // Assert: the serializer may wrap the converter's exception; its message, or an inner one, names the factory
-        exception.ToString().ShouldContain(nameof(ResultJsonConverterFactory));
+        // Assert
+        exception.ShouldBeOfType<JsonException>();
+        exception.Message.ShouldContain(nameof(ResultJsonConverterFactory));
+    }
+
+    [Fact]
+    public void RoundTrip_WithoutOptions_WhenWrittenThenRead_FailsWithJsonException()
+    {
+        // Arrange
+        var json = JsonSerializer.Serialize(Result.Success(42));
+
+        // Act
+        var exception = Record.Exception(() => JsonSerializer.Deserialize<Result<int>>(json));
+
+        // Assert: never a NotSupportedException
+        exception.ShouldBeOfType<JsonException>();
     }
 
     [Fact]
@@ -154,7 +169,7 @@ public sealed class UnregisteredResultConverterTests
     }
 
     [Fact]
-    public void Serialize_WhenCollectionHoldsASystemFaultWithoutOptions_RedactsEveryFaultMessageAndKeepsTheOthers()
+    public void Serialize_WhenCollectionHoldsASystemFaultWithoutOptions_RedactsItAndNamesOnlyTheFaults()
     {
         // Arrange
         var errors = ErrorCollection.From(
@@ -165,14 +180,15 @@ public sealed class UnregisteredResultConverterTests
         // Act
         var json = JsonSerializer.Serialize(result);
 
-        // Assert: the collection is Technical, so its joined message is redacted too
+        // Assert: the collection is Technical, so its message is redacted, and it names only its faults
         json.ShouldNotContain("db-7");
+        json.ShouldNotContain("Item 7 not found");
         using var document = JsonDocument.Parse(json);
         var error = document.RootElement.GetProperty("error");
         error.GetProperty("message").GetString().ShouldBe("The server could not complete the request.");
         var inner = error.GetProperty("errors");
+        inner.GetArrayLength().ShouldBe(1);
         inner[0].GetProperty("message").GetString().ShouldBe("The server could not complete the request.");
-        inner[1].GetProperty("message").GetString().ShouldBe("Item 7 not found");
     }
 
     [Fact]
@@ -192,7 +208,7 @@ public sealed class UnregisteredResultConverterTests
     [Fact]
     public void Serialize_WhenSystemFaultWithMetadataFactoryRegistered_KeepsItsMessage()
     {
-        // Arrange: includeMetadata is for in-process storage, never a response: it writes everything
+        // Arrange: ResultJsonView.Full is for in-process storage, never a response: it writes everything
         var result = Result.Failure<int>(new FaultError(ErrorCategory.Technical, "Host db-7 refused the login of sa"));
 
         // Act
@@ -225,8 +241,125 @@ public sealed class UnregisteredResultConverterTests
         var thrown = Record.Exception(() => JsonSerializer.Deserialize<Result<int>>(json));
 
         // Assert: never an uninitialized result read as a value
-        thrown.ShouldNotBeNull();
-        (thrown is JsonException or NotSupportedException).ShouldBeTrue(thrown.ToString());
+        thrown.ShouldBeOfType<JsonException>();
+    }
+
+    [Fact]
+    public void Serialize_WhenUnauthorizedCollectionHoldsAValidationErrorWithoutOptions_WritesNoValidationDetail()
+    {
+        // Arrange: ToHttpResult answers 401 and names neither the field nor its message
+        var errors = ErrorCollection.From(new AccessError(ErrorCategory.Unauthorized), ValidationError.Required("Email"));
+        var result = Result.Failure<int>(errors);
+
+        // Act
+        var json = JsonSerializer.Serialize(result);
+
+        // Assert
+        json.ShouldNotContain("Email");
+        json.ShouldNotContain("propertyName");
+        using var document = JsonDocument.Parse(json);
+        var error = document.RootElement.GetProperty("error");
+        error.GetProperty("category").GetString().ShouldBe("Unauthorized");
+        error.GetProperty("message").GetString().ShouldBe("Sign in first.");
+        var inner = error.GetProperty("errors");
+        inner.GetArrayLength().ShouldBe(1);
+        inner[0].GetProperty("code").GetString().ShouldBe("TEST.ACCESS");
+    }
+
+    [Fact]
+    public void Serialize_WhenTechnicalCollectionHoldsOtherErrorsWithoutOptions_WritesOnlyItsFaults()
+    {
+        // Arrange
+        var errors = ErrorCollection.From(
+            ValidationError.Required("Email"),
+            new NotFoundTestError(7),
+            new FaultError(ErrorCategory.Technical, "Host db-7 refused the login of sa"));
+        var result = Result.Failure<int>(errors);
+
+        // Act
+        var json = JsonSerializer.Serialize(result);
+
+        // Assert
+        json.ShouldNotContain("Email");
+        json.ShouldNotContain("Item 7 not found");
+        json.ShouldNotContain("db-7");
+        using var document = JsonDocument.Parse(json);
+        var inner = document.RootElement.GetProperty("error").GetProperty("errors");
+        inner.GetArrayLength().ShouldBe(1);
+        inner[0].GetProperty("code").GetString().ShouldBe("TEST.FAULT");
+    }
+
+    [Fact]
+    public void Serialize_WhenNestedCollectionsWithoutOptions_FlattensTheErrorsOfTheCategory()
+    {
+        // Arrange
+        var errors = ErrorCollection.From(
+            ErrorCollection.From(new AccessError(ErrorCategory.Unauthorized), ValidationError.Required("Email")),
+            new AccessError(ErrorCategory.Unauthorized));
+        var result = Result.Failure<int>(errors);
+
+        // Act
+        var json = JsonSerializer.Serialize(result);
+
+        // Assert
+        using var document = JsonDocument.Parse(json);
+        var inner = document.RootElement.GetProperty("error").GetProperty("errors");
+        inner.EnumerateArray().Select(e => e.GetProperty("code").GetString()).ShouldBe(["TEST.ACCESS", "TEST.ACCESS"]);
+        inner.EnumerateArray().Any(e => e.TryGetProperty("errors", out _)).ShouldBeFalse();
+    }
+
+    [Fact]
+    public void Serialize_WhenValidationCollectionWithoutOptions_KeepsEveryFieldError()
+    {
+        // Arrange
+        var errors = ErrorCollection.From(ValidationError.Required("Email"), ValidationError.Required("Name"));
+        var result = Result.Failure<int>(errors);
+
+        // Act
+        var json = JsonSerializer.Serialize(result);
+
+        // Assert
+        json.ShouldContain("\"propertyName\":\"Email\"");
+        json.ShouldContain("\"propertyName\":\"Name\"");
+    }
+
+    [Fact]
+    public void Serialize_WhenValidationErrorHasAnotherCategoryWithoutOptions_WritesNoPropertyName()
+    {
+        // Arrange: a third-party IValidationError whose category is not an input category
+        var result = Result.Failure<int>(new ForeignValidationError());
+
+        // Act
+        var json = JsonSerializer.Serialize(result);
+
+        // Assert
+        json.ShouldNotContain("propertyName");
+        json.ShouldNotContain("Secret");
+    }
+
+    [Fact]
+    public void Serialize_WhenUnauthorizedCollectionWithMetadataFactory_KeepsEveryError()
+    {
+        // Arrange: ResultJsonView.Full is for in-process storage, which keeps the whole collection
+        var errors = ErrorCollection.From(new AccessError(ErrorCategory.Unauthorized), ValidationError.Required("Email"));
+
+        // Act
+        var json = JsonSerializer.Serialize(Result.Failure<int>(errors), MetadataFactoryOptions);
+
+        // Assert
+        json.ShouldContain("\"propertyName\":\"Email\"");
+    }
+
+    private sealed record AccessError(ErrorCategory Kind) : Error(ErrorCode.From("TEST.ACCESS"), "Sign in first.")
+    {
+        public override ErrorCategory Category => Kind;
+    }
+
+    private sealed record ForeignValidationError() : Error(ErrorCode.From("TEST.FOREIGN"), "Not found."), IValidationError
+    {
+        public override ErrorCategory Category => ErrorCategory.NotFound;
+
+        public string PropertyName => "Secret";
     }
 
     private sealed record FaultError(ErrorCategory Kind, string Text) : Error(ErrorCode.From("TEST.FAULT"), Text)

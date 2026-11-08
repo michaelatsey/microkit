@@ -5,6 +5,7 @@ namespace MicroKit.Result;
 /// </summary>
 internal static class ErrorCategoryFacts
 {
+    private const int InputGroup = 1;
     private const int SystemFaultGroup = 5;
 
     /// <summary>
@@ -36,9 +37,12 @@ internal static class ErrorCategoryFacts
     /// </summary>
     internal static bool IsSystemFault(ErrorCategory category) => Group(category) == SystemFaultGroup;
 
+    /// <summary>Whether the category is in the input group (Validation, BusinessRule), the lowest precedence.</summary>
+    internal static bool DescribesInput(ErrorCategory category) => Group(category) == InputGroup;
+
     private static int Group(ErrorCategory category) => category switch
     {
-        ErrorCategory.Validation or ErrorCategory.BusinessRule => 1,
+        ErrorCategory.Validation or ErrorCategory.BusinessRule => InputGroup,
         ErrorCategory.Cancelled => 2,
         ErrorCategory.NotFound or ErrorCategory.Conflict or ErrorCategory.PreconditionFailed
             or ErrorCategory.TooManyRequests => 3,

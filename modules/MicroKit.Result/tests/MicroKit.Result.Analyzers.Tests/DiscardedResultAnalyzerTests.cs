@@ -137,6 +137,38 @@ public sealed class DiscardedResultAnalyzerTests
         """);
 
     [Fact]
+    public Task MKR001_WhenTapIsCalledOnAVirtualProperty_DoesNotReport() => Verify("""
+        class Holder
+        {
+            public virtual Result<int> Current => Result.Success(1);
+        }
+        class CachingHolder : Holder
+        {
+            public override Result<int> Current { get; } = Result.Success(2);
+        }
+        class Service
+        {
+            void Run(CachingHolder holder, Holder any)
+            {
+                holder.Current.Tap(x => { });
+                any.Current.Tap(x => { });
+            }
+        }
+        """);
+
+    [Fact]
+    public Task MKR001_WhenTapIsCalledOnTheValueOfAKeyValuePair_DoesNotReport() => Verify("""
+        class Service
+        {
+            void Run(System.Collections.Generic.Dictionary<int, Result<int>> results)
+            {
+                foreach (var kv in results)
+                    kv.Value.Tap(x => { });
+            }
+        }
+        """);
+
+    [Fact]
     public Task MKR001_WhenTapIsCalledOnTheValueOfANullableHeldResult_DoesNotReport() => Verify("""
         class Service
         {

@@ -688,7 +688,7 @@ Without a mapper, `Try` and `TryAsync` let every `OperationCanceledException` pr
 
 ## Return results over HTTP
 
-`MicroKit.Result.AspNetCore` turns a result into a typed ASP.NET Core response. A success answers its status with the value. A failure answers RFC 9457 problem details, with the status of the error's category.
+`MicroKit.Result.AspNetCore` turns a result into a typed ASP.NET Core response. A success answers its status with the value. A failure answers RFC 9457 problem details, with the status of the error's category. A result returned as is from an endpoint is data and answers 200: use `ToHttpResult()` for HTTP semantics.
 
 ### Register problem details
 
@@ -815,12 +815,12 @@ builder.Services.ConfigureHttpJsonOptions(o =>
 builder.Services.AddControllers().AddJsonOptions(o =>
     o.JsonSerializerOptions.Converters.Add(new ResultJsonConverterFactory()));
 
-// An in-process store such as a cache, never a response: also write Metadata
+// An in-process store such as a cache, never a response: the Full view keeps every error, message and Metadata
 var cacheOptions = new JsonSerializerOptions();
-cacheOptions.Converters.Add(new ResultJsonConverterFactory(includeMetadata: true));
+cacheOptions.Converters.Add(new ResultJsonConverterFactory(ResultJsonView.Full));
 ```
 
-By default the converters never write `Metadata`, and write `"The server could not complete the request."` as the `message` of a fault of the system (`Technical`, `External`, `Unavailable`, `Timeout`, `NotSupported`, any undefined value), in a collection too: their output may reach a client. Create the factory with `includeMetadata: true` only for a payload that stays in process, such as a cache entry: it writes `Metadata` and every message. Metadata keys survive a round trip; values come back as JSON primitives. An integer comes back as a `long`, a `Guid` or a `DateTime` as a `string`, another object as its invariant string.
+By default the converters never write `Metadata`, and write `"The server could not complete the request."` as the `message` of a fault of the system (`Technical`, `External`, `Unavailable`, `Timeout`, `NotSupported`, any undefined value), in a collection too: their output may reach a client. Create the factory with `ResultJsonView.Full` only for a payload that stays in process, such as a cache entry or an idempotency store: it writes `Metadata`, every message and every error of a collection, `propertyName` included, so a round trip returns the result as it was. A default converter writes the client view described below, and a round trip reads that view back. Metadata keys survive a round trip; values come back as JSON primitives. An integer comes back as a `long`, a `Guid` or a `DateTime` as a `string`, another object as its invariant string.
 
 The factory uses reflection to build `ResultJsonConverter<T>`, so it is not trim or NativeAOT safe. Under NativeAOT, register `ResultJsonConverter<T>` itself, as below.
 
@@ -841,7 +841,7 @@ The non-generic `Result` carries its own converter through `[JsonConverter]`. It
 
 `Result<T>` carries `ResultEnvelopeJsonConverterFactory`, also without reflection: with no converter registered, it writes the same envelope, without `Metadata`, so a `Result<T>` returned as is by an endpoint never answers 500 for want of a converter.
 
-Like every converter not created with `includeMetadata: true`, they write the generic message for a fault of the system, keeping `code` and `category`. A result returned as is answers the status the endpoint gives it, 200 for a plain value: for a client, prefer `ToHttpResult()`. Reading a `Result<T>` needs a registered converter: without one, it throws `NotSupportedException`, whose message names `ResultJsonConverterFactory` and `ResultJsonConverter<T>`. A registered converter always takes precedence over the type's own.
+Like every converter in the default `ResultJsonView.Client` view, they write what `ToHttpResult()` shows a client: the generic message for a fault of the system, keeping `code` and `category`, and, for a collection whose category is not `Validation` or `BusinessRule`, only its errors of that category, nested collections flattened, without `propertyName`. `ErrorCategoryExtensions.IsSystemFault()`, `ErrorCategoryExtensions.DescribesInput()` and `ErrorCategoryExtensions.SystemFaultMessage` define the fault of the system, the input categories and that text, for the converters and for `MicroKit.Result.AspNetCore`. Reading a `Result<T>` needs a registered converter: without one, it throws `JsonException`, as for any payload the converters cannot read, and the message names `ResultJsonConverterFactory` and `ResultJsonConverter<T>`. A `Result<T>` request body then answers 400, as an unreadable body does. A registered converter always takes precedence over the type's own.
 
 ### Serialize under Native AOT
 
@@ -858,9 +858,13 @@ internal sealed partial class AppJsonContext : JsonSerializerContext;
 string json = JsonSerializer.Serialize(order, AppJsonContext.Default.ResultOrderDto);
 Result<OrderDto> restored = JsonSerializer.Deserialize(json, AppJsonContext.Default.ResultOrderDto);
 
-// Minimal APIs: the context resolves the contracts of the endpoints
+// Minimal APIs: the context resolves the contracts of the endpoints; its Converters apply to its own options only,
+// so the host's options register the closed converter too
 builder.Services.ConfigureHttpJsonOptions(o =>
-    o.SerializerOptions.TypeInfoResolverChain.Insert(0, AppJsonContext.Default));
+{
+    o.SerializerOptions.TypeInfoResolverChain.Insert(0, AppJsonContext.Default);
+    o.SerializerOptions.Converters.Add(new ResultJsonConverter<OrderDto>());
+});
 ```
 
 `ResultJsonConverter<T>` uses no reflection and carries no trim or AOT annotation; only `ResultJsonConverterFactory` does. The pattern follows Microsoft Learn, *How to use source generation in System.Text.Json* and *ASP.NET Core support for Native AOT*.
@@ -910,7 +914,7 @@ It reports an expression statement whose value is a result: a call such as `repo
 It does not report:
 
 - An assignment, an explicit discard `_ = …` included.
-- `Tap`, `TapError` and `Finally` of MicroKit.Result, and their `Async` forms awaited, with or without `ConfigureAwait`, alone, chained or through a conditional access (`held?.Tap(…)`), on a result already held in a local, a parameter, a field, an auto-property, an indexer or an array element. The side effect is the point, and the result is still held. A method of yours with one of these names is reported, and so is a side effect on a computed property (a getter with a body): it builds a new result at each read, which the side effect then drops.
+- `Tap`, `TapError` and `Finally` of MicroKit.Result, and their `Async` forms awaited, with or without `ConfigureAwait`, alone, chained or through a conditional access (`held?.Tap(…)`), on a result already held in a local, a parameter, a field, an auto-property, an indexer or an array element. The side effect is the point, and the result is still held. A method of yours with one of these names is reported, and so is a side effect on a computed property declared in your code (a getter with a body): it builds a new result at each read, which the side effect then drops. A property of a referenced assembly, such as `KeyValuePair<TKey, TValue>.Value` or `Nullable<T>.Value`, and an abstract or interface property are held: their storage cannot be seen.
 
 To fix it, handle the result. Assign it and check the failure rail, return it, or await it:
 

@@ -10,31 +10,28 @@ namespace MicroKit.Result.Serialization;
 /// <remarks>
 /// <see cref="Result"/> carries it as its <see cref="JsonConverterAttribute"/>, so a <see cref="Result"/> returned by
 /// an endpoint is written this way even when no converter is registered, and never emits <see cref="IError.Metadata"/>
-/// by default (ADR-RESULT-001 D1, D12). It uses no reflection. Unless created with <c>includeMetadata</c>, it writes
-/// <c>"The server could not complete the request."</c> as the message of a fault of the system, whose message may
-/// describe it. The error object holds <c>code</c>, <c>message</c>,
-/// <c>category</c>, <c>severity</c>, <c>propertyName</c> for a validation error, and <c>errors</c> for an
-/// <see cref="ErrorCollection"/>; <c>metadata</c> only when created with <c>includeMetadata</c>.
+/// by default (ADR-RESULT-001 D1, D12). It uses no reflection. By default it writes the
+/// <see cref="ResultJsonView.Client"/> view, which that member documents: what a client may read. Created with
+/// <see cref="ResultJsonView.Full"/>, the error object holds <c>code</c>, <c>message</c>, <c>category</c>,
+/// <c>severity</c>, <c>propertyName</c> for a validation error, <c>errors</c> for an <see cref="ErrorCollection"/>, and
+/// <c>metadata</c>.
 /// </remarks>
 public sealed class ResultJsonConverter : JsonConverter<Result>
 {
-    private readonly bool _includeMetadata;
+    private readonly ResultJsonView _view;
 
-    /// <summary>Initializes a converter that never writes <see cref="IError.Metadata"/>.</summary>
-    public ResultJsonConverter() : this(includeMetadata: false)
+    /// <summary>Initializes a converter that writes the <see cref="ResultJsonView.Client"/> view.</summary>
+    public ResultJsonConverter() : this(ResultJsonView.Client)
     {
     }
 
     /// <summary>Initializes a converter.</summary>
-    /// <param name="includeMetadata">
-    /// <see langword="true"/> to write <see cref="IError.Metadata"/> and the message of a fault of the system, for
-    /// in-process storage such as a cache; never for a response sent to a client. <see langword="false"/> writes
-    /// <c>"The server could not complete the request."</c> as the message of a fault of the system
-    /// (<see cref="ErrorCategory.Technical"/>, <see cref="ErrorCategory.External"/>, <see cref="ErrorCategory.Unavailable"/>,
-    /// <see cref="ErrorCategory.Timeout"/>, <see cref="ErrorCategory.NotSupported"/>, undefined values). Values come back as JSON primitives: an integer as a <see cref="long"/> (or a <see cref="ulong"/>), a non-integer as a <see cref="double"/>, a
-    /// <see cref="Guid"/> or a <see cref="DateTime"/> as a <see cref="string"/>, any other object as its invariant string.
+    /// <param name="view">
+    /// <see cref="ResultJsonView.Client"/> for anything a client may read; <see cref="ResultJsonView.Full"/> only for
+    /// in-process storage, such as a cache, whose payload never reaches a client.
     /// </param>
-    public ResultJsonConverter(bool includeMetadata) => _includeMetadata = includeMetadata;
+    /// <exception cref="ArgumentOutOfRangeException">Thrown when <paramref name="view"/> is not a defined <see cref="ResultJsonView"/>.</exception>
+    public ResultJsonConverter(ResultJsonView view) => _view = ResultGuard.DefinedView(view);
 
     /// <inheritdoc/>
     public override Result Read(ref Utf8JsonReader reader, Type typeToConvert, JsonSerializerOptions options)
@@ -98,7 +95,7 @@ public sealed class ResultJsonConverter : JsonConverter<Result>
         if (value.IsFailure)
         {
             writer.WritePropertyName("error");
-            ErrorJson.Write(writer, value.Error, _includeMetadata);
+            ErrorJson.Write(writer, value.Error, _view);
         }
         writer.WriteEndObject();
     }

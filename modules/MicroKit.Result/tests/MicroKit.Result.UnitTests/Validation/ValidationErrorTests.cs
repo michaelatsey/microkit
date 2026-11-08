@@ -438,4 +438,60 @@ public sealed class ValidationErrorTests
             CultureInfo.CurrentCulture = previous;
         }
     }
+
+    [Fact]
+    public void With_WhenCodeChangedToAnotherValue_ThrowsArgumentException()
+    {
+        // Arrange
+        var error = new ValidationError("Email", "Email is required.");
+
+        // Act + Assert
+        Should.Throw<ArgumentException>(() => error with { Code = ErrorCode.From("OTHER.CODE") });
+    }
+
+    [Fact]
+    public void With_WhenCodeChangedThroughTheErrorType_ThrowsArgumentException()
+    {
+        // Arrange: the with expression binds to Error.Code
+        Error error = new ValidationError("Email", "Email is required.");
+
+        // Act + Assert
+        Should.Throw<ArgumentException>(() => error with { Code = ErrorCode.From("OTHER.CODE") });
+    }
+
+    [Fact]
+    public void With_WhenCodeSetToTheCodeOfItsPropertyName_KeepsTheError()
+    {
+        // Arrange
+        var error = new ValidationError("Email", "Email is required.");
+
+        // Act
+        var same = error with { Code = ErrorCode.From("VALIDATION.EMAIL") };
+
+        // Assert
+        same.ShouldBe(error);
+    }
+
+    [Fact]
+    public void With_WhenCodeIsSetAfterItsNewPropertyName_KeepsBoth()
+    {
+        // Arrange
+        var error = new ValidationError("Email", "Email is required.");
+
+        // Act
+        var renamed = error with { PropertyName = "Name", Code = ErrorCode.From("VALIDATION.NAME") };
+
+        // Assert
+        renamed.Code.ShouldBe(ErrorCode.From("VALIDATION.NAME"));
+    }
+
+    [Fact]
+    public void With_WhenCodeIsSetBeforeItsNewPropertyName_ThrowsArgumentException()
+    {
+        // Arrange: members of a with expression are set in the order they are written; set PropertyName alone
+        var error = new ValidationError("Email", "Email is required.");
+
+        // Act + Assert
+        Should.Throw<ArgumentException>(() => error with { Code = ErrorCode.From("VALIDATION.NAME"), PropertyName = "Name" });
+    }
 }

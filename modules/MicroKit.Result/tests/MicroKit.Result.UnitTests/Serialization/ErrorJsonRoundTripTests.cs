@@ -6,19 +6,19 @@ using MicroKit.Result.UnitTests.TestSupport;
 namespace MicroKit.Result.UnitTests.Serialization;
 
 // #184 Phase 5: the error object keeps Severity, the inner errors of an ErrorCollection, PropertyName and, on
-// opt-in (includeMetadata), Metadata across a round trip (ADR-RESULT-001 D1, D12).
+// opt-in (ResultJsonView.Full), Metadata across a round trip (ADR-RESULT-001 D1, D12).
 public sealed class ErrorJsonRoundTripTests
 {
     // The factory, as a consumer registers it.
     private static readonly JsonSerializerOptions FactoryMetadataOptions = new()
     {
-        Converters = { new ResultJsonConverterFactory(includeMetadata: true) },
+        Converters = { new ResultJsonConverterFactory(ResultJsonView.Full) },
     };
 
     // The converter created directly: the encoding tests below do not depend on how the factory creates it.
     private static readonly JsonSerializerOptions MetadataOptions = new()
     {
-        Converters = { new ResultJsonConverter<int>(includeMetadata: true) },
+        Converters = { new ResultJsonConverter<int>(ResultJsonView.Full) },
     };
 
     private static readonly JsonSerializerOptions DefaultFactoryOptions = new()
@@ -57,7 +57,7 @@ public sealed class ErrorJsonRoundTripTests
     }
 
     [Fact]
-    public void Write_WhenIncludeMetadataAndMetadataEmpty_OmitsMetadata()
+    public void Write_WithTheFullViewAndMetadataEmpty_OmitsMetadata()
     {
         // Arrange
         var result = Result.Failure<int>(new OtherError());
@@ -70,7 +70,7 @@ public sealed class ErrorJsonRoundTripTests
     }
 
     [Fact]
-    public void Write_WhenIncludeMetadata_WritesPrimitivesAsJsonValues()
+    public void Write_WithTheFullView_WritesPrimitivesAsJsonValues()
     {
         // Arrange
         var metadata = ErrorMetadata.Create(
@@ -105,7 +105,7 @@ public sealed class ErrorJsonRoundTripTests
     }
 
     [Fact]
-    public void RoundTrip_WhenIncludeMetadata_ReadsPrimitivesAsStringLongDoubleBoolOrNull()
+    public void RoundTrip_WithTheFullView_ReadsPrimitivesAsStringLongDoubleBoolOrNull()
     {
         // Arrange
         var metadata = ErrorMetadata.Create(
