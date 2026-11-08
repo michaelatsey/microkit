@@ -1,81 +1,57 @@
 # Rule: Testing — MicroKit.Persistence
 
-## Test Project Responsibilities
+## Test Projects
 
 | Project | Tests |
 |---------|-------|
-| `UnitTests` | Repository logic, QueryOptions, specifications — isolated via InMemoryRepository, no real DB |
-| `IntegrationTests` | EF Core + real DB (SQLite in-memory or Testcontainers), full UoW cycle |
-| `ArchitectureTests` | Dependency rules via NetArchTest, analyzer rule checks |
-| `PerformanceTests` | Query overhead, allocation regression via BenchmarkDotNet |
+| `UnitTests` | `QueryOptions` and its extensions, `PaginationOptions`, the in-memory doubles — no database |
+| `IntegrationTests` | EF Core against SQLite in-memory (`EntityFrameworkCore/`), PostgreSQL via Testcontainers (`PostgreSql/`), provider registration (`Providers/`) |
+| `ArchitectureTests` | NetArchTest layering, contract placement, sealing, namespaces; `IlCallScanTests` (Mono.Cecil) |
+| `Analyzers.Tests` | MKP001–MKP005 — see `analyzers.md` |
 
-## Library Choices
+There is no performance-test or benchmark project.
 
-- **xUnit** — test framework
-- **Shouldly** — all assertions — see root `.claude/rules/testing-libraries.md`
-- **FluentAssertions is banned** (commercial licence). Nothing enforces it automatically — review and `dependency-guardian` catch it
-- **NSubstitute** — all mocks and stubs
-- **MicroKit.Persistence.Testing** — `InMemoryRepository<TAggregate, TId>`, `InMemoryUnitOfWork`
-- **NetArchTest.Rules** — architecture tests only
-- **Testcontainers** — integration tests against real PostgreSQL/SQL Server (opt-in, slow suite)
+PostgreSQL tests use `PostgreSqlFixture` and `[DockerRequiredFact]` / `[DockerRequiredTheory]`,
+which skip when Docker is unavailable, so `dotnet test` stays green without it. Transaction
+semantics (retry, join, rollback — ADR-006) are tested on PostgreSQL only.
 
-## Isolation Principle
+## Libraries
 
-Unit tests must not require a real database, EF Core context, or DI container:
+Root `.claude/rules/testing-libraries.md` governs: xUnit, Shouldly, NSubstitute, NetArchTest,
+Testcontainers PostgreSQL; FluentAssertions is forbidden (commercial licence). Handler-level unit
+tests use `MicroKit.Persistence.Testing`:
 
 ```csharp
-// ✅ Pure unit test using InMemoryRepository
-var repo = new InMemoryRepository<User, UserId>();
-var uow = new InMemoryUnitOfWork();
+var orders = new InMemoryRepository<Order, OrderId>();   // also IReadRepository<Order>
+var unitOfWork = new InMemoryUnitOfWork();               // counts CommitCount / DiscardCount
 
-await repo.AddAsync(user);
-await uow.CommitAsync();
-
-var found = await repo.FindAsync(user.Id);
-found.ShouldNotBeNull();
+await orders.AddAsync(order);
+await unitOfWork.CommitAsync();
+(await orders.FindAsync(order.Id)).ShouldNotBeNull();
 ```
 
-Integration tests use an in-memory SQLite DbContext or Testcontainers for provider-specific tests.
+The doubles apply the same `PaginationLimits` rules as `EfReadRepository`; they do not support
+composite keys, includes or tracking.
 
-## xUnit Conventions
+## Conventions
 
-- Test classes: `sealed` — no inheritance
-- Method naming: `Method_Scenario_ExpectedResult`
-- `[Fact]` for deterministic tests, `[Theory]` + `[InlineData]` for parameterized
-- `[Collection]` for sharing database fixtures across integration tests
+- Test classes are `sealed`; methods `Method_Scenario_ExpectedResult`.
+- `[Fact]` for one case, `[Theory]` + `[InlineData]` for parameterised ones.
+- A fix comes with a test shown to fail when the fix is reverted.
+- Each SQLite test owns its connection; anything touching uniqueness, concurrency or transactions
+  runs on PostgreSQL.
+- Test `.csproj`: `GenerateDocumentationFile=false`, `NoWarn` includes `CS1591;CA1707`.
 
-## Mandatory Cases
+## Cases worth covering
 
-### Per Repository
-- [ ] `FindAsync_WhenExists_ReturnsAggregate`
-- [ ] `FindAsync_WhenNotFound_ReturnsNull`
-- [ ] `AddAsync_ThenUnitOfWorkCommit_PersistsAggregate`
-- [ ] `FindAsync_ThenMutateThenUnitOfWorkCommit_PersistsChange` (there is no `UpdateAsync`)
-- [ ] `DeleteAsync_ThenUnitOfWorkCommit_RemovesAggregate`
-- [ ] `FindAsync_LoadsTheWholeAggregate` (EF Core: SQLite and PostgreSQL)
+- Write repository: find existing / missing, add then commit, find → mutate → commit, delete then
+  commit, aggregate load includes the children (`EfRepositoryAggregateLoadTests`).
+- Read repository: spec filter, ordering + pagination, default page and maximum size, any, count,
+  `FindAsync` tracked vs untracked.
+- Unit of work: commit translation to `PersistenceException`, `DiscardChanges`, cancellation.
 
-### Per ReadRepository
-- [ ] `ListAsync_WithSpec_FiltersCorrectly`
-- [ ] `ListAsync_WithPagination_ReturnsCorrectPage`
-- [ ] `AnyAsync_WhenMatches_ReturnsTrue`
-- [ ] `AnyAsync_WhenNoMatch_ReturnsFalse`
-- [ ] `CountAsync_ReturnsCorrectCount`
-
-### Per Specification
-- [ ] `Criteria_WhenSatisfied_MatchesAggregate`
-- [ ] `Criteria_WhenNotSatisfied_DoesNotMatch`
-- [ ] `QueryOptions_WithSpec_AppliesCorrectFilter`
-
-## Test Project .csproj
-
-```xml
-<GenerateDocumentationFile>false</GenerateDocumentationFile>
-<NoWarn>CS1591;CA1707</NoWarn>
-```
-
-## Detecting Violations
+## Detecting violations
 
 ```bash
-# FluentAssertions must never appear
-grep -rn 'FluentAssertions\|\.Should()\.' modules/MicroKit.Persistence/tests/ --include="*.cs"
+grep -rn 'FluentAssertions' modules/MicroKit.Persistence --include="*.cs" --include="*.csproj"
 ```

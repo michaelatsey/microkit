@@ -1,80 +1,64 @@
-# Workflow: Releasing a Module
+# Workflow: Releasing the Module
 
-End-to-end release process for the 8 MicroKit.Persistence packages.
+End-to-end release of the 8 MicroKit.Persistence packages. The root `/release Persistence`
+command runs the `release-manager` agent through these steps. ADR-GLOBAL-002 (root) governs; no
+tag is cut until steps 1–4 of its migration land.
 
 ## Prerequisites
 
-- [ ] On `main` or `release/persistence-*` branch
-- [ ] All CI checks green (all 3 providers tested)
-- [ ] `CHANGELOG.md` entry complete for this version
-- [ ] No uncommitted changes
-- [ ] Migration scripts reviewed (no destructive operations without documentation)
+- [ ] On `main`, clean tree, CI green
+- [ ] `CHANGELOG.md` complete for the version
+- [ ] `MicroKit.Domain` published at the version `Directory.Packages.props` declares
+- [ ] ArchitectureTests present and green
 
 ## Steps
 
-### 1. Run the Release Command
+### 1. Build and test in Release, with Docker
 
+```bash
+dotnet build modules/MicroKit.Persistence/MicroKit.Persistence.slnx -c Release
+dotnet test  modules/MicroKit.Persistence/MicroKit.Persistence.slnx -c Release --no-build
 ```
-/release
+
+No PostgreSQL test may be skipped.
+
+### 2. Pack and smoke-test
+
+```bash
+dotnet pack modules/MicroKit.Persistence/MicroKit.Persistence.slnx -c Release \
+  -p:PackageVersion={version} -o artifacts/persistence/
 ```
 
-The `release-manager` agent handles every step. Review each step's output before approving.
+- 8 packages present
+- Declared dependencies match `.claude/rules/packaging.md`; Analyzers has no `lib/`
+- Consumed from a local folder feed by a real consumer before any NuGet.org publish
 
-### 2. Review Package List (8 packages)
-
-Verify all 8 packages are present:
-- `MicroKit.Persistence.Abstractions`
-- `MicroKit.Persistence`
-- `MicroKit.Persistence.EntityFrameworkCore`
-- `MicroKit.Persistence.EntityFrameworkCore.PostgreSql`
-- `MicroKit.Persistence.EntityFrameworkCore.SqlServer`
-- `MicroKit.Persistence.Specifications`
-- `MicroKit.Persistence.Testing`
-- `MicroKit.Persistence.Analyzers`
-
-### 3. Verify Dependency Graph
-
-- `Abstractions` declares only `MicroKit.Domain`
-- `Core` declares `MicroKit.Persistence.Abstractions` only
-- `EntityFrameworkCore` adds `Microsoft.EntityFrameworkCore`
-- Provider packages add only their provider NuGet
-- `Testing` declares `NSubstitute`
-- `Analyzers` has no `lib/` in the nupkg (build-only)
-- No `FluentAssertions` anywhere
-
-### 4. Approve Tag Creation
-
-The agent presents the tag (`persistence-v{version}`) and asks for confirmation before pushing.
+### 3. Tag — after the human confirms
 
 ```bash
 git tag persistence-v{version} -m "MicroKit.Persistence {version}"
 git push origin persistence-v{version}
 ```
 
-### 5. Verify GitHub Actions
+### 4. Watch the workflow
 
 ```bash
 gh run list --workflow=release-persistence.yml --limit=3
 ```
 
-### 6. Post-Release
+### 5. Post-release
 
-- [ ] GitHub Release created with changelog excerpt
-- [ ] Breaking change migration guide updated if ADR-001 IUnitOfWork migration guidance applies
-- [ ] Samples updated if the API changed
-- [ ] Notify MicroKit.MediatR team if ITransactionalContext signature changed (cross-module impact)
+- [ ] GitHub Release with the CHANGELOG excerpt
+- [ ] `MicroKit.MediatR` and `MicroKit.Tenancy` told when a contract they use changed
+      (`ITransactionalContext`, `IUnitOfWork`, `EfRepository`, conventions)
 
-## Breaking Change Protocol
+## Breaking changes
 
-If `IUnitOfWork`, `ITransactionalContext`, or `IRepository<TAggregate, TId>` signatures change:
-1. Add `!` to the commit scope: `feat(persistence)!:`
-2. Add `BREAKING CHANGE:` footer with migration guide
-3. Increment major version in `version.json`
-4. Update ADR in `.claude-context/context/architectural-decisions.md`
+On `preview.*` a known break ships outright, without `[Obsolete]` (ADR-GLOBAL-002 D10):
+`!` in the commit header (`refactor(persistence)!:`), a `BREAKING CHANGE:` footer with the
+migration, a CHANGELOG entry, and an ADR in `.claude-context/context/architectural-decisions.md`
+when the decision outlives the change.
 
 ## Rollback
 
-```bash
-dotnet nuget delete MicroKit.Persistence.Abstractions {version} --source nuget.org
-```
-Then create a patch release with the fix.
+NuGet packages cannot be deleted, only unlisted. Ship the fix as the next version.

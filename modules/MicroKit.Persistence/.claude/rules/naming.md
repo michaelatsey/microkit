@@ -1,86 +1,74 @@
 # Rule: Naming — MicroKit.Persistence
 
-## Repository Contracts
+## Repositories
 
 | Type | Convention | Example |
 |---|---|---|
-| Write repository interface | `I{Entity}Repository` | `IUserRepository`, `IOrderRepository` |
-| Read repository interface | `I{Entity}ReadRepository` | `IUserReadRepository`, `IOrderReadRepository` |
-| EF write repository | `Ef{Entity}Repository` | `EfUserRepository`, `EfOrderRepository` |
-| EF read repository | `Ef{Entity}ReadRepository` | `EfUserReadRepository` |
-| In-memory (testing) | `InMemory{Entity}Repository` or `InMemoryRepository<TAggregate, TId>` | `InMemoryUserRepository` |
-| Generic base | `IRepository<TAggregate, TId>`, `IReadRepository<TAggregate>` | (non-entity-specific) |
+| Write contract | `IRepository<TAggregate, TId>` | |
+| Typed write interface | `I{Aggregate}Repository : IRepository<{Aggregate}, {Aggregate}Id>` | `IOrderRepository` |
+| EF write base | `EfRepository<TAggregate, TId, TContext>` | |
+| Typed EF write repository | `Ef{Aggregate}Repository` | `EfOrderRepository` |
+| Read contract | `IReadRepository<TAggregate>` | |
+| Typed read interface | `I{Aggregate}ReadRepository : IReadRepository<{Aggregate}>` | `IOrderReadRepository` |
+| EF read base | `EfReadRepository<TAggregate, TContext>` | |
+| Typed EF read repository | `Ef{Aggregate}ReadRepository` | |
+| In-memory doubles | `InMemoryRepository<TAggregate, TId>`, `InMemoryReadRepository<TAggregate>` | |
 
-## Unit of Work
+## Unit of Work and Transactions
 
-| Type | Convention | Example |
-|---|---|---|
-| Interface | `IUnitOfWork` | (single, no entity suffix) |
-| EF Core implementation | `EfUnitOfWork` | |
-| Composite interface | `ITransactionalUnitOfWork` | `ITransactionalUnitOfWork : IUnitOfWork, ITransactionalContext` |
-| In-memory | `InMemoryUnitOfWork` | |
+| Type | Name |
+|---|---|
+| Commit boundary | `IUnitOfWork` |
+| Transactional execution | `ITransactionalContext` |
+| EF composite | `ITransactionalUnitOfWork : IUnitOfWork, ITransactionalContext` |
+| EF implementation | `EfUnitOfWork<TContext>` |
+| In-memory | `InMemoryUnitOfWork` |
 
-## Transaction
+## Query and Pagination
 
-| Type | Convention | Example |
-|---|---|---|
-| Context interface | `ITransactionalContext` | |
+| Type | Name |
+|---|---|
+| Options record | `QueryOptions<TAggregate>` |
+| Paged result | `IPagedResult<T>` / `PagedResult<T>` |
+| Page request | `PaginationOptions` |
+| Page bounds | `PaginationLimits` |
+| Evaluator | `ISpecificationEvaluator` / `EfSpecificationEvaluator` |
 
-## QueryOptions and Pagination
+Builder extensions use the `With-` prefix (`WithIncludes`, `WithPagination`, `WithTracking`,
+`WithOrderBy`, `WithThenBy`, `WithSpec`), except `AsNoTracking()` and `AsSplitQuery()`, named
+after their EF Core counterparts. Core's `OrderBy(...)` extension shares its name with the
+`QueryOptions.OrderBy` property and cannot be called with extension syntax — see `specifications.md`.
 
-| Type | Convention | Example |
-|---|---|---|
-| Options record | `QueryOptions<TAggregate>` | `QueryOptions<User>` |
-| Paged result interface | `IPagedResult<T>` | |
-| Paged result implementation | `PagedResult<T>` | |
-| Pagination parameters | `PaginationOptions` | |
+## Specifications (in MicroKit.Domain)
 
-## Specifications (Domain — not Persistence)
-
-Specification types live in the **Domain** layer, but naming is documented here for consistency:
-
-| Type | Convention | Example |
-|---|---|---|
-| Specification class | `{Adjective/Condition}{Entity}[By{Discriminant}]Spec` | `ActiveUserSpec`, `UserByEmailSpec` |
-| Composite | `{SpecA}And{SpecB}Spec` | (use Specification.And() helper) |
+`{Condition}{Aggregate}[By{Discriminant}]Spec` — `OpenOrdersSpec`, `OrderByNumberSpec`.
 
 ## Analyzers
 
-| Type | Convention | Example |
+| Item | Convention | Example |
 |---|---|---|
-| Analyzer class | `{Concern}Analyzer` | `ReadRepositoryMutationAnalyzer`, `DbContextInjectionAnalyzer` |
-| Diagnostic ID | `MKP{NNN}` | `MKP001`, `MKP002`, `MKP005` |
-| Code fix | `{Concern}CodeFixProvider` | (none in v1 — analyzers are diagnostic-only) |
+| Analyzer class | `{Concern}Analyzer` | `ReadRepositoryMutationAnalyzer` |
+| Diagnostic ID | `MKP{NNN}` | `MKP001` |
+| Code fix | none — the analyzers are diagnostic-only |
 
-## Registered Diagnostic IDs
+Registered IDs: `analyzers.md`.
 
-| ID | Severity | Description |
-|----|----------|-------------|
-| `MKP001` | Error | `IReadRepository<T>` implementation calls `CommitAsync` or `SaveChangesAsync` |
-| `MKP002` | Error | `IReadRepository<T>` implementation declares or calls `AddAsync`, `UpdateAsync`, or `DeleteAsync` |
-| `MKP003` | Warning | `SaveChangesAsync` / `SaveChanges` called directly on `DbContext` — bypasses `IUnitOfWork` |
-| `MKP004` | Warning | `DbContext` injected as constructor parameter outside the infrastructure layer |
-| `MKP005` | Error | Repository method exposes `IQueryable<T>` as return type |
-
-## DI Extension Methods
+## DI Entry Points
 
 ```csharp
-// ✅ Registration entry points
-AddMicroKitPersistence(this IServiceCollection, Action<PersistenceBuilder>)
-AddEntityFrameworkCore(this PersistenceBuilder, Action<EfCoreBuilder>)
-UsePostgreSQL(this EfCoreBuilder, string connectionString)
-UseSqlServer(this EfCoreBuilder, string connectionString)
+AddMicroKitPersistence(this IServiceCollection, Action<PersistenceBuilder>?)
+AddEntityFrameworkCore(this PersistenceBuilder, Action<EfCoreBuilder>?)
+ConfigurePagination(this EfCoreBuilder, PaginationLimits)
+AddDbContext<TContext>(this EfCoreBuilder, Action<DbContextOptionsBuilder>?)
+AddUnitOfWork<TContext>(this EfCoreBuilder)
+UsePostgreSQL<TContext>(this EfCoreBuilder, string, Action<NpgsqlDbContextOptionsBuilder>?, ProviderOptions?)
+UseSqlServer<TContext>(this EfCoreBuilder, string, Action<SqlServerDbContextOptionsBuilder>?, ProviderOptions?)
 ```
 
 ## Namespaces
 
-```csharp
-namespace MicroKit.Persistence.Abstractions;           // contracts
-namespace MicroKit.Persistence;                        // core
-namespace MicroKit.Persistence.EntityFrameworkCore;    // EF bridge
-namespace MicroKit.Persistence.EntityFrameworkCore.PostgreSql;
-namespace MicroKit.Persistence.EntityFrameworkCore.SqlServer;
-namespace MicroKit.Persistence.Specifications;
-namespace MicroKit.Persistence.Testing;
-namespace MicroKit.Persistence.Analyzers;
-```
+One namespace per project, equal to the assembly name (`NamespaceConventionTests`):
+`MicroKit.Persistence.Abstractions`, `MicroKit.Persistence`, `MicroKit.Persistence.EntityFrameworkCore`
+(DI, conventions and `ProviderOptions` included), `….EntityFrameworkCore.PostgreSql`,
+`….EntityFrameworkCore.SqlServer`, `MicroKit.Persistence.Specifications`,
+`MicroKit.Persistence.Testing`, `MicroKit.Persistence.Analyzers`.

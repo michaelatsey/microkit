@@ -1,58 +1,55 @@
 ---
 name: dependency-guardian
-description: Use this agent on any .csproj or project-reference change in MicroKit.Persistence. Fast PASS/BLOCK verdict. Invoke it after every .csproj or Directory.Packages.props change. Checks CPM compliance, layer isolation (EF Core out of Abstractions), package confinement (Npgsql/SqlServer only in providers, NSubstitute only in Testing, Analyzers as build-only).
+description: Use this agent on any .csproj or project-reference change in MicroKit.Persistence. Fast PASS/BLOCK verdict. Invoke it after every .csproj or Directory.Packages.props change. Checks CPM compliance, reference patterns (intra-module unconditional, cross-module two-ItemGroup), layer isolation (EF Core out of Abstractions and core), and package confinement (Npgsql/SqlServer only in providers, NSubstitute only in Testing, Analyzers build-only).
 tools: Read, Glob, Grep
 model: haiku
 ---
 
 # Agent: Persistence Dependency Guardian
 
+## Context to load
+- `.claude/rules/dependencies.md`
+- `.claude-context/context/dependency-graph.md`
+- Root `.claude/rules/cross-module-references.md`
+
 ## Rules (checked in order)
 
-1. **CPM compliance** — no `Version=` on any `PackageReference`
-2. **FluentAssertions banned** — any reference to `FluentAssertions` is an instant BLOCK
-3. **Abstractions purity** — `MicroKit.Persistence.Abstractions` must not reference:
-   - `Microsoft.EntityFrameworkCore` or any EF package
-   - `Npgsql.*`, `Microsoft.EntityFrameworkCore.SqlServer`
-   - `NSubstitute`
-   - Any `MicroKit.Persistence.*` project (no self-referential project refs in Abstractions)
-4. **Core isolation** — `MicroKit.Persistence` (core) must not reference:
-   - EF Core packages
-   - `Npgsql.*`, `Microsoft.EntityFrameworkCore.SqlServer`
-   - `NSubstitute`
-5. **EFCore layer** — `MicroKit.Persistence.EntityFrameworkCore` may reference Core and EF Core only;
-   must not reference provider packages directly
-6. **Provider isolation** — PostgreSql project references EFCore + Npgsql only;
-   SqlServer project references EFCore + SqlServer only
-7. **Sibling isolation** — `Testing` and `Specifications` are siblings; neither references the other
-8. **NSubstitute confined** — appears only in `Testing` project
-9. **Analyzers build-only** — `MicroKit.Persistence.Analyzers` referenced with `OutputItemType="Analyzer" ReferenceOutputAssembly="false"` only
+1. **CPM** — no `Version=` on any `PackageReference`; the version is in the root `Directory.Packages.props`.
+2. **FluentAssertions** — any reference is a BLOCK.
+3. **Abstractions** — references `MicroKit.Domain` only (cross-module); no EF Core, `Npgsql.*`,
+   SqlServer, `NSubstitute`, nor any `MicroKit.Persistence.*` project.
+4. **Core** — references Abstractions only; no package.
+5. **EntityFrameworkCore** — core + `Microsoft.EntityFrameworkCore`,
+   `Microsoft.EntityFrameworkCore.Relational`, `Microsoft.Extensions.DependencyInjection.Abstractions`;
+   no provider package.
+6. **Providers** — PostgreSql: EntityFrameworkCore + `Npgsql.EntityFrameworkCore.PostgreSQL`;
+   SqlServer: EntityFrameworkCore + `Microsoft.EntityFrameworkCore.SqlServer`.
+7. **Siblings** — `Specifications`, `Testing`, `PostgreSql`, `SqlServer` never reference one another.
+8. **NSubstitute** — `Testing` and test projects only.
+9. **Analyzers** — no project reference; only `Microsoft.CodeAnalysis.CSharp`. Inside the
+   repository it is referenced with `OutputItemType="Analyzer" ReferenceOutputAssembly="false"`.
+10. **No reverse edge** — nothing in this module references MediatR, Messaging, Tenancy or Http.
 
-## Cross-Module Reference Pattern (rule: `/.claude/rules/cross-module-references.md`)
+## Reference patterns
 
-The only cross-module reference in this module's `src/` is `MicroKit.Persistence.Abstractions` →
-`MicroKit.Domain` (#196 D17 removed `MicroKit.Result`); Core references nothing outside the module. Cross-module references in `src/` follow the canonical
-two-ItemGroup pattern; test and other non-packable projects use an unconditional
-`ProjectReference` instead (e.g. `IntegrationTests` → `MicroKit.Domain`), which is correct.
-**Intra-module** references (between this module's own projects) are always unconditional
-`ProjectReference` (ADR-GLOBAL-002 D5) — a `CIReleaseBuild` condition on one is a BLOCK.
-Run on every cross-module reference found:
+- **Intra-module** (between this module's projects): unconditional `ProjectReference`, in every
+  build mode (ADR-GLOBAL-002 D5). A `CIReleaseBuild` condition on one is a BLOCK.
+- **Cross-module from `src/`**: the two-ItemGroup pattern. Today the only one is
+  Abstractions → `MicroKit.Domain`.
+- **Tests and samples** (`IsPackable=false`): unconditional `ProjectReference` to other modules.
 
 ```bash
-# Detect Condition= placed on individual items instead of ItemGroups (violation)
-grep -n 'ProjectReference.*Condition=\|PackageReference.*Condition=' modules/MicroKit.Persistence/src/**/*.csproj
+# Condition placed on an item instead of its ItemGroup (violation)
+grep -rn 'Reference.*Condition=' modules/MicroKit.Persistence/src --include='*.csproj'
 ```
 
-Checklist:
-- [ ] `Condition=` is on `<ItemGroup>`, never on individual `<ProjectReference>` or `<PackageReference>` items
-- [ ] Both warning comments appear above the two `<ItemGroup>` blocks:
-      `<!-- DEV: source ProjectReferences — CI/Release: published NuGet packages -->`
-      `<!-- ⚠ Any new cross-module dependency must be added to BOTH ItemGroups -->`
-- [ ] Strict symmetry: every `ProjectReference` has a matching `PackageReference` twin and vice versa
-- [ ] No `Version=` on cross-module `<PackageReference>` (CPM via `Directory.Packages.props`)
-- [ ] All `<ProjectReference>` paths are relative (never absolute)
-- [ ] All newly referenced modules are listed in `MicroKit.Persistence.slnx`
-- [ ] Test/non-packable projects use unconditional `<ProjectReference>` — never conditional
+Cross-module checklist:
+- [ ] `Condition=` is on the `<ItemGroup>`, never on an item
+- [ ] The comment `<!-- ⚠ Any new cross-module dependency must be added to BOTH ItemGroups -->` is present
+- [ ] Every `ProjectReference` has its `PackageReference` twin, and the reverse
+- [ ] Paths are relative
+- [ ] The referenced projects are listed under `/deps/` in `MicroKit.Persistence.slnx`
+- [ ] A new edge is in the root CLAUDE.md graph and `.claude-context/context/dependency-graph.md`
 
 ## Output format
 ```

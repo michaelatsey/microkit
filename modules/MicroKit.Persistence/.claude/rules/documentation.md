@@ -1,55 +1,30 @@
 # Rule: Documentation — MicroKit.Persistence
 
-## XML Documentation (src/ projects only)
+## XML Documentation (src/ projects)
 
-All public types and members in `src/` projects require XML documentation. The repository
-contracts in `MicroKit.Persistence.Abstractions` are a published API.
+Every public type and member in `src/` carries XML documentation. `GenerateDocumentationFile`
+is on and `TreatWarningsAsErrors` applies in Release (root `Directory.Build.props`), so a missing
+`<summary>` fails a Release build (CS1591).
 
-```xml
-<GenerateDocumentationFile>true</GenerateDocumentationFile>
-<TreatWarningsAsErrors>true</TreatWarningsAsErrors>
-```
+## Minimum Tags
 
-A missing `<summary>` on a public member is a build error in Release configuration.
-
-## Minimum Required Tags
-
-| Member type | Required tags |
-|-------------|--------------|
-| Interface | `<summary>` |
-| Repository method | `<summary>` + `<param>` + `<returns>` |
-| Exception class | `<summary>` + `<param>` on constructors |
-| `IUnitOfWork.CommitAsync` | `<summary>` + `<param name="ct">` + `<exception cref="PersistenceException">` |
-| QueryOptions | `<summary>` + `<param>` on record parameters |
-| IPagedResult | `<summary>` + `<param>` on all members |
-| EF implementation `override` | `<inheritdoc/>` |
-
-## Repository Contract Documentation Pattern
-
-```csharp
-/// <summary>
-/// Write-side repository for <typeparamref name="TAggregate"/> aggregates. It never commits —
-/// committing belongs to <see cref="IUnitOfWork"/>.
-/// </summary>
-/// <typeparam name="TAggregate">The aggregate root type.</typeparam>
-/// <typeparam name="TId">The aggregate's identifier type.</typeparam>
-public interface IRepository<TAggregate, TId>
-    where TAggregate : class, IAggregateRoot
-    where TId : IEntityId
-{
-    /// <summary>
-    /// Loads the whole aggregate identified by <paramref name="id"/>, tracked.
-    /// </summary>
-    /// <param name="id">The aggregate's identifier.</param>
-    /// <param name="ct">Propagates notification that operations should be cancelled.</param>
-    /// <returns>The aggregate, or <see langword="null"/> if none has this identifier.</returns>
-    ValueTask<TAggregate?> FindAsync(TId id, CancellationToken ct = default);
-}
-```
+| Member | Tags |
+|--------|------|
+| Interface / class / record | `<summary>`; `<typeparam>` on generics |
+| Method | `<summary>` + `<param>` + `<returns>` (non-void) |
+| `IUnitOfWork.CommitAsync`, `ITransactionalContext.ExecuteAsync` | + `<exception cref="PersistenceException">` |
+| Exception constructors | `<summary>` + `<param>` |
+| Implementation of a documented contract member | `<inheritdoc/>` |
 
 ## Style
 
-- `<summary>` uses imperative mood: "Finds an aggregate." not "This method finds..."
-- Cross-reference related contracts with `<see cref=""/>`
-- Document why `CommitAsync` instead of `SaveChangesAsync` where it helps consumers understand
-- EF implementation overrides use `<inheritdoc/>` exclusively — no duplication
+- `<summary>` states what the member does, in the present: "Finds an aggregate by its identifier."
+- Cross-reference related contracts with `<see cref=""/>`.
+- Say what a consumer must know and cannot see in the signature: tracking, what is loaded,
+  retries and their at-least-once consequence, what an exception means.
+
+## README and samples
+
+`README.md` is the consumer documentation. Every C# sample it shows lives in
+`samples/MicroKit.Persistence.Samples` and builds in Release with the analyzers enabled; change
+both together.

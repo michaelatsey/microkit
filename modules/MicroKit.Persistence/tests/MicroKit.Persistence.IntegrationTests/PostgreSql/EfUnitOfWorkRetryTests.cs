@@ -48,6 +48,24 @@ public sealed class EfUnitOfWorkRetryTests(PostgreSqlFixture fixture)
     }
 
     [DockerRequiredFact]
+    public async Task CommitAsync_OutsideExecuteAsync_WhenTheStrategyExhaustsItsRetries_ThrowsPersistenceException()
+    {
+        await using var database = await ExecutionDatabase.CreateAsync(fixture);
+        var alwaysFail = new FailingInsertInterceptor(int.MaxValue);
+        await using var context = database.CreateContext(maxRetryCount: 2, alwaysFail);
+        var sut = new EfUnitOfWork<ExecutionDbContext>(context);
+        context.Rows.Add(new ExecutionRow { Id = Guid.NewGuid(), Name = "row" });
+
+        // SaveChangesAsync runs the retrying strategy itself and gives up with
+        // RetryLimitExceededException, which is not a DbUpdateException.
+        var thrown = await Should.ThrowAsync<PersistenceException>(async () => await sut.CommitAsync());
+
+        thrown.InnerException.ShouldBeOfType<RetryLimitExceededException>();
+        alwaysFail.Thrown.ShouldBe(3, "one attempt plus the two retries the strategy allows");
+        (await database.ReadRowsAsync()).ShouldBeEmpty();
+    }
+
+    [DockerRequiredFact]
     public async Task ExecuteAsync_WhenCommitFailsNonTransiently_SurfacesTheOriginalPersistenceExceptionWithoutRetry()
     {
         await using var database = await ExecutionDatabase.CreateAsync(fixture);

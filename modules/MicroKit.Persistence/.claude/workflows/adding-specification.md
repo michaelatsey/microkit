@@ -1,95 +1,57 @@
 # Workflow: Adding a Specification
 
-Step-by-step guide for adding a domain specification and its QueryOptions wrapper.
+A specification is a reusable domain predicate; the query handler wraps it in `QueryOptions`.
+Template: `.claude-context/templates/specification-template.md`. Rule: `.claude/rules/specifications.md`.
 
-## When to Use
+## 1. Is it a domain concern?
 
-When a new query filter is needed that encapsulates domain logic (e.g., "active users",
-"overdue orders", "products in a category").
+A specification when the predicate expresses a business rule ("open", "overdue", "eligible") and
+is reused. A one-off UI filter is a `Specification<T>` local to the handler's feature, or a typed
+read repository method — never a `Where` on a raw `DbSet` in a handler.
 
-## Steps
-
-### 1. Determine if This Is a Domain Concern
-
-A specification belongs in the **Domain** layer when:
-- The criteria express business rules ("active", "overdue", "eligible")
-- The predicate uses domain concepts (value objects, domain-level flags)
-
-A raw filter belongs in the **query handler** (inline) when:
-- It is a one-off UI filter with no business meaning
-- It will never be reused across handlers
-
-### 2. Create the Specification in Domain
-
-```
-/new-specification <SpecificationName>
-```
-
-File location: `modules/MicroKit.Domain/src/MicroKit.Domain/Specifications/`
+## 2. Write it in the consumer's domain layer
 
 ```csharp
-// ✅ Domain layer — criteria only
-public sealed class ActiveUserSpec : Specification<User>
+public sealed class OpenOrdersSpec : Specification<Order>
 {
-    public ActiveUserSpec() => AddCriteria(u => u.IsActive && !u.IsDeleted);
+    public override Expression<Func<Order, bool>> ToExpression() => order => !order.IsClosed;
 }
 
-// ✅ Parameterised specification
-public sealed class UserByEmailSpec : Specification<User>
+public sealed class OrderByNumberSpec(string number) : Specification<Order>
 {
-    public UserByEmailSpec(Email email) => AddCriteria(u => u.Email == email);
+    public override Expression<Func<Order, bool>> ToExpression() => order => order.Number == number;
 }
 ```
 
-### 3. Create the QueryOptions Wrapper in the Handler
+The predicate must translate to SQL (no method EF Core cannot translate) and also run in memory
+through `IsSatisfiedBy` — the in-memory doubles use it.
 
-QueryOptions is assembled in the **query handler** — it is an application-layer concern:
+## 3. Use it from the query handler
 
 ```csharp
-public async ValueTask<Result<IReadOnlyList<UserDto>>> Handle(
-    GetActiveUsersQuery query, CancellationToken ct = default)
+public sealed class ListOpenOrders(IReadRepository<Order> orders)
 {
-    var opts = new QueryOptions<User>(new ActiveUserSpec())
-        .WithIncludes(q => q.Include(u => u.Roles))
-        .WithPagination(query.Page, query.PageSize)
-        .AsNoTracking();
-
-    var users = await _readRepo.ListAsync(opts, ct).ConfigureAwait(false);
-    return Result.Success(users.Select(UserDto.From).ToList().AsReadOnly());
+    public ValueTask<IPagedResult<Order>> HandleAsync(int page, CancellationToken ct = default) =>
+        orders.ListPagedAsync(
+            new QueryOptions<Order>(new OpenOrdersSpec())
+                .WithOrderByDescending(o => o.CreatedAt)
+                .WithPagination(page, pageSize: 20),
+            ct);
 }
 ```
 
-### 4. Add QueryOptions Extensions (if Needed)
+Includes, ordering, pagination and tracking belong to `QueryOptions`, never to the specification.
 
-If the spec needs sorting or complex composition used across many handlers, add helpers in
-`MicroKit.Persistence.Specifications`:
+## 4. Shared option presets (optional)
+
+Extensions over `QueryOptions<T>` in the consumer, built on `WithSpec` and the `With-` builders:
 
 ```csharp
-public static class UserQueryOptionsExtensions
-{
-    public static QueryOptions<User> ActiveUsers(this QueryOptions<User> opts)
-        => opts.WithSpec(new ActiveUserSpec());
-}
+public static QueryOptions<Order> OpenFirst(this QueryOptions<Order> opts) =>
+    opts.WithSpec(new OpenOrdersSpec()).WithOrderByDescending(o => o.CreatedAt);
 ```
 
-### 5. Write Specification Tests
+## 5. Tests
 
-```csharp
-[Fact]
-public void ActiveUserSpec_WhenActive_Matches()
-{
-    var user = User.CreateActive();
-    var spec = new ActiveUserSpec();
-
-    spec.Criteria.Compile()(user).ShouldBeTrue();
-}
-
-[Fact]
-public void ActiveUserSpec_WhenDeleted_DoesNotMatch()
-{
-    var user = User.CreateDeleted();
-    var spec = new ActiveUserSpec();
-
-    spec.Criteria.Compile()(user).ShouldBeFalse();
-}
-```
+`IsSatisfiedBy` for a matching and a non-matching aggregate (unit), and one SQLite test proving
+the expression translates.

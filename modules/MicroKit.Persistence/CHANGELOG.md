@@ -3,7 +3,14 @@
 ## [Unreleased]
 
 Issue #196 settles the module before 2.0.0 stable. The entries below are grouped by package; the
-decision number (D1–D17) points at the issue.
+decision number (D1–D17) points at the issue. D3's presumption was confirmed by a test (a transient
+commit failure was not retried) before the retry was fixed; D7 was dropped — a drain already runs
+exactly one `DetectChanges`. The README is new and documents composition and every public type; its samples
+compile in `samples/MicroKit.Persistence.Samples`.
+
+### Build
+- The Release restore no longer fails on `System.Security.Cryptography.Pkcs` 9.0.4 (GHSA-2fmv-rv2c-59x7, GHSA-846f-f764-76mx), pinned to 9.0.21 (#161).
+- References between the module's own projects are unconditional `ProjectReference`s in every build mode (ADR-GLOBAL-002 D5).
 
 ### Breaking Changes
 
@@ -53,6 +60,7 @@ decision number (D1–D17) points at the issue.
 - **D6** — `PaginationLimits` (default page 50, maximum 500), validated on construction.
 
 #### MicroKit.Persistence.EntityFrameworkCore
+- **D15** — `UsePostgreSQL<TContext>` and `UseSqlServer<TContext>` take an optional `ProviderOptions`: `Retry = new RetryOnFailureOptions(maxRetryCount, maxRetryDelay)` turns on the provider's retrying execution strategy, `PoolSize` registers the context with `AddDbContextPool`. Both are off by default; existing calls are unchanged. With `PoolSize` set, registration throws `ArgumentException` unless the context's only public constructor takes just `DbContextOptions` or `DbContextOptions<TContext>`: a pooled context's constructor-injected scoped services are resolved once from the root provider and shared by every lease, so tenant-aware contexts such as `MultitenantDbContext` must not be pooled.
 - **D13** — `DomainConventionExtensions` for `ConfigureConventions`: `AddEntityIdConventions(params Assembly[])` maps every concrete `EntityId<T>` of the given assemblies, and `GuidId`, to a `Guid` column, reading values back through the type's `(Guid)` constructor whatever its accessibility (model building fails, naming the type, when there is none); `AddActorConvention()` maps `Actor` to a string of at most `Actor.MaxLength` characters read back through `Actor.Restore` (on an existing schema the 200-character limit is a column change to migrate); `AddDomainConventions(params Assembly[])` applies all three conventions.
 - **D14** — `AddAuditInstantConvention()` normalises the `CreatedAt` / `UpdatedAt` instants of every `IAuditableEntity` to offset zero on read and write (query parameters included), and rejects a stored `default` instant on read. Compiled models (`dotnet ef dbcontext optimize`) and NativeAOT precompiled queries are not supported by the D13/D14 conventions: the generated code instantiates internal converters.
 - **D6** — `EfCoreBuilder.ConfigurePagination(PaginationLimits)`; `AddEntityFrameworkCore()` registers `PaginationLimits.Default`.
@@ -69,6 +77,7 @@ decision number (D1–D17) points at the issue.
 - **D2** — reading an aggregate the current command had added, modified or deleted through `EfReadRepository.FindAsync` detached it, and the next commit silently wrote nothing. Loading an untracked one could also wire it into tracked entities' navigations before detaching it, so a later commit tried to insert it.
 - **D3** — a transient failure of the command's `SaveChangesAsync` inside `ExecuteAsync` was never retried: `CommitAsync`'s `PersistenceException` hid the `DbUpdateException` from the execution strategy. A failure of the transaction's COMMIT left the attempt's accepted changes tracked, so a retry could apply them twice.
 - **D3** — with a provider's default (non-retrying) strategy, `CommitAsync` leaked `InvalidOperationException` for a transient write failure instead of `PersistenceException`.
+- **D15** — with a retrying strategy, `CommitAsync` called outside `ExecuteAsync` leaked `RetryLimitExceededException` once the retries were exhausted, instead of the documented `PersistenceException`.
 - **D4** — `ExecuteAsync` inside an open transaction (nested, or caller-owned) threw `InvalidOperationException` ("The connection is already in a transaction").
 - **D5** — the rollback after a failed operation ran with the caller's token, so after a cancellation it threw `OperationCanceledException` and masked the original exception; a failing rollback masked it too.
 

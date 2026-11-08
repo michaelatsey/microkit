@@ -1,79 +1,47 @@
 # Workflow: Testing Repositories
 
-Step-by-step guide for writing and running repository tests in MicroKit.Persistence.
+Commands: `.claude/skills/testing/SKILL.md`. Conventions and cases: `.claude/rules/testing.md`.
 
-## When to Use
+## Pick the layer
 
-When implementing a new repository, modifying an existing one, or debugging a failing test.
+| What is tested | Where | With |
+|----------------|-------|------|
+| A handler's logic | UnitTests (or the consumer's) | `InMemoryRepository<TAggregate, TId>`, `InMemoryReadRepository<T>`, `InMemoryUnitOfWork` |
+| QueryOptions, pagination, the doubles | UnitTests | plain xUnit + Shouldly |
+| EF Core mapping, aggregate load, read tracking, pagination | IntegrationTests/EntityFrameworkCore | SQLite in-memory |
+| Transactions, retries, uniqueness, concurrency | IntegrationTests/PostgreSql | `PostgreSqlFixture`, `[DockerRequiredFact]` |
+| Provider registration | IntegrationTests/Providers | service-collection assertions |
+| Layering, placement, sealing, IL calls | ArchitectureTests | NetArchTest, Mono.Cecil |
+| MKP diagnostics | Analyzers.Tests | `CSharpAnalyzerTest`, `PersistenceStubs.All` |
 
-## Test Layers
+## Unit test with the doubles
 
-| Layer | When | Tools |
-|-------|------|-------|
-| Unit | Always | `InMemoryRepository<T>`, `InMemoryUnitOfWork` |
-| Integration | EF Core-specific behavior | SQLite in-memory + Testcontainers |
-| Architecture | Dependency rules | NetArchTest |
-| Performance | Allocation regression | BenchmarkDotNet |
-
-## Unit Tests (Fast — No DB)
-
-```bash
-dotnet test modules/MicroKit.Persistence/tests/MicroKit.Persistence.UnitTests/ --no-build
-```
-
-Use `InMemoryRepository<T>` from `MicroKit.Persistence.Testing`:
 ```csharp
-var repo = new InMemoryRepository<User>();
-await repo.AddAsync(user);
-// ...
+var orders = new InMemoryRepository<Order, OrderId>();
+var unitOfWork = new InMemoryUnitOfWork();
+
+await orders.AddAsync(order);
+await unitOfWork.CommitAsync();
+
+unitOfWork.CommitCount.ShouldBe(1);
+orders.All.Single().ShouldBe(order);
 ```
 
-## Integration Tests (EF Core + Real DB Logic)
+The doubles store on `AddAsync` (no staging), ignore `Includes`, and reject composite keys.
+
+## Integration test
+
+One SQLite connection per test (and per `Task.Run`), schema created by `EnsureCreated`; a
+PostgreSQL test runs against the server `PostgreSqlFixture` starts once for the
+`PostgreSqlSuite` collection, and skips without Docker.
+
+## Generate
+
+`test-generator` writes the matrix for a repository pair.
+
+## Detect violations
 
 ```bash
-# SQLite in-memory (fast, no container)
-dotnet test modules/MicroKit.Persistence/tests/MicroKit.Persistence.IntegrationTests/ \
-  --no-build --filter "Category=SQLite"
-
-# Testcontainers PostgreSQL (requires Docker)
-dotnet test modules/MicroKit.Persistence/tests/MicroKit.Persistence.IntegrationTests/ \
-  --no-build --filter "Category=PostgreSQL"
-```
-
-## Architecture Tests
-
-```bash
-dotnet test modules/MicroKit.Persistence/tests/MicroKit.Persistence.ArchitectureTests/ --no-build
-```
-
-Checks:
-- `IReadRepository` implementations have no mutation methods
-- `DbContext` not injected directly into handlers
-- Specification classes contain no Include or pagination
-- EF Core types absent from Abstractions namespace
-
-## Generate Tests
-
-```
-/new-repository-tests <AggregateName>
-```
-
-The `test-generator` agent produces the mandatory test matrix for the repository pair.
-
-## Filter Tests
-
-```bash
-dotnet test --filter "ClassName=UserRepositoryTests"
-dotnet test --filter "Name~FindAsync"
-dotnet test --filter "Category=UnitTest"
-```
-
-## Detecting Violations
-
-```bash
-# FluentAssertions must never appear
-grep -rn 'FluentAssertions\|\.Should()\.' modules/MicroKit.Persistence/tests/ --include="*.cs"
-
-# Check analyzer violations compile-time
-dotnet build modules/MicroKit.Persistence/MicroKit.Persistence.slnx -c Debug
+grep -rn 'FluentAssertions' modules/MicroKit.Persistence --include="*.cs" --include="*.csproj"
+dotnet build modules/MicroKit.Persistence/MicroKit.Persistence.slnx -c Release   # MKP diagnostics
 ```

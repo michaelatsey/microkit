@@ -104,7 +104,22 @@ pagination, split queries). The two types are separate and never merged.
   Any attempt to add `AddInclude()`, `ApplyPaging()`, or similar to `Specification<T>` is a violation.
 - `QueryOptions<T>` is assembled in the query handler, not in domain services.
 - The evaluator's application order is canonical (criteria → includes → split → order → paginate).
-  See `.claude-context/standards/query-options.md`.
+
+### Amendment — #196 D1, D6 (2026-11-08)
+
+- **D1.** `QueryOptions<T>.IncludeDeleted` (and `IncludeSoftDeleted()`) is removed, together with the
+  evaluator's "step 0", which called the parameterless `IgnoreQueryFilters()`. That call disabled
+  **every** query filter of the model — a tenant filter included — while the module owns no soft
+  delete. The original order "IgnoreQueryFilters → criteria → …" is superseded by the five steps above.
+  `IlCallScanTests` fails on any library call to the parameterless overload; #197 reintroduces the
+  flag on a *named* filter (`IgnoreQueryFilters(["<name>"])`).
+- **Wording.** Since #169, `Specification<T>` in `MicroKit.Domain` exposes `ToExpression()` (and
+  `IsSatisfiedBy`), not `AddCriteria` / `Criteria`: read the rationale and consequences above with
+  that API. The decision itself — criteria only, no includes or paging in a specification — stands.
+- **D6.** Pagination is validated (`PaginationOptions(page >= 1, pageSize >= 1)`, offset within
+  `int`) and bounded: `PaginationLimits` (default page 50, maximum 500, configured by
+  `ConfigurePagination`) makes `ListPagedAsync` without pagination return the default page instead
+  of the whole result set, and rejects — never clamps — a larger page. This supersedes DN-002.
 
 ---
 
@@ -147,6 +162,19 @@ NOT in Abstractions:
   and acceptable (most consumers will want both).
 - The `dependency-guardian` agent checks this on every `.csproj` change.
 
+### Amendment — #196 D8, D9, D10, D12, D17 (2026-11-08)
+
+The inventory in the Decision above is superseded. Abstractions now holds exactly:
+
+- `IRepository<TAggregate, TId>` — the only write-side contract (D10); no `CommitAsync` (D9);
+- `IUnitOfWork`, `ITransactionalContext`, `IPagedResult<T>`, `PersistenceException`.
+
+Removed: the empty `IReadRepository<T>` marker (D8 — the read contract needs `QueryOptions`, so it
+lives in Core, the only `IReadRepository<T>`), and `ITransaction` / `ITransactionManager` (D12 —
+implemented and used nowhere). The package references `MicroKit.Domain` only: the `MicroKit.Result`
+reference is removed (D17), because nothing in Abstractions used it; the earlier claim that
+repository methods "return `Result<T>`" never matched the code.
+
 ---
 
 ## ADR-004: ITransactionalUnitOfWork Is the EF Core Composite (Not in Abstractions)
@@ -174,7 +202,8 @@ NOT in Abstractions:
 
 ### Consequences
 
-- DI registration uses the triple-registration pattern (see `.claude-context/standards/transaction-contracts.md`).
+- DI registration maps one scoped `EfUnitOfWork<TContext>` to `IUnitOfWork`, `ITransactionalContext`
+  and `ITransactionalUnitOfWork` (`AddUnitOfWork<TContext>`).
 - `ITransactionalUnitOfWork` is not part of the published API in Abstractions — it is an
   implementation detail of the EF Core integration.
 - If a future `Marten` or `Dapper` provider is added, it registers its own scoped service implementing
@@ -508,6 +537,84 @@ choice. All 8 packages share one version — whichever number is chosen, all 8 r
   level. This module leaves `TransactionBehavior` untouched (#196 perimeter).
 - **Tests.** `EfUnitOfWorkRetryTests`, `EfUnitOfWorkJoinTests` (each case under the default and a
   retrying strategy), `EfUnitOfWorkRollbackTests` — all against PostgreSQL.
+
+---
+
+## ADR-007: Whole-Aggregate Typed Load, No Update, No Repository Commit (#196 D9–D11)
+
+**Status:** Accepted
+**Date:** 2026-11-08
+**Source:** Issue #196, phase 2.
+
+### Decision
+
+1. **One write-side contract.** `IRepository<TAggregate, TId>` (`TAggregate : class, IAggregateRoot`,
+   `TId : IEntityId`) replaces `IRepository<TAggregate>`: `FindAsync(TId)`, `AddAsync`, `DeleteAsync`.
+2. **No commit on the repository (D9).** Committing belongs to `IUnitOfWork` only; the repository's
+   `CommitAsync` let a handler commit outside `TransactionBehavior`, which MKP003 exists to prevent.
+3. **No update (D11).** A loaded aggregate is tracked, so its changes need no call; `DbSet.Update`
+   marked a whole graph `Modified` — redundant when tracked, unsafe when detached.
+4. **Typed, whole load (D10).** `EfRepository<TAggregate, TId, TContext>.FindAsync(id)`:
+   - returns an aggregate the unit of work already tracks as is, without a query;
+   - otherwise builds the id predicate from the EF model's single-property primary key (whose CLR type
+     must be `TId`; no `AggregateRoot<TId>` base class is required) and loads, tracked, every
+     navigation — reference, collection, skip; derived types included — whose target is not an
+     `IAggregateRoot`, recursively, a cycle being cut against the current path's ancestors only;
+   - splits the load when the aggregate has two or more collections (owned collections mapped to a
+     table included); otherwise leaves the context's split setting alone.
+   The protected virtual `IncludeAggregate` is the seam #197's per-aggregate load profiles replace.
+
+### Consequences
+
+- An entity not marked `IAggregateRoot` is inside the boundary — reference data included — and a
+  self-referencing child is followed one level only; `IncludeAggregate` overrides both.
+- A split load is not snapshot-consistent under Read Committed (documented on `IncludeAggregate`).
+- `InMemoryRepository<TAggregate, TId>` implements both repository contracts on one store, and fails
+  fast where EF Core fails (an `Id` of another type, a duplicate `AddAsync`).
+- Tests: `EfRepositoryAggregateLoadTests` (SQLite and PostgreSQL).
+
+---
+
+## ADR-008: MicroKit.Domain Mapping Conventions (#196 D13, D14)
+
+**Status:** Accepted
+**Date:** 2026-11-08
+**Source:** Issue #196, phase 3. Resolves #172.
+
+### Decision
+
+`DomainConventionExtensions` (for `ConfigureConventions`) ships the mappings every consumer otherwise
+writes by hand:
+
+- `AddEntityIdConventions(assemblies)` — every `record X : EntityId<X>` of the given assemblies, and
+  `GuidId`, to a `Guid` column (pre-convention configuration). Values are read back through the
+  type's `(Guid)` constructor whatever its accessibility (`EntityId<T>`'s own constructor is
+  protected and `MicroKit.Domain` is not modified); model building fails, naming the type, when
+  there is none. Converted keys stay `ValueGenerated.Never` (EF Core's default for them).
+- `AddActorConvention()` — `Actor` to a string of at most `Actor.MaxLength`, read back through
+  `Actor.Restore`, so the built-in actors keep their shared instances.
+- `AddAuditInstantConvention()` (D14) — an interactive property-added convention that normalises
+  `IAuditableEntity.CreatedAt` / `UpdatedAt` to offset zero on read and write, and rejects a stored
+  `default` instant on read. Writes and query parameters are only normalised: rejecting `default`
+  there would fail `CreatedAt >= DateTimeOffset.MinValue`.
+
+### Rationale
+
+Materialisation writes the audit backing fields directly, bypassing the `Auditable*` constructors:
+a row stored with a non-zero offset (SQL Server `datetimeoffset`, SQLite text) came back with it,
+and a later write to a PostgreSQL `timestamptz` column failed; a `0001-01-01` row loaded silently.
+Scope is limited to audit instants: other `DateTimeOffset` properties keep their offset by design.
+
+### Consequences
+
+- A conversion configured explicitly — or a pre-convention `DateTimeOffset` converter — takes
+  precedence and turns the normalisation off for those properties.
+- Compiled models and NativeAOT precompiled queries are not supported: a `dotnet ef dbcontext
+  optimize` spike showed the generated model instantiating the internal converters and calling
+  internal `UtcInstant` members, so it does not compile. Making the converters public is additive and
+  can be done later.
+- `IEntityId` record structs other than `GuidId` still need a hand-written converter.
+- Tests: `DomainConventionTests`, `DomainConventionModelTests`, `AuditInstantNormalisationTests`.
 
 ---
 

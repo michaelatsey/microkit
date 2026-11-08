@@ -1,74 +1,53 @@
 ---
 name: testing
-description: How to run, filter, and interpret tests for MicroKit.Persistence. Use whenever you need to run unit/integration/architecture/performance tests, filter by name, collect coverage, or diagnose a failing test (analyzer violation, missing AsNoTracking, N+1 detection). Enforces Shouldly + NSubstitute; FluentAssertions is banned.
+description: How to run, filter, and interpret tests for MicroKit.Persistence. Use whenever you need to run unit, integration (SQLite, PostgreSQL via Testcontainers), architecture, or analyzer tests, filter by name, collect coverage, or diagnose a failing test. xUnit + Shouldly + NSubstitute; FluentAssertions is forbidden.
 ---
 
 # Skill: Testing
 
-How to run, filter, and interpret tests for MicroKit.Persistence.
+Conventions and what to cover: `.claude/rules/testing.md`.
 
-## Stack (non-negotiable)
-
-- **xUnit** framework, **Shouldly** assertions, **NSubstitute** mocks
-- **FluentAssertions is banned** (commercial license). Never `.Should().`
-- Repository isolation via `InMemoryRepository<TAggregate, TId>` from `MicroKit.Persistence.Testing`
-- Integration tests via SQLite in-memory or Testcontainers
-
-## Run All Tests
+## Run
 
 ```bash
-dotnet test modules/MicroKit.Persistence/MicroKit.Persistence.slnx --no-build -c Release
+# Everything (build first — Release)
+dotnet test modules/MicroKit.Persistence/MicroKit.Persistence.slnx -c Release
+
+# One project
+dotnet test modules/MicroKit.Persistence/tests/MicroKit.Persistence.UnitTests/ -c Release
+dotnet test modules/MicroKit.Persistence/tests/MicroKit.Persistence.IntegrationTests/ -c Release
+dotnet test modules/MicroKit.Persistence/tests/MicroKit.Persistence.ArchitectureTests/ -c Release
+dotnet test modules/MicroKit.Persistence/tests/MicroKit.Persistence.Analyzers.Tests/ -c Release
 ```
 
-## Run by Category
+The PostgreSQL suite (`IntegrationTests/PostgreSql/`) needs Docker; without it the
+`[DockerRequiredFact]`/`[DockerRequiredTheory]` tests are reported as skipped, not passed. Check
+the skipped count before trusting a green run that touches transactions.
+
+## Filter
+
+No test carries a `Category` trait; filter by name:
 
 ```bash
-# Unit tests (fast — no DB)
-dotnet test modules/MicroKit.Persistence/tests/MicroKit.Persistence.UnitTests/ --no-build
-
-# Architecture tests (dependency rules, no EF in Abstractions)
-dotnet test modules/MicroKit.Persistence/tests/MicroKit.Persistence.ArchitectureTests/ --no-build
-
-# Integration tests (EF Core, SQLite in-memory)
-dotnet test modules/MicroKit.Persistence/tests/MicroKit.Persistence.IntegrationTests/ \
-  --no-build --filter "Category=SQLite"
-
-# Performance tests (BenchmarkDotNet — run separately, slow)
-dotnet test modules/MicroKit.Persistence/tests/MicroKit.Persistence.PerformanceTests/ --no-build
+dotnet test … --filter "FullyQualifiedName~MicroKit.Persistence.IntegrationTests.PostgreSql"
+dotnet test … --filter "FullyQualifiedName~EfRepositoryAggregateLoadTests"
+dotnet test … --filter "Name~FindAsync"
 ```
 
-## Filter by Test Name
+## Coverage
 
 ```bash
-dotnet test --filter "ClassName=UserRepositoryTests"
-dotnet test --filter "Name~FindAsync"
-dotnet test --filter "FullyQualifiedName~MicroKit.Persistence.UnitTests"
-```
-
-## Code Coverage
-
-```bash
-dotnet test modules/MicroKit.Persistence/MicroKit.Persistence.slnx \
+dotnet test modules/MicroKit.Persistence/MicroKit.Persistence.slnx -c Release \
   --collect:"XPlat Code Coverage" --results-directory coverage/
-
-reportgenerator -reports:"coverage/**/*.xml" -targetdir:"coverage/report" -reporttypes:Html
 ```
 
-## Interpreting Failures
+## Interpreting failures
 
-| Failure type | Likely cause | First action |
-|-------------|-------------|-------------|
-| `ArchitectureTests` fail | EF type in Abstractions, or mutation in IReadRepository | Check recent `.csproj` changes |
-| `MKP004` warning | DbContext injected outside the infrastructure layer | Replace with typed repository |
-| `MKP001` build error | CommitAsync / SaveChanges in read repo | Remove the call |
-| `.Should()` compile error | FluentAssertions slipped in | Replace with Shouldly |
-| Integration test fails | DB schema mismatch | Check migration is up to date |
-
-## Test Project Configuration
-
-```xml
-<GenerateDocumentationFile>false</GenerateDocumentationFile>
-<NoWarn>CS1591;CA1707</NoWarn>
-```
-
-See `.claude/rules/testing.md` for the full convention and the mandatory case matrix.
+| Failure | Likely cause | First action |
+|---------|--------------|--------------|
+| `LayerDependencyTests` | A forbidden reference (EF Core in Abstractions/core, sibling reference, MediatR) | Check the recent `.csproj` change |
+| `ContractPlacementTests` | A contract moved to the wrong project | See `.claude/rules/abstractions.md` |
+| `SealedClassTests` | Sealing changed (`EfRepository`/`EfReadRepository` must stay unsealed) | Restore it |
+| `IlCallScanTests` | Library code calls the parameterless `IgnoreQueryFilters()` | Use the named overload or remove it |
+| `MKP00x` in Analyzers.Tests | Detection changed, or a stub no longer matches a metadata name | `.claude/rules/analyzers.md` |
+| PostgreSQL test flaky or failing | Container start, or transaction semantics regressed | Re-run once; then read ADR-006 |

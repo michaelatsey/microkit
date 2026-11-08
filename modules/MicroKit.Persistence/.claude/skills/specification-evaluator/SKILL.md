@@ -1,13 +1,11 @@
 ---
 name: specification-evaluator
-description: How ISpecificationEvaluator works in MicroKit.Persistence — applies QueryOptions (spec, includes, pagination, tracking, split queries) to an IQueryable<T>. Use when implementing or debugging query composition, evaluator customization, or spec-to-SQL translation.
+description: How ISpecificationEvaluator works in MicroKit.Persistence — applies QueryOptions (specification, includes, split query, ordering, pagination) to an IQueryable<T>, and how EfReadRepository uses it with tracking and PaginationLimits. Use when implementing or debugging query composition, decorating the evaluator, or tracing a specification to SQL.
 ---
 
 # Skill: Specification Evaluator
 
-How `ISpecificationEvaluator` applies `QueryOptions<T>` to `IQueryable<T>`.
-
-## Interface (lives in Core, not Abstractions)
+## Contract (core, not Abstractions — it takes `IQueryable<T>`)
 
 ```csharp
 public interface ISpecificationEvaluator
@@ -17,63 +15,41 @@ public interface ISpecificationEvaluator
 }
 ```
 
-## EF Core Implementation
+## `EfSpecificationEvaluator` — the order is fixed
 
 ```csharp
-public sealed class EfSpecificationEvaluator : ISpecificationEvaluator
-{
-    public IQueryable<T> GetQuery<T>(IQueryable<T> inputQuery, QueryOptions<T> opts)
-        where T : class, IAggregateRoot
-    {
-        var query = inputQuery;
-
-        // 1. Apply spec criteria
-        if (opts.Specification?.Criteria is { } criteria)
-            query = query.Where(criteria);
-
-        // 2. Apply includes (eager loading)
-        if (opts.Includes is not null)
-            query = opts.Includes(query);
-
-        // 3. Apply split query hint
-        if (opts.AsSplitQueryEnabled)
-            query = query.AsSplitQuery();
-
-        // 4. Apply ordering
-        if (opts.OrderBy is not null)
-            query = opts.OrderBy(query);
-
-        // 5. Apply pagination (always after ordering)
-        if (opts.Pagination is { } p)
-            query = query.Skip((p.Page - 1) * p.PageSize).Take(p.PageSize);
-
-        return query;
-    }
-}
+if (opts.Specification is { } spec) query = query.Where(spec.ToExpression()); // 1. criteria
+if (opts.Includes is not null)       query = opts.Includes(query);           // 2. eager loading
+if (opts.AsSplitQueryEnabled)        query = query.AsSplitQuery();           // 3. split hint
+if (opts.OrderBy is not null)        query = opts.OrderBy(query);            // 4. ordering
+if (opts.Pagination is { } p)        query = query.Skip(p.Skip).Take(p.PageSize); // 5. pagination
 ```
 
-## Injection Pattern
+`PaginationOptions` validates `page ≥ 1`, `pageSize ≥ 1` and computes `Skip` without overflow.
+`AddEntityFrameworkCore` registers the evaluator as a singleton (`TryAdd`, so a prior
+registration wins).
 
-The evaluator is injected into EF repositories:
+## How `EfReadRepository` calls it
 
-```csharp
-public sealed class EfUserReadRepository(AppDbContext ctx, ISpecificationEvaluator evaluator)
-    : IUserReadRepository
-{
-    public async ValueTask<IReadOnlyList<User>> ListAsync(QueryOptions<User> opts, CancellationToken ct)
-    {
-        var query = evaluator.GetQuery(ctx.Users.AsNoTracking(), opts);
-        return await query.ToListAsync(ct).ConfigureAwait(false);
-    }
-}
-```
+- Base query: `Set<T>().AsNoTracking()`, or tracked when `AsNoTrackingEnabled` is false.
+- `ListAsync`: rejects a page size above `PaginationLimits.MaxPageSize`, then evaluates.
+- `ListPagedAsync`: applies `PaginationLimits.ForPagedQuery` (default page when none), runs a
+  count without includes/ordering/pagination, then the page query.
+- `AnyAsync` / `CountAsync`: evaluate with includes, ordering, pagination and split removed.
 
-## Custom Evaluator Extensions
+A typed read repository passes its own base query (for instance a projection source) through
+the same evaluator.
 
-Wrap `ISpecificationEvaluator` to add query logic every repository query needs (decorate the
-registered `EfSpecificationEvaluator`; never replace the criteria step).
+## Decorating
 
-Never bypass the model's query filters from library code: the parameterless
-`IgnoreQueryFilters()` disables every filter, a tenant filter included, and
-`IlCallScanTests` fails the build on any library call to it (#196 D1). The module owns no soft
-delete; #197 reintroduces `IncludeDeleted` on a *named* filter (`IgnoreQueryFilters(["<name>"])`).
+To add logic every query needs, decorate `ISpecificationEvaluator` and call the inner one; never
+drop the criteria step. Never bypass the model's query filters: the parameterless
+`IgnoreQueryFilters()` disables all of them, a tenant filter included, and `IlCallScanTests`
+fails on any library call to it. Only the named overload `IgnoreQueryFilters(names)` may be used.
+
+## Debugging
+
+- `query.ToQueryString()` on the evaluated query shows the SQL.
+- An unordered paginated query gives unstable pages — set `WithOrderBy…`.
+- A composed `ISpecification<T>` (`And`/`Or`/`Not`) is not a `Specification<T>`; wrap it before
+  passing it to `QueryOptions` (see `.claude/rules/specifications.md`).

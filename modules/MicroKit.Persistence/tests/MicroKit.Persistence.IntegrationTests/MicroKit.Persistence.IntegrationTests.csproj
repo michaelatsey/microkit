@@ -10,6 +10,8 @@
   <ItemGroup>
     <!-- Same-module, IsPackable=false — unconditional ProjectReferences (no CIReleaseBuild pattern needed) -->
     <ProjectReference Include="..\..\src\MicroKit.Persistence.EntityFrameworkCore\MicroKit.Persistence.EntityFrameworkCore.csproj" />
+    <ProjectReference Include="..\..\src\MicroKit.Persistence.EntityFrameworkCore.PostgreSql\MicroKit.Persistence.EntityFrameworkCore.PostgreSql.csproj" />
+    <ProjectReference Include="..\..\src\MicroKit.Persistence.EntityFrameworkCore.SqlServer\MicroKit.Persistence.EntityFrameworkCore.SqlServer.csproj" />
     <!-- Cross-module, test-only: the aggregates, events and actors these tests persist come from
          MicroKit.Domain directly. Unconditional, so a CIReleaseBuild=true build still compiles them
          against the Domain source instead of the published package that Persistence.Abstractions

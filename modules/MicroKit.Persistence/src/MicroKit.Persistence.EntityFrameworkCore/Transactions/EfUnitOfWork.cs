@@ -37,7 +37,9 @@ public sealed class EfUnitOfWork<TContext>(TContext context)
     /// on any other database write failure (<see cref="DbUpdateException"/>), and on a write
     /// failure the provider's non-retrying execution strategy classified as transient (EF Core
     /// surfaces that one as an <see cref="InvalidOperationException"/> wrapping the
-    /// <see cref="DbUpdateException"/>). The original exception is preserved as
+    /// <see cref="DbUpdateException"/>), and, outside <see cref="ExecuteAsync{TState}"/>, when the
+    /// provider's retrying execution strategy has exhausted its retries
+    /// (<see cref="RetryLimitExceededException"/>). The original exception is preserved as
     /// <see cref="Exception.InnerException"/>.
     /// </exception>
     public async ValueTask CommitAsync(CancellationToken ct = default)
@@ -59,6 +61,10 @@ public sealed class EfUnitOfWork<TContext>(TContext context)
             throw new PersistenceException(
                 "Database error during commit. The provider classified it as transient; enable retry on failure to retry it.",
                 ex);
+        }
+        catch (RetryLimitExceededException ex)
+        {
+            throw new PersistenceException("Database error during commit: the retries on failure are exhausted.", ex);
         }
     }
 

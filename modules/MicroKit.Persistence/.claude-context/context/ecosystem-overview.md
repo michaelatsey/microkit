@@ -1,108 +1,72 @@
 # Context: Ecosystem Overview
 
-**How MicroKit.Persistence fits in the broader MicroKit monorepo.**
+How MicroKit.Persistence fits among the MicroKit modules. The authoritative graph is the root
+`.claude/CLAUDE.md`; edges as declared: `dependency-graph.md`.
 
 ---
 
-## Position in the Dependency Graph
+## Position
 
 ```
-Level 0 (foundations):
-  MicroKit.Domain        ← IAggregateRoot, Specification<T>, IDomainEvent, value objects
-  MicroKit.Result        ← Result<T>, Error, Unit
-
-Level 1:
-  MicroKit.Logging       → (Result abstained — ADR-006 in Logging module)
-  MicroKit.Caching       → Result
-
-Level 2:
-  MicroKit.MediatR       → Result, Domain.Abstractions, Logging.Abstractions
-  MicroKit.Persistence   → Result, Domain.Abstractions, Logging.Abstractions
-
-Level 3:
-  MicroKit.Messaging     → Result, Domain, Persistence (outbox pattern)
-  MicroKit.Http          → Result, Observability
-  MicroKit.Multitenancy  → Result, Auth, Persistence
+MicroKit.Domain        ← IAggregateRoot, IEntityId/EntityId<T>, Specification<T>, domain events,
+                         Actor, IAuditableEntity
+    ↑
+MicroKit.Persistence   ← repositories, unit of work, transactions, QueryOptions, EF Core bridge
+    ↑
+MicroKit.MediatR.Behaviors            TransactionBehavior over ITransactionalContext + IUnitOfWork
+MicroKit.Tenancy.EntityFrameworkCore  tenant-aware EF Core integration
 ```
 
-MicroKit.Persistence sits at **Level 2**, alongside MicroKit.MediatR. Both modules depend on the
-same Level 0 foundations but are otherwise independent — neither depends on the other directly.
-The integration between them is achieved via `ITransactionalContext` (declared in
-Persistence.Abstractions, consumed by MediatR.Behaviors).
+Persistence depends on MicroKit.Domain only. It does not depend on MicroKit.Result, Logging,
+MediatR, Messaging or Tenancy.
 
 ---
 
-## Who Consumes MicroKit.Persistence
+## Who consumes what
 
-| Consumer | What they use |
-|----------|--------------|
-| Application layer (command handlers) | `IRepository<TAggregate, TId>`, `IUnitOfWork`, `ITransactionalContext` |
-| Application layer (query handlers) | `IReadRepository<T>`, `QueryOptions<T>`, `IPagedResult<T>` |
-| `MicroKit.MediatR.Behaviors` | `ITransactionalContext` (for `TransactionBehavior`) |
-| `MicroKit.Messaging` (future) | `IRepository<TAggregate, TId>`, `IUnitOfWork` (outbox pattern) |
-| `MicroKit.Multitenancy` (future) | `IReadRepository<T>` (tenant resolution) |
-| Test projects | `InMemoryRepository<TAggregate, TId>`, `InMemoryUnitOfWork` from `Persistence.Testing` |
+| Consumer | Uses |
+|----------|------|
+| Command handlers | `IRepository<TAggregate, TId>` (or a typed one), `IUnitOfWork` |
+| Query handlers | `IReadRepository<T>`, `QueryOptions<T>`, `IPagedResult<T>` |
+| Composition root | `AddMicroKitPersistence` → `AddEntityFrameworkCore` → `UsePostgreSQL`/`UseSqlServer`, `AddUnitOfWork`, `ConfigurePagination` |
+| `DbContext.ConfigureConventions` | `AddDomainConventions` |
+| `MicroKit.MediatR.Behaviors` | `ITransactionalContext`, `IUnitOfWork` (`TransactionBehavior`) |
+| `MicroKit.Tenancy.EntityFrameworkCore` | Abstractions + EntityFrameworkCore |
+| Test projects | `InMemoryRepository<TAggregate, TId>`, `InMemoryReadRepository<T>`, `InMemoryUnitOfWork` |
 
 ---
 
-## What MicroKit.Persistence Does NOT Own
+## What Persistence does not own
 
 | Concern | Owner |
 |---------|-------|
-| `Specification<T>` (predicate) | `MicroKit.Domain` |
-| `IAggregateRoot` | `MicroKit.Domain.Abstractions` |
-| `IDomainEvent` / domain event dispatch | `MicroKit.MediatR` |
-| Caching behavior in the pipeline | `MicroKit.MediatR.Behaviors` (CachingBehavior) |
-| Connection string management | Consuming application |
-| Migration execution | Consuming application or dedicated migration project |
+| `Specification<T>`, `IAggregateRoot`, identifiers, `Actor` | MicroKit.Domain |
+| Domain event dispatch | MicroKit.MediatR (`IDomainEventsDispatcher`); Persistence only provides the tracked aggregates' events (`EfDomainEventsProvider`) |
+| The transaction pipeline | MicroKit.MediatR.Behaviors (`TransactionBehavior`) |
+| Tenant filters | MicroKit.Tenancy — Persistence never disables query filters wholesale |
+| Connection strings, migrations | The consuming application |
 
 ---
 
-## Integration Points
+## Integration with MicroKit.MediatR
 
-### With MicroKit.MediatR
-
-```
-MicroKit.MediatR.Behaviors.TransactionBehavior
-    ← injects ITransactionalContext (from MicroKit.Persistence.Abstractions)
-    ← wraps ICommand handlers in a DB transaction automatically
-    ← consumers opt in by registering both modules and the TransactionBehavior
-```
-
-See `.claude-context/context/transaction-behavior-integration.md` for full design.
-
-### With MicroKit.Messaging (future — Level 3)
-
-The outbox pattern requires:
-1. A `StoredMessage` aggregate persisted via `IRepository<StoredMessage>`
-2. A `IUnitOfWork` that commits both the business aggregate and the outbox entry atomically
-3. `ITransactionalContext` for the cross-aggregate transaction
-
-The Messaging module will depend on `Persistence.Abstractions` for these contracts.
-
-### With MicroKit.Domain
-
-```
-MicroKit.Domain provides:
-  IAggregateRoot      ← generic constraint on IRepository<TAggregate, TId>
-  Specification<T>    ← WHAT to query, wrapped by QueryOptions<T>
-
-MicroKit.Persistence provides:
-  IRepository<TAggregate, TId>      ← wraps IAggregateRoot for write-side persistence
-  QueryOptions<T>     ← HOW to execute a Specification<T>
-```
+`TransactionBehavior` wraps a command in `ITransactionalContext.ExecuteAsync`; on success it
+dispatches domain events, then calls `IUnitOfWork.CommitAsync`; on a business failure or an
+exception it calls `IUnitOfWork.DiscardChanges()` (ADR-005). `EfUnitOfWork` retries the whole
+operation on a transient failure and joins an already open transaction (ADR-006). ADR-006 records
+the consequence for nested command dispatch: an inner discard clears the outer command's staged
+changes — a pipeline concern this module leaves to MediatR.
 
 ---
 
-## Package Adoption Guidance for Consumers
+## Package adoption
 
-| Scenario | Packages needed |
-|----------|----------------|
-| Define repository contracts only | `MicroKit.Persistence.Abstractions` |
-| Use QueryOptions in handlers | + `MicroKit.Persistence` (core) |
-| Wire EF Core | + `MicroKit.Persistence.EntityFrameworkCore` |
-| Use PostgreSQL | + `MicroKit.Persistence.EntityFrameworkCore.PostgreSql` |
-| Use SQL Server | + `MicroKit.Persistence.EntityFrameworkCore.SqlServer` |
-| Write spec extensions | + `MicroKit.Persistence.Specifications` |
-| Write repository tests | + `MicroKit.Persistence.Testing` |
-| Enforce design rules at build time | + `MicroKit.Persistence.Analyzers` (PrivateAssets=all) |
+| Scenario | Packages |
+|----------|----------|
+| Contracts only | `MicroKit.Persistence.Abstractions` |
+| Read side, QueryOptions | + `MicroKit.Persistence` |
+| EF Core | + `MicroKit.Persistence.EntityFrameworkCore` |
+| PostgreSQL / SQL Server | + `.EntityFrameworkCore.PostgreSql` / `.EntityFrameworkCore.SqlServer` |
+| Ordering and spec-swap helpers | + `MicroKit.Persistence.Specifications` |
+| Handler unit tests | + `MicroKit.Persistence.Testing` |
+| Build-time rules | + `MicroKit.Persistence.Analyzers` (`PrivateAssets=all`) |

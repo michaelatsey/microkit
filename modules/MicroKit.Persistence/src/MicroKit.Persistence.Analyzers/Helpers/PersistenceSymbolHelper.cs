@@ -7,7 +7,7 @@ namespace MicroKit.Persistence.Analyzers.Helpers;
 /// </summary>
 internal static class PersistenceSymbolHelper
 {
-    // The single read contract (Core) and the single write contract (Abstractions) — #196 D8, D10.
+    // The single read contract (Core) and the single write contract (Abstractions).
     private const string CoreReadRepositoryName = "MicroKit.Persistence.IReadRepository`1";
     private const string RepositoryName         = "MicroKit.Persistence.Abstractions.IRepository`2";
     private const string UnitOfWorkName         = "MicroKit.Persistence.Abstractions.IUnitOfWork";

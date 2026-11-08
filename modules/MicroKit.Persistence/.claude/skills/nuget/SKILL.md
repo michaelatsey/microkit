@@ -1,59 +1,54 @@
 ---
 name: nuget
-description: How to manage NuGet packages and CPM for MicroKit.Persistence. Use when adding/inspecting packages, verifying the dependency graph, or checking for outdated/vulnerable deps. All versions live in Directory.Packages.props.
+description: How to manage NuGet packages and CPM for MicroKit.Persistence. Use when adding or inspecting packages, verifying the declared dependency graph, packing locally, or checking for outdated or vulnerable dependencies. All versions live in the root Directory.Packages.props.
 ---
 
 # Skill: NuGet
 
-How to manage packages in MicroKit.Persistence.
+## Central Package Management
 
-## Central Package Management (CPM)
-
-All package versions are in `Directory.Packages.props` at the monorepo root.
+Versions live in the root `Directory.Packages.props` (`ManagePackageVersionsCentrally`,
+`CentralPackageTransitivePinningEnabled`).
 
 ```xml
-<!-- ✅ Version in Directory.Packages.props -->
-<PackageVersion Include="Microsoft.EntityFrameworkCore" Version="10.x.x" />
+<!-- Directory.Packages.props -->
+<PackageVersion Include="Microsoft.EntityFrameworkCore" Version="10.0.9" />
 
-<!-- ✅ Reference without version in .csproj -->
+<!-- .csproj — never a Version= -->
 <PackageReference Include="Microsoft.EntityFrameworkCore" />
-
-<!-- ❌ Version in .csproj — CPM violation (dependency-guardian BLOCK) -->
-<PackageReference Include="Microsoft.EntityFrameworkCore" Version="10.x.x" />
 ```
 
-## Check for Outdated Packages
+Which package may go where: `.claude/rules/dependencies.md`.
+
+## Inspect
 
 ```bash
 dotnet list modules/MicroKit.Persistence/MicroKit.Persistence.slnx package --outdated
+dotnet list modules/MicroKit.Persistence/MicroKit.Persistence.slnx package --vulnerable --include-transitive
+dotnet list modules/MicroKit.Persistence/MicroKit.Persistence.slnx package --include-transitive
 ```
 
-## Check for Vulnerable Packages
+## Pack and consume locally
 
 ```bash
-dotnet list modules/MicroKit.Persistence/MicroKit.Persistence.slnx package --vulnerable
+dotnet pack modules/MicroKit.Persistence/MicroKit.Persistence.slnx -c Release \
+  -p:PackageVersion=1.0.0-preview.local -o artifacts/persistence/
+
+dotnet nuget add source "$PWD/artifacts/persistence" --name local-persistence
+dotnet add <consumer>.csproj package MicroKit.Persistence.EntityFrameworkCore \
+  --version 1.0.0-preview.local --source local-persistence
 ```
 
-## Verify Package Graph Before Publish
+Check each `.nuspec` (rename the `.nupkg` to `.zip`, or `unzip -p x.nupkg '*.nuspec'`) against the
+declared dependencies in `.claude/rules/packaging.md`; the Analyzers package must have
+`analyzers/dotnet/cs/` and no `lib/`.
 
-```bash
-dotnet pack modules/MicroKit.Persistence/MicroKit.Persistence.slnx -c Release -o /tmp/check/
-nuget verify /tmp/check/*.nupkg
-```
+## Confinement
 
-## Test Package Locally
-
-```bash
-dotnet nuget add source /tmp/prd-pack/ --name local-persistence
-dotnet add package MicroKit.Persistence.Abstractions --source local-persistence
-```
-
-## Package Confinement Rules
-
-| Package | Allowed In | Blocked From |
-|---------|-----------|-------------|
-| `Microsoft.EntityFrameworkCore` | EntityFrameworkCore | Abstractions, Core |
-| `Npgsql.EntityFrameworkCore.PostgreSQL` | PostgreSql only | All others |
-| `Microsoft.EntityFrameworkCore.SqlServer` | SqlServer only | All others |
-| `NSubstitute` | Testing only | All runtime packages |
-| `FluentAssertions` | **Banned everywhere** | Commercial license |
+| Package | Allowed in |
+|---------|-----------|
+| `Microsoft.EntityFrameworkCore*` | EntityFrameworkCore and the providers |
+| `Npgsql.EntityFrameworkCore.PostgreSQL` | PostgreSql |
+| `Microsoft.EntityFrameworkCore.SqlServer` | SqlServer |
+| `NSubstitute` | Testing, test projects |
+| `FluentAssertions` | nowhere |
