@@ -12,7 +12,7 @@ The `dependency-guardian` agent validates against this graph.
 ```
 MicroKit.Persistence.Abstractions
 │   └── [no project references — package refs only]
-│   └── Cross-module: MicroKit.Domain, MicroKit.Result (removed by #196 D17)
+│   └── Cross-module: MicroKit.Domain
 │
 MicroKit.Persistence (core)
 │   └── → MicroKit.Persistence.Abstractions
@@ -67,14 +67,13 @@ MicroKit.Persistence is a **Level 2** module:
 ```
 Level 0: Domain · Result
 Level 1: Logging → Result(opt) | Caching → Result | Auth → Result+Domain
-Level 2: MediatR → Result+Domain+Logging.Abs | Persistence → Domain (+Result until #196 D17)
+Level 2: MediatR → Result+Domain+Logging.Abs | Persistence → Domain
 ```
 
 Allowed cross-module references (via PackageReference, never ProjectReference):
 
 ```
-MicroKit.Persistence.Abstractions → MicroKit.Domain  (IAggregateRoot generic constraint)
-MicroKit.Persistence.Abstractions → MicroKit.Result  (a global using only — removed by #196 D17, phase 2)
+MicroKit.Persistence.Abstractions → MicroKit.Domain  (IAggregateRoot / IEntityId generic constraints)
 ```
 
 **Incoming cross-module reference:**
@@ -108,7 +107,6 @@ module's Abstractions. Full cross-module integration: `.claude-context/context/t
 | Package | Used By | Notes |
 |---------|---------|-------|
 | `MicroKit.Domain` | Abstractions | `IAggregateRoot` constraint |
-| `MicroKit.Result` | Abstractions | Removed by #196 D17 (unused) |
 | `Microsoft.EntityFrameworkCore` | EntityFrameworkCore | ORM |
 | `Npgsql.EntityFrameworkCore.PostgreSQL` | PostgreSql | Provider |
 | `Microsoft.EntityFrameworkCore.SqlServer` | SqlServer | Provider |

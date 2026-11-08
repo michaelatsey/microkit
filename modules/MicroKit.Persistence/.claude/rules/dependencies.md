@@ -25,7 +25,7 @@ MicroKit.Persistence.Analyzers         ← build-time only (no runtime dependenc
 
 | Project | Allowed Packages |
 |---------|-----------------|
-| `Abstractions` | `MicroKit.Domain`, `MicroKit.Result` (`MicroKit.Result` is removed by #196 D17, phase 2) |
+| `Abstractions` | `MicroKit.Domain` |
 | `Core` | Abstractions (project) — no extra packages |
 | `EntityFrameworkCore` | Core (project) + `Microsoft.EntityFrameworkCore` + `Microsoft.EntityFrameworkCore.Relational` + `Microsoft.Extensions.DependencyInjection.Abstractions` |
 | `PostgreSql` | EntityFrameworkCore (project) + `Npgsql.EntityFrameworkCore.PostgreSQL` |
@@ -61,7 +61,6 @@ MicroKit.Persistence is a **Level 2** module:
 
 ```
 MicroKit.Persistence.Abstractions → MicroKit.Domain (IAggregateRoot / IEntityId constraints)
-MicroKit.Persistence.Abstractions → MicroKit.Result (global using only — removed by #196 D17, phase 2)
 ```
 
 > Any addition to Abstractions requires explicit `api-reviewer` approval.

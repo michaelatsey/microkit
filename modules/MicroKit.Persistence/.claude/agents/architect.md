@@ -36,10 +36,10 @@ You arbitrate all design decisions in MicroKit.Persistence.
 ### 1. Does this contract belong in Abstractions or Core?
 ```
 Abstractions: only what a consuming module needs to compile
-  - IRepository<T> (→ IRepository<TAggregate, TId> in #196 phase 2), IUnitOfWork, ITransactionalContext
+  - IRepository<TAggregate, TId>, IUnitOfWork, ITransactionalContext
   - IPagedResult<T>, PersistenceException
-  - IReadRepository<T> marker, ITransaction, ITransactionManager — deleted in #196 phase 2 (D8, D12);
-    the full IReadRepository<T> lives in Core because it needs QueryOptions
+  (IReadRepository<T> lives in Core because it needs QueryOptions — #196 D8;
+   ITransaction / ITransactionManager were deleted — #196 D12)
   - Nothing EF Core, nothing Specification evaluator, nothing IQueryable
 
 Core: internal plumbing the application uses but not through contracts
@@ -95,7 +95,7 @@ See .claude/rules/analyzers.md.
 
 | Situation | Decision |
 |---|---|
-| New aggregate needs persistence | `IRepository<T>` + `EfRepository<T, TContext>` (→ `IRepository<TAggregate, TId>` + `EfRepository<TAggregate, TId, TContext>` in #196 phase 2) |
+| New aggregate needs persistence | `IRepository<TAggregate, TId>` in Abstractions + `EfRepository<TAggregate, TId, TContext>` in EFCore |
 | New read projection | `IReadRepository<T>` with custom finder methods |
 | Cross-aggregate query | `IReadRepository` with composite QueryOptions |
 | Ambient transaction needed | `ITransactionalContext.ExecuteAsync` — joins an open transaction, otherwise begins one inside the execution strategy (#196 D4) |

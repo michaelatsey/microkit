@@ -11,7 +11,7 @@ How to run, filter, and interpret tests for MicroKit.Persistence.
 
 - **xUnit** framework, **Shouldly** assertions, **NSubstitute** mocks
 - **FluentAssertions is banned** (commercial license). Never `.Should().`
-- Repository isolation via `InMemoryRepository<T>` from `MicroKit.Persistence.Testing`
+- Repository isolation via `InMemoryRepository<TAggregate, TId>` from `MicroKit.Persistence.Testing`
 - Integration tests via SQLite in-memory or Testcontainers
 
 ## Run All Tests

@@ -23,7 +23,7 @@ Two detection axes run in parallel:
 **Axis 1 — Invocation (`RegisterOperationAction`):**
 - Triggered on every `IInvocationOperation`.
 - Checks if the method name is in the forbidden set and if the *containing type* implements
-  `IReadRepository<T>` (either the Abstractions marker or the Core extension).
+  `MicroKit.Persistence.IReadRepository<T>` (the only read contract — #196 D8).
 - CommitAsync/SaveChangesAsync → MKP001; AddAsync/UpdateAsync/DeleteAsync → MKP002.
 
 **Axis 2 — Declaration (`RegisterSymbolAction(SymbolKind.Method)`):**
@@ -55,7 +55,7 @@ Two detection axes run in parallel:
 ### MKP005 — `RepositoryIQueryableLeakAnalyzer`
 
 - `RegisterSymbolAction(SymbolKind.Method)`.
-- For each public/internal method on a type implementing `IRepository<T>` or `IReadRepository<T>`,
+- For each public/internal method on a type implementing `IRepository<TAggregate, TId>` or `IReadRepository<T>`,
   unwraps `Task<>` / `ValueTask<>` from the return type and checks for `IQueryable<T>`.
 - Reports MKP005 at the method name.
 - `IAsyncEnumerable<T>` is **not** covered — its internal query source is not visible at

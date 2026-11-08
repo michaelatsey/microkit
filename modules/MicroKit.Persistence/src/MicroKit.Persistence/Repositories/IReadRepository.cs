@@ -1,11 +1,9 @@
-using Abs = MicroKit.Persistence.Abstractions;
-
 namespace MicroKit.Persistence;
 
 /// <summary>
-/// Full read-side repository contract for <typeparamref name="TAggregate"/> aggregates.
-/// Extends the empty marker in <c>MicroKit.Persistence.Abstractions</c> with the query
-/// methods that depend on <see cref="QueryOptions{TAggregate}"/> (ADR-002, ADR-003).
+/// Read-side repository contract for <typeparamref name="TAggregate"/> aggregates. Declared in
+/// <c>MicroKit.Persistence</c> (Core), next to <see cref="QueryOptions{TAggregate}"/> on which its
+/// query methods depend; it is the only read repository contract.
 /// </summary>
 /// <typeparam name="TAggregate">
 /// The aggregate root type. Must be a reference type implementing <see cref="IAggregateRoot"/>.
@@ -31,7 +29,6 @@ namespace MicroKit.Persistence;
 /// </para>
 /// </remarks>
 public interface IReadRepository<TAggregate>
-    : Abs.IReadRepository<TAggregate>
     where TAggregate : class, IAggregateRoot
 {
     /// <summary>

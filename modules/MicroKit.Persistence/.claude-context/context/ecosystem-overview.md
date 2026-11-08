@@ -36,12 +36,12 @@ Persistence.Abstractions, consumed by MediatR.Behaviors).
 
 | Consumer | What they use |
 |----------|--------------|
-| Application layer (command handlers) | `IRepository<T>`, `IUnitOfWork`, `ITransactionalContext` |
+| Application layer (command handlers) | `IRepository<TAggregate, TId>`, `IUnitOfWork`, `ITransactionalContext` |
 | Application layer (query handlers) | `IReadRepository<T>`, `QueryOptions<T>`, `IPagedResult<T>` |
 | `MicroKit.MediatR.Behaviors` | `ITransactionalContext` (for `TransactionBehavior`) |
-| `MicroKit.Messaging` (future) | `IRepository<T>`, `IUnitOfWork` (outbox pattern) |
+| `MicroKit.Messaging` (future) | `IRepository<TAggregate, TId>`, `IUnitOfWork` (outbox pattern) |
 | `MicroKit.Multitenancy` (future) | `IReadRepository<T>` (tenant resolution) |
-| Test projects | `InMemoryRepository<T>`, `InMemoryUnitOfWork` from `Persistence.Testing` |
+| Test projects | `InMemoryRepository<TAggregate, TId>`, `InMemoryUnitOfWork` from `Persistence.Testing` |
 
 ---
 
@@ -84,11 +84,11 @@ The Messaging module will depend on `Persistence.Abstractions` for these contrac
 
 ```
 MicroKit.Domain provides:
-  IAggregateRoot      ← generic constraint on IRepository<T>
+  IAggregateRoot      ← generic constraint on IRepository<TAggregate, TId>
   Specification<T>    ← WHAT to query, wrapped by QueryOptions<T>
 
 MicroKit.Persistence provides:
-  IRepository<T>      ← wraps IAggregateRoot for write-side persistence
+  IRepository<TAggregate, TId>      ← wraps IAggregateRoot for write-side persistence
   QueryOptions<T>     ← HOW to execute a Specification<T>
 ```
 

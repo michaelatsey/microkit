@@ -7,17 +7,29 @@ decision number (D1–D17) points at the issue.
 
 ### Breaking Changes
 
+#### MicroKit.Persistence.Abstractions
+- **D10** — `IRepository<TAggregate>` is replaced by `IRepository<TAggregate, TId> where TAggregate : class, IAggregateRoot where TId : IEntityId`, the only write-side contract: `FindAsync(TId id, ct)` loads the whole aggregate, tracked; `AddAsync`; `DeleteAsync`.
+- **D9** — `IRepository.CommitAsync` is removed: committing belongs to `IUnitOfWork` only (`TransactionBehavior` calls it).
+- **D11** — `IRepository.UpdateAsync` is removed: an aggregate loaded through `FindAsync` is tracked, so its changes need no call; `DbSet.Update` marked a whole graph `Modified` and was unsafe on a detached one.
+- **D8** — the empty `MicroKit.Persistence.Abstractions.IReadRepository<TAggregate>` marker is removed; `MicroKit.Persistence.IReadRepository<TAggregate>` (Core) is the only read contract (#120).
+- **D12** — `ITransactionManager` and `ITransaction` are removed: implemented and used nowhere.
+- **D17** — the package no longer depends on `MicroKit.Result`, which it did not use.
+
 #### MicroKit.Persistence (Core)
 - **D1** — `QueryOptions<T>.IncludeDeleted` and `QueryOptionsExtensions.IncludeSoftDeleted()` are removed. They called the parameterless `IgnoreQueryFilters()`, which disables **every** query filter of the model — a tenant filter included — while the module owns no soft delete. #197 reintroduces the flag on a *named* filter.
 - **D6** — `PaginationOptions` is no longer a positional record: `new PaginationOptions(page, pageSize)` validates `page >= 1`, `pageSize >= 1` and that the offset fits in an `int`, and `Page`, `PageSize`, `Skip` are get-only (no `Deconstruct`, no `with { Page = … }`). Named arguments change from `Page:`/`PageSize:` to `page:`/`pageSize:`.
 
 #### MicroKit.Persistence.EntityFrameworkCore
+- **D10** — `EfRepository<TAggregate, TContext>(TContext, IUnitOfWork)` becomes `EfRepository<TAggregate, TId, TContext>(TContext)`. The protected `FindByKeyAsync(object[])`, which loaded the root without its children, is removed; `FindAsync(TId)` loads the whole aggregate (every navigation to a non-root entity, recursively; split when it has two or more collections), and the protected virtual `IncludeAggregate(IQueryable<TAggregate>)` lets a typed repository apply or replace those includes.
+- **D9, D11** — `EfRepository.CommitAsync` and `UpdateAsync` are removed.
+- **D12** — `EfTransaction` is removed.
 - **D6** — `EfReadRepository<TAggregate, TContext>` takes a third, required constructor parameter `PaginationLimits paginationLimits`; typed subclasses forward it (the container resolves the registered instance).
 - **D6** — `ListPagedAsync` without pagination returns page 1 of `PaginationLimits.DefaultPageSize` (50) items instead of the whole result set; a requested page size above `PaginationLimits.MaxPageSize` (500) throws `ArgumentOutOfRangeException` from `ListAsync` and `ListPagedAsync`.
 - **D2** — `EfReadRepository.FindAsync` returns an aggregate the unit of work already tracks as is (same instance, same state) instead of detaching it, and loads any other aggregate with a no-tracking query instead of tracking then detaching it.
 - **D3–D5** — `EfUnitOfWork.ExecuteAsync` joins an open `Database.CurrentTransaction`; exhausted retries surface as `PersistenceException` (inner `RetryLimitExceededException`) instead of `RetryLimitExceededException`; failures of the transaction itself surface as `PersistenceException`; a failed attempt clears the change tracker. See ADR-006.
 
 #### MicroKit.Persistence.Testing
+- **D10** — `InMemoryRepository<TAggregate>` becomes `InMemoryRepository<TAggregate, TId>`: `FindAsync(TId)` replaces `FindById(object)`; `UpdateAsync` and `CommitAsync` are removed; the key-selector constructors take a `Func<TAggregate, TId>`.
 - **D6** — `InMemoryRepository<T>` and `InMemoryReadRepository<T>` enforce `PaginationLimits` like the EF Core read repository (new constructor overloads take one); `ListPagedAsync` without pagination returns the default page.
 
 #### MicroKit.Persistence.Abstractions

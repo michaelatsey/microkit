@@ -64,7 +64,7 @@ foreach (var iface in type.AllInterfaces)
 ### Null-guard on GetTypeByMetadataName
 ```csharp
 // ALWAYS null-guard — the target package may not be referenced
-var symbol = compilation.GetTypeByMetadataName("MicroKit.Persistence.Abstractions.IReadRepository`1");
+var symbol = compilation.GetTypeByMetadataName("MicroKit.Persistence.IReadRepository`1");
 if (symbol is null) return false; // package not in compilation
 ```
 
@@ -94,7 +94,7 @@ public async Task MKP00X_Scenario_ExpectedResult()
         // Minimal reproducing code using stub types
         class MyAggregate : MicroKit.Persistence.Abstractions.IAggregateRoot { }
 
-        class ViolatingClass : MicroKit.Persistence.Abstractions.IReadRepository<MyAggregate>
+        class ViolatingClass : IReadRepository<MyAggregate>
         {
             public void {|MKP00X:ForbiddenMethod|}() { }
         }

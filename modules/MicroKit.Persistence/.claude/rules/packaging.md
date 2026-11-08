@@ -68,7 +68,7 @@ persistence-v2.0.0
 
 | Package | Runtime Dependencies |
 |---------|---------------------|
-| `Abstractions` | `MicroKit.Domain`, `MicroKit.Result` (`MicroKit.Result` is removed by #196 D17, phase 2) |
+| `Abstractions` | `MicroKit.Domain` |
 | `MicroKit.Persistence` | `MicroKit.Persistence.Abstractions` |
 | `EntityFrameworkCore` | `MicroKit.Persistence`, `Microsoft.EntityFrameworkCore` |
 | `PostgreSql` | `MicroKit.Persistence.EntityFrameworkCore`, `Npgsql.EntityFrameworkCore.PostgreSQL` |

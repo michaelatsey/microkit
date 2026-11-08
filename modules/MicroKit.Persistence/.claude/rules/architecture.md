@@ -4,9 +4,7 @@
 
 ## Repository Pattern
 
-### Write side — `IRepository<TAggregate, TId>` (from #196 phase 2, D9–D11)
-Until phase 2 lands, the code still has `IRepository<TAggregate>` with `AddAsync`, `UpdateAsync`,
-`DeleteAsync` and `CommitAsync`. Phase 2 replaces it with:
+### Write side — `IRepository<TAggregate, TId>` (#196 D9–D11)
 ```csharp
 // ✅ The only write-side contract. No CommitAsync (committing belongs to IUnitOfWork only),
 //    no UpdateAsync (a tracked aggregate needs no call).
@@ -124,8 +122,8 @@ public sealed class UserWithRolesSpec : Specification<User>
 
 | Handler Type | Inject | Forbidden |
 |---|---|---|
-| CommandHandler | `IRepository<T>` + `IUnitOfWork` | `IReadRepository`, `DbContext` |
-| QueryHandler | `IReadRepository<T>` | `IRepository<T>`, `IUnitOfWork`, `DbContext` |
+| CommandHandler | `IRepository<TAggregate, TId>` + `IUnitOfWork` | `IReadRepository`, `DbContext` |
+| QueryHandler | `IReadRepository<T>` | `IRepository<TAggregate, TId>`, `IUnitOfWork`, `DbContext` |
 | Either | Custom typed repo extending correct base | Raw `IQueryable<T>` on public interfaces |
 
 ## Strict Rules
@@ -134,7 +132,7 @@ public sealed class UserWithRolesSpec : Specification<User>
 🔴 IReadRepository must not have: AddAsync, UpdateAsync, DeleteAsync, CommitAsync
 🔴 SaveChangesAsync must not appear in any public method name — use CommitAsync
 🔴 DbContext injected in a handler — always inject a typed repository
-🔴 IRepository<T> in a QueryHandler — queries are read-only
+🔴 IRepository<TAggregate, TId> in a QueryHandler — queries are read-only
 🔴 IQueryable<T> on any IReadRepository public method signature
 🟡 IUnitOfWork in MicroKit.Domain code — it moved to Persistence.Abstractions (ADR-001)
 ```

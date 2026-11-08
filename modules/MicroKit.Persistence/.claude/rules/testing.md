@@ -15,7 +15,7 @@
 - **Shouldly** — all assertions — see root `.claude/rules/testing-libraries.md`
 - **FluentAssertions is banned** (commercial licence). Nothing enforces it automatically — review and `dependency-guardian` catch it
 - **NSubstitute** — all mocks and stubs
-- **MicroKit.Persistence.Testing** — `InMemoryRepository<T>`, `InMemoryUnitOfWork`
+- **MicroKit.Persistence.Testing** — `InMemoryRepository<TAggregate, TId>`, `InMemoryUnitOfWork`
 - **NetArchTest.Rules** — architecture tests only
 - **Testcontainers** — integration tests against real PostgreSQL/SQL Server (opt-in, slow suite)
 
@@ -25,7 +25,7 @@ Unit tests must not require a real database, EF Core context, or DI container:
 
 ```csharp
 // ✅ Pure unit test using InMemoryRepository
-var repo = new InMemoryRepository<User>();
+var repo = new InMemoryRepository<User, UserId>();
 var uow = new InMemoryUnitOfWork();
 
 await repo.AddAsync(user);
@@ -49,10 +49,10 @@ Integration tests use an in-memory SQLite DbContext or Testcontainers for provid
 ### Per Repository
 - [ ] `FindAsync_WhenExists_ReturnsAggregate`
 - [ ] `FindAsync_WhenNotFound_ReturnsNull`
-- [ ] `AddAsync_ThenCommit_PersistsAggregate`
-- [ ] `UpdateAsync_ThenCommit_UpdatesAggregate`
-- [ ] `DeleteAsync_ThenCommit_RemovesAggregate`
-- [ ] `CommitAsync_WhenCancelled_ThrowsOperationCancelled`
+- [ ] `AddAsync_ThenUnitOfWorkCommit_PersistsAggregate`
+- [ ] `FindAsync_ThenMutateThenUnitOfWorkCommit_PersistsChange` (there is no `UpdateAsync`)
+- [ ] `DeleteAsync_ThenUnitOfWorkCommit_RemovesAggregate`
+- [ ] `FindAsync_LoadsTheWholeAggregate` (EF Core: SQLite and PostgreSQL)
 
 ### Per ReadRepository
 - [ ] `ListAsync_WithSpec_FiltersCorrectly`

@@ -19,7 +19,7 @@ A missing `<summary>` on a public member is a build error in Release configurati
 | Interface | `<summary>` |
 | Repository method | `<summary>` + `<param>` + `<returns>` |
 | Exception class | `<summary>` + `<param>` on constructors |
-| `CommitAsync` | `<summary>` + `<param name="ct">` + `<exception cref="PersistenceException">` |
+| `IUnitOfWork.CommitAsync` | `<summary>` + `<param name="ct">` + `<exception cref="PersistenceException">` |
 | QueryOptions | `<summary>` + `<param>` on record parameters |
 | IPagedResult | `<summary>` + `<param>` on all members |
 | EF implementation `override` | `<inheritdoc/>` |
@@ -28,25 +28,22 @@ A missing `<summary>` on a public member is a build error in Release configurati
 
 ```csharp
 /// <summary>
-/// Write-side repository for <typeparamref name="TAggregate"/> aggregates.
-/// Exposes the Unit of Work boundary via <see cref="CommitAsync"/>.
+/// Write-side repository for <typeparamref name="TAggregate"/> aggregates. It never commits —
+/// committing belongs to <see cref="IUnitOfWork"/>.
 /// </summary>
 /// <typeparam name="TAggregate">The aggregate root type.</typeparam>
-public interface IRepository<TAggregate>
-    where TAggregate : IAggregateRoot
+/// <typeparam name="TId">The aggregate's identifier type.</typeparam>
+public interface IRepository<TAggregate, TId>
+    where TAggregate : class, IAggregateRoot
+    where TId : IEntityId
 {
     /// <summary>
-    /// Finds an aggregate by its primary key.
+    /// Loads the whole aggregate identified by <paramref name="id"/>, tracked.
     /// </summary>
-    /// <returns>The aggregate, or <see langword="null"/> if not found.</returns>
-    ValueTask<TAggregate?> FindAsync(/* id */, CancellationToken ct = default);
-
-    /// <summary>
-    /// Commits all pending changes to the underlying store.
-    /// </summary>
+    /// <param name="id">The aggregate's identifier.</param>
     /// <param name="ct">Propagates notification that operations should be cancelled.</param>
-    /// <exception cref="PersistenceException">Thrown when the underlying provider fails to commit.</exception>
-    ValueTask CommitAsync(CancellationToken ct = default);
+    /// <returns>The aggregate, or <see langword="null"/> if none has this identifier.</returns>
+    ValueTask<TAggregate?> FindAsync(TId id, CancellationToken ct = default);
 }
 ```
 

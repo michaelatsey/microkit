@@ -8,7 +8,7 @@ the MediatR pipeline via `ITransactionalContext`, and enforces CQRS-aligned data
 build time via Roslyn analyzers.
 
 > **Core principle:** the domain layer defines what entities are persisted; this module defines how.
-> Handlers write to aggregates via `IRepository<T>`; handlers read via `IReadRepository<T>`.
+> Handlers write to aggregates via `IRepository<TAggregate, TId>`; handlers read via `IReadRepository<T>`.
 > The `IUnitOfWork` — moved here from `MicroKit.Domain` (ADR-001) — lives at the persistence boundary
 > because committing is an infrastructure concern, not a domain concern.
 
@@ -50,9 +50,9 @@ Always load the relevant file before working on a specific concern:
 ```
 MicroKit.Persistence/
 ├── src/
-│   ├── MicroKit.Persistence.Abstractions/        ← IRepository, IReadRepository (marker), IUnitOfWork,
+│   ├── MicroKit.Persistence.Abstractions/        ← IRepository<TAggregate, TId>, IUnitOfWork,
 │   │                                                ITransactionalContext, IPagedResult<T>,
-│   │                                                ITransaction, ITransactionManager, PersistenceException
+│   │                                                PersistenceException
 │   ├── MicroKit.Persistence/                      ← ISpecificationEvaluator, QueryOptions,
 │   │                                                pagination, transaction pipeline, conventions
 │   ├── MicroKit.Persistence.EntityFrameworkCore/  ← EfRepository, EfUnitOfWork,
@@ -76,7 +76,7 @@ MicroKit.Persistence/
 ## 📦 Dependency Graph
 
 ```
-MicroKit.Persistence.Abstractions  ← MicroKit.Domain, MicroKit.Result (removed by #196 D17)
+MicroKit.Persistence.Abstractions  ← MicroKit.Domain
         ↑
 MicroKit.Persistence (core)        ← Abstractions
         ↑
@@ -90,7 +90,7 @@ MicroKit.Persistence.Analyzers        ← Microsoft.CodeAnalysis.CSharp (build-t
 ```
 
 **Cross-module:** MicroKit.Persistence is a **Level 2** module — may depend on Level 0
-(`MicroKit.Domain`, `MicroKit.Result`). Intra-module references are unconditional `ProjectReference` (ADR-GLOBAL-002 D5). Full graph: `.claude-context/context/dependency-graph.md`.
+(`MicroKit.Domain`). Intra-module references are unconditional `ProjectReference` (ADR-GLOBAL-002 D5). Full graph: `.claude-context/context/dependency-graph.md`.
 
 ---
 
@@ -98,8 +98,7 @@ MicroKit.Persistence.Analyzers        ← Microsoft.CodeAnalysis.CSharp (build-t
 
 ### Write side
 ```csharp
-IRepository<TAggregate>       // AddAsync, UpdateAsync, DeleteAsync, CommitAsync
-                              // → #196 phase 2: IRepository<TAggregate, TId> { FindAsync(TId), AddAsync, DeleteAsync }
+IRepository<TAggregate, TId>  // FindAsync(TId) — whole aggregate, tracked — AddAsync, DeleteAsync; never commits
 IUnitOfWork                   // CommitAsync(CancellationToken), DiscardChanges() — source-compatible, frozen
 ITransactionalContext         // ExecuteAsync<TState>(…) / ExecuteAsync<TState, TResult>(…) — frozen
 ```

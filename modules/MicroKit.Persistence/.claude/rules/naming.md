@@ -8,8 +8,8 @@
 | Read repository interface | `I{Entity}ReadRepository` | `IUserReadRepository`, `IOrderReadRepository` |
 | EF write repository | `Ef{Entity}Repository` | `EfUserRepository`, `EfOrderRepository` |
 | EF read repository | `Ef{Entity}ReadRepository` | `EfUserReadRepository` |
-| In-memory (testing) | `InMemory{Entity}Repository` or `InMemoryRepository<T>` | `InMemoryUserRepository` |
-| Generic base | `IRepository<T>`, `IReadRepository<T>` | (non-entity-specific) |
+| In-memory (testing) | `InMemory{Entity}Repository` or `InMemoryRepository<TAggregate, TId>` | `InMemoryUserRepository` |
+| Generic base | `IRepository<TAggregate, TId>`, `IReadRepository<TAggregate>` | (non-entity-specific) |
 
 ## Unit of Work
 

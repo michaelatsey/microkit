@@ -30,9 +30,8 @@ model: haiku
 
 ## Cross-Module Reference Pattern (rule: `/.claude/rules/cross-module-references.md`)
 
-The only cross-module references in this module's `src/` are `MicroKit.Persistence.Abstractions` →
-`MicroKit.Domain` and → `MicroKit.Result` (the latter removed by #196 D17 in phase 2); Core
-references nothing outside the module. Cross-module references in `src/` follow the canonical
+The only cross-module reference in this module's `src/` is `MicroKit.Persistence.Abstractions` →
+`MicroKit.Domain` (#196 D17 removed `MicroKit.Result`); Core references nothing outside the module. Cross-module references in `src/` follow the canonical
 two-ItemGroup pattern; test and other non-packable projects use an unconditional
 `ProjectReference` instead (e.g. `IntegrationTests` → `MicroKit.Domain`), which is correct.
 **Intra-module** references (between this module's own projects) are always unconditional

@@ -48,7 +48,7 @@ ls /tmp/persistence-pack/*.nupkg
 Confirm all 8 `.nupkg` files are present.
 
 ### 5. Dependency verification
-- `Abstractions` declares `MicroKit.Domain` and `MicroKit.Result` only (`MicroKit.Result` removed by #196 D17)
+- `Abstractions` declares `MicroKit.Domain` only
 - `Core` declares `MicroKit.Persistence.Abstractions` only
 - `EntityFrameworkCore` adds `Microsoft.EntityFrameworkCore`
 - Provider packages add only their provider

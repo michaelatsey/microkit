@@ -34,7 +34,7 @@ Verify all 8 packages are present:
 
 ### 3. Verify Dependency Graph
 
-- `Abstractions` declares only `MicroKit.Domain` + `MicroKit.Result` (`MicroKit.Result` removed by #196 D17)
+- `Abstractions` declares only `MicroKit.Domain`
 - `Core` declares `MicroKit.Persistence.Abstractions` only
 - `EntityFrameworkCore` adds `Microsoft.EntityFrameworkCore`
 - Provider packages add only their provider NuGet
@@ -66,7 +66,7 @@ gh run list --workflow=release-persistence.yml --limit=3
 
 ## Breaking Change Protocol
 
-If `IUnitOfWork`, `ITransactionalContext`, or `IRepository<T>` signatures change:
+If `IUnitOfWork`, `ITransactionalContext`, or `IRepository<TAggregate, TId>` signatures change:
 1. Add `!` to the commit scope: `feat(persistence)!:`
 2. Add `BREAKING CHANGE:` footer with migration guide
 3. Increment major version in `version.json`

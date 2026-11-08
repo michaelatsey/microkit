@@ -39,14 +39,13 @@ renaming it is a breaking change that affects every consumer.
 - [ ] `PersistenceException` is the only exception type declared here
 
 ### Write-side repository
-Review against the phase being committed. Until #196 phase 2 the code has `IRepository<TAggregate>`
-with `AddAsync`, `UpdateAsync`, `DeleteAsync`, `CommitAsync`. From phase 2 (D9–D11):
+#196 D9–D11:
 - [ ] Exactly one write-side interface: `IRepository<TAggregate, TId>` (`TAggregate : class, IAggregateRoot`, `TId : IEntityId`)
 - [ ] `FindAsync(TId id, ct)`, `AddAsync`, `DeleteAsync` — no `CommitAsync` (committing belongs to `IUnitOfWork` only), no `UpdateAsync`
 - [ ] No `IQueryable<T>` return types
 
 ### IReadRepository<TAggregate>
-- [ ] From #196 phase 2 (D8): declared once, in Core (`MicroKit.Persistence`); until then an empty marker also exists in Abstractions
+- [ ] Declared once, in Core (`MicroKit.Persistence`) — no marker in Abstractions (#196 D8)
 - [ ] No `AddAsync`, `UpdateAsync`, `DeleteAsync`, `CommitAsync`
 - [ ] Returns `IReadOnlyList<T>` / `IPagedResult<T>`, never `List<T>` or `IQueryable<T>`
 
@@ -55,7 +54,7 @@ with `AddAsync`, `UpdateAsync`, `DeleteAsync`, `CommitAsync`. From phase 2 (D9�
 
 ### ITransactionalContext — source-compatible, frozen
 - [ ] Exactly the two `ExecuteAsync<TState>` / `ExecuteAsync<TState, TResult>` overloads returning `Task` / `Task<TResult>`
-- [ ] No Begin/Commit/Rollback members. `ITransaction` / `ITransactionManager` are deleted by #196 D12 (phase 2)
+- [ ] No Begin/Commit/Rollback members. no `ITransaction` / `ITransactionManager` (deleted by #196 D12)
 
 ### Naming
 - [ ] Repository interfaces: `IXxxRepository<T>` or `IXxxReadRepository<T>`

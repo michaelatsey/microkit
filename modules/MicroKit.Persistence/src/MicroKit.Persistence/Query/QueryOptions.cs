@@ -76,7 +76,8 @@ public sealed record QueryOptions<TAggregate>
     /// </summary>
     /// <value>
     /// <see langword="true"/> by default. Set to <see langword="false"/> only when the loaded
-    /// aggregate will be mutated and committed via <c>IRepository&lt;TAggregate&gt;</c>.
+    /// aggregate will be mutated and committed by the <c>IUnitOfWork</c>; the usual way to load an
+    /// aggregate for modification is <c>IRepository&lt;TAggregate, TId&gt;.FindAsync</c>.
     /// </value>
     public bool AsNoTrackingEnabled { get; init; } = true;
 

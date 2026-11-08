@@ -1,7 +1,3 @@
-using System.Linq.Expressions;
-using System.Reflection;
-using Microsoft.EntityFrameworkCore.Metadata;
-
 namespace MicroKit.Persistence.EntityFrameworkCore;
 
 /// <summary>
@@ -97,7 +93,7 @@ public class EfReadRepository<TAggregate, TContext>(
     {
         ArgumentNullException.ThrowIfNull(keyValues);
         var set = Context.Set<TAggregate>();
-        var keyProperties = PrimaryKeyOf(set);
+        var keyProperties = KeyLookup.PrimaryKeyOf(set.EntityType);
         if (keyValues.Length != keyProperties.Count)
         {
             throw new ArgumentException(
@@ -109,99 +105,15 @@ public class EfReadRepository<TAggregate, TContext>(
         if (Array.Exists(keyValues, v => v is null))
             return null;
 
-        var tracker = Context.ChangeTracker;
-        var autoDetectChanges = tracker.AutoDetectChangesEnabled;
-        EntityEntry<TAggregate>? tracked;
-        try
-        {
-            tracker.AutoDetectChangesEnabled = false;
-            tracked = set.Local.FindEntryUntyped(keyValues);
-        }
-        finally
-        {
-            tracker.AutoDetectChangesEnabled = autoDetectChanges;
-        }
-
+        var tracked = KeyLookup.FindTracked(Context, set, keyValues);
         if (tracked is not null)
             return tracked.Entity;
 
         return await set.AsNoTracking()
-            .FirstOrDefaultAsync(KeyPredicate(keyProperties, keyValues), ct)
+            .FirstOrDefaultAsync(KeyLookup.Predicate<TAggregate>(keyProperties, keyValues), ct)
             .ConfigureAwait(false);
     }
 
-    private static IReadOnlyList<IProperty> PrimaryKeyOf(DbSet<TAggregate> set) =>
-        set.EntityType.FindPrimaryKey()?.Properties
-        ?? throw new InvalidOperationException($"'{typeof(TAggregate).Name}' has no primary key.");
-
-    // e => EF.Property<T0>(e, "K0") == (T0)values[0] && ... . The values are read through a
-    // closure object, so EF Core parameterises them and every call shares one compiled query.
-    [System.Diagnostics.CodeAnalysis.UnconditionalSuppressMessage(
-        "Trimming", "IL2060:MakeGenericMethod",
-        Justification = "EF.Property<T> carries no trimming annotation and is only ever translated by EF Core, which is not trim-safe itself (see IL2091 in the project file).")]
-    private static Expression<Func<TAggregate, bool>> KeyPredicate(
-        IReadOnlyList<IProperty> keyProperties,
-        object[] keyValues)
-    {
-        var entity = Expression.Parameter(typeof(TAggregate), "e");
-        var values = Expression.Field(Expression.Constant(new KeyValuesHolder(keyValues)), KeyValuesField);
-
-        Expression? body = null;
-        for (var i = 0; i < keyProperties.Count; i++)
-        {
-            var clrType = keyProperties[i].ClrType;
-            var property = Expression.Call(
-                EfPropertyMethod.MakeGenericMethod(clrType),
-                entity,
-                Expression.Constant(keyProperties[i].Name));
-            var value = Expression.Convert(
-                Expression.ArrayIndex(values, Expression.Constant(i)),
-                clrType);
-            var equal = KeyEquals(property, value);
-            body = body is null ? equal : Expression.AndAlso(body, equal);
-        }
-
-        return Expression.Lambda<Func<TAggregate, bool>>(body!, entity);
-    }
-
-    // == where the key type supports it (primitives, Guid, records…); otherwise value equality
-    // through Equals(object), which EF Core translates to the same SQL comparison — DbSet.Find
-    // accepts such keys, so the read repository must too. Probed once per key type.
-    private static Expression KeyEquals(Expression property, Expression value)
-    {
-        var supportsEqualityOperator = s_equalityOperatorSupport.GetOrAdd(property.Type, static type =>
-        {
-            try
-            {
-                _ = Expression.Equal(Expression.Default(type), Expression.Default(type));
-                return true;
-            }
-            catch (InvalidOperationException)
-            {
-                return false;
-            }
-        });
-
-        return supportsEqualityOperator
-            ? Expression.Equal(property, value)
-            : Expression.Call(property, ObjectEqualsMethod, Expression.Convert(value, typeof(object)));
-    }
-
-    private static readonly System.Collections.Concurrent.ConcurrentDictionary<Type, bool> s_equalityOperatorSupport = new();
-
-    private static readonly MethodInfo ObjectEqualsMethod =
-        typeof(object).GetMethod(nameof(Equals), [typeof(object)])!;
-
-    private static readonly MethodInfo EfPropertyMethod =
-        typeof(EF).GetMethod(nameof(EF.Property))!;
-
-    private static readonly FieldInfo KeyValuesField =
-        typeof(KeyValuesHolder).GetField(nameof(KeyValuesHolder.Values))!;
-
-    private sealed class KeyValuesHolder(object[] values)
-    {
-        public readonly object[] Values = values;
-    }
 
     /// <summary>
     /// Returns all aggregates that satisfy the supplied <see cref="QueryOptions{TAggregate}"/>.

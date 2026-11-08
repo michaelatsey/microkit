@@ -12,7 +12,7 @@ model: sonnet
 - **Shouldly** — all assertions (`result.ShouldBe(...)`, `result.ShouldNotBeNull()`)
 - **FluentAssertions is banned** (commercial licence) — never reference it
 - **NSubstitute** — mocks for external dependencies
-- **MicroKit.Persistence.Testing** — `InMemoryRepository<T>` for repository isolation (`InMemoryRepository<TAggregate, TId>` from #196 phase 2)
+- **MicroKit.Persistence.Testing** — `InMemoryRepository<TAggregate, TId>` for repository isolation
 
 ## Context to load
 - `.claude/rules/testing.md`
@@ -25,7 +25,7 @@ model: sonnet
 - [ ] `FindAsync_WhenExists_ReturnsAggregate`
 - [ ] `FindAsync_WhenNotFound_ReturnsNull`
 - [ ] `AddAsync_ThenUnitOfWorkCommit_PersistsAggregate`
-- [ ] `FindAsync_ThenMutateThenUnitOfWorkCommit_PersistsChange` (`UpdateAsync` is removed by #196 D11, phase 2)
+- [ ] `FindAsync_ThenMutateThenUnitOfWorkCommit_PersistsChange` (there is no `UpdateAsync` — #196 D11)
 - [ ] `DeleteAsync_ThenUnitOfWorkCommit_RemovesAggregate`
 
 ### Per ReadRepository
@@ -46,7 +46,7 @@ model: sonnet
 ```csharp
 public sealed class UserRepositoryTests
 {
-    private readonly InMemoryRepository<User> _repo = new();
+    private readonly InMemoryRepository<User, UserId> _repo = new();
     private readonly InMemoryUnitOfWork _uow = new();
 
     [Fact]

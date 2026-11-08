@@ -1,25 +1,29 @@
-using Abs = MicroKit.Persistence.Abstractions;
-
 namespace MicroKit.Persistence.Testing;
 
 /// <summary>
 /// An in-memory repository test double that implements both the write contract
-/// (<see cref="Abs.IRepository{TAggregate}"/>) and the full read contract
+/// (<see cref="IRepository{TAggregate, TId}"/>) and the full read contract
 /// (<see cref="IReadRepository{TAggregate}"/>).
 /// </summary>
 /// <typeparam name="TAggregate">
 /// The aggregate root type. Must be a reference type implementing <see cref="IAggregateRoot"/>.
 /// </typeparam>
+/// <typeparam name="TId">The aggregate's identifier type.</typeparam>
 /// <remarks>
 /// <para>
-/// Pass a single instance to both a command handler (as <see cref="Abs.IRepository{TAggregate}"/>)
+/// Pass a single instance to both a command handler (as <see cref="IRepository{TAggregate, TId}"/>)
 /// and a query handler (as <see cref="IReadRepository{TAggregate}"/>) to test them in isolation
-/// without a real database.
+/// without a real database — the role the shared scoped <c>DbContext</c> plays in production. It
+/// therefore declares the write methods although it implements the read contract; that is the
+/// one intended exception to MKP002.
 /// </para>
 /// <para>
-/// Writes (<see cref="AddAsync"/>, <see cref="UpdateAsync"/>, <see cref="DeleteAsync"/>) are
-/// applied immediately to the in-memory store. <see cref="CommitAsync"/> on this type honours
-/// cancellation only — use <see cref="InMemoryUnitOfWork"/> to track commit boundaries.
+/// Writes (<see cref="AddAsync"/>, <see cref="DeleteAsync"/>) are applied immediately to the
+/// in-memory store, and an aggregate returned by <see cref="FindAsync(TId, CancellationToken)"/> is the
+/// stored instance, so its mutations are visible at once. Use <see cref="InMemoryUnitOfWork"/>
+/// to assert commit boundaries. One difference with EF Core: a deleted aggregate is gone at once,
+/// whereas <c>EfRepository.FindAsync</c> still returns it, in the <c>Deleted</c> state, until the
+/// unit of work commits.
 /// </para>
 /// <para>
 /// <see cref="QueryOptions{TAggregate}.Includes"/>, <see cref="QueryOptions{TAggregate}.AsNoTrackingEnabled"/>
@@ -27,102 +31,88 @@ namespace MicroKit.Persistence.Testing;
 /// EF Core execution concerns with no in-memory equivalent.
 /// </para>
 /// </remarks>
-public sealed class InMemoryRepository<TAggregate>
+public sealed class InMemoryRepository<TAggregate, TId>
     : IReadRepository<TAggregate>,
-      Abs.IRepository<TAggregate>
+      IRepository<TAggregate, TId>
     where TAggregate : class, IAggregateRoot
+    where TId : IEntityId
 {
     private readonly InMemoryStore<TAggregate> _store;
 
     /// <summary>
-    /// Initializes an empty repository. The aggregate's identity is extracted from its
-    /// conventional public <c>Id</c> property.
+    /// Initializes an empty repository. The aggregate's identity is read from its conventional
+    /// public <c>Id</c> property.
     /// </summary>
-    public InMemoryRepository() => _store = new InMemoryStore<TAggregate>();
+    /// <exception cref="InvalidOperationException">
+    /// <typeparamref name="TAggregate"/> has no public <c>Id</c> property of type <typeparamref name="TId"/>.
+    /// </exception>
+    public InMemoryRepository() => _store = new InMemoryStore<TAggregate>(ConventionalKeySelector());
 
     /// <summary>
     /// Initializes an empty repository that enforces <paramref name="paginationLimits"/>, as the
-    /// EF Core read repository does. The aggregate's identity is extracted from its conventional
-    /// public <c>Id</c> property.
+    /// EF Core read repository does. The aggregate's identity is read from its conventional public
+    /// <c>Id</c> property.
     /// </summary>
     /// <param name="paginationLimits">The page sizes to enforce.</param>
+    /// <exception cref="InvalidOperationException">
+    /// <typeparamref name="TAggregate"/> has no public <c>Id</c> property of type <typeparamref name="TId"/>.
+    /// </exception>
     public InMemoryRepository(PaginationLimits paginationLimits) =>
-        _store = new InMemoryStore<TAggregate>(paginationLimits: paginationLimits
+        _store = new InMemoryStore<TAggregate>(ConventionalKeySelector(), paginationLimits
             ?? throw new ArgumentNullException(nameof(paginationLimits)));
 
     /// <summary>
-    /// Initializes an empty repository using an explicit key selector.
+    /// Initializes an empty repository using an explicit identity selector.
     /// </summary>
-    /// <param name="keySelector">
-    /// Extracts the identity key used for storage and lookup. Required when the aggregate
-    /// does not expose a public <c>Id</c> property.
+    /// <param name="idSelector">
+    /// Extracts the aggregate's identifier. Required when the aggregate does not expose a public
+    /// <c>Id</c> property.
     /// </param>
-    public InMemoryRepository(Func<TAggregate, object> keySelector) =>
-        _store = new InMemoryStore<TAggregate>(keySelector);
+    public InMemoryRepository(Func<TAggregate, TId> idSelector) =>
+        _store = new InMemoryStore<TAggregate>(ToKeySelector(idSelector));
 
     /// <summary>
-    /// Initializes an empty repository using an explicit key selector and enforcing
+    /// Initializes an empty repository using an explicit identity selector and enforcing
     /// <paramref name="paginationLimits"/>.
     /// </summary>
-    /// <param name="keySelector">Extracts the identity key used for storage and lookup.</param>
+    /// <param name="idSelector">Extracts the aggregate's identifier.</param>
     /// <param name="paginationLimits">The page sizes to enforce.</param>
-    public InMemoryRepository(Func<TAggregate, object> keySelector, PaginationLimits paginationLimits) =>
-        _store = new InMemoryStore<TAggregate>(keySelector, paginationLimits
+    public InMemoryRepository(Func<TAggregate, TId> idSelector, PaginationLimits paginationLimits) =>
+        _store = new InMemoryStore<TAggregate>(ToKeySelector(idSelector), paginationLimits
             ?? throw new ArgumentNullException(nameof(paginationLimits)));
 
     /// <summary>Gets a snapshot of all aggregates currently in the store.</summary>
     public IReadOnlyCollection<TAggregate> All => _store.All;
 
-    // ---- Write side (Abs.IRepository<TAggregate>) ----
+    // ---- Write side (IRepository<TAggregate, TId>) ----
 
     /// <inheritdoc/>
-    public ValueTask AddAsync(TAggregate aggregate, CancellationToken ct = default)
+    public ValueTask<TAggregate?> FindAsync(TId id, CancellationToken ct = default)
     {
+        ArgumentNullException.ThrowIfNull(id);
         ct.ThrowIfCancellationRequested();
-        _store.Add(aggregate);
-        return ValueTask.CompletedTask;
+        return new ValueTask<TAggregate?>(_store.Find(id));
     }
 
     /// <inheritdoc/>
-    public ValueTask UpdateAsync(TAggregate aggregate, CancellationToken ct = default)
+    /// <exception cref="InvalidOperationException">
+    /// An aggregate with the same identifier is already stored — EF Core rejects it too.
+    /// </exception>
+    public ValueTask AddAsync(TAggregate aggregate, CancellationToken ct = default)
     {
+        ArgumentNullException.ThrowIfNull(aggregate);
         ct.ThrowIfCancellationRequested();
-        _store.Update(aggregate);
+        _store.AddNew(aggregate);
         return ValueTask.CompletedTask;
     }
 
     /// <inheritdoc/>
     public ValueTask DeleteAsync(TAggregate aggregate, CancellationToken ct = default)
     {
+        ArgumentNullException.ThrowIfNull(aggregate);
         ct.ThrowIfCancellationRequested();
         _store.Remove(aggregate);
         return ValueTask.CompletedTask;
-    }
-
-    /// <summary>
-    /// No-op commit boundary. Honours cancellation; otherwise returns immediately.
-    /// Use <see cref="InMemoryUnitOfWork"/> to track commit boundaries in tests.
-    /// </summary>
-    /// <param name="ct">Propagates notification that operations should be cancelled.</param>
-    public ValueTask CommitAsync(CancellationToken ct = default)
-    {
-        ct.ThrowIfCancellationRequested();
-        return ValueTask.CompletedTask;
-    }
-
-    // ---- Convenience finder (not on any interface — avoids overload ambiguity with object[]) ----
-
-    /// <summary>
-    /// Finds an aggregate by a single identity key.
-    /// </summary>
-    /// <param name="id">The identity key. Must not be an <c>object[]</c> — use
-    /// <see cref="FindAsync(object[], CancellationToken)"/> for composite PKs.</param>
-    /// <param name="ct">Propagates notification that operations should be cancelled.</param>
-    /// <returns>The matching aggregate, or <see langword="null"/> if not found.</returns>
-    public ValueTask<TAggregate?> FindById(object id, CancellationToken ct = default)
-    {
-        ct.ThrowIfCancellationRequested();
-        return new ValueTask<TAggregate?>(_store.Find(id));
     }
 
     // ---- Read side (Core.IReadRepository<TAggregate>) ----
@@ -168,5 +158,25 @@ public sealed class InMemoryRepository<TAggregate>
     {
         ct.ThrowIfCancellationRequested();
         return new ValueTask<int>(_store.ExecuteCount(opts));
+    }
+
+    private static Func<TAggregate, object> ToKeySelector(Func<TAggregate, TId> idSelector)
+    {
+        ArgumentNullException.ThrowIfNull(idSelector);
+        return aggregate => idSelector(aggregate);
+    }
+
+    private static Func<TAggregate, object> ConventionalKeySelector()
+    {
+        var property = typeof(TAggregate).GetProperty("Id", System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Instance);
+        if (property is null || property.PropertyType != typeof(TId))
+        {
+            throw new InvalidOperationException(
+                $"'{typeof(TAggregate).Name}' has no public 'Id' property of type '{typeof(TId).Name}'. " +
+                "Pass an idSelector to the repository constructor.");
+        }
+
+        return aggregate => property.GetValue(aggregate)
+            ?? throw new InvalidOperationException($"The 'Id' property of '{typeof(TAggregate).Name}' returned null.");
     }
 }

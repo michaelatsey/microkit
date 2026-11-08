@@ -35,7 +35,7 @@ public sealed class InMemoryUnitOfWork : IUnitOfWork
     /// Records a discard by incrementing <see cref="DiscardCount"/>.
     /// </summary>
     /// <remarks>
-    /// There is no pending change set to abandon: <see cref="InMemoryRepository{TAggregate}"/>
+    /// There is no pending change set to abandon: <see cref="InMemoryRepository{TAggregate, TId}"/>
     /// applies writes to its store immediately and shares no state with this type. The double is
     /// therefore the no-op case ADR-005 describes for a provider that accumulates nothing — a
     /// counter, so a test can assert that a failed command discarded exactly once. Safe to call

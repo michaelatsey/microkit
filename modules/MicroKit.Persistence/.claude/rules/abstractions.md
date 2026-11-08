@@ -9,15 +9,13 @@ belong in Abstractions.
 
 ```csharp
 // ✅ Repository contracts
-IRepository<TAggregate>        // #196 phase 2: replaced by IRepository<TAggregate, TId> (D10)
-IReadRepository<TAggregate>    // empty marker — #196 phase 2 deletes it; the full contract is in Core (D8)
+IRepository<TAggregate, TId>   // the only write-side contract (#196 D10); IReadRepository is in Core (D8)
 
 // ✅ Unit of Work — the single commit boundary
 IUnitOfWork
 
-// ✅ Transaction contracts
+// ✅ Transaction contract
 ITransactionalContext
-ITransaction, ITransactionManager   // used nowhere — #196 phase 2 deletes them (D12)
 
 // ✅ Result contract
 IPagedResult<T>
@@ -44,14 +42,13 @@ PersistenceException
 ## Allowed package references in Abstractions
 
 ```xml
-<!-- cross-module, two-ItemGroup CIReleaseBuild pattern -->
+<!-- the only one — cross-module, two-ItemGroup CIReleaseBuild pattern -->
 <PackageReference Include="MicroKit.Domain" />
-<PackageReference Include="MicroKit.Result" />   <!-- removed by #196 D17 (phase 2) -->
 ```
 
-`MicroKit.Domain` is required for the `IAggregateRoot` constraint on the repository's generic
-parameters. `MicroKit.Result` is used by nothing but a `global using`; #196 D17 removes it in
-phase 2. No other non-BCL package reference is allowed in Abstractions.
+`MicroKit.Domain` is required for the `IAggregateRoot` and `IEntityId` constraints on the
+repository's generic parameters. `MicroKit.Result` is not referenced (#196 D17): nothing in
+Abstractions used it. No other non-BCL package reference is allowed in Abstractions.
 
 ## The minimality test
 

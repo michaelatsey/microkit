@@ -19,7 +19,7 @@ public sealed class IlCallScanTests
         typeof(MicroKit.Persistence.EntityFrameworkCore.PostgreSql.PostgreSqlEfCoreBuilderExtensions).Assembly,
         typeof(MicroKit.Persistence.EntityFrameworkCore.SqlServer.SqlServerEfCoreBuilderExtensions).Assembly,
         typeof(MicroKit.Persistence.Specifications.QueryOptionsOrderingExtensions).Assembly,
-        typeof(MicroKit.Persistence.Testing.InMemoryRepository<>).Assembly,
+        typeof(MicroKit.Persistence.Testing.InMemoryRepository<,>).Assembly,
     ];
 
     /// <summary>

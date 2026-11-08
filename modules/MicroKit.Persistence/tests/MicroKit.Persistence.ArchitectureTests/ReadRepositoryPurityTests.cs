@@ -19,13 +19,6 @@ public sealed class ReadRepositoryPurityTests
         }
     }
 
-    // NOTE 1: The Abstractions marker IReadRepository<T> is an empty interface with no methods.
-    [Fact]
-    public void IReadRepository_AbstractionsMarker_HasZeroDeclaredMethods()
-    {
-        typeof(MicroKit.Persistence.Abstractions.IReadRepository<>).GetMethods().Length.ShouldBe(0);
-    }
-
     // NOTE 1: Core's IReadRepository<T> must not declare any mutation methods.
     [Fact]
     public void IReadRepository_Core_HasNoMutationMethods()
@@ -39,7 +32,7 @@ public sealed class ReadRepositoryPurityTests
     [Fact]
     public void InMemoryRepository_ExposesNoIQueryable()
     {
-        ExposesIQueryable(typeof(MicroKit.Persistence.Testing.InMemoryRepository<>)).ShouldBeFalse();
+        ExposesIQueryable(typeof(MicroKit.Persistence.Testing.InMemoryRepository<,>)).ShouldBeFalse();
     }
 
     // NOTE 12: InMemoryReadRepository must not leak IQueryable on any public method.

@@ -3,7 +3,7 @@ using System.Reflection;
 namespace MicroKit.Persistence.Testing;
 
 /// <summary>
-/// Internal backing store shared by <see cref="InMemoryRepository{TAggregate}"/> and
+/// Internal backing store shared by <see cref="InMemoryRepository{TAggregate, TId}"/> and
 /// <see cref="InMemoryReadRepository{TAggregate}"/>. Encapsulates the dictionary, key
 /// extraction, and the in-memory query pipeline.
 /// </summary>
@@ -55,9 +55,14 @@ internal sealed class InMemoryStore<TAggregate>
         return Find(keys[0]);
     }
 
-    internal void Add(TAggregate item) => _data[_keySelector(item)] = item;
-
-    internal void Update(TAggregate item) => _data[_keySelector(item)] = item;
+    internal void AddNew(TAggregate item)
+    {
+        if (!_data.TryAdd(_keySelector(item), item))
+        {
+            throw new InvalidOperationException(
+                $"A '{typeof(TAggregate).Name}' with the identifier '{_keySelector(item)}' is already stored.");
+        }
+    }
 
     internal void Remove(TAggregate item) => _data.Remove(_keySelector(item));
 

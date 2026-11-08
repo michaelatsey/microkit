@@ -86,8 +86,9 @@ public static class QueryOptionsExtensions
 
     /// <summary>
     /// Returns a new <see cref="QueryOptions{TAggregate}"/> with EF Core change tracking
-    /// enabled. Use only when the loaded aggregate will be mutated and committed via
-    /// <c>IRepository&lt;TAggregate&gt;</c> within the same command handler.
+    /// enabled. Use only when the loaded aggregate will be mutated and committed by the
+    /// <c>IUnitOfWork</c> within the same command; the usual way to load an aggregate for
+    /// modification is <c>IRepository&lt;TAggregate, TId&gt;.FindAsync</c>.
     /// </summary>
     /// <typeparam name="TAggregate">The aggregate root type.</typeparam>
     /// <param name="opts">The source options to derive from.</param>
