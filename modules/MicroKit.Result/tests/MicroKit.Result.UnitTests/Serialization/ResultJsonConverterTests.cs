@@ -70,7 +70,7 @@ public sealed class ResultJsonConverterTests
     }
 
     [Fact]
-    public void Write_WhenFailureIsErrorCollection_WritesAggregateWithInnerErrors()
+    public void Write_WhenFailureIsErrorCollection_WritesTheErrorsOfItsCategory()
     {
         // Arrange
         var result = Result.Failure<int>(ErrorCollection.From(new NotFoundTestError(1), new OtherError()));
@@ -78,9 +78,9 @@ public sealed class ResultJsonConverterTests
         // Act
         var json = JsonSerializer.Serialize(result, Options);
 
-        // Assert
+        // Assert: #198 review, a default converter names what ToHttpResult names: the NotFound errors only
         json.ShouldBe(
-            """{"isSuccess":false,"error":{"code":"MULTI.ERROR","message":"Item 1 not found; Other error","category":"NotFound","severity":"Error","errors":[{"code":"TEST.NOT_FOUND","message":"Item 1 not found","category":"NotFound","severity":"Error"},{"code":"TEST.OTHER","message":"Other error","category":"Conflict","severity":"Error"}]}}""");
+            """{"isSuccess":false,"error":{"code":"MULTI.ERROR","message":"Item 1 not found","category":"NotFound","severity":"Error","errors":[{"code":"TEST.NOT_FOUND","message":"Item 1 not found","category":"NotFound","severity":"Error"}]}}""");
     }
 
     [Fact]

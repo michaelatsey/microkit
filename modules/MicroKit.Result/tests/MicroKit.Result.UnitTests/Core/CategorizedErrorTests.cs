@@ -254,4 +254,52 @@ public sealed class CategorizedErrorTests
         Should.Throw<ArgumentException>(() => new CategorizedError(ErrorCode.From("A.B"), " ", ErrorCategory.NotFound));
         Should.Throw<ArgumentOutOfRangeException>(() => new CategorizedError(ErrorCode.From("A.B"), "Message.", (ErrorCategory)99));
     }
+
+    // #198 PR body: a code set through with is checked as the constructor checks it
+
+    public static TheoryData<string> InvalidCodes() => new() { "default", "empty", "whitespace" };
+
+    private static ErrorCode InvalidCode(string kind) => kind switch
+    {
+        "default" => default,
+        "empty" => new ErrorCode(string.Empty),
+        "whitespace" => new ErrorCode("   "),
+        _ => throw new ArgumentOutOfRangeException(nameof(kind)),
+    };
+
+    [Theory]
+    [MemberData(nameof(InvalidCodes))]
+    public void With_WhenCodeIsInvalidThroughTheSubtype_ThrowsArgumentException(string kind)
+    {
+        // Arrange
+        var error = Error.NotFound(ErrorCode.From("ORDER.NOT_FOUND"), "Order 7 does not exist.");
+
+        // Act + Assert
+        Should.Throw<ArgumentException>(() => error with { Code = InvalidCode(kind) });
+    }
+
+    [Theory]
+    [MemberData(nameof(InvalidCodes))]
+    public void With_WhenCodeIsInvalidThroughError_ThrowsArgumentException(string kind)
+    {
+        // Arrange: the with expression binds to Error.Code
+        Error error = Error.NotFound(ErrorCode.From("ORDER.NOT_FOUND"), "Order 7 does not exist.");
+
+        // Act + Assert
+        Should.Throw<ArgumentException>(() => error with { Code = InvalidCode(kind) });
+    }
+
+    [Fact]
+    public void With_WhenCodeIsValid_KeepsTheNewCode()
+    {
+        // Arrange
+        var error = Error.NotFound(ErrorCode.From("ORDER.NOT_FOUND"), "Order 7 does not exist.");
+
+        // Act
+        var renamed = error with { Code = ErrorCode.From("ORDER.GONE") };
+
+        // Assert
+        renamed.Code.ShouldBe(ErrorCode.From("ORDER.GONE"));
+        renamed.Category.ShouldBe(ErrorCategory.NotFound);
+    }
 }

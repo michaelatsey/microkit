@@ -688,22 +688,19 @@ public sealed class CancellationOverloadTests
     }
 
     [Fact]
-    public async Task MapErrorAsync_WithToken_WhenDefault_ReturnsDefaultWithoutCallingMapper()
+    public async Task MapErrorAsync_WithToken_WhenDefault_ThrowsResultExceptionWithoutCallingMapper()
     {
         // Arrange
         var called = false;
         Result<int> result = default;
 
-        // Act
-        Result<int> mapped = await result.MapErrorAsync((e, _) =>
+        // Act + Assert
+        Func<Task<Result<int>>> act = async () => await result.MapErrorAsync((e, _) =>
         {
             called = true;
             return ValueTask.FromResult(e);
         });
-
-        // Assert
-        mapped.IsSuccess.ShouldBeFalse();
-        mapped.IsFailure.ShouldBeFalse();
+        await Should.ThrowAsync<ResultException>(act);
         called.ShouldBeFalse();
     }
 
@@ -759,22 +756,19 @@ public sealed class CancellationOverloadTests
     }
 
     [Fact]
-    public async Task CompensateAsync_WithToken_WhenDefault_ReturnsDefaultWithoutCallingFallback()
+    public async Task CompensateAsync_WithToken_WhenDefault_ThrowsResultExceptionWithoutCallingFallback()
     {
         // Arrange
         var called = false;
         Result<int> result = default;
 
-        // Act
-        Result<int> compensated = await result.CompensateAsync((_, _) =>
+        // Act + Assert
+        Func<Task<Result<int>>> act = async () => await result.CompensateAsync((_, _) =>
         {
             called = true;
             return ValueTask.FromResult(Result.Success(0));
         });
-
-        // Assert
-        compensated.IsSuccess.ShouldBeFalse();
-        compensated.IsFailure.ShouldBeFalse();
+        await Should.ThrowAsync<ResultException>(act);
         called.ShouldBeFalse();
     }
 

@@ -11,12 +11,12 @@ MicroKit.Result makes the outcome of an operation explicit in .NET 10. A method 
 The library commits to five guarantees:
 
 - Correctness: an invalid result is never read as a success. A `default` result is neither a success nor a failure, and reading it throws.
-- Security: internal details never reach a client by default. The library never turns an exception's text into an error message, and no response writes `Metadata` by default.
+- Security: internal details never reach a client by default. The library never turns an exception's text into an error message, a server error (5xx) answers a generic `detail` instead of its message, a result returned as is never writes a system fault's message, and no response writes `Metadata` by default.
 - Predictability: synchronous and asynchronous operations behave alike, with the same argument checks and the same rails.
 - Interoperability: HTTP concerns stay out of the core. `MicroKit.Result` has no dependency; `MicroKit.Result.AspNetCore` maps error categories to statuses.
 - Performance: every performance claim is measured, as below.
 
-Both runtime packages are trim and NativeAOT compatible, checked by the trim and AOT analyzers. The exception is the reflection-based JSON converter factory, annotated `[RequiresUnreferencedCode]` and `[RequiresDynamicCode]`.
+Both runtime packages are trim and NativeAOT compatible, checked by the trim and AOT analyzers and by a test project that serializes a `Result<T>` with reflection disabled. The exception is the reflection-based JSON converter factory, annotated `[RequiresUnreferencedCode]` and `[RequiresDynamicCode]`; under NativeAOT, register `ResultJsonConverter<T>` next to a source-generated context.
 
 ### Performance
 

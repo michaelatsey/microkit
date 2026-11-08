@@ -22,17 +22,21 @@ public static class ResultProblemDetailsFactory
     /// there. Otherwise the result is a <see cref="ProblemDetails"/>.
     /// </para>
     /// <para>
-    /// <see cref="ProblemDetails.Detail"/> is <see cref="IError.Message"/>, which the error contract keeps safe for
-    /// a client; <see cref="IError.Metadata"/> is never emitted. The extension <c>errorCode</c> carries
-    /// <see cref="IError.Code"/>; for an <see cref="ErrorCollection"/>, the extension <c>errorCodes</c> lists the
-    /// codes of its errors, nested collections flattened, in order.
+    /// For a fault of the system (<see cref="ErrorCategoryExtensions.IsSystemFault"/>: <see cref="ErrorCategory.Technical"/>,
+    /// <see cref="ErrorCategory.External"/>, <see cref="ErrorCategory.Unavailable"/>, <see cref="ErrorCategory.NotSupported"/>,
+    /// <see cref="ErrorCategory.Timeout"/>, any undefined value: the categories <see cref="ToStatusCode"/> maps to 5xx),
+    /// <see cref="ProblemDetails.Detail"/> is <see cref="ErrorCategoryExtensions.SystemFaultMessage"/>, whatever the error:
+    /// its message may describe the system, and it never reaches the client. For any other category, it is
+    /// <see cref="IError.Message"/>, which the error contract keeps safe for a client. <see cref="IError.Metadata"/> is never emitted. The extension
+    /// <c>errorCode</c> carries <see cref="IError.Code"/>; for an <see cref="ErrorCollection"/>, the extension
+    /// <c>errorCodes</c> lists the codes of its errors, nested collections flattened, in order.
     /// </para>
     /// <para>
     /// A response of any other category — a server, access or resource error — says nothing of the request's input,
     /// whatever errors a collection also holds: it carries no field errors, and for an <see cref="ErrorCollection"/>,
     /// <see cref="ProblemDetails.Detail"/> and <c>errorCodes</c> are built only from its errors (nested collections
-    /// flattened, in order) whose category is the collection's: <see cref="ProblemDetails.Detail"/> joins their
-    /// messages with <c>"; "</c>. An unauthenticated caller, for one, receives no validation message, code or
+    /// flattened, in order) whose category is the collection's: unless it is a fault of the system, <see cref="ProblemDetails.Detail"/> joins
+    /// their messages with <c>"; "</c>. An unauthenticated caller, for one, receives no validation message, code or
     /// property name.
     /// </para>
     /// <para>
@@ -50,16 +54,20 @@ public static class ResultProblemDetailsFactory
         var statusCode = ToStatusCode(error.Category);
         // The request's input is described only by a Validation or BusinessRule response: an access, resource or
         // server response names neither field errors nor any error outside its own category.
-        var describesInput = error.Category is ErrorCategory.Validation or ErrorCategory.BusinessRule;
+        var describesInput = error.Category.DescribesInput(); // the core's definition, which its JSON converters share
         var fieldErrors = describesInput ? GroupValidationErrors(error) : null;
 
         var problemDetails = fieldErrors is null
             ? new ProblemDetails()
             : new HttpValidationProblemDetails(fieldErrors);
 
+        // A fault of the system (the core's definition, the categories ToStatusCode maps to 5xx) may describe the
+        // system in its message: the client reads the core's generic text, and the code alone identifies the error.
+        var isServerFault = error.Category.IsSystemFault();
+
         problemDetails.Status = statusCode;
         problemDetails.Title = GetTitle(error.Category);
-        problemDetails.Detail = error.Message;
+        problemDetails.Detail = isServerFault ? ErrorCategoryExtensions.SystemFaultMessage : error.Message;
         problemDetails.Extensions["errorCode"] = error.Code.Value;
         if (error is ErrorCollection collection)
         {
@@ -68,7 +76,8 @@ public static class ResultProblemDetailsFactory
             {
                 var category = collection.Category;
                 named = named.Where(e => e.Category == category).ToArray(); // never empty: the category is a leaf's
-                problemDetails.Detail = string.Join("; ", named.Select(e => e.Message));
+                if (!isServerFault)
+                    problemDetails.Detail = string.Join("; ", named.Select(e => e.Message));
             }
 
             problemDetails.Extensions["errorCodes"] = named.Select(e => e.Code.Value).ToArray();

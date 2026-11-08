@@ -3,8 +3,8 @@ using MicroKit.Result.UnitTests.TestSupport;
 namespace MicroKit.Result.UnitTests.Extensions;
 
 // ADR-RESULT-001 D9: the non-generic Result has the sync operations Result<T> has, and Bind goes from a value to a
-// command. A default Result throws ResultException where Result<T> does (Map, Bind, Ensure); MapError and Compensate
-// return it unchanged, as on Result<T>.
+// command. A default Result throws ResultException where Result<T> does (Map, Bind, Ensure, MapError, Compensate),
+// without calling the delegate.
 public sealed class NonGenericResultExtensionsTests
 {
     #region Map
@@ -494,23 +494,18 @@ public sealed class NonGenericResultExtensionsTests
     }
 
     [Fact]
-    public void MapError_WhenDefault_ReturnsDefaultWithoutCallingMapper()
+    public void MapError_WhenDefault_ThrowsResultExceptionWithoutCallingMapper()
     {
         // Arrange
         var called = false;
         Result result = default;
 
-        // Act
-        Result mapped = result.MapError(e =>
+        // Act + Assert
+        Should.Throw<ResultException>(() => result.MapError(e =>
         {
             called = true;
             return e;
-        });
-
-        // Assert
-        mapped.IsSuccess.ShouldBeFalse();
-        mapped.IsFailure.ShouldBeFalse();
-        mapped.ShouldBe(default(Result));
+        }));
         called.ShouldBeFalse();
     }
 
@@ -595,23 +590,18 @@ public sealed class NonGenericResultExtensionsTests
     }
 
     [Fact]
-    public void Compensate_WhenDefault_ReturnsDefaultWithoutCallingFallback()
+    public void Compensate_WhenDefault_ThrowsResultExceptionWithoutCallingFallback()
     {
         // Arrange
         var called = false;
         Result result = default;
 
-        // Act
-        Result compensated = result.Compensate(_ =>
+        // Act + Assert
+        Should.Throw<ResultException>(() => result.Compensate(_ =>
         {
             called = true;
             return Result.Success();
-        });
-
-        // Assert
-        compensated.IsSuccess.ShouldBeFalse();
-        compensated.IsFailure.ShouldBeFalse();
-        compensated.ShouldBe(default(Result));
+        }));
         called.ShouldBeFalse();
     }
 

@@ -10,7 +10,8 @@ namespace MicroKit.Result;
 /// Result failed = Result.Failure(new MyError());
 /// </code>
 /// </example>
-// The converter is reflection-free: a Result returned by an endpoint never serializes Metadata (ADR-RESULT-001 D12).
+// The converter is reflection-free: a Result returned by an endpoint never serializes Metadata (ADR-RESULT-001 D12),
+// nor the message of a fault of the system.
 [System.Text.Json.Serialization.JsonConverter(typeof(Serialization.ResultJsonConverter))]
 public readonly struct Result : IEquatable<Result>, IResultMarker
 {
@@ -101,17 +102,21 @@ public readonly struct Result : IEquatable<Result>, IResultMarker
     /// </remarks>
     /// <param name="action">The action to execute.</param>
     /// <returns>The result from the action, or a failure wrapping the caught exception.</returns>
+    /// <exception cref="ResultException">Thrown when the action returns an uninitialized (<c>default</c>) result.</exception>
     public static Result Try(Func<Result> action)
     {
         ArgumentNullException.ThrowIfNull(action);
+        Result result;
         try
         {
-            return action();
+            result = action();
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
             return Failure(new ExceptionError(ex));
         }
+
+        return EnsureInitialized(result); // outside the catch: a default result is the delegate's contract violation
     }
 
     /// <summary>
@@ -122,18 +127,22 @@ public readonly struct Result : IEquatable<Result>, IResultMarker
     /// <param name="exceptionMapper">Maps caught exceptions to errors; it must not return <see langword="null"/>.</param>
     /// <returns>The result from the action, or a failure wrapping the mapped error.</returns>
     /// <exception cref="ArgumentNullException">Thrown when <paramref name="exceptionMapper"/> returns <see langword="null"/>.</exception>
+    /// <exception cref="ResultException">Thrown when the action returns an uninitialized (<c>default</c>) result; the mapper is not called.</exception>
     public static Result Try(Func<Result> action, Func<Exception, IError> exceptionMapper)
     {
         ArgumentNullException.ThrowIfNull(action);
         ArgumentNullException.ThrowIfNull(exceptionMapper);
+        Result result;
         try
         {
-            return action();
+            result = action();
         }
         catch (Exception ex)
         {
             return Failure(ThrowHelper.EnsureMapped(exceptionMapper(ex), ex));
         }
+
+        return EnsureInitialized(result); // outside the catch: a default result is the delegate's contract violation
     }
 
     /// <summary>
@@ -148,6 +157,7 @@ public readonly struct Result : IEquatable<Result>, IResultMarker
     /// </remarks>
     /// <param name="action">The async action to execute.</param>
     /// <returns>The result from the action, or a failure wrapping the caught exception.</returns>
+    /// <exception cref="ResultException">Thrown, when awaited, when the action returns an uninitialized (<c>default</c>) result.</exception>
     public static ValueTask<Result> TryAsync(Func<Task<Result>> action)
     {
         ArgumentNullException.ThrowIfNull(action);
@@ -155,14 +165,17 @@ public readonly struct Result : IEquatable<Result>, IResultMarker
 
         static async ValueTask<Result> TryCoreAsync(Func<Task<Result>> action)
         {
+            Result result;
             try
             {
-                return await action().ConfigureAwait(false);
+                result = await action().ConfigureAwait(false);
             }
             catch (Exception ex) when (ex is not OperationCanceledException)
             {
                 return Failure(new ExceptionError(ex));
             }
+
+            return EnsureInitialized(result); // outside the catch: a default result is the delegate's contract violation
         }
     }
 
@@ -177,6 +190,7 @@ public readonly struct Result : IEquatable<Result>, IResultMarker
     /// <param name="exceptionMapper">Maps caught exceptions to errors; it must not return <see langword="null"/>.</param>
     /// <returns>The result from the action, or a failure wrapping the mapped error.</returns>
     /// <exception cref="ArgumentNullException">Thrown when <paramref name="exceptionMapper"/> returns <see langword="null"/>.</exception>
+    /// <exception cref="ResultException">Thrown, when awaited, when the action returns an uninitialized (<c>default</c>) result; the mapper is not called.</exception>
     public static ValueTask<Result> TryAsync(
         Func<Task<Result>> action,
         Func<Exception, IError> exceptionMapper)
@@ -187,14 +201,17 @@ public readonly struct Result : IEquatable<Result>, IResultMarker
 
         static async ValueTask<Result> TryCoreAsync(Func<Task<Result>> action, Func<Exception, IError> exceptionMapper)
         {
+            Result result;
             try
             {
-                return await action().ConfigureAwait(false);
+                result = await action().ConfigureAwait(false);
             }
             catch (Exception ex)
             {
                 return Failure(ThrowHelper.EnsureMapped(exceptionMapper(ex), ex));
             }
+
+            return EnsureInitialized(result); // outside the catch: a default result is the delegate's contract violation
         }
     }
 
@@ -317,6 +334,13 @@ public readonly struct Result : IEquatable<Result>, IResultMarker
         TagFailure => $"Result {{ Failure: [{_error!.Code}] {_error.Message} }}",
         _ => "Result { Uninitialized }",
     };
+
+    private static Result EnsureInitialized(Result result)
+    {
+        if (result._tag == TagUninitialized)
+            ThrowHelper.ThrowDelegateReturnedUninitialized();
+        return result;
+    }
 
     /// <summary>Determines whether two results are equal.</summary>
     public static bool operator ==(Result left, Result right) => left.Equals(right);

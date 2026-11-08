@@ -148,14 +148,10 @@ public sealed class ResultTests
     }
 
     [Fact]
-    public void Try_WhenActionReturnsDefault_ReturnsUninitializedResult()
+    public void Try_WhenActionReturnsDefault_ThrowsResultException()
     {
-        // Act
-        Result result = Result.Try(() => default);
-
-        // Assert
-        result.IsSuccess.ShouldBeFalse();
-        result.IsFailure.ShouldBeFalse();
+        // Act + Assert
+        Should.Throw<ResultException>(() => Result.Try(() => default(Result)));
     }
 
     [Fact]
@@ -243,6 +239,21 @@ public sealed class ResultTests
         // Assert
         result.IsFailure.ShouldBeTrue();
         result.Error.ShouldBeSameAs(error);
+    }
+
+    [Fact]
+    public void Try_WithMapper_WhenActionReturnsDefault_ThrowsResultExceptionWithoutCallingMapper()
+    {
+        // Arrange
+        var mapped = new List<Exception>();
+
+        // Act + Assert
+        Should.Throw<ResultException>(() => Result.Try(() => default(Result), ex =>
+        {
+            mapped.Add(ex);
+            return new TestError();
+        }));
+        mapped.ShouldBeEmpty();
     }
 
     [Fact]
@@ -367,6 +378,28 @@ public sealed class ResultTests
         result.Error.ShouldBeSameAs(error);
     }
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task TryAsync_WhenActionReturnsDefault_ThrowsResultException(bool yield)
+    {
+        // Act + Assert
+        await Should.ThrowAsync<ResultException>(async () => await Result.TryAsync(async () =>
+        {
+            if (yield)
+                await Task.Yield();
+            return default(Result);
+        }));
+    }
+
+    [Fact]
+    public async Task TryAsync_WhenActionReturnsCompletedDefault_ThrowsResultException()
+    {
+        // Act + Assert
+        await Should.ThrowAsync<ResultException>(async () =>
+            await Result.TryAsync(() => Task.FromResult(default(Result))));
+    }
+
     [Fact]
     public async Task TryAsync_WhenActionThrowsAfterAwait_ReturnsTechnicalFailure()
     {
@@ -475,6 +508,47 @@ public sealed class ResultTests
         // Assert
         result.IsSuccess.ShouldBeTrue();
         called.ShouldBeFalse();
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task TryAsync_WithMapper_WhenActionReturnsDefault_ThrowsResultExceptionWithoutCallingMapper(bool yield)
+    {
+        // Arrange
+        var mapped = new List<Exception>();
+
+        // Act + Assert
+        await Should.ThrowAsync<ResultException>(async () => await Result.TryAsync(
+            async () =>
+            {
+                if (yield)
+                    await Task.Yield();
+                return default(Result);
+            },
+            ex =>
+            {
+                mapped.Add(ex);
+                return new TestError();
+            }));
+        mapped.ShouldBeEmpty();
+    }
+
+    [Fact]
+    public async Task TryAsync_WithMapper_WhenActionReturnsCompletedDefault_ThrowsResultExceptionWithoutCallingMapper()
+    {
+        // Arrange
+        var mapped = new List<Exception>();
+
+        // Act + Assert
+        await Should.ThrowAsync<ResultException>(async () => await Result.TryAsync(
+            () => Task.FromResult(default(Result)),
+            ex =>
+            {
+                mapped.Add(ex);
+                return new TestError();
+            }));
+        mapped.ShouldBeEmpty();
     }
 
     [Fact]

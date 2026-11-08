@@ -1,3 +1,5 @@
+using System.Globalization;
+
 namespace MicroKit.Result.UnitTests.Validation;
 
 public sealed class ValidationErrorTests
@@ -172,6 +174,46 @@ public sealed class ValidationErrorTests
     }
 
     [Fact]
+    public void OutOfRange_WhenMinAndMaxUnderFrenchCulture_FormatsBoundsWithInvariantCulture()
+    {
+        // Arrange
+        const decimal min = 1.5m;
+        const decimal max = 2.5m;
+
+        // Act
+        var error = CreateInCulture("fr-FR", () => ValidationError.OutOfRange("Price", min, max));
+
+        // Assert
+        error.Message.ShouldBe("Price must be between 1.5 and 2.5.");
+    }
+
+    [Fact]
+    public void OutOfRange_WhenOnlyMinUnderFrenchCulture_FormatsBoundWithInvariantCulture()
+    {
+        // Arrange
+        const double min = 1.5;
+
+        // Act
+        var error = CreateInCulture("fr-FR", () => ValidationError.OutOfRange("Price", min: min));
+
+        // Assert
+        error.Message.ShouldBe("Price must be greater than or equal to 1.5.");
+    }
+
+    [Fact]
+    public void OutOfRange_WhenOnlyMaxUnderFrenchCulture_FormatsBoundWithInvariantCulture()
+    {
+        // Arrange
+        const double max = 2.5;
+
+        // Act
+        var error = CreateInCulture("fr-FR", () => ValidationError.OutOfRange("Price", max: max));
+
+        // Assert
+        error.Message.ShouldBe("Price must be less than or equal to 2.5.");
+    }
+
+    [Fact]
     public void InvalidFormat_WhenNoHint_BuildsInvalidFormatMessage()
     {
         // Arrange + Act
@@ -314,5 +356,162 @@ public sealed class ValidationErrorTests
 
         // Assert
         equal.ShouldBeFalse();
+    }
+
+    [Fact]
+    public void With_WhenPropertyNameChanged_RebuildsCodeFromNewPropertyName()
+    {
+        // Arrange
+        var original = new ValidationError("Email", "m");
+
+        // Act
+        var changed = original with { PropertyName = "Phone" };
+
+        // Assert
+        changed.PropertyName.ShouldBe("Phone");
+        changed.Code.ShouldBe(ErrorCode.From("VALIDATION.PHONE"));
+    }
+
+    [Fact]
+    public void With_WhenPropertyNameChanged_EqualsErrorBuiltWithNewPropertyName()
+    {
+        // Arrange
+        var original = new ValidationError("Email", "m");
+        var expected = new ValidationError("Phone", "m");
+
+        // Act
+        var changed = original with { PropertyName = "Phone" };
+
+        // Assert
+        changed.ShouldBe(expected);
+        (changed == expected).ShouldBeTrue();
+        changed.GetHashCode().ShouldBe(expected.GetHashCode());
+    }
+
+    [Fact]
+    public void With_WhenPropertyNameChanged_LeavesOriginalUnchanged()
+    {
+        // Arrange
+        var original = new ValidationError("Email", "m");
+
+        // Act
+        var changed = original with { PropertyName = "Phone" };
+
+        // Assert
+        changed.ShouldNotBeSameAs(original);
+        original.PropertyName.ShouldBe("Email");
+        original.Code.ShouldBe(ErrorCode.From("VALIDATION.EMAIL"));
+    }
+
+    [Theory]
+    [InlineData(" ")]
+    [InlineData("")]
+    public void With_WhenPropertyNameIsBlank_ThrowsArgumentException(string propertyName)
+    {
+        // Arrange
+        var original = new ValidationError("Email", "m");
+
+        // Act + Assert
+        Should.Throw<ArgumentException>(() => original with { PropertyName = propertyName });
+    }
+
+    [Fact]
+    public void With_WhenPropertyNameIsNull_ThrowsArgumentException()
+    {
+        // Arrange
+        var original = new ValidationError("Email", "m");
+
+        // Act + Assert
+        Should.Throw<ArgumentException>(() => original with { PropertyName = null! });
+    }
+
+    private static ValidationError CreateInCulture(string cultureName, Func<ValidationError> create)
+    {
+        var previous = CultureInfo.CurrentCulture;
+        try
+        {
+            CultureInfo.CurrentCulture = CultureInfo.GetCultureInfo(cultureName);
+            return create();
+        }
+        finally
+        {
+            CultureInfo.CurrentCulture = previous;
+        }
+    }
+
+    [Fact]
+    public void With_WhenCodeChangedToAnotherValue_ThrowsArgumentException()
+    {
+        // Arrange
+        var error = new ValidationError("Email", "Email is required.");
+
+        // Act + Assert
+        Should.Throw<ArgumentException>(() => error with { Code = ErrorCode.From("OTHER.CODE") });
+    }
+
+    [Fact]
+    public void With_WhenCodeChangedThroughTheErrorType_ThrowsArgumentException()
+    {
+        // Arrange: the with expression binds to Error.Code
+        Error error = new ValidationError("Email", "Email is required.");
+
+        // Act + Assert
+        Should.Throw<ArgumentException>(() => error with { Code = ErrorCode.From("OTHER.CODE") });
+    }
+
+    [Fact]
+    public void With_WhenCodeSetToTheCodeOfItsPropertyName_KeepsTheError()
+    {
+        // Arrange
+        var error = new ValidationError("Email", "Email is required.");
+
+        // Act
+        var same = error with { Code = ErrorCode.From("VALIDATION.EMAIL") };
+
+        // Assert
+        same.ShouldBe(error);
+    }
+
+    [Fact]
+    public void With_WhenCodeIsSetAfterItsNewPropertyName_KeepsBoth()
+    {
+        // Arrange
+        var error = new ValidationError("Email", "Email is required.");
+
+        // Act
+        var renamed = error with { PropertyName = "Name", Code = ErrorCode.From("VALIDATION.NAME") };
+
+        // Assert
+        renamed.Code.ShouldBe(ErrorCode.From("VALIDATION.NAME"));
+    }
+
+    [Fact]
+    public void With_WhenCodeIsSetBeforeItsNewPropertyName_ThrowsArgumentException()
+    {
+        // Arrange: members of a with expression are set in the order they are written; set PropertyName alone
+        var error = new ValidationError("Email", "Email is required.");
+
+        // Act + Assert
+        Should.Throw<ArgumentException>(() => error with { Code = ErrorCode.From("VALIDATION.NAME"), PropertyName = "Name" });
+    }
+
+    [Fact]
+    public void With_WhenCodeIsDefaultThroughTheSubtype_ThrowsArgumentException()
+    {
+        // Arrange
+        var error = new ValidationError("Email", "Email is required.");
+
+        // Act + Assert
+        Should.Throw<ArgumentException>(() => error with { Code = default });
+    }
+
+    [Fact]
+    public void With_WhenCodeIsDefaultThroughError_ThrowsArgumentException()
+    {
+        // Arrange
+        Error error = new ValidationError("Email", "Email is required.");
+
+        // Act + Assert
+        Should.Throw<ArgumentException>(() => error with { Code = default });
     }
 }

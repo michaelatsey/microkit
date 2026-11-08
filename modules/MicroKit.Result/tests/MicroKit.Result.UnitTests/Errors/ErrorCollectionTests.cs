@@ -174,17 +174,57 @@ public sealed class ErrorCollectionTests
     }
 
     [Fact]
-    public void Severity_WhenAllErrorsAreWarnings_IsError()
+    public void Severity_WhenAllErrorsAreWarnings_IsWarning()
     {
         // Arrange
-        // The aggregate severity starts at Error: only a more severe error raises it.
+        // The aggregate severity is the highest severity of its errors.
         var collection = ErrorCollection.From(ValidationError.Required("Name"), ValidationError.Required("Email"));
 
         // Act
         var severity = collection.Severity;
 
         // Assert
-        severity.ShouldBe(ErrorSeverity.Error);
+        severity.ShouldBe(ErrorSeverity.Warning);
+    }
+
+    [Fact]
+    public void Severity_WhenAllErrorsAreInformation_IsInformation()
+    {
+        // Arrange
+        var collection = ErrorCollection.From(new InformationTestError("first"), new InformationTestError("second"));
+
+        // Act
+        var severity = collection.Severity;
+
+        // Assert
+        severity.ShouldBe(ErrorSeverity.Information);
+    }
+
+    [Fact]
+    public void Severity_WhenInformationAndWarning_IsWarning()
+    {
+        // Arrange
+        var collection = ErrorCollection.From(new InformationTestError(), ValidationError.Required("Name"));
+
+        // Act
+        var severity = collection.Severity;
+
+        // Assert
+        severity.ShouldBe(ErrorSeverity.Warning);
+    }
+
+    [Fact]
+    public void Severity_WhenNestedCollectionOfWarnings_IsWarning()
+    {
+        // Arrange
+        var inner = ErrorCollection.From(ValidationError.Required("Name"), ValidationError.Required("Email"));
+        var collection = ErrorCollection.From(inner, ValidationError.Required("Phone"));
+
+        // Act
+        var severity = collection.Severity;
+
+        // Assert
+        severity.ShouldBe(ErrorSeverity.Warning);
     }
 
     [Fact]

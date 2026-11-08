@@ -1,3 +1,5 @@
+using System.Collections.Immutable;
+
 namespace MicroKit.Result.UnitTests.Errors;
 
 public sealed class ErrorMetadataTests
@@ -104,5 +106,61 @@ public sealed class ErrorMetadataTests
 
         // Act + Assert
         Should.Throw<ArgumentNullException>(() => ErrorMetadata.Create(pair, pair));
+    }
+
+    [Fact]
+    public void Create_WhenSinglePair_ReturnsImmutableDictionary()
+    {
+        // Act
+        var metadata = ErrorMetadata.Create("userId", 42);
+
+        // Assert
+        metadata.ShouldBeOfType<ImmutableDictionary<string, object?>>();
+    }
+
+    [Fact]
+    public void Create_WhenSinglePairCastToMutableDictionary_RejectsWrite()
+    {
+        // Arrange
+        var metadata = ErrorMetadata.Create("userId", 42);
+        var writable = (IDictionary<string, object?>)metadata;
+
+        // Act + Assert
+        Should.Throw<NotSupportedException>(() =>
+        {
+            writable["other"] = 1;
+        });
+        metadata.Count.ShouldBe(1);
+    }
+
+    [Fact]
+    public void Create_WhenSeveralPairs_ReturnsImmutableDictionary()
+    {
+        // Arrange
+        var first = new KeyValuePair<string, object?>("a", 1);
+        var second = new KeyValuePair<string, object?>("b", "two");
+
+        // Act
+        var metadata = ErrorMetadata.Create(first, second);
+
+        // Assert
+        metadata.ShouldBeOfType<ImmutableDictionary<string, object?>>();
+    }
+
+    [Fact]
+    public void Create_WhenSeveralPairsCastToMutableDictionary_RejectsWrite()
+    {
+        // Arrange
+        var first = new KeyValuePair<string, object?>("a", 1);
+        var second = new KeyValuePair<string, object?>("b", "two");
+        var metadata = ErrorMetadata.Create(first, second);
+        var writable = (IDictionary<string, object?>)metadata;
+
+        // Act + Assert
+        Should.Throw<NotSupportedException>(() =>
+        {
+            writable["other"] = 1;
+        });
+        metadata.Count.ShouldBe(2);
     }
 }

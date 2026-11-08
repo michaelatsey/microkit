@@ -72,7 +72,7 @@ public sealed record {ErrorName}({Fields})
 ## Règles appliquées automatiquement
 1. `sealed record` — pas d'héritage non contrôlé
 2. ErrorCode au format `DOMAIN.ENTITY.ACTION` en SCREAMING_SNAKE_CASE
-3. Message sans danger pour le client : il part dans `ProblemDetails.Detail`. Jamais le texte d'une exception, ni un détail interne (requête, chemin, serveur) ; ceux-là vont dans le log, jamais dans le message ni dans un champ de l'erreur. Une erreur `Technical` porte un message générique
+3. Message sans danger pour le client : il part dans `ProblemDetails.Detail` pour un statut 4xx (pour un 5xx, `Detail` porte un texte générique). Jamais le texte d'une exception, ni un détail interne (requête, chemin, serveur) ; ceux-là vont dans le log, jamais dans le message ni dans un champ de l'erreur. Une erreur `Technical` porte un message générique
 4. Category cohérente avec le nom (`…NotFoundError` → `NotFound`, `…ForbiddenError` → `Forbidden`, `…TimeoutError` → `Timeout`)
 5. XML docs générés
 6. Placement dans le bon namespace/dossier

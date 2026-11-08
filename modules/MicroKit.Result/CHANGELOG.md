@@ -82,7 +82,7 @@ Hardening before stable (#184). Breaking changes ship outright on `preview.*` (A
   mixing two `ToHttpResult()` types, no longer compiles. Declare the lambda's return type, or nest the union
   (`Results<BadRequest, Results<Ok<T>, ProblemHttpResult>>`). A test that casts the value to
   `IStatusCodeHttpResult` or tests `is ProblemHttpResult` reads `.Result` first.
-- With `includeMetadata: true`, metadata values come back as JSON primitives: `TryGetMetadata<int>` after a
+- With `ResultJsonView.Full`, metadata values come back as JSON primitives: `TryGetMetadata<int>` after a
   round trip reads a `long`, `TryGetMetadata<Guid>` a `string`.
 - `Result<string> r = null;` and `return null;` in a method returning a result no longer compile (CS0037):
   the conversions from `Error` and `ErrorCollection` both accept `null`. They used to give a null success.
@@ -117,11 +117,76 @@ Hardening before stable (#184). Breaking changes ship outright on `preview.*` (A
 - `ProblemDetails.Type` is the section ASP.NET Core knows for the status (RFC 9110; RFC 4918 for 422), absent
   for 429 and 499, instead of a link to httpstatuses.io.
 - JSON: the error object adds `severity`, `propertyName` and the `errors` of a collection; `metadata` only
-  with `new ResultJsonConverterFactory(includeMetadata: true)`. Reading returns an `ErrorCollection`, a
+  with `new ResultJsonConverterFactory(ResultJsonView.Full)`. Reading returns an `ErrorCollection`, a
   public `DeserializedValidationError` or `DeserializedError`. Writing a `default` result throws
   `JsonException`.
 - The non-generic `Result` has a converter, `ResultJsonConverter`, carried by the type: returned as is, it
   serializes as `{"isSuccess":…}` without `metadata`. The factory converts `Result` too.
+
+### Changed (breaking, #195 — what #184 left open)
+- `ResultProblemDetailsFactory.CreateProblemDetails` / `ToHttpResult()`: from status 500 on (`Technical`,
+  `External`, `Unavailable`, `NotSupported`, `Timeout`, undefined values), `detail` is the generic
+  `"The server could not complete the request."`, never the error's `Message`, collections included;
+  `errorCode` and `errorCodes` are kept. 4xx responses keep the message.
+- `Result.Try` / `TryAsync` throw `ResultException` when the delegate returns a `default` result, outside their
+  `catch` (the mapper never sees it). `MapError`, `Compensate` and every async form throw `ResultException` on a
+  `default` result without calling their delegate, instead of returning it; the async forms when awaited.
+- `GetValueOrThrow(factory)` throws `InvalidOperationException` when the factory returns `null`, instead of a
+  bare `NullReferenceException`.
+- `Select`, `SelectMany` and `Where` report their own parameter names (`selector`, `errorOnFalse`) in
+  `ArgumentNullException.ParamName`.
+- `ErrorCollection.Severity` is the highest severity of its errors: a collection of warnings is a `Warning`,
+  no longer an `Error`.
+- `ErrorMetadata.Create` returns an `ImmutableDictionary` (the return type stays
+  `IReadOnlyDictionary<string, object?>`): a cast no longer lets a caller mutate an error. Its keys no longer
+  enumerate in insertion order.
+- `ValidationError`: `with { PropertyName = … }` recomputes `Code` (`VALIDATION.<NAME>`) and validates the name.
+  `OutOfRange` formats its bounds with the invariant culture.
+- `DeserializedError` and `DeserializedValidationError` compare `Metadata` by content (a `JsonElement` by its
+  JSON), not by reference.
+- `Result<T>` carries `ResultEnvelopeJsonConverterFactory` as its `[JsonConverter]`, reflection-free: with no
+  converter registered, a `Result<T>` (an endpoint's return value included) writes the documented envelope
+  without `metadata` instead of failing with a 500; reading one throws `JsonException`, as any unreadable payload,
+  naming `ResultJsonConverterFactory` and `ResultJsonConverter<T>`, instead of silently returning a `default`
+  result.
+  A registered converter still takes precedence.
+- The JSON converters, registered or carried by `Result` and `Result<T>`, write
+  `"The server could not complete the request."` as the `message` of a fault of the system (`Technical`,
+  `External`, `Unavailable`, `Timeout`, `NotSupported`, undefined values), a collection's errors included: their
+  output may reach a client. A collection whose category is not `Validation` or `BusinessRule` names, as
+  `ToHttpResult` does, only its errors of that category, nested collections flattened, and no `propertyName`.
+  Only a converter created with `ResultJsonView.Full`, for in-process storage (a cache, an idempotency store),
+  writes every message and every error; a default round trip reads the client view back.
+- The converters' `bool includeMetadata` constructor parameter is replaced by `ResultJsonView view`, on
+  `ResultJsonConverterFactory`, `ResultJsonConverter<T>` and `ResultJsonConverter`: the switch selects a view,
+  `ResultJsonView.Client` (the default, what a client may read) or `ResultJsonView.Full` (in-process storage:
+  every error, message and `Metadata`), not only whether metadata is written. `new ResultJsonConverterFactory(true)`
+  becomes `new ResultJsonConverterFactory(ResultJsonView.Full)`; an undefined value throws
+  `ArgumentOutOfRangeException`.
+- `ResultJsonConverter<T>` loses `[RequiresUnreferencedCode]` / `[RequiresDynamicCode]`: it reads and writes the
+  value through `options.GetTypeInfo(typeof(T))` and is NativeAOT safe, registered next to a source-generated
+  context that declares `Result<T>` and `T`. Only `ResultJsonConverterFactory` keeps the annotations.
+- MKR001 reports a side effect (`Tap`, `TapError`, `Finally`) on a computed property declared in source: it builds
+  a new result at each read, even when its body only returns a field. A property from a referenced assembly
+  (`KeyValuePair<TKey, TValue>.Value`, `Nullable<T>.Value`), an abstract, interface, virtual or overriding
+  property, an auto-property and an indexer still count as held.
+- `Error.Code` calls the new `protected virtual void ValidateCode(ErrorCode)` when set after construction (a `with`
+  expression, an object initializer); the property itself stays non-virtual. `ValidationError` overrides
+  `ValidateCode`: `with { Code = … }`, through `ValidationError` or through `Error`, throws `ArgumentException`
+  unless the code is the one its `PropertyName` gives. Members of a `with` are set in order: set `PropertyName`
+  alone. `CategorizedError` overrides it too: a `with` that sets an uninitialized, empty or whitespace code throws
+  `ArgumentException`, as its constructor does.
+
+### Added (#195)
+- `ResultJsonView` (`MicroKit.Result.Serialization`): `Client`, the default, and `Full`, the view the result
+  converters write.
+- `ErrorCategoryExtensions`: `IsSystemFault()`, `DescribesInput()` and `SystemFaultMessage`, the one definition of
+  a fault of the system, of the input categories and of the text a client reads instead of a fault's message, used
+  by the JSON converters and by `MicroKit.Result.AspNetCore`.
+- `ResultEnvelopeJsonConverterFactory` (`MicroKit.Result.Serialization`): the reflection-free converter the
+  result types carry; infrastructure, not meant to be registered.
+- `tests/MicroKit.Result.AotTests`: `System.Text.Json` reflection disabled, trim and AOT analyzers on; a
+  `Result<OrderDto>` round-trips through a source-generated context only.
 
 ### Performance (Phase 7)
 - Published BenchmarkDotNet figures in the README (machine and SDK stated), against ErrorOr 2.1.1 and

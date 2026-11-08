@@ -66,13 +66,16 @@ public sealed class ResultLinqExtensionsTests
     }
 
     [Fact]
-    public void Select_WhenSelectorIsNull_ThrowsArgumentNullException()
+    public void Select_WhenSelectorIsNull_ThrowsArgumentNullExceptionNamingSelector()
     {
         // Arrange
         var result = Result.Success(1);
 
-        // Act + Assert
-        Should.Throw<ArgumentNullException>(() => result.Select<int, int>(null!));
+        // Act
+        var thrown = Should.Throw<ArgumentNullException>(() => result.Select<int, int>(null!));
+
+        // Assert
+        thrown.ParamName.ShouldBe("selector");
     }
 
     #endregion
@@ -140,13 +143,16 @@ public sealed class ResultLinqExtensionsTests
     }
 
     [Fact]
-    public void SelectMany_WhenSelectorIsNull_ThrowsArgumentNullException()
+    public void SelectMany_WhenSelectorIsNull_ThrowsArgumentNullExceptionNamingSelector()
     {
         // Arrange
         var result = Result.Success(1);
 
-        // Act + Assert
-        Should.Throw<ArgumentNullException>(() => result.SelectMany<int, int>(null!));
+        // Act
+        var thrown = Should.Throw<ArgumentNullException>(() => result.SelectMany<int, int>(null!));
+
+        // Assert
+        thrown.ParamName.ShouldBe("selector");
     }
 
     #endregion
@@ -384,13 +390,16 @@ public sealed class ResultLinqExtensionsTests
     }
 
     [Fact]
-    public void Where_WhenErrorIsNull_ThrowsArgumentNullException()
+    public void Where_WhenErrorIsNull_ThrowsArgumentNullExceptionNamingErrorOnFalse()
     {
         // Arrange
         var result = Result.Success(1);
 
-        // Act + Assert
-        Should.Throw<ArgumentNullException>(() => result.Where(_ => true, null!));
+        // Act
+        var thrown = Should.Throw<ArgumentNullException>(() => result.Where(_ => true, null!));
+
+        // Assert
+        thrown.ParamName.ShouldBe("errorOnFalse");
     }
 
     #endregion

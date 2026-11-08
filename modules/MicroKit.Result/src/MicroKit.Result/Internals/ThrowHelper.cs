@@ -31,6 +31,13 @@ internal static class ThrowHelper
 
     [DoesNotReturn]
     [MethodImpl(MethodImplOptions.NoInlining)]
+    internal static void ThrowDelegateReturnedUninitialized() =>
+        throw new ResultException(
+            "The delegate returned an uninitialized (default) Result: it is neither a success nor a failure. " +
+            "Return Result.Success() or Result.Failure(error).");
+
+    [DoesNotReturn]
+    [MethodImpl(MethodImplOptions.NoInlining)]
     internal static void ThrowSuccessValueNull(string paramName) =>
         throw new ArgumentNullException(
             paramName,

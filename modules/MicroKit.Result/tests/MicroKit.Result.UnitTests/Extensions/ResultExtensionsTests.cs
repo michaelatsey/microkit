@@ -1060,24 +1060,19 @@ public sealed class ResultExtensionsTests
     }
 
     [Fact]
-    public void MapError_WhenDefault_ReturnsDefaultWithoutInvokingMapper()
+    public void MapError_WhenDefault_ThrowsResultExceptionWithoutInvokingMapper()
     {
         // Arrange
         var called = false;
         Result<int> result = default;
 
-        // Act
-        var mapped = result.MapError(e =>
+        // Act + Assert
+        Should.Throw<ResultException>(() => result.MapError(e =>
         {
             called = true;
             return e;
-        });
-
-        // Assert
+        }));
         called.ShouldBeFalse();
-        mapped.IsSuccess.ShouldBeFalse();
-        mapped.IsFailure.ShouldBeFalse();
-        mapped.ShouldBe(default(Result<int>));
     }
 
     [Fact]
@@ -1176,24 +1171,19 @@ public sealed class ResultExtensionsTests
     }
 
     [Fact]
-    public void Compensate_WhenDefault_ReturnsDefaultWithoutInvokingFallback()
+    public void Compensate_WhenDefault_ThrowsResultExceptionWithoutInvokingFallback()
     {
         // Arrange
         var called = false;
         Result<int> result = default;
 
-        // Act
-        var compensated = result.Compensate(_ =>
+        // Act + Assert
+        Should.Throw<ResultException>(() => result.Compensate(_ =>
         {
             called = true;
             return Result.Success(0);
-        });
-
-        // Assert
+        }));
         called.ShouldBeFalse();
-        compensated.IsSuccess.ShouldBeFalse();
-        compensated.IsFailure.ShouldBeFalse();
-        compensated.ShouldBe(default(Result<int>));
     }
 
     [Fact]
@@ -1402,6 +1392,39 @@ public sealed class ResultExtensionsTests
 
         // Assert
         thrown.ShouldBeOfType<ResultException>();
+        called.ShouldBeFalse();
+    }
+
+    [Fact]
+    public void GetValueOrThrow_WithFactoryReturningNullWhenFailure_ThrowsInvalidOperationException()
+    {
+        // Arrange
+        var result = Result.Failure<int>(new TestError());
+
+        // Act
+        var thrown = Record.Exception(() => result.GetValueOrThrow(_ => null!));
+
+        // Assert
+        var exact = thrown.ShouldBeOfType<InvalidOperationException>();
+        exact.Message.ShouldContain("null");
+    }
+
+    [Fact]
+    public void GetValueOrThrow_WithFactoryReturningNullWhenSuccess_ReturnsValueWithoutInvokingFactory()
+    {
+        // Arrange
+        var called = false;
+        var result = Result.Success(42);
+
+        // Act
+        var value = result.GetValueOrThrow(_ =>
+        {
+            called = true;
+            return null!;
+        });
+
+        // Assert
+        value.ShouldBe(42);
         called.ShouldBeFalse();
     }
 

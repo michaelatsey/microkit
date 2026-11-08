@@ -17,6 +17,21 @@ namespace MicroKit.Result;
 /// </example>
 public abstract record Error(ErrorCode Code, string Message) : IError
 {
+    /// <summary>Gets the error code: a stable identifier, <c>DOMAIN.ENTITY.REASON</c> by convention (ADR-RESULT-001 D1).</summary>
+    /// <remarks>
+    /// Not virtual: the code equality, hashing and <see langword="with"/> use is the one every reader sees. Setting it,
+    /// in a <see langword="with"/> expression or an object initializer, first calls <see cref="ValidateCode"/>.
+    /// </remarks>
+    public ErrorCode Code
+    {
+        get;
+        init
+        {
+            ValidateCode(value);
+            field = value;
+        }
+    } = Code; // the constructor stores it directly: ValidateCode is not called on a half-built object
+
     /// <summary>
     /// Gets the kind of failure: the only input to the transport's status (in <c>MicroKit.Result.AspNetCore</c>, the
     /// HTTP status) and to the category of an <see cref="ErrorCollection"/>. Default is
@@ -127,6 +142,18 @@ public abstract record Error(ErrorCode Code, string Message) : IError
     /// <exception cref="ArgumentException">Thrown when <paramref name="code"/> is uninitialized or <paramref name="message"/> is empty or whitespace.</exception>
     /// <returns>A <see cref="CategorizedError"/> of category <see cref="ErrorCategory.PreconditionFailed"/>.</returns>
     public static CategorizedError PreconditionFailed(ErrorCode code, string message) => Create(code, message, ErrorCategory.PreconditionFailed);
+
+    /// <summary>
+    /// Validates a code set after construction, in a <see langword="with"/> expression or an object initializer. Does
+    /// nothing by default; <see cref="ValidationError"/>, whose code follows its <see cref="ValidationError.PropertyName"/>,
+    /// rejects any other, and <see cref="CategorizedError"/> rejects an uninitialized, empty or whitespace code, as its
+    /// constructor does.
+    /// </summary>
+    /// <param name="code">The code being set.</param>
+    /// <exception cref="ArgumentException">Thrown by an override that rejects <paramref name="code"/>.</exception>
+    protected virtual void ValidateCode(ErrorCode code)
+    {
+    }
 
     private static CategorizedError Create(ErrorCode code, string message, ErrorCategory category)
     {

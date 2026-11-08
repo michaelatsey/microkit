@@ -6,19 +6,19 @@ using MicroKit.Result.UnitTests.TestSupport;
 namespace MicroKit.Result.UnitTests.Serialization;
 
 // #184 Phase 5: the error object keeps Severity, the inner errors of an ErrorCollection, PropertyName and, on
-// opt-in (includeMetadata), Metadata across a round trip (ADR-RESULT-001 D1, D12).
+// opt-in (ResultJsonView.Full), Metadata across a round trip (ADR-RESULT-001 D1, D12).
 public sealed class ErrorJsonRoundTripTests
 {
     // The factory, as a consumer registers it.
     private static readonly JsonSerializerOptions FactoryMetadataOptions = new()
     {
-        Converters = { new ResultJsonConverterFactory(includeMetadata: true) },
+        Converters = { new ResultJsonConverterFactory(ResultJsonView.Full) },
     };
 
     // The converter created directly: the encoding tests below do not depend on how the factory creates it.
     private static readonly JsonSerializerOptions MetadataOptions = new()
     {
-        Converters = { new ResultJsonConverter<int>(includeMetadata: true) },
+        Converters = { new ResultJsonConverter<int>(ResultJsonView.Full) },
     };
 
     private static readonly JsonSerializerOptions DefaultFactoryOptions = new()
@@ -57,7 +57,7 @@ public sealed class ErrorJsonRoundTripTests
     }
 
     [Fact]
-    public void Write_WhenIncludeMetadataAndMetadataEmpty_OmitsMetadata()
+    public void Write_WithTheFullViewAndMetadataEmpty_OmitsMetadata()
     {
         // Arrange
         var result = Result.Failure<int>(new OtherError());
@@ -70,7 +70,7 @@ public sealed class ErrorJsonRoundTripTests
     }
 
     [Fact]
-    public void Write_WhenIncludeMetadata_WritesPrimitivesAsJsonValues()
+    public void Write_WithTheFullView_WritesPrimitivesAsJsonValues()
     {
         // Arrange
         var metadata = ErrorMetadata.Create(
@@ -95,14 +95,17 @@ public sealed class ErrorJsonRoundTripTests
         // Act
         var json = JsonSerializer.Serialize(result, MetadataOptions);
 
-        // Assert
+        // Assert: each value as its JSON primitive; metadata is an immutable dictionary, whose key order is not defined
         using var document = JsonDocument.Parse(json);
-        document.RootElement.GetProperty("error").GetProperty("metadata").GetRawText().ShouldBe(
+        using var expected = JsonDocument.Parse(
             """{"text":"hello","flag":true,"off":false,"int":42,"long":9000000000,"short":-7,"byte":255,"uint":4000000000,"ulong":18446744073709551615,"decimal":12.50,"double":1.25,"float":0.5,"guid":"3f2504e0-4f89-11d3-9a0c-0305e82c3301","dateTime":"2026-11-07T10:30:00Z","dateTimeOffset":"2026-11-07T10:30:00+01:00","none":null}""");
+        var written = document.RootElement.GetProperty("error").GetProperty("metadata");
+        JsonElement.DeepEquals(written, expected.RootElement).ShouldBeTrue(written.GetRawText());
+        written.GetProperty("decimal").GetRawText().ShouldBe("12.50"); // DeepEquals compares numbers by value
     }
 
     [Fact]
-    public void RoundTrip_WhenIncludeMetadata_ReadsPrimitivesAsStringLongDoubleBoolOrNull()
+    public void RoundTrip_WithTheFullView_ReadsPrimitivesAsStringLongDoubleBoolOrNull()
     {
         // Arrange
         var metadata = ErrorMetadata.Create(
@@ -289,8 +292,8 @@ public sealed class ErrorJsonRoundTripTests
         // Act
         var json = JsonSerializer.Serialize(result, DefaultConverterOfTOptions);
 
-        // Assert
-        json.ShouldBe("""{"isSuccess":false,"error":{"code":"TEST.CRITICAL","message":"Critical error","category":"Unavailable","severity":"Critical"}}""");
+        // Assert: #195, a default converter writes a fault of the system with the generic message
+        json.ShouldBe("""{"isSuccess":false,"error":{"code":"TEST.CRITICAL","message":"The server could not complete the request.","category":"Unavailable","severity":"Critical"}}""");
     }
 
     [Fact]
@@ -360,7 +363,7 @@ public sealed class ErrorJsonRoundTripTests
 
         // Assert
         json.ShouldBe(
-            """{"isSuccess":false,"error":{"code":"MULTI.ERROR","message":"Too young","category":"Validation","severity":"Error","errors":[{"code":"VALIDATION.AGE","message":"Too young","category":"Validation","severity":"Warning","propertyName":"Age"}]}}""");
+            """{"isSuccess":false,"error":{"code":"MULTI.ERROR","message":"Too young","category":"Validation","severity":"Warning","errors":[{"code":"VALIDATION.AGE","message":"Too young","category":"Validation","severity":"Warning","propertyName":"Age"}]}}""");
     }
 
     [Fact]

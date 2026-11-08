@@ -1,3 +1,5 @@
+using System.Globalization;
+
 namespace MicroKit.Result;
 
 /// <summary>
@@ -13,14 +15,25 @@ namespace MicroKit.Result;
 /// </code>
 /// </example>
 public sealed record ValidationError(string PropertyName, string Message)
-    : Error(ErrorCode.From($"VALIDATION.{ValidatePropertyName(PropertyName)}"), Message),
+    : Error(CodeFor(PropertyName), Message),
       IValidationError
 {
-    private static string ValidatePropertyName(string propertyName)
+    /// <summary>Gets the name of the property that failed validation.</summary>
+    /// <remarks>
+    /// Setting it, in a <see langword="with"/> expression, also sets <see cref="Error.Code"/> to
+    /// <c>VALIDATION.&lt;PROPERTYNAME&gt;</c>, as the constructor does.
+    /// </remarks>
+    /// <exception cref="ArgumentException">Thrown when the value is <see langword="null"/>, empty or whitespace.</exception>
+    public string PropertyName
     {
-        ArgumentException.ThrowIfNullOrWhiteSpace(propertyName);
-        return propertyName.ToUpperInvariant();
-    }
+        get;
+        init
+        {
+            var code = CodeFor(value); // validates; the code always follows the name
+            field = value;
+            Code = code;
+        }
+    } = PropertyName; // the base constructor already computed the code from this parameter
 
     /// <summary>Gets the error category. Always <see cref="ErrorCategory.Validation"/>.</summary>
     public override ErrorCategory Category => ErrorCategory.Validation;
@@ -54,7 +67,7 @@ public sealed record ValidationError(string PropertyName, string Message)
     public static ValidationError MaxLength(string propertyName, int max)
         => new(propertyName, $"{propertyName} must not exceed {max} characters.");
 
-    /// <summary>Creates an out-of-range validation error.</summary>
+    /// <summary>Creates an out-of-range validation error. The bounds are formatted with the invariant culture.</summary>
     /// <param name="propertyName">The property name.</param>
     /// <param name="min">The minimum allowed value, or <see langword="null"/> if unbounded below.</param>
     /// <param name="max">The maximum allowed value, or <see langword="null"/> if unbounded above.</param>
@@ -90,14 +103,41 @@ public sealed record ValidationError(string PropertyName, string Message)
     /// <summary>Returns a string representation of this validation error.</summary>
     public override string ToString() => $"ValidationError[{PropertyName}]: {Message}";
 
+    // ── Protected methods ─────────────────────────────────────────────────
+
+    /// <summary>
+    /// Rejects a code other than <c>VALIDATION.&lt;PROPERTYNAME&gt;</c>: a <see langword="with"/> expression that sets
+    /// <see cref="Error.Code"/>, through this type or through <see cref="Error"/>, accepts only the code of
+    /// <see cref="PropertyName"/>. Set <see cref="PropertyName"/> alone to change both; members of a
+    /// <see langword="with"/> expression are set in the order they are written.
+    /// </summary>
+    /// <param name="code">The code being set.</param>
+    /// <exception cref="ArgumentException">Thrown when <paramref name="code"/> is not the code of <see cref="PropertyName"/>.</exception>
+    protected override void ValidateCode(ErrorCode code)
+    {
+        if (code != CodeFor(PropertyName))
+        {
+            throw new ArgumentException(
+                $"The code of a ValidationError is {CodeFor(PropertyName)}, computed from its PropertyName; set PropertyName instead.",
+                nameof(code));
+        }
+    }
+
     // ── Private helpers ───────────────────────────────────────────────────
 
+    private static ErrorCode CodeFor(string propertyName)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(propertyName);
+        return ErrorCode.From($"VALIDATION.{propertyName.ToUpperInvariant()}");
+    }
+
+    // The invariant culture: the message reads the same whatever the server's culture (CA1305).
     private static string BuildRangeMessage(string propertyName, object? min, object? max) =>
         (min, max) switch
         {
-            (not null, not null) => $"{propertyName} must be between {min} and {max}.",
-            (not null, null) => $"{propertyName} must be greater than or equal to {min}.",
-            (null, not null) => $"{propertyName} must be less than or equal to {max}.",
+            (not null, not null) => string.Create(CultureInfo.InvariantCulture, $"{propertyName} must be between {min} and {max}."),
+            (not null, null) => string.Create(CultureInfo.InvariantCulture, $"{propertyName} must be greater than or equal to {min}."),
+            (null, not null) => string.Create(CultureInfo.InvariantCulture, $"{propertyName} must be less than or equal to {max}."),
             _ => $"{propertyName} is out of range.",
         };
 }

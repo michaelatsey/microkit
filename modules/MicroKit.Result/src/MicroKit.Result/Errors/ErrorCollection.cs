@@ -14,7 +14,7 @@ public sealed class ErrorCollection : IError, IReadOnlyList<IError>
     {
         Debug.Assert(!errors.IsEmpty, "An ErrorCollection is never empty.");
         _errors = errors;
-        Severity = ErrorSeverity.Error;
+        Severity = errors[0].Severity; // the loop raises it to the highest: a collection of warnings is a warning
 
         foreach (var error in errors)
         {
@@ -46,7 +46,7 @@ public sealed class ErrorCollection : IError, IReadOnlyList<IError>
     /// </summary>
     public ErrorCategory Category { get; }
 
-    /// <summary>Gets the maximum severity across all contained errors.</summary>
+    /// <summary>Gets the highest severity of the contained errors, nested collections included.</summary>
     public ErrorSeverity Severity { get; }
 
     /// <summary>Gets an empty metadata dictionary.</summary>

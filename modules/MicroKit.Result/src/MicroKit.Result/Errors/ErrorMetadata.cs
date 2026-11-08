@@ -14,21 +14,23 @@ public static class ErrorMetadata
     /// </summary>
     /// <param name="key">The metadata key.</param>
     /// <param name="value">The metadata value.</param>
-    /// <returns>A read-only dictionary containing the specified pair.</returns>
+    /// <returns>An immutable dictionary containing the specified pair.</returns>
+    /// <exception cref="ArgumentNullException">Thrown when <paramref name="key"/> is <see langword="null"/>.</exception>
     public static IReadOnlyDictionary<string, object?> Create(string key, object? value) =>
-        new Dictionary<string, object?>(1) { [key] = value };
+        ImmutableDictionary<string, object?>.Empty.SetItem(key, value); // immutable: an error never changes, even cast
 
     /// <summary>
     /// Creates metadata from multiple key-value pairs.
     /// </summary>
     /// <param name="pairs">The key-value pairs to include.</param>
-    /// <returns>A read-only dictionary containing all specified pairs.</returns>
+    /// <returns>An immutable dictionary containing all specified pairs; for a repeated key, the last value.</returns>
+    /// <exception cref="ArgumentNullException">Thrown when a key is <see langword="null"/>.</exception>
     public static IReadOnlyDictionary<string, object?> Create(
         params ReadOnlySpan<KeyValuePair<string, object?>> pairs)
     {
-        var dict = new Dictionary<string, object?>(pairs.Length);
+        var builder = ImmutableDictionary.CreateBuilder<string, object?>();
         foreach (var pair in pairs)
-            dict[pair.Key] = pair.Value;
-        return dict;
+            builder[pair.Key] = pair.Value;
+        return builder.ToImmutable();
     }
 }

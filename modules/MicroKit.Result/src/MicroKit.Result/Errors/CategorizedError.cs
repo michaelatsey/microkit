@@ -24,6 +24,14 @@ public sealed record CategorizedError(ErrorCode Code, string Message, ErrorCateg
         ? Category
         : throw new ArgumentOutOfRangeException(nameof(Category), Category, "The category is not a defined ErrorCategory value.");
 
+    /// <summary>
+    /// Rejects an uninitialized, empty or whitespace code set after construction, in a <see langword="with"/> expression
+    /// through this type or through <see cref="Error"/>, as the constructor rejects it.
+    /// </summary>
+    /// <param name="code">The code being set.</param>
+    /// <exception cref="ArgumentException">Thrown when <paramref name="code"/> is uninitialized, empty or whitespace.</exception>
+    protected override void ValidateCode(ErrorCode code) => RequireCode(code);
+
     private static ErrorCode RequireCode(ErrorCode code) =>
         string.IsNullOrWhiteSpace(code.Value)
             ? throw new ArgumentException("The error code is uninitialized; build it with ErrorCode.From.", nameof(code))

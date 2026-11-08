@@ -27,7 +27,10 @@ public sealed class ProblemDetailsContractTests
         body.ShouldNotContain("Npgsql");
         body.ShouldNotContain(nameof(InvalidOperationException));
         using var json = JsonDocument.Parse(body);
-        json.RootElement.GetProperty("detail").GetString().ShouldBe("An unexpected error occurred.");
+        // #195 item 1: a 5xx response carries the generic server text, the same for every server error
+        string? genericServerDetail = ResultProblemDetailsFactory
+            .CreateProblemDetails(Error.Technical(ErrorCode.From("TEST.TECHNICAL"), "Any technical message.")).Detail;
+        json.RootElement.GetProperty("detail").GetString().ShouldBe(genericServerDetail);
         json.RootElement.GetProperty("errorCode").GetString().ShouldBe("EXCEPTION");
     }
 

@@ -201,9 +201,10 @@ public static partial class ResultExtensions
     public static Result<T> MapError<T>(this Result<T> result, Func<IError, IError> mapper)
     {
         ResultGuard.NotNull(mapper);
-        return result.IsFailure
-            ? Result<T>.Failure(mapper(result.Error))
-            : result;
+        // !IsSuccess, not IsFailure: Error throws ResultException on a default result
+        return result.IsSuccess
+            ? result
+            : Result<T>.Failure(mapper(result.Error));
     }
 
     #endregion
@@ -221,9 +222,10 @@ public static partial class ResultExtensions
     public static Result<T> Compensate<T>(this Result<T> result, Func<IError, Result<T>> fallback)
     {
         ResultGuard.NotNull(fallback);
-        return result.IsFailure
-            ? fallback(result.Error)
-            : result;
+        // !IsSuccess, not IsFailure: Error throws ResultException on a default result
+        return result.IsSuccess
+            ? result
+            : fallback(result.Error);
     }
 
     #endregion
@@ -253,7 +255,8 @@ public static partial class ResultExtensions
     /// When <see langword="null"/>, a <see cref="ResultException"/> is thrown instead.
     /// </param>
     /// <returns>The success value.</returns>
-    /// <exception cref="ResultException">Thrown when the result is a failure and no factory is provided.</exception>
+    /// <exception cref="ResultException">Thrown when the result is a failure and no factory is provided, or when it is uninitialized (<c>default</c>).</exception>
+    /// <exception cref="InvalidOperationException">Thrown when the result is a failure and <paramref name="exceptionFactory"/> returns <see langword="null"/>.</exception>
     public static T GetValueOrThrow<T>(
         this Result<T> result,
         Func<IError, Exception>? exceptionFactory = null)
@@ -262,7 +265,12 @@ public static partial class ResultExtensions
             return result.Value;
 
         if (exceptionFactory is not null)
-            throw exceptionFactory(result.Error);
+        {
+            // Error throws ResultException on a default result, before the factory runs
+            var exception = exceptionFactory(result.Error);
+            throw exception ?? new InvalidOperationException(
+                "The exception factory passed to GetValueOrThrow returned null; it must return the exception to throw.");
+        }
 
         // Delegate to Value getter, which calls ThrowHelper.ThrowResultFailure
         return result.Value;
