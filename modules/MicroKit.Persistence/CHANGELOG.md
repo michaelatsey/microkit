@@ -53,6 +53,8 @@ decision number (D1–D17) points at the issue.
 - **D6** — `PaginationLimits` (default page 50, maximum 500), validated on construction.
 
 #### MicroKit.Persistence.EntityFrameworkCore
+- **D13** — `DomainConventionExtensions` for `ConfigureConventions`: `AddEntityIdConventions(params Assembly[])` maps every concrete `EntityId<T>` of the given assemblies, and `GuidId`, to a `Guid` column, reading values back through the type's `(Guid)` constructor whatever its accessibility (model building fails, naming the type, when there is none); `AddActorConvention()` maps `Actor` to a string of at most `Actor.MaxLength` characters read back through `Actor.Restore` (on an existing schema the 200-character limit is a column change to migrate); `AddDomainConventions(params Assembly[])` applies all three conventions.
+- **D14** — `AddAuditInstantConvention()` normalises the `CreatedAt` / `UpdatedAt` instants of every `IAuditableEntity` to offset zero on read and write (query parameters included), and rejects a stored `default` instant on read. Compiled models (`dotnet ef dbcontext optimize`) and NativeAOT precompiled queries are not supported by the D13/D14 conventions: the generated code instantiates internal converters.
 - **D6** — `EfCoreBuilder.ConfigurePagination(PaginationLimits)`; `AddEntityFrameworkCore()` registers `PaginationLimits.Default`.
 - `EfDomainEventsProvider<TContext>` — change-tracker-backed `IDomainEventsProvider` that aggregates domain events across every entity tracked by `TContext`. Candidates are detected on `IHasDomainEvents` (the read contract); draining requires `IDomainEventsProvider`, so an entity that exposes events without implementing the drain contract is reported by `DomainEvents` but skipped by `DrainDomainEvents`. Reads the in-memory change tracker only — never queries the database.
 
@@ -62,6 +64,7 @@ decision number (D1–D17) points at the issue.
 ### Fixed
 
 #### MicroKit.Persistence.EntityFrameworkCore
+- **D14** — an audit instant read from a row stored with a non-zero offset (SQL Server `datetimeoffset`, SQLite text) kept that offset, and a later write to a PostgreSQL `timestamptz` column failed ("only offset 0 is supported"); a row holding `0001-01-01` loaded silently. With `AddAuditInstantConvention()`, the first is normalised and the second rejected (#172).
 - **D1** — a query with `IncludeDeleted = true` returned other tenants' rows (the parameterless `IgnoreQueryFilters()` disabled the tenant filter). An architecture test now fails on any library call to it.
 - **D2** — reading an aggregate the current command had added, modified or deleted through `EfReadRepository.FindAsync` detached it, and the next commit silently wrote nothing. Loading an untracked one could also wire it into tracked entities' navigations before detaching it, so a later commit tried to insert it.
 - **D3** — a transient failure of the command's `SaveChangesAsync` inside `ExecuteAsync` was never retried: `CommitAsync`'s `PersistenceException` hid the `DbUpdateException` from the execution strategy. A failure of the transaction's COMMIT left the attempt's accepted changes tracked, so a retry could apply them twice.

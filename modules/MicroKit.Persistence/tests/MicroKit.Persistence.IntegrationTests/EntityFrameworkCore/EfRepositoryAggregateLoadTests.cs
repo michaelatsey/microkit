@@ -15,14 +15,11 @@ namespace MicroKit.Persistence.IntegrationTests.EntityFrameworkCore;
 /// #196 D10: <see cref="EfRepository{TAggregate,TId,TContext}.FindAsync"/> loads a whole aggregate
 /// by its typed id, tracked — and nothing beyond its boundary. Run on SQLite and PostgreSQL.
 /// </summary>
-public abstract class EfRepositoryAggregateLoadTests
+internal static class EfRepositoryAggregateLoadScenarios
 {
-    protected abstract Task<OrderStore> CreateStoreAsync();
-
-    [Fact]
-    public async Task FindAsync_LoadsEveryEntityOfTheAggregate_AndNothingBeyondIt()
+    public static async Task FindAsync_LoadsEveryEntityOfTheAggregate_AndNothingBeyondIt(Func<Task<OrderStore>> createStoreAsync)
     {
-        await using var store = await CreateStoreAsync();
+        await using var store = await createStoreAsync();
         var (orderId, customerId) = await store.SeedAsync();
 
         await using var context = store.CreateContext();
@@ -46,10 +43,9 @@ public abstract class EfRepositoryAggregateLoadTests
         context.ChangeTracker.Entries<Customer>().ShouldBeEmpty();
     }
 
-    [Fact]
-    public async Task FindAsync_ReturnsTheAggregateTracked_SoAMutationIsWrittenByTheCommit()
+    public static async Task FindAsync_ReturnsTheAggregateTracked_SoAMutationIsWrittenByTheCommit(Func<Task<OrderStore>> createStoreAsync)
     {
-        await using var store = await CreateStoreAsync();
+        await using var store = await createStoreAsync();
         var (orderId, _) = await store.SeedAsync();
 
         await using (var context = store.CreateContext())
@@ -65,10 +61,9 @@ public abstract class EfRepositoryAggregateLoadTests
         (await verify.Set<LineNote>().CountAsync(n => n.Text == "edited")).ShouldBe(1);
     }
 
-    [Fact]
-    public async Task FindAsync_WhenTheAggregateIsAlreadyTracked_ReturnsItWithoutAQuery()
+    public static async Task FindAsync_WhenTheAggregateIsAlreadyTracked_ReturnsItWithoutAQuery(Func<Task<OrderStore>> createStoreAsync)
     {
-        await using var store = await CreateStoreAsync();
+        await using var store = await createStoreAsync();
         var (orderId, _) = await store.SeedAsync();
         var commands = new List<string>();
         await using var context = store.CreateContext(commands);
@@ -82,10 +77,9 @@ public abstract class EfRepositoryAggregateLoadTests
         commands.ShouldBeEmpty();
     }
 
-    [Fact]
-    public async Task FindAsync_OnAContextThatDoesNotTrackByDefault_StillReturnsATrackedAggregate()
+    public static async Task FindAsync_OnAContextThatDoesNotTrackByDefault_StillReturnsATrackedAggregate(Func<Task<OrderStore>> createStoreAsync)
     {
-        await using var store = await CreateStoreAsync();
+        await using var store = await createStoreAsync();
         var (orderId, _) = await store.SeedAsync();
 
         await using (var context = store.CreateContext(noTrackingByDefault: true))
@@ -100,10 +94,9 @@ public abstract class EfRepositoryAggregateLoadTests
         (await verify.Set<OrderLine>().CountAsync(l => l.Sku == "BOOK-2")).ShouldBe(1);
     }
 
-    [Fact]
-    public async Task FindAsync_WithAnOwnedCollectionAndAnotherCollection_SplitsTheLoad()
+    public static async Task FindAsync_WithAnOwnedCollectionAndAnotherCollection_SplitsTheLoad(Func<Task<OrderStore>> createStoreAsync)
     {
-        await using var store = await CreateStoreAsync();
+        await using var store = await createStoreAsync();
         var invoiceId = await store.SeedInvoiceAsync();
         var commands = new List<string>();
         await using var context = store.CreateContext(commands);
@@ -117,10 +110,9 @@ public abstract class EfRepositoryAggregateLoadTests
             "an owned collection mapped to a table is a join: with a second collection the load must split");
     }
 
-    [Fact]
-    public async Task FindAsync_WhenMissing_ReturnsNull()
+    public static async Task FindAsync_WhenMissing_ReturnsNull(Func<Task<OrderStore>> createStoreAsync)
     {
-        await using var store = await CreateStoreAsync();
+        await using var store = await createStoreAsync();
         await store.SeedAsync();
         await using var context = store.CreateContext();
 
@@ -128,10 +120,9 @@ public abstract class EfRepositoryAggregateLoadTests
             .ShouldBeNull();
     }
 
-    [Fact]
-    public async Task FindAsync_WhenTheKeyIsNotASinglePropertyOfTheIdType_ThrowsAnExplicitError()
+    public static async Task FindAsync_WhenTheKeyIsNotASinglePropertyOfTheIdType_ThrowsAnExplicitError(Func<Task<OrderStore>> createStoreAsync)
     {
-        await using var store = await CreateStoreAsync();
+        await using var store = await createStoreAsync();
         await using var context = store.CreateContext();
         var sut = new EfRepository<Customer, OrderId, OrderDbContext>(context);
 
@@ -141,10 +132,9 @@ public abstract class EfRepositoryAggregateLoadTests
         thrown.Message.ShouldContain("'Customer' cannot be loaded by 'OrderId'");
     }
 
-    [Fact]
-    public async Task FindAsync_WithTwoOrMoreCollections_SplitsTheLoad_OtherwiseRunsOneQuery()
+    public static async Task FindAsync_WithTwoOrMoreCollections_SplitsTheLoad_OtherwiseRunsOneQuery(Func<Task<OrderStore>> createStoreAsync)
     {
-        await using var store = await CreateStoreAsync();
+        await using var store = await createStoreAsync();
         var (orderId, customerId) = await store.SeedAsync();
 
         var orderCommands = new List<string>();
@@ -160,9 +150,33 @@ public abstract class EfRepositoryAggregateLoadTests
     }
 }
 
-public sealed class EfRepositoryAggregateLoadSqliteTests : EfRepositoryAggregateLoadTests
+public sealed class EfRepositoryAggregateLoadSqliteTests
 {
-    protected override async Task<OrderStore> CreateStoreAsync()
+    [Fact]
+    public Task FindAsync_LoadsEveryEntityOfTheAggregate_AndNothingBeyondIt() => EfRepositoryAggregateLoadScenarios.FindAsync_LoadsEveryEntityOfTheAggregate_AndNothingBeyondIt(CreateStoreAsync);
+
+    [Fact]
+    public Task FindAsync_ReturnsTheAggregateTracked_SoAMutationIsWrittenByTheCommit() => EfRepositoryAggregateLoadScenarios.FindAsync_ReturnsTheAggregateTracked_SoAMutationIsWrittenByTheCommit(CreateStoreAsync);
+
+    [Fact]
+    public Task FindAsync_WhenTheAggregateIsAlreadyTracked_ReturnsItWithoutAQuery() => EfRepositoryAggregateLoadScenarios.FindAsync_WhenTheAggregateIsAlreadyTracked_ReturnsItWithoutAQuery(CreateStoreAsync);
+
+    [Fact]
+    public Task FindAsync_OnAContextThatDoesNotTrackByDefault_StillReturnsATrackedAggregate() => EfRepositoryAggregateLoadScenarios.FindAsync_OnAContextThatDoesNotTrackByDefault_StillReturnsATrackedAggregate(CreateStoreAsync);
+
+    [Fact]
+    public Task FindAsync_WithAnOwnedCollectionAndAnotherCollection_SplitsTheLoad() => EfRepositoryAggregateLoadScenarios.FindAsync_WithAnOwnedCollectionAndAnotherCollection_SplitsTheLoad(CreateStoreAsync);
+
+    [Fact]
+    public Task FindAsync_WhenMissing_ReturnsNull() => EfRepositoryAggregateLoadScenarios.FindAsync_WhenMissing_ReturnsNull(CreateStoreAsync);
+
+    [Fact]
+    public Task FindAsync_WhenTheKeyIsNotASinglePropertyOfTheIdType_ThrowsAnExplicitError() => EfRepositoryAggregateLoadScenarios.FindAsync_WhenTheKeyIsNotASinglePropertyOfTheIdType_ThrowsAnExplicitError(CreateStoreAsync);
+
+    [Fact]
+    public Task FindAsync_WithTwoOrMoreCollections_SplitsTheLoad_OtherwiseRunsOneQuery() => EfRepositoryAggregateLoadScenarios.FindAsync_WithTwoOrMoreCollections_SplitsTheLoad_OtherwiseRunsOneQuery(CreateStoreAsync);
+
+    private static async Task<OrderStore> CreateStoreAsync()
     {
         var connection = new SqliteConnection("DataSource=:memory:");
         await connection.OpenAsync();
@@ -171,9 +185,33 @@ public sealed class EfRepositoryAggregateLoadSqliteTests : EfRepositoryAggregate
 }
 
 [Collection(PostgreSqlSuite.Name)]
-public sealed class EfRepositoryAggregateLoadPostgreSqlTests(PostgreSqlFixture fixture) : EfRepositoryAggregateLoadTests
+public sealed class EfRepositoryAggregateLoadPostgreSqlTests(PostgreSqlFixture fixture)
 {
-    protected override async Task<OrderStore> CreateStoreAsync()
+    [DockerRequiredFact]
+    public Task FindAsync_LoadsEveryEntityOfTheAggregate_AndNothingBeyondIt() => EfRepositoryAggregateLoadScenarios.FindAsync_LoadsEveryEntityOfTheAggregate_AndNothingBeyondIt(CreateStoreAsync);
+
+    [DockerRequiredFact]
+    public Task FindAsync_ReturnsTheAggregateTracked_SoAMutationIsWrittenByTheCommit() => EfRepositoryAggregateLoadScenarios.FindAsync_ReturnsTheAggregateTracked_SoAMutationIsWrittenByTheCommit(CreateStoreAsync);
+
+    [DockerRequiredFact]
+    public Task FindAsync_WhenTheAggregateIsAlreadyTracked_ReturnsItWithoutAQuery() => EfRepositoryAggregateLoadScenarios.FindAsync_WhenTheAggregateIsAlreadyTracked_ReturnsItWithoutAQuery(CreateStoreAsync);
+
+    [DockerRequiredFact]
+    public Task FindAsync_OnAContextThatDoesNotTrackByDefault_StillReturnsATrackedAggregate() => EfRepositoryAggregateLoadScenarios.FindAsync_OnAContextThatDoesNotTrackByDefault_StillReturnsATrackedAggregate(CreateStoreAsync);
+
+    [DockerRequiredFact]
+    public Task FindAsync_WithAnOwnedCollectionAndAnotherCollection_SplitsTheLoad() => EfRepositoryAggregateLoadScenarios.FindAsync_WithAnOwnedCollectionAndAnotherCollection_SplitsTheLoad(CreateStoreAsync);
+
+    [DockerRequiredFact]
+    public Task FindAsync_WhenMissing_ReturnsNull() => EfRepositoryAggregateLoadScenarios.FindAsync_WhenMissing_ReturnsNull(CreateStoreAsync);
+
+    [DockerRequiredFact]
+    public Task FindAsync_WhenTheKeyIsNotASinglePropertyOfTheIdType_ThrowsAnExplicitError() => EfRepositoryAggregateLoadScenarios.FindAsync_WhenTheKeyIsNotASinglePropertyOfTheIdType_ThrowsAnExplicitError(CreateStoreAsync);
+
+    [DockerRequiredFact]
+    public Task FindAsync_WithTwoOrMoreCollections_SplitsTheLoad_OtherwiseRunsOneQuery() => EfRepositoryAggregateLoadScenarios.FindAsync_WithTwoOrMoreCollections_SplitsTheLoad_OtherwiseRunsOneQuery(CreateStoreAsync);
+
+    private async Task<OrderStore> CreateStoreAsync()
     {
         var connectionString = new NpgsqlConnectionStringBuilder(fixture.ConnectionString)
         {
