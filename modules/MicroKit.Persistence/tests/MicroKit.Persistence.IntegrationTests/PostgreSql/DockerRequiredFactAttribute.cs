@@ -30,6 +30,23 @@ public sealed class DockerRequiredFactAttribute : FactAttribute
     }
 }
 
+/// <summary>
+/// The <see cref="TheoryAttribute"/> counterpart of <see cref="DockerRequiredFactAttribute"/>:
+/// skips every data row when no Docker endpoint is reachable.
+/// </summary>
+public sealed class DockerRequiredTheoryAttribute : TheoryAttribute
+{
+    public DockerRequiredTheoryAttribute()
+    {
+        if (!DockerEndpoint.IsAvailable)
+        {
+            Skip = "Docker is not available — skipping the PostgreSQL suite. " +
+                   "Start Docker to run the EF Core round-trip tests against a real " +
+                   "database.";
+        }
+    }
+}
+
 /// <summary>Cheap, total, side-effect-free detection of a usable Docker endpoint.</summary>
 internal static class DockerEndpoint
 {

@@ -1,88 +1,60 @@
 # Rule: Dependencies — MicroKit.Persistence
 
-## Central Package Management (CPM)
+## Central Package Management
 
-All NuGet versions live in `build/Directory.Packages.props`. Never set `Version=` on a
-`PackageReference` in a `.csproj`.
+Every version lives in the root `Directory.Packages.props`
+(`CentralPackageTransitivePinningEnabled=true`). Never `Version=` on a `PackageReference`.
 
-## The 8-Project Layer Graph
+## Project and Package Matrix
 
-```
-MicroKit.Persistence.Abstractions      ← IRepository, IReadRepository, IUnitOfWork,
-        ↑                                ITransactionalContext, IPagedResult, PersistenceException
-MicroKit.Persistence (core)            ← ISpecificationEvaluator, QueryOptions, pagination, conventions
-        ↑
-MicroKit.Persistence.EntityFrameworkCore  ← EfRepository, EfUnitOfWork, EfSpecificationEvaluator,
-        ↑                                   ITransactionalUnitOfWork
-MicroKit.Persistence.EntityFrameworkCore.PostgreSql  ← Npgsql provider
-MicroKit.Persistence.EntityFrameworkCore.SqlServer   ← SqlServer provider
-MicroKit.Persistence.Specifications    ← QueryOptions extensions, spec helpers (sibling of EFCore)
-MicroKit.Persistence.Testing           ← InMemoryRepository, test helpers (sibling of EFCore)
-MicroKit.Persistence.Analyzers         ← build-time only (no runtime dependency chain)
-```
+| Project | Project reference | Packages |
+|---------|-------------------|----------|
+| `Abstractions` | — | `MicroKit.Domain` (cross-module) |
+| core (`MicroKit.Persistence`) | Abstractions | — |
+| `EntityFrameworkCore` | core | `Microsoft.EntityFrameworkCore`, `Microsoft.EntityFrameworkCore.Relational`, `Microsoft.Extensions.DependencyInjection.Abstractions` |
+| `EntityFrameworkCore.PostgreSql` | EntityFrameworkCore | `Npgsql.EntityFrameworkCore.PostgreSQL` |
+| `EntityFrameworkCore.SqlServer` | EntityFrameworkCore | `Microsoft.EntityFrameworkCore.SqlServer` |
+| `Specifications` | core | — |
+| `Testing` | core | — |
+| `Analyzers` | — | `Microsoft.CodeAnalysis.CSharp` (build-time, `PrivateAssets="all"`) |
 
-## Allowed Package Matrix
+`Specifications`, `Testing`, `PostgreSql` and `SqlServer` are siblings: none references another
+(`LayerDependencyTests`).
 
-| Project | Allowed Packages |
-|---------|-----------------|
-| `Abstractions` | `MicroKit.Result`, `MicroKit.Domain.Abstractions` |
-| `Core` | Abstractions (project) + `MicroKit.Logging.Abstractions` |
-| `EntityFrameworkCore` | Core (project) + `Microsoft.EntityFrameworkCore` + `Microsoft.Extensions.DependencyInjection.Abstractions` |
-| `PostgreSql` | EntityFrameworkCore (project) + `Npgsql.EntityFrameworkCore.PostgreSQL` |
-| `SqlServer` | EntityFrameworkCore (project) + `Microsoft.EntityFrameworkCore.SqlServer` |
-| `Specifications` | Core (project) — no extra packages |
-| `Testing` | Core (project) + `NSubstitute` |
-| `Analyzers` | `Microsoft.CodeAnalysis.CSharp` (build-time attribute only) |
+## Reference Rules
 
-## Project Reference Rules
+- **Intra-module** references are unconditional `ProjectReference`, in every build mode
+  (ADR-GLOBAL-002 D5). A `CIReleaseBuild` condition on one is a violation.
+- **Cross-module** references from `src/` use the two-ItemGroup pattern conditioned on
+  `CIReleaseBuild` (root `.claude/rules/cross-module-references.md`). The only one is
+  Abstractions → `MicroKit.Domain`.
+- Test projects and the samples project reference other modules with an unconditional
+  `ProjectReference`.
 
-```
-Abstractions   → (no project references — package refs only)
-Core           → Abstractions
-EntityFrameworkCore → Core
-PostgreSql     → EntityFrameworkCore
-SqlServer      → EntityFrameworkCore
-Specifications → Core
-Testing        → Core
-Analyzers      → (no project references — standalone Roslyn package)
-```
+## Ecosystem
 
-### Sibling Isolation
-`Specifications`, `Testing`, `PostgreSql`, and `SqlServer` are siblings — none references another.
-`Testing` must not reference `Specifications` and vice versa.
-
-## Cross-Module Dependencies (Ecosystem)
-
-MicroKit.Persistence is a **Level 2** module:
-
-```
-MicroKit.Persistence.Abstractions → MicroKit.Result              (production)
-MicroKit.Persistence.Abstractions → MicroKit.Domain.Abstractions (IAggregateRoot constraint)
-MicroKit.Persistence (core)       → MicroKit.Logging.Abstractions (structured log property names)
-```
-
-> Any addition to Abstractions requires explicit `api-reviewer` approval.
-
-**Forbidden:**
-- Dependency on Level 3 modules (Messaging, Http, Multitenancy)
-- `ProjectReference` crossing module boundaries (use `PackageReference`)
-- `Microsoft.EntityFrameworkCore` in Abstractions or Core
-
-## Adding a New Dependency
-
-1. Check it is not already available transitively
-2. Add version to `Directory.Packages.props`
-3. Verify it targets `.NET 10` / `netstandard2.0` / `netstandard2.1`
-4. Confirm it lands in the correct layer
-5. Any addition to `Abstractions`: requires explicit `api-reviewer` approval
+Allowed by the root graph: Persistence may depend on Result and Domain; it depends on Domain only.
+Persistence never depends on Messaging, Tenancy, MediatR or Http — they depend on it
+(`MicroKit.MediatR.Behaviors` → Abstractions; `MicroKit.Tenancy.EntityFrameworkCore` →
+Abstractions + EntityFrameworkCore). Core and EntityFrameworkCore do not reference
+MediatR.Contracts (`LayerDependencyTests`).
 
 ## Package Confinement
 
-| Package | Confined to | Forbidden elsewhere |
-|---------|-------------|---------------------|
-| `Microsoft.EntityFrameworkCore` | EntityFrameworkCore | Abstractions, Core |
-| `Npgsql.EntityFrameworkCore.PostgreSQL` | PostgreSql | All others |
-| `Microsoft.EntityFrameworkCore.SqlServer` | SqlServer | All others |
-| `NSubstitute` | Testing | All runtime packages |
-| `Microsoft.CodeAnalysis.CSharp` | Analyzers | All runtime packages |
-| `FluentAssertions` | **banned everywhere** | Commercial license (Xceed EULA) |
+| Package | Confined to |
+|---------|-------------|
+| `Microsoft.EntityFrameworkCore*` | EntityFrameworkCore and the providers |
+| `Npgsql.EntityFrameworkCore.PostgreSQL` | PostgreSql |
+| `Microsoft.EntityFrameworkCore.SqlServer` | SqlServer |
+| `NSubstitute` | test projects |
+| `Microsoft.CodeAnalysis.CSharp` | Analyzers (and test projects) |
+| `FluentAssertions` | forbidden everywhere (root `.claude/rules/testing-libraries.md`) |
+
+## Adding a Dependency
+
+1. Check it is not already available transitively.
+2. Add its version to the root `Directory.Packages.props`.
+3. Put it in the lowest layer that needs it, never in Abstractions or core if it is EF Core.
+4. A new cross-module edge updates the root CLAUDE.md graph and
+   `.claude-context/context/dependency-graph.md`; any Abstractions change needs `api-reviewer`.
+5. Run `dependency-guardian`.

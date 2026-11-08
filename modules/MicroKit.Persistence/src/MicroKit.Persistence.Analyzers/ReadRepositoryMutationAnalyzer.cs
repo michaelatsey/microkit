@@ -24,7 +24,7 @@ public sealed class ReadRepositoryMutationAnalyzer : DiagnosticAnalyzer
         defaultSeverity: DiagnosticSeverity.Error,
         isEnabledByDefault: true,
         description: "IReadRepository<T> implementations must never commit or save changes. "
-                   + "Use IRepository<T> and IUnitOfWork.CommitAsync() for write operations.",
+                   + "Use IRepository<TAggregate, TId> and IUnitOfWork.CommitAsync() for write operations.",
         helpLinkUri: $"https://github.com/michaelatsey/microkit/docs/analyzers/{MKP001Id}");
 
     private static readonly DiagnosticDescriptor MKP002Rule = new(
@@ -35,7 +35,7 @@ public sealed class ReadRepositoryMutationAnalyzer : DiagnosticAnalyzer
         defaultSeverity: DiagnosticSeverity.Error,
         isEnabledByDefault: true,
         description: "IReadRepository<T> implementations must never expose or call AddAsync, UpdateAsync, or DeleteAsync. "
-                   + "Use IRepository<T> for write operations.",
+                   + "Use IRepository<TAggregate, TId> for write operations.",
         helpLinkUri: $"https://github.com/michaelatsey/microkit/docs/analyzers/{MKP002Id}");
 
     /// <inheritdoc />

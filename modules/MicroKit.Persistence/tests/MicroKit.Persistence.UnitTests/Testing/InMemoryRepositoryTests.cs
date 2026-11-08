@@ -9,7 +9,7 @@ namespace MicroKit.Persistence.UnitTests.Testing;
 
 public sealed class InMemoryRepositoryWriteTests
 {
-    private readonly InMemoryRepository<TestItem> _repo = new();
+    private readonly InMemoryRepository<TestItem, TestItemId> _repo = new();
 
     [Fact]
     public async Task AddAsync_PersistsImmediately()
@@ -22,23 +22,33 @@ public sealed class InMemoryRepositoryWriteTests
     }
 
     [Fact]
-    public async Task FindById_WhenExists_ReturnsAggregate()
+    public async Task FindAsync_ById_WhenExists_ReturnsTheStoredInstance()
     {
         var item = new TestItem("Alice");
         await _repo.AddAsync(item);
 
-        var found = await _repo.FindById(item.Id);
+        var found = await _repo.FindAsync(item.Id);
 
-        found.ShouldNotBeNull();
-        found!.Id.ShouldBe(item.Id);
+        found.ShouldBeSameAs(item);
     }
 
     [Fact]
-    public async Task FindById_WhenNotFound_ReturnsNull()
+    public async Task FindAsync_ById_WhenNotFound_ReturnsNull()
     {
-        var found = await _repo.FindById(Guid.NewGuid());
+        var found = await _repo.FindAsync(new TestItemId(Guid.NewGuid()));
 
         found.ShouldBeNull();
+    }
+
+    [Fact]
+    public async Task FindAsync_ById_ThenMutate_ChangeIsVisibleWithoutAnUpdateCall()
+    {
+        var item = new TestItem("Alice");
+        await _repo.AddAsync(item);
+
+        (await _repo.FindAsync(item.Id))!.Rename("Alice Updated");
+
+        (await _repo.FindAsync(item.Id))!.Name.ShouldBe("Alice Updated");
     }
 
     [Fact]
@@ -54,19 +64,6 @@ public sealed class InMemoryRepositoryWriteTests
     }
 
     [Fact]
-    public async Task UpdateAsync_ReplacesAggregate()
-    {
-        var item = new TestItem("Alice");
-        await _repo.AddAsync(item);
-
-        item.Rename("Alice Updated");
-        await _repo.UpdateAsync(item);
-
-        var found = await _repo.FindById(item.Id);
-        found!.Name.ShouldBe("Alice Updated");
-    }
-
-    [Fact]
     public async Task DeleteAsync_RemovesAggregate()
     {
         var item = new TestItem("Alice");
@@ -74,7 +71,7 @@ public sealed class InMemoryRepositoryWriteTests
 
         await _repo.DeleteAsync(item);
 
-        var found = await _repo.FindById(item.Id);
+        var found = await _repo.FindAsync(item.Id);
         found.ShouldBeNull();
     }
 
@@ -82,29 +79,16 @@ public sealed class InMemoryRepositoryWriteTests
     public async Task FindAsync_WithCompositePkArray_ThrowsNotSupported()
     {
         await Should.ThrowAsync<NotSupportedException>(
-            async () => await _repo.FindAsync([Guid.NewGuid(), Guid.NewGuid()]));
+            async () => await _repo.FindAsync([new TestItemId(Guid.NewGuid()), new TestItemId(Guid.NewGuid())]));
     }
 
     [Fact]
-    public async Task CommitAsync_WhenCancelled_ThrowsOperationCancelled()
+    public async Task FindAsync_WithANullKeyValue_ReturnsNull()
     {
-        using var cts = new CancellationTokenSource();
-        cts.Cancel();
+        await _repo.AddAsync(new TestItem("Alice"));
 
-        await Should.ThrowAsync<OperationCanceledException>(
-            async () => await _repo.CommitAsync(cts.Token));
-    }
-
-    [Fact]
-    public async Task CommitAsync_IsNoOp()
-    {
-        var item = new TestItem("Alice");
-        await _repo.AddAsync(item);
-
-        await _repo.CommitAsync();
-
-        // Writes are immediate — CommitAsync is a no-op; state is unchanged.
-        _repo.All.Count.ShouldBe(1);
+        // EfReadRepository.FindAsync answers null for a null key value, as DbSet.Find does.
+        (await _repo.FindAsync([null!])).ShouldBeNull();
     }
 }
 
@@ -114,7 +98,7 @@ public sealed class InMemoryRepositoryWriteTests
 
 public sealed class InMemoryRepositoryReadTests
 {
-    private readonly InMemoryRepository<TestItem> _repo = new();
+    private readonly InMemoryRepository<TestItem, TestItemId> _repo = new();
 
     [Fact]
     public async Task ListAsync_WithNullSpec_ReturnsAll()
@@ -252,9 +236,18 @@ public sealed class InMemoryReadRepositoryTests
     {
         var repo = new InMemoryReadRepository<TestItem>([new TestItem("Alice")]);
 
-        var found = await repo.FindAsync([Guid.NewGuid()]);
+        var found = await repo.FindAsync([new TestItemId(Guid.NewGuid())]);
 
         found.ShouldBeNull();
+    }
+
+    [Fact]
+    public async Task FindAsync_WithANullKeyValue_ReturnsNull()
+    {
+        var repo = new InMemoryReadRepository<TestItem>([new TestItem("Alice")]);
+
+        // EfReadRepository.FindAsync answers null for a null key value, as DbSet.Find does.
+        (await repo.FindAsync([null!])).ShouldBeNull();
     }
 
     [Fact]
@@ -291,10 +284,12 @@ public sealed class InMemoryReadRepositoryTests
 // Test helpers — scoped to this file
 // ---------------------------------------------------------------------------
 
-// A minimal IAggregateRoot with a conventional Guid Id property.
+internal readonly record struct TestItemId(Guid Value) : IEntityId;
+
+// A minimal IAggregateRoot with a conventional typed Id property.
 internal sealed class TestItem : IAggregateRoot
 {
-    public Guid Id { get; } = Guid.NewGuid();
+    public TestItemId Id { get; } = new(Guid.NewGuid());
     public string Name { get; private set; }
 
     public TestItem(string name) => Name = name;

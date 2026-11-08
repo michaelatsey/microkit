@@ -1,90 +1,81 @@
 # Template: Domain Specification
 
-Use this template for new `Specification<T>` subclasses in MicroKit.Domain.
+For a new `MicroKit.Domain.Specifications.Specification<T>` subclass, written in the consumer's
+domain layer. A specification overrides `ToExpression()` — nothing else.
 
 ---
 
-## Simple Specification
+## Simple specification
 
 ```csharp
-namespace MicroKit.Domain.Specifications;
-
-/// <summary>
-/// Matches <see cref="{Entity}"/> aggregates that are {condition}.
-/// </summary>
-public sealed class {Condition}{Entity}Spec : Specification<{Entity}>
+/// <summary>Matches <see cref="{Aggregate}"/> aggregates that are {condition}.</summary>
+public sealed class {Condition}{Aggregate}Spec : Specification<{Aggregate}>
 {
-    public {Condition}{Entity}Spec()
-        => AddCriteria(e => /* predicate */);
+    /// <inheritdoc/>
+    public override Expression<Func<{Aggregate}, bool>> ToExpression() => e => /* predicate */;
 }
 ```
 
-**Example:**
-```csharp
-public sealed class ActiveUserSpec : Specification<User>
-{
-    public ActiveUserSpec() => AddCriteria(u => u.IsActive && !u.IsDeleted);
-}
-```
-
----
-
-## Parameterised Specification
+Example:
 
 ```csharp
-/// <summary>
-/// Matches <see cref="{Entity}"/> aggregates where {property} equals <paramref name="{parameter}"/>.
-/// </summary>
-public sealed class {Entity}By{Property}Spec : Specification<{Entity}>
+public sealed class OpenOrdersSpec : Specification<Order>
 {
-    public {Entity}By{Property}Spec({PropertyType} {parameter})
-        => AddCriteria(e => e.{Property} == {parameter});
-}
-```
-
-**Example:**
-```csharp
-public sealed class UserByEmailSpec : Specification<User>
-{
-    public UserByEmailSpec(Email email) => AddCriteria(u => u.Email == email);
+    public override Expression<Func<Order, bool>> ToExpression() => order => !order.IsClosed;
 }
 ```
 
 ---
 
-## Test for the Specification
+## Parameterised specification
 
 ```csharp
-public sealed class {Condition}{Entity}SpecTests
+/// <summary>Matches <see cref="{Aggregate}"/> aggregates whose {Property} equals <paramref name="{parameter}"/>.</summary>
+public sealed class {Aggregate}By{Property}Spec({PropertyType} {parameter}) : Specification<{Aggregate}>
+{
+    /// <inheritdoc/>
+    public override Expression<Func<{Aggregate}, bool>> ToExpression() => e => e.{Property} == {parameter};
+}
+```
+
+---
+
+## Tests
+
+```csharp
+public sealed class {Condition}{Aggregate}SpecTests
 {
     [Fact]
-    public void Criteria_When{MatchCondition}_Matches()
+    public void IsSatisfiedBy_When{MatchCondition}_ReturnsTrue()
     {
-        var entity = {Entity}.Create{MatchingFactory}();
-        var spec = new {Condition}{Entity}Spec();
+        var aggregate = /* a matching aggregate */;
 
-        spec.Criteria.Compile()(entity).ShouldBeTrue();
+        new {Condition}{Aggregate}Spec().IsSatisfiedBy(aggregate).ShouldBeTrue();
     }
 
     [Fact]
-    public void Criteria_When{NoMatchCondition}_DoesNotMatch()
+    public void IsSatisfiedBy_When{NoMatchCondition}_ReturnsFalse()
     {
-        var entity = {Entity}.Create{NonMatchingFactory}();
-        var spec = new {Condition}{Entity}Spec();
+        var aggregate = /* a non-matching aggregate */;
 
-        spec.Criteria.Compile()(entity).ShouldBeFalse();
+        new {Condition}{Aggregate}Spec().IsSatisfiedBy(aggregate).ShouldBeFalse();
     }
 }
 ```
 
+Add one SQLite integration test that runs the specification through `IReadRepository` to prove
+EF Core translates it.
+
 ---
 
-## Usage in QueryHandler (application layer)
+## Usage in a query handler
 
 ```csharp
-// In the query handler — never in the spec itself
-var opts = new QueryOptions<{Entity}>(new {Condition}{Entity}Spec())
+var opts = new QueryOptions<{Aggregate}>(new {Condition}{Aggregate}Spec())
+    .WithOrderBy(e => e.{SortKey})
     .WithPagination(query.Page, query.PageSize);
 
-var results = await _readRepo.ListAsync(opts, ct).ConfigureAwait(false);
+var page = await _readRepository.ListPagedAsync(opts, ct).ConfigureAwait(false);
 ```
+
+Includes, ordering, pagination and tracking belong to `QueryOptions`, never to the specification.

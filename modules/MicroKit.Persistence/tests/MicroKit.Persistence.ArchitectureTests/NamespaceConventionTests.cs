@@ -14,7 +14,7 @@ public sealed class NamespaceConventionTests
         typeof(MicroKit.Persistence.EntityFrameworkCore.ITransactionalUnitOfWork).Assembly;
 
     private static readonly Assembly TestingAssembly =
-        typeof(MicroKit.Persistence.Testing.InMemoryRepository<>).Assembly;
+        typeof(MicroKit.Persistence.Testing.InMemoryRepository<,>).Assembly;
 
     private static readonly Assembly SpecificationsAssembly =
         typeof(MicroKit.Persistence.Specifications.QueryOptionsOrderingExtensions).Assembly;

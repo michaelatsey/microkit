@@ -1,72 +1,51 @@
 # Rule: Abstractions Minimality — MicroKit.Persistence
 
 ## Core principle (ADR-003)
-`MicroKit.Persistence.Abstractions` contains **only what a consuming module needs to compile**.
-If a type is not required to declare a handler signature or a service registration, it does not
-belong in Abstractions.
 
-## What belongs in Abstractions
+`MicroKit.Persistence.Abstractions` contains only what a consuming module needs to compile against
+the write side and the commit boundary. A type that is not needed to declare a handler signature
+or a service registration does not belong here.
+
+## What is in Abstractions — and nothing else
 
 ```csharp
-// ✅ Repository contracts
-IRepository<TAggregate>
-IReadRepository<TAggregate>
-
-// ✅ Unit of Work — the single commit boundary
-IUnitOfWork
-
-// ✅ Transaction contracts
-ITransactionalContext
-ITransaction
-ITransactionManager
-
-// ✅ Result contract
+IRepository<TAggregate, TId>   // TAggregate : class, IAggregateRoot; TId : IEntityId
+IUnitOfWork                    // CommitAsync + DiscardChanges
+ITransactionalContext          // the two ExecuteAsync overloads
 IPagedResult<T>
-
-// ✅ Exception
 PersistenceException
-
-// ✅ Nothing else
 ```
 
 ## What does NOT belong in Abstractions
 
 ```
-❌ ISpecificationEvaluator          → Core (infrastructure plumbing)
-❌ QueryOptions<T>                  → Core (loading strategy — not needed for type signatures)
-❌ EfRepository<T>, EfUnitOfWork   → EntityFrameworkCore (implementations, never in contracts)
-❌ DbContext, DbSet<T>, IQueryable  → never in Abstractions
-❌ Microsoft.EntityFrameworkCore    → not even as a package reference
-❌ Npgsql.*, SqlServer.*            → provider-specific, never in Abstractions
-❌ NSubstitute, Shouldly            → test packages, never in production code
-❌ Any MicroKit.Persistence.* project reference (package refs only)
+❌ IReadRepository<T>              → core (its methods take QueryOptions<T>)
+❌ ISpecificationEvaluator, QueryOptions<T>, PaginationOptions, PagedResult<T> → core
+❌ ITransactionalUnitOfWork, EfRepository, EfUnitOfWork → EntityFrameworkCore (ADR-004)
+❌ DbContext, DbSet<T>, IQueryable<T>, ModelBuilder → never
+❌ Microsoft.EntityFrameworkCore, Npgsql.*, SqlServer.* → not even as a package reference
+❌ NSubstitute, Shouldly          → test packages
+❌ Any MicroKit.Persistence.* project reference
 ```
 
-## Allowed package references in Abstractions
+## Allowed references
 
-```xml
-<!-- ✅ only these two -->
-<PackageReference Include="MicroKit.Result" />
-<PackageReference Include="MicroKit.Domain.Abstractions" />
-```
-
-`MicroKit.Result` is allowed because `IRepository` methods return `Result<T>` in consumer handlers.
-`MicroKit.Domain.Abstractions` is required for `IAggregateRoot` constraint on generic repository parameters.
-No other non-BCL package reference is allowed in Abstractions.
+`MicroKit.Domain` only — `IAggregateRoot` and `IEntityId` constrain `IRepository`'s type
+parameters. It is declared with the cross-module two-ItemGroup pattern
+(root `.claude/rules/cross-module-references.md`). No other non-BCL reference.
 
 ## The minimality test
 
-Ask: "Could a consuming module that does NOT use EF Core reference this package and compile?"
-If the answer is NO because of an EF Core type leak, the type is in the wrong package.
+"Could a module that does not use EF Core reference this package and compile?" If not, a type is
+in the wrong package.
 
 ## Detecting violations
 
 ```bash
-# EF Core leaked into Abstractions
 grep -rn 'EntityFrameworkCore\|DbContext\|DbSet\|IQueryable\|ModelBuilder' \
   modules/MicroKit.Persistence/src/MicroKit.Persistence.Abstractions/ --include="*.cs" --include="*.csproj"
-
-# Non-BCL package refs in Abstractions .csproj
-grep 'PackageReference' \
+grep -n 'Reference' \
   modules/MicroKit.Persistence/src/MicroKit.Persistence.Abstractions/MicroKit.Persistence.Abstractions.csproj
 ```
+
+`LayerDependencyTests` and `ContractPlacementTests` (ArchitectureTests) enforce the same placement.

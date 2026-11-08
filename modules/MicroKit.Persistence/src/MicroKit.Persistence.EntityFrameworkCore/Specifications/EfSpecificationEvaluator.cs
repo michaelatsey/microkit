@@ -3,15 +3,12 @@ namespace MicroKit.Persistence.EntityFrameworkCore;
 /// <summary>
 /// EF Core implementation of <see cref="ISpecificationEvaluator"/>.
 /// Applies a <see cref="QueryOptions{T}"/> to an <c>IQueryable&lt;T&gt;</c> in the canonical
-/// 6-step evaluation order.
+/// 5-step evaluation order.
 /// </summary>
 /// <remarks>
 /// <para>
 /// The canonical evaluation order is:
 /// <list type="number">
-///   <item><description><b>IgnoreQueryFilters</b> — bypasses EF Core global query filters (e.g., soft-delete)
-///     when <see cref="QueryOptions{T}.IncludeDeleted"/> is <see langword="true"/>. Must run
-///     before <c>Where</c> to ensure predicates are not constrained by the filter.</description></item>
 ///   <item><description><b>Specification criteria</b> — applies <c>.Where(spec.Criteria)</c></description></item>
 ///   <item><description><b>Includes</b> — applies the <c>Includes</c> delegate
 ///     (e.g., <c>.Include(...).ThenInclude(...)</c>)</description></item>
@@ -33,7 +30,7 @@ public sealed class EfSpecificationEvaluator : ISpecificationEvaluator
 {
     /// <summary>
     /// Transforms <paramref name="inputQuery"/> by applying all active properties of
-    /// <paramref name="opts"/> in the canonical 6-step evaluation order.
+    /// <paramref name="opts"/> in the canonical 5-step evaluation order.
     /// </summary>
     /// <typeparam name="T">The aggregate root type.</typeparam>
     /// <param name="inputQuery">
@@ -51,9 +48,6 @@ public sealed class EfSpecificationEvaluator : ISpecificationEvaluator
         where T : class, IAggregateRoot
     {
         var query = inputQuery;
-
-        if (opts.IncludeDeleted)
-            query = query.IgnoreQueryFilters();                        // step 0: bypass soft-delete filter
 
         if (opts.Specification is { } spec)
             query = query.Where(spec.ToExpression());                  // step 1: criteria

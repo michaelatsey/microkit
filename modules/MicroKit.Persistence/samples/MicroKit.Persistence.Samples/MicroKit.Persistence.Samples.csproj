@@ -1,0 +1,31 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <AssemblyName>MicroKit.Persistence.Samples</AssemblyName>
+    <RootNamespace>MicroKit.Persistence.Samples</RootNamespace>
+    <IsPackable>false</IsPackable>
+    <IsPublishable>false</IsPublishable>
+    <!-- An executable that is never trimmed: it opts out of the root IsTrimmable=true. -->
+    <IsTrimmable>false</IsTrimmable>
+    <!-- The samples are README code, not a published API. -->
+    <GenerateDocumentationFile>false</GenerateDocumentationFile>
+    <NoWarn>$(NoWarn);CA1707;IL2026;IL2091</NoWarn>
+  </PropertyGroup>
+  <!-- Intra-module: always an unconditional ProjectReference (ADR-GLOBAL-002 D5). Every C# sample of
+       README.md lives here and builds in Release (#196 D16); ReadmeSamplesTests enforces it. -->
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\MicroKit.Persistence.EntityFrameworkCore\MicroKit.Persistence.EntityFrameworkCore.csproj" />
+    <ProjectReference Include="..\..\src\MicroKit.Persistence.EntityFrameworkCore.PostgreSql\MicroKit.Persistence.EntityFrameworkCore.PostgreSql.csproj" />
+    <ProjectReference Include="..\..\src\MicroKit.Persistence.Specifications\MicroKit.Persistence.Specifications.csproj" />
+    <ProjectReference Include="..\..\src\MicroKit.Persistence.Testing\MicroKit.Persistence.Testing.csproj" />
+    <!-- Cross-module, non-packable: the aggregates, identifiers and actors come from MicroKit.Domain
+         directly, unconditionally, as in the integration tests. -->
+    <ProjectReference Include="..\..\..\MicroKit.Domain\src\MicroKit.Domain\MicroKit.Domain.csproj" />
+    <!-- The samples are the analyzers' corpus of valid usage: a Release build fails on any MKP diagnostic. -->
+    <ProjectReference Include="..\..\src\MicroKit.Persistence.Analyzers\MicroKit.Persistence.Analyzers.csproj"
+                      OutputItemType="Analyzer" ReferenceOutputAssembly="false" />
+  </ItemGroup>
+</Project>

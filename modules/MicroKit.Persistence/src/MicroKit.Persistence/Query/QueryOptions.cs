@@ -3,7 +3,7 @@ namespace MicroKit.Persistence;
 /// <summary>
 /// Encapsulates the loading strategy for a read query over <typeparamref name="TAggregate"/>
 /// aggregates. Combines the WHAT (a domain <see cref="Specification{T}"/>) with the HOW
-/// (eager includes, change-tracking hint, ordering, pagination, soft-delete visibility) — ADR-002.
+/// (eager includes, change-tracking hint, ordering, pagination) — ADR-002.
 /// </summary>
 /// <typeparam name="TAggregate">
 /// The aggregate root type. Must be a reference type implementing <see cref="IAggregateRoot"/>.
@@ -39,7 +39,7 @@ public sealed record QueryOptions<TAggregate>
     /// </summary>
     /// <param name="specification">
     /// The domain specification that determines which aggregates match the query.
-    /// Pass <see langword="null"/> to return all aggregates (subject to soft-delete filtering).
+    /// Pass <see langword="null"/> to return all aggregates (subject to the model's query filters).
     /// </param>
     public QueryOptions(Specification<TAggregate>? specification = null)
     {
@@ -65,7 +65,9 @@ public sealed record QueryOptions<TAggregate>
 
     /// <summary>
     /// Gets the pagination parameters.
-    /// <see langword="null"/> means no pagination — the full result set is returned.
+    /// <see langword="null"/> means no pagination: <c>ListAsync</c> returns the full result set,
+    /// <c>ListPagedAsync</c> returns the first page of <see cref="PaginationLimits.DefaultPageSize"/>
+    /// items. A requested page size above <see cref="PaginationLimits.MaxPageSize"/> is rejected.
     /// </summary>
     public PaginationOptions? Pagination { get; init; }
 
@@ -74,7 +76,8 @@ public sealed record QueryOptions<TAggregate>
     /// </summary>
     /// <value>
     /// <see langword="true"/> by default. Set to <see langword="false"/> only when the loaded
-    /// aggregate will be mutated and committed via <c>IRepository&lt;TAggregate&gt;</c>.
+    /// aggregate will be mutated and committed by the <c>IUnitOfWork</c>; the usual way to load an
+    /// aggregate for modification is <c>IRepository&lt;TAggregate, TId&gt;.FindAsync</c>.
     /// </value>
     public bool AsNoTrackingEnabled { get; init; } = true;
 
@@ -93,21 +96,9 @@ public sealed record QueryOptions<TAggregate>
     /// <see langword="null"/> means no explicit ordering (database default order).
     /// </summary>
     /// <remarks>
-    /// Must be set whenever <see cref="Pagination"/> is non-null to ensure deterministic
-    /// page boundaries across requests.
+    /// Must be set whenever <see cref="Pagination"/> is non-null, and for every
+    /// <c>ListPagedAsync</c> call (which applies a default page when <see cref="Pagination"/> is
+    /// null), to ensure deterministic page boundaries across requests.
     /// </remarks>
     public Func<IQueryable<TAggregate>, IOrderedQueryable<TAggregate>>? OrderBy { get; init; }
-
-    /// <summary>
-    /// Gets a value indicating whether soft-deleted aggregates are included in results.
-    /// </summary>
-    /// <value>
-    /// <see langword="false"/> by default — soft-deleted rows are excluded.
-    /// Set to <see langword="true"/> for administrative or audit queries.
-    /// </value>
-    /// <remarks>
-    /// The <see cref="ISpecificationEvaluator"/> implementation is responsible for honouring
-    /// this flag by bypassing the global query filter for soft-deleted entities.
-    /// </remarks>
-    public bool IncludeDeleted { get; init; }
 }

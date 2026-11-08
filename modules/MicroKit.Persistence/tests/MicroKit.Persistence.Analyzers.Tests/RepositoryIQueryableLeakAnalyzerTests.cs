@@ -13,6 +13,7 @@ public sealed class RepositoryIQueryableLeakAnalyzerTests
     {
         var source = PersistenceStubs.All + """
             class MyAggregate : IAggregateRoot { }
+            class MyId : IEntityId { }
 
             class MyReadRepo : IReadRepository<MyAggregate>
             {
@@ -31,13 +32,13 @@ public sealed class RepositoryIQueryableLeakAnalyzerTests
     {
         var source = PersistenceStubs.All + """
             class MyAggregate : IAggregateRoot { }
+            class MyId : IEntityId { }
 
-            class MyWriteRepo : IRepository<MyAggregate>
+            class MyWriteRepo : IRepository<MyAggregate, MyId>
             {
+                public ValueTask<MyAggregate> FindAsync(MyId id, CancellationToken ct = default) => default;
                 public ValueTask AddAsync(MyAggregate a, CancellationToken ct = default) => default;
-                public ValueTask UpdateAsync(MyAggregate a, CancellationToken ct = default) => default;
                 public ValueTask DeleteAsync(MyAggregate a, CancellationToken ct = default) => default;
-                public ValueTask CommitAsync(CancellationToken ct = default) => default;
 
                 public IQueryable<MyAggregate> {|MKP005:Query|}() => throw new System.NotImplementedException();
             }
@@ -54,6 +55,7 @@ public sealed class RepositoryIQueryableLeakAnalyzerTests
     {
         var source = PersistenceStubs.All + """
             class MyAggregate : IAggregateRoot { }
+            class MyId : IEntityId { }
 
             class MyReadRepo : IReadRepository<MyAggregate>
             {
@@ -77,8 +79,9 @@ public sealed class RepositoryIQueryableLeakAnalyzerTests
     {
         var source = PersistenceStubs.All + """
             class MyAggregate : IAggregateRoot { }
+            class MyId : IEntityId { }
 
-            class MyReadRepo : MicroKit.Persistence.IReadRepository<MyAggregate>
+            class MyReadRepo : IReadRepository<MyAggregate>
             {
                 public ValueTask<IReadOnlyList<MyAggregate>> ListAsync(CancellationToken ct = default)
                     => new ValueTask<IReadOnlyList<MyAggregate>>(new List<MyAggregate>());
@@ -113,11 +116,37 @@ public sealed class RepositoryIQueryableLeakAnalyzerTests
     {
         var source = PersistenceStubs.All + """
             class MyAggregate : IAggregateRoot { }
+            class MyId : IEntityId { }
 
             class MyReadRepo : IReadRepository<MyAggregate>
             {
                 // Private helper — not part of the public surface; must not be flagged
                 private IQueryable<MyAggregate> BuildQuery() => new List<MyAggregate>().AsQueryable();
+            }
+            """;
+
+        await new CSharpAnalyzerTest<RepositoryIQueryableLeakAnalyzer, CompatXUnitVerifier>
+        {
+            TestCode = source,
+        }.RunAsync();
+    }
+
+    [Fact]
+    public async Task ProtectedIncludeSeam_ReturningIQueryable_OnWriteRepoImpl_NoDiagnostic()
+    {
+        // EfRepository.IncludeAggregate is a protected IQueryable seam for subclasses (#196 D10):
+        // MKP005 targets the public surface only.
+        var source = PersistenceStubs.All + """
+            class MyAggregate : IAggregateRoot { }
+            class MyId : IEntityId { }
+
+            class MyWriteRepo : IRepository<MyAggregate, MyId>
+            {
+                public ValueTask<MyAggregate> FindAsync(MyId id, CancellationToken ct = default) => default;
+                public ValueTask AddAsync(MyAggregate a, CancellationToken ct = default) => default;
+                public ValueTask DeleteAsync(MyAggregate a, CancellationToken ct = default) => default;
+
+                protected virtual IQueryable<MyAggregate> IncludeAggregate(IQueryable<MyAggregate> query) => query;
             }
             """;
 

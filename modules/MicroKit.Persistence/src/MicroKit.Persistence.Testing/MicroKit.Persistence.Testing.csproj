@@ -9,16 +9,9 @@
     <NoWarn>$(NoWarn);IL2026;IL2090</NoWarn>
   </PropertyGroup>
 
-  <!-- DEV: source ProjectReferences — CI/Release: published NuGet packages -->
-  <!-- ⚠ Any new cross-module dependency must be added to BOTH ItemGroups -->
-  <ItemGroup Condition="'$(CIReleaseBuild)' != 'true'">
-    <ProjectReference Include="..\MicroKit.Persistence\MicroKit.Persistence.csproj" />
-  </ItemGroup>
-  <ItemGroup Condition="'$(CIReleaseBuild)' == 'true'">
-    <PackageReference Include="MicroKit.Persistence" />
-  </ItemGroup>
-
+  <!-- Intra-module: sibling packages are built and released together — always an unconditional
+       ProjectReference, in every build mode (ADR-GLOBAL-002 D5) -->
   <ItemGroup>
-    <PackageReference Include="NSubstitute" />
+    <ProjectReference Include="..\MicroKit.Persistence\MicroKit.Persistence.csproj" />
   </ItemGroup>
 </Project>

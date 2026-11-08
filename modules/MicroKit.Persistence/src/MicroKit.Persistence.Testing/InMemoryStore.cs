@@ -3,7 +3,7 @@ using System.Reflection;
 namespace MicroKit.Persistence.Testing;
 
 /// <summary>
-/// Internal backing store shared by <see cref="InMemoryRepository{TAggregate}"/> and
+/// Internal backing store shared by <see cref="InMemoryRepository{TAggregate, TId}"/> and
 /// <see cref="InMemoryReadRepository{TAggregate}"/>. Encapsulates the dictionary, key
 /// extraction, and the in-memory query pipeline.
 /// </summary>
@@ -15,9 +15,11 @@ internal sealed class InMemoryStore<TAggregate>
 
     private readonly Dictionary<object, TAggregate> _data = [];
     private readonly Func<TAggregate, object> _keySelector;
+    private readonly PaginationLimits _paginationLimits;
 
-    internal InMemoryStore(Func<TAggregate, object>? keySelector = null)
+    internal InMemoryStore(Func<TAggregate, object>? keySelector = null, PaginationLimits? paginationLimits = null)
     {
+        _paginationLimits = paginationLimits ?? PaginationLimits.Default;
         _keySelector = keySelector
             ?? s_conventionalKey
             ?? throw new InvalidOperationException(
@@ -25,8 +27,11 @@ internal sealed class InMemoryStore<TAggregate>
                 "Provide an explicit keySelector to the repository constructor.");
     }
 
-    internal InMemoryStore(IEnumerable<TAggregate> seed, Func<TAggregate, object>? keySelector = null)
-        : this(keySelector)
+    internal InMemoryStore(
+        IEnumerable<TAggregate> seed,
+        Func<TAggregate, object>? keySelector = null,
+        PaginationLimits? paginationLimits = null)
+        : this(keySelector, paginationLimits)
     {
         foreach (var item in seed)
             _data[_keySelector(item)] = item;
@@ -47,12 +52,18 @@ internal sealed class InMemoryStore<TAggregate>
                 $"InMemoryRepository does not support composite primary keys. " +
                 $"Received {keys.Length} key values for '{typeof(TAggregate).Name}'.");
 
-        return Find(keys[0]);
+        // A null key value matches nothing, as EfReadRepository.FindAsync and DbSet.Find answer.
+        return keys[0] is { } key ? Find(key) : null;
     }
 
-    internal void Add(TAggregate item) => _data[_keySelector(item)] = item;
-
-    internal void Update(TAggregate item) => _data[_keySelector(item)] = item;
+    internal void AddNew(TAggregate item)
+    {
+        if (!_data.TryAdd(_keySelector(item), item))
+        {
+            throw new InvalidOperationException(
+                $"A '{typeof(TAggregate).Name}' with the identifier '{_keySelector(item)}' is already stored.");
+        }
+    }
 
     internal void Remove(TAggregate item) => _data.Remove(_keySelector(item));
 
@@ -60,8 +71,11 @@ internal sealed class InMemoryStore<TAggregate>
 
     // ---- In-memory query pipeline ----
 
+    // Mirrors EfReadRepository: same PaginationLimits rules, so a handler tested against the
+    // double sees the bounded default page and the maximum-size rejection it meets in production.
     internal IReadOnlyList<TAggregate> ExecuteList(QueryOptions<TAggregate> opts)
     {
+        _paginationLimits.EnsureWithinMaximum(opts.Pagination);
         var items = ApplyFilter(opts);
         items = ApplyOrder(items, opts);
         if (opts.Pagination is { } p)
@@ -71,25 +85,11 @@ internal sealed class InMemoryStore<TAggregate>
 
     internal IPagedResult<TAggregate> ExecuteListPaged(QueryOptions<TAggregate> opts)
     {
-        var filtered = ApplyFilter(opts);
-        filtered = ApplyOrder(filtered, opts);
-        var all = filtered.ToList();
-        var total = all.Count;
+        var pagination = _paginationLimits.ForPagedQuery(opts.Pagination);
+        var all = ApplyOrder(ApplyFilter(opts), opts).ToList();
 
-        if (total == 0)
-        {
-            var emptyPage = opts.Pagination?.Page ?? 1;
-            var emptySize = opts.Pagination?.PageSize ?? 0;
-            return PagedResult<TAggregate>.Empty(emptyPage, emptySize);
-        }
-
-        if (opts.Pagination is { } p)
-        {
-            var page = all.Skip(p.Skip).Take(p.PageSize).ToList().AsReadOnly();
-            return new PagedResult<TAggregate>(page, total, p.Page, p.PageSize);
-        }
-
-        return new PagedResult<TAggregate>(all.AsReadOnly(), total, 1, total);
+        var page = all.Skip(pagination.Skip).Take(pagination.PageSize).ToList().AsReadOnly();
+        return new PagedResult<TAggregate>(page, all.Count, pagination.Page, pagination.PageSize);
     }
 
     internal bool ExecuteAny(QueryOptions<TAggregate> opts) =>

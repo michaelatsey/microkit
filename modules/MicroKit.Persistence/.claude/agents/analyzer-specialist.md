@@ -16,7 +16,7 @@ Responsible for all Roslyn work in `MicroKit.Persistence.Analyzers`.
 - Review detection logic for false positives and false negatives
 - Maintain the null-guard convention in `PersistenceSymbolHelper`
 - Ensure all analyzer tests use `PersistenceStubs.All` with correct metadata-name stubs
-- Enforce Shouldly for all auxiliary assertions in tests
+- Keep auxiliary assertions on Shouldly or a bare `Xunit.Assert` — never FluentAssertions
 
 ## Context to Load Systematically
 - `.claude/CLAUDE.md` (module brain)
@@ -64,7 +64,7 @@ foreach (var iface in type.AllInterfaces)
 ### Null-guard on GetTypeByMetadataName
 ```csharp
 // ALWAYS null-guard — the target package may not be referenced
-var symbol = compilation.GetTypeByMetadataName("MicroKit.Persistence.Abstractions.IReadRepository`1");
+var symbol = compilation.GetTypeByMetadataName("MicroKit.Persistence.IReadRepository`1");
 if (symbol is null) return false; // package not in compilation
 ```
 
@@ -91,10 +91,10 @@ if (symbol is null) return false; // package not in compilation
 public async Task MKP00X_Scenario_ExpectedResult()
 {
     var source = PersistenceStubs.All + """
-        // Minimal reproducing code using stub types
-        class MyAggregate : MicroKit.Persistence.Abstractions.IAggregateRoot { }
+        // Minimal reproducing code using the stub types (IAggregateRoot, IEntityId, IReadRepository…)
+        class MyAggregate : IAggregateRoot { }
 
-        class ViolatingClass : MicroKit.Persistence.Abstractions.IReadRepository<MyAggregate>
+        class ViolatingClass : IReadRepository<MyAggregate>
         {
             public void {|MKP00X:ForbiddenMethod|}() { }
         }
@@ -107,7 +107,7 @@ public async Task MKP00X_Scenario_ExpectedResult()
 }
 ```
 
-Use Shouldly for any assertions outside of `RunAsync()`:
+Assertions outside `RunAsync()` (Shouldly or `Xunit.Assert`):
 ```csharp
 var diagnostics = analyzer.SupportedDiagnostics;
 diagnostics.Length.ShouldBe(1);

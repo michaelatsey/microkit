@@ -2,7 +2,44 @@
 
 ## [Unreleased]
 
+Issue #196 settles the module before 2.0.0 stable. The entries below are grouped by package; the
+decision number (D1–D17) points at the issue. D3's presumption was confirmed by a test (a transient
+commit failure was not retried) before the retry was fixed; D7 was dropped — a drain already runs
+exactly one `DetectChanges`. The README is new and documents composition and every public type; its samples
+compile in `samples/MicroKit.Persistence.Samples`.
+
+### Build
+- The Release restore no longer fails on `System.Security.Cryptography.Pkcs` 9.0.4 (GHSA-2fmv-rv2c-59x7, GHSA-846f-f764-76mx), pinned to 9.0.21 (#161).
+- References between the module's own projects are unconditional `ProjectReference`s in every build mode (ADR-GLOBAL-002 D5).
+
 ### Breaking Changes
+
+#### MicroKit.Persistence.Abstractions
+- **D10** — `IRepository<TAggregate>` is replaced by `IRepository<TAggregate, TId> where TAggregate : class, IAggregateRoot where TId : IEntityId`, the only write-side contract: `FindAsync(TId id, ct)` loads the whole aggregate, tracked; `AddAsync`; `DeleteAsync`.
+- **D9** — `IRepository.CommitAsync` is removed: committing belongs to `IUnitOfWork` only (`TransactionBehavior` calls it).
+- **D11** — `IRepository.UpdateAsync` is removed: an aggregate loaded through `FindAsync` is tracked, so its changes need no call; `DbSet.Update` marked a whole graph `Modified` and was unsafe on a detached one.
+- **D8** — the empty `MicroKit.Persistence.Abstractions.IReadRepository<TAggregate>` marker is removed; `MicroKit.Persistence.IReadRepository<TAggregate>` (Core) is the only read contract (#120).
+- **D12** — `ITransactionManager` and `ITransaction` are removed: implemented and used nowhere.
+- **D17** — the package no longer depends on `MicroKit.Result`, which it did not use.
+
+#### MicroKit.Persistence (Core)
+- **D1** — `QueryOptions<T>.IncludeDeleted` and `QueryOptionsExtensions.IncludeSoftDeleted()` are removed. They called the parameterless `IgnoreQueryFilters()`, which disables **every** query filter of the model — a tenant filter included — while the module owns no soft delete. #197 reintroduces the flag on a *named* filter.
+- **D6** — `PaginationOptions` is no longer a positional record: `new PaginationOptions(page, pageSize)` validates `page >= 1`, `pageSize >= 1` and that the offset fits in an `int`, and `Page`, `PageSize`, `Skip` are get-only (no `Deconstruct`, no `with { Page = … }`). Named arguments change from `Page:`/`PageSize:` to `page:`/`pageSize:`.
+- `QueryOptionsExtensions.OrderBy(Func<IQueryable<T>, IOrderedQueryable<T>>)` is renamed `WithOrdering`. Named `OrderBy`, it lost to the `QueryOptions<T>.OrderBy` property and could only be called statically (`QueryOptionsExtensions.OrderBy(opts, …)`); replace that call with `opts.WithOrdering(…)`.
+
+#### MicroKit.Persistence.EntityFrameworkCore
+- **D10** — `EfRepository<TAggregate, TContext>(TContext, IUnitOfWork)` becomes `EfRepository<TAggregate, TId, TContext>(TContext)`. The protected `FindByKeyAsync(object[])`, which loaded the root without its children, is removed; `FindAsync(TId)` loads the whole aggregate (every navigation to a non-root entity, recursively; split when it has two or more collections), and the protected virtual `IncludeAggregate(IQueryable<TAggregate>)` lets a typed repository apply or replace those includes.
+- **D9, D11** — `EfRepository.CommitAsync` and `UpdateAsync` are removed.
+- **D12** — `EfTransaction` is removed.
+- **D6** — `EfReadRepository<TAggregate, TContext>` takes a third, required constructor parameter `PaginationLimits paginationLimits`; typed subclasses forward it (the container resolves the registered instance).
+- **D6** — `ListPagedAsync` without pagination returns page 1 of `PaginationLimits.DefaultPageSize` (50) items instead of the whole result set; a requested page size above `PaginationLimits.MaxPageSize` (500) throws `ArgumentOutOfRangeException` from `ListAsync` and `ListPagedAsync`.
+- **D2** — `EfReadRepository.FindAsync` returns an aggregate the unit of work already tracks as is (same instance, same state) instead of detaching it, and loads any other aggregate with a no-tracking query instead of tracking then detaching it.
+- **D3–D5** — `EfUnitOfWork.ExecuteAsync` joins an open `Database.CurrentTransaction`; exhausted retries surface as `PersistenceException` (inner `RetryLimitExceededException`) instead of `RetryLimitExceededException`; failures of the transaction itself surface as `PersistenceException`; a failed attempt clears the change tracker. See ADR-006.
+
+#### MicroKit.Persistence.Testing
+- **D10** — `InMemoryRepository<TAggregate>` becomes `InMemoryRepository<TAggregate, TId>`: `FindAsync(TId)` replaces `FindById(object)`; `UpdateAsync` and `CommitAsync` are removed; the key-selector constructors take a `Func<TAggregate, TId>`.
+- **D6** — `InMemoryRepository<T>` and `InMemoryReadRepository<T>` enforce `PaginationLimits` like the EF Core read repository (new constructor overloads take one); `ListPagedAsync` without pagination returns the default page.
+- The package no longer depends on `NSubstitute`, which none of its code used. A test project that used NSubstitute only through it must now reference `NSubstitute` itself.
 
 #### MicroKit.Persistence.Abstractions
 - `IUnitOfWork` gains `void DiscardChanges()` — abandons the pending change set without writing it. Every implementer must add the member. Consumers that only inject `IUnitOfWork` are unaffected: the member is called by `TransactionBehavior`, not by handlers.
@@ -21,13 +58,38 @@
 
 ### Added
 
+#### MicroKit.Persistence (Core)
+- **D6** — `PaginationLimits` (default page 50, maximum 500), validated on construction.
+
 #### MicroKit.Persistence.EntityFrameworkCore
+- **D15** — `UsePostgreSQL<TContext>` and `UseSqlServer<TContext>` take an optional `ProviderOptions`: `Retry = new RetryOnFailureOptions(maxRetryCount, maxRetryDelay)` turns on the provider's retrying execution strategy, `PoolSize` registers the context with `AddDbContextPool`. Both are off by default; existing calls are unchanged. With `PoolSize` set, registration throws `ArgumentException` unless the context's only public constructor takes just `DbContextOptions` or `DbContextOptions<TContext>`: a pooled context's constructor-injected scoped services are resolved once from the root provider and shared by every lease, so tenant-aware contexts such as `MultitenantDbContext` must not be pooled.
+- **D13** — `DomainConventionExtensions` for `ConfigureConventions`: `AddEntityIdConventions(params Assembly[])` maps every concrete `EntityId<T>` of the given assemblies, and `GuidId`, to a `Guid` column, reading values back through the type's `(Guid)` constructor whatever its accessibility (model building fails, naming the type, when there is none); `AddActorConvention()` maps `Actor` to a string of at most `Actor.MaxLength` characters read back through `Actor.Restore` (on an existing schema the 200-character limit is a column change to migrate); `AddDomainConventions(params Assembly[])` applies all three conventions.
+- **D14** — `AddAuditInstantConvention()` normalises the `CreatedAt` / `UpdatedAt` instants of every `IAuditableEntity` to offset zero on read and write (query parameters included), and rejects a stored `default` instant on read. Compiled models (`dotnet ef dbcontext optimize`) and NativeAOT precompiled queries are not supported by the D13/D14 conventions: the generated code instantiates internal converters.
+- **D6** — `EfCoreBuilder.ConfigurePagination(PaginationLimits)`; `AddEntityFrameworkCore()` registers `PaginationLimits.Default`.
 - `EfDomainEventsProvider<TContext>` — change-tracker-backed `IDomainEventsProvider` that aggregates domain events across every entity tracked by `TContext`. Candidates are detected on `IHasDomainEvents` (the read contract); draining requires `IDomainEventsProvider`, so an entity that exposes events without implementing the drain contract is reported by `DomainEvents` but skipped by `DrainDomainEvents`. Reads the in-memory change tracker only — never queries the database.
 
 #### MicroKit.Persistence.Testing
 - `InMemoryUnitOfWork.DiscardChanges()` and `DiscardCount`, symmetric with `CommitCount`, so tests can assert that a failed command discarded exactly once.
 
 ### Fixed
+
+#### MicroKit.Persistence.EntityFrameworkCore
+- **D14** — an audit instant read from a row stored with a non-zero offset (SQL Server `datetimeoffset`, SQLite text) kept that offset, and a later write to a PostgreSQL `timestamptz` column failed ("only offset 0 is supported"); a row holding `0001-01-01` loaded silently. With `AddAuditInstantConvention()`, the first is normalised and the second rejected (#172).
+- **D1** — a query with `IncludeDeleted = true` returned other tenants' rows (the parameterless `IgnoreQueryFilters()` disabled the tenant filter). An architecture test now fails on any library call to it.
+- **D2** — reading an aggregate the current command had added, modified or deleted through `EfReadRepository.FindAsync` detached it, and the next commit silently wrote nothing. Loading an untracked one could also wire it into tracked entities' navigations before detaching it, so a later commit tried to insert it.
+- **D3** — a transient failure of the command's `SaveChangesAsync` inside `ExecuteAsync` was never retried: `CommitAsync`'s `PersistenceException` hid the `DbUpdateException` from the execution strategy. A failure of the transaction's COMMIT left the attempt's accepted changes tracked, so a retry could apply them twice.
+- **D3** — with a provider's default (non-retrying) strategy, `CommitAsync` leaked `InvalidOperationException` for a transient write failure instead of `PersistenceException`.
+- **D15** — with a retrying strategy, `CommitAsync` called outside `ExecuteAsync` leaked `RetryLimitExceededException` once the retries were exhausted, instead of the documented `PersistenceException`.
+- **D4** — `ExecuteAsync` inside an open transaction (nested, or caller-owned) threw `InvalidOperationException` ("The connection is already in a transaction").
+- **D5** — the rollback after a failed operation ran with the caller's token, so after a cancellation it threw `OperationCanceledException` and masked the original exception; a failing rollback masked it too.
+- `ExecuteAsync` let a raw `DbUpdateException` escape when the operation flushed through the `DbContext` itself rather than `CommitAsync`, instead of the documented `PersistenceException`.
+- `EfReadRepository` list, paged list, any and count queries with `WithTracking()` ran untracked on a context configured with `QueryTrackingBehavior.NoTracking`, so changes to the aggregates they returned were silently lost at commit.
+
+#### MicroKit.Persistence.Analyzers
+- The package declared `Microsoft.CodeAnalysis.CSharp` as a NuGet dependency, so every consumer restored Roslyn as a package. The reference is now `PrivateAssets="all"`: the compiler that loads the analyzer provides Roslyn, and the nuspec declares no dependency.
+
+#### MicroKit.Persistence.Testing
+- `InMemoryReadRepository.FindAsync` and `InMemoryRepository.FindAsync(object[])` threw `ArgumentNullException` for a null key value, where `EfReadRepository.FindAsync` returns `null`.
 
 #### MicroKit.Persistence.Abstractions
 - A command that failed its business rule could persist its data anyway. `TransactionBehavior` correctly skipped the flush on failure, but the entities the handler staged stayed in the scoped `DbContext`'s change tracker; the next successful command in the same scope wrote them along with its own. Identical on the exception path — EF Core's transaction rollback does not reset the change tracker. The failure was silent: no error, no log, and nothing distinguishing it from correct operation. `IUnitOfWork` had no way to express "abandon this change set", so no consumer could fix it without reaching past the abstraction into EF Core.

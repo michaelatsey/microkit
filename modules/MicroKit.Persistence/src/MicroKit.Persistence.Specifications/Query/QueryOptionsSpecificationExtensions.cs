@@ -9,13 +9,13 @@ public static class QueryOptionsSpecificationExtensions
     /// <summary>
     /// Returns a new <see cref="QueryOptions{TAggregate}"/> with the specification replaced
     /// by <paramref name="specification"/>. All other options (includes, pagination, ordering,
-    /// tracking, split-query, soft-delete) are preserved unchanged.
+    /// tracking, split-query) are preserved unchanged.
     /// </summary>
     /// <typeparam name="TAggregate">The aggregate root type.</typeparam>
     /// <param name="opts">The source options to derive from.</param>
     /// <param name="specification">
     ///   The replacement specification, or <see langword="null"/> to clear the filter and
-    ///   return all aggregates (subject to soft-delete filtering).
+    ///   return all aggregates (subject to the model's query filters).
     /// </param>
     /// <returns>
     ///   A new options instance with <see cref="QueryOptions{TAggregate}.Specification"/>

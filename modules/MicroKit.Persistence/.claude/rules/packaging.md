@@ -1,78 +1,61 @@
 # Rule: Packaging — MicroKit.Persistence
 
-## Package IDs
+## Packages
 
-| Project | NuGet Package ID |
-|---------|-----------------|
-| `MicroKit.Persistence.Abstractions` | `MicroKit.Persistence.Abstractions` |
-| `MicroKit.Persistence` | `MicroKit.Persistence` |
-| `MicroKit.Persistence.EntityFrameworkCore` | `MicroKit.Persistence.EntityFrameworkCore` |
-| `MicroKit.Persistence.EntityFrameworkCore.PostgreSql` | `MicroKit.Persistence.EntityFrameworkCore.PostgreSql` |
-| `MicroKit.Persistence.EntityFrameworkCore.SqlServer` | `MicroKit.Persistence.EntityFrameworkCore.SqlServer` |
-| `MicroKit.Persistence.Specifications` | `MicroKit.Persistence.Specifications` |
-| `MicroKit.Persistence.Testing` | `MicroKit.Persistence.Testing` |
-| `MicroKit.Persistence.Analyzers` | `MicroKit.Persistence.Analyzers` |
+Eight packages, one per `src/` project, package ID = project name:
 
-## Versioning
-
-Versions are computed by **Nerdbank.GitVersioning** from `version.json`:
-
-```json
-{
-  "version": "1.0",
-  "publicReleaseRefSpec": [
-    "^refs/heads/main$",
-    "^refs/tags/persistence-v\\d+\\.\\d+"
-  ]
-}
+```
+MicroKit.Persistence.Abstractions
+MicroKit.Persistence
+MicroKit.Persistence.EntityFrameworkCore
+MicroKit.Persistence.EntityFrameworkCore.PostgreSql
+MicroKit.Persistence.EntityFrameworkCore.SqlServer
+MicroKit.Persistence.Specifications
+MicroKit.Persistence.Testing
+MicroKit.Persistence.Analyzers
 ```
 
-All 8 packages share the same version within a release.
+Tests and `samples/MicroKit.Persistence.Samples` are `IsPackable=false`.
 
-## Required Package Metadata (.csproj)
+## Metadata
+
+Common metadata (`Authors`, project and repository URLs, `MIT` licence, symbols as `snupkg`) comes
+from the root `Directory.Build.props`. Each `.csproj` sets its own `Description` and
+`PackageTags`; keep the description true to what the package contains.
+
+## Versioning and Tags
+
+All 8 packages ship under one version. A `persistence-v<semver>` tag (e.g.
+`persistence-v1.0.0-preview.4`) triggers `.github/workflows/release-persistence.yml`, which takes
+the version from the tag. `version.json` is not read by the build. ADR-GLOBAL-002 (root) defines
+the replacement model; no tag is cut until steps 1–4 of its migration land.
+
+## Declared NuGet Dependencies
+
+| Package | Dependencies |
+|---------|--------------|
+| `Abstractions` | `MicroKit.Domain` |
+| `MicroKit.Persistence` | `MicroKit.Persistence.Abstractions` |
+| `EntityFrameworkCore` | `MicroKit.Persistence`, `Microsoft.EntityFrameworkCore`, `Microsoft.EntityFrameworkCore.Relational`, `Microsoft.Extensions.DependencyInjection.Abstractions` |
+| `PostgreSql` | `MicroKit.Persistence.EntityFrameworkCore`, `Npgsql.EntityFrameworkCore.PostgreSQL` |
+| `SqlServer` | `MicroKit.Persistence.EntityFrameworkCore`, `Microsoft.EntityFrameworkCore.SqlServer` |
+| `Specifications` | `MicroKit.Persistence` |
+| `Testing` | `MicroKit.Persistence` |
+| `Analyzers` | none — `Microsoft.CodeAnalysis.CSharp` is referenced with `PrivateAssets="all"`; the compiler provides Roslyn |
+
+## Analyzers Package
+
+`netstandard2.0`, `IncludeBuildOutput=false`, the DLL packed to `analyzers/dotnet/cs/` — no `lib/`.
+Consumers:
 
 ```xml
-<Authors>Ange-Michaël Atsé</Authors>
-<Description>...</Description>
-<PackageTags>persistence;repository;ef-core;unit-of-work;microkit;ddd;dotnet</PackageTags>
-<PackageProjectUrl>https://github.com/michaelatsey/microkit</PackageProjectUrl>
-<RepositoryUrl>https://github.com/michaelatsey/microkit</RepositoryUrl>
-<PackageLicenseExpression>MIT</PackageLicenseExpression>
-<IncludeSymbols>true</IncludeSymbols>
-<SymbolPackageFormat>snupkg</SymbolPackageFormat>
-```
-
-## Analyzers Package Special Configuration
-
-The Analyzers package must be referenced as a build-time tool, not a runtime dependency:
-
-```xml
-<!-- In consuming project .csproj -->
 <PackageReference Include="MicroKit.Persistence.Analyzers">
   <PrivateAssets>all</PrivateAssets>
   <IncludeAssets>runtime; build; native; contentfiles; analyzers</IncludeAssets>
 </PackageReference>
 ```
 
-The Analyzers `.nupkg` must contain `analyzers/dotnet/cs/` — no `lib/` folder.
+## Before Publishing
 
-## Release Tag Convention
-
-```
-persistence-v1.0.0
-persistence-v1.1.0-beta.1
-persistence-v2.0.0
-```
-
-## Declared NuGet Dependencies per Package
-
-| Package | Runtime Dependencies |
-|---------|---------------------|
-| `Abstractions` | `MicroKit.Result`, `MicroKit.Domain.Abstractions` |
-| `MicroKit.Persistence` | `MicroKit.Persistence.Abstractions`, `MicroKit.Logging.Abstractions` |
-| `EntityFrameworkCore` | `MicroKit.Persistence`, `Microsoft.EntityFrameworkCore` |
-| `PostgreSql` | `MicroKit.Persistence.EntityFrameworkCore`, `Npgsql.EntityFrameworkCore.PostgreSQL` |
-| `SqlServer` | `MicroKit.Persistence.EntityFrameworkCore`, `Microsoft.EntityFrameworkCore.SqlServer` |
-| `Specifications` | `MicroKit.Persistence` |
-| `Testing` | `MicroKit.Persistence`, `NSubstitute` |
-| `Analyzers` | `Microsoft.CodeAnalysis.CSharp` (build-time, not runtime) |
+Pack to `artifacts/persistence/` and consume the packages from a local folder feed in a real
+consumer before any NuGet.org publish (see `workflows/releasing-module.md`).

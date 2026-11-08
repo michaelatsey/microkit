@@ -35,6 +35,11 @@ public static class QueryOptionsExtensions
     /// <param name="page">The one-based page number. Must be ≥ 1.</param>
     /// <param name="pageSize">The number of items per page. Must be ≥ 1.</param>
     /// <returns>A new options instance with <see cref="QueryOptions{TAggregate}.Pagination"/> set.</returns>
+    /// <exception cref="ArgumentNullException"><paramref name="opts"/> is <see langword="null"/>.</exception>
+    /// <exception cref="ArgumentOutOfRangeException">
+    /// <paramref name="page"/> or <paramref name="pageSize"/> is less than 1, or the page starts
+    /// beyond <see cref="int.MaxValue"/> items (see <see cref="PaginationOptions"/>).
+    /// </exception>
     public static QueryOptions<TAggregate> WithPagination<TAggregate>(
         this QueryOptions<TAggregate> opts,
         int page,
@@ -81,8 +86,9 @@ public static class QueryOptionsExtensions
 
     /// <summary>
     /// Returns a new <see cref="QueryOptions{TAggregate}"/> with EF Core change tracking
-    /// enabled. Use only when the loaded aggregate will be mutated and committed via
-    /// <c>IRepository&lt;TAggregate&gt;</c> within the same command handler.
+    /// enabled. Use only when the loaded aggregate will be mutated and committed by the
+    /// <c>IUnitOfWork</c> within the same command; the usual way to load an aggregate for
+    /// modification is <c>IRepository&lt;TAggregate, TId&gt;.FindAsync</c>.
     /// </summary>
     /// <typeparam name="TAggregate">The aggregate root type.</typeparam>
     /// <param name="opts">The source options to derive from.</param>
@@ -112,9 +118,16 @@ public static class QueryOptionsExtensions
     }
 
     /// <summary>
-    /// Returns a new <see cref="QueryOptions{TAggregate}"/> with the specified ordering delegate.
-    /// Ordering is applied after filtering and includes, and before pagination.
+    /// Returns a new <see cref="QueryOptions{TAggregate}"/> with the specified ordering delegate,
+    /// replacing any previous ordering. Ordering is applied after filtering and includes, and before
+    /// pagination.
     /// </summary>
+    /// <remarks>
+    /// Named with the <c>With</c> prefix, like <c>WithOrderBy</c> and <c>WithThenBy</c>: an extension
+    /// named <c>OrderBy</c> loses to the <see cref="QueryOptions{TAggregate}.OrderBy"/> property and
+    /// cannot be called with extension syntax. For a key selector, the
+    /// <c>MicroKit.Persistence.Specifications</c> package offers <c>WithOrderBy</c> and <c>WithThenBy</c>.
+    /// </remarks>
     /// <typeparam name="TAggregate">The aggregate root type.</typeparam>
     /// <param name="opts">The source options to derive from.</param>
     /// <param name="orderBy">
@@ -123,7 +136,7 @@ public static class QueryOptionsExtensions
     /// Example: <c>q =&gt; q.OrderByDescending(u =&gt; u.CreatedAt)</c>.
     /// </param>
     /// <returns>A new options instance with <see cref="QueryOptions{TAggregate}.OrderBy"/> set.</returns>
-    public static QueryOptions<TAggregate> OrderBy<TAggregate>(
+    public static QueryOptions<TAggregate> WithOrdering<TAggregate>(
         this QueryOptions<TAggregate> opts,
         Func<IQueryable<TAggregate>, IOrderedQueryable<TAggregate>> orderBy)
         where TAggregate : class, IAggregateRoot
@@ -131,20 +144,5 @@ public static class QueryOptionsExtensions
         ArgumentNullException.ThrowIfNull(opts);
         ArgumentNullException.ThrowIfNull(orderBy);
         return opts with { OrderBy = orderBy };
-    }
-
-    /// <summary>
-    /// Returns a new <see cref="QueryOptions{TAggregate}"/> that includes soft-deleted
-    /// aggregates in query results. By default soft-deleted rows are excluded.
-    /// </summary>
-    /// <typeparam name="TAggregate">The aggregate root type.</typeparam>
-    /// <param name="opts">The source options to derive from.</param>
-    /// <returns>A new options instance with <see cref="QueryOptions{TAggregate}.IncludeDeleted"/> set to <see langword="true"/>.</returns>
-    public static QueryOptions<TAggregate> IncludeSoftDeleted<TAggregate>(
-        this QueryOptions<TAggregate> opts)
-        where TAggregate : class, IAggregateRoot
-    {
-        ArgumentNullException.ThrowIfNull(opts);
-        return opts with { IncludeDeleted = true };
     }
 }

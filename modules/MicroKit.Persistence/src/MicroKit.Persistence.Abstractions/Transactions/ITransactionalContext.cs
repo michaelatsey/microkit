@@ -13,9 +13,12 @@ public interface ITransactionalContext
 {
     /// <summary>
     /// Executes <paramref name="operation"/> inside a database transaction.
-    /// The implementation begins a transaction, invokes the operation, commits on success,
-    /// and rolls back on failure. Transient-failure retry is handled transparently when
-    /// supported by the provider (e.g., Npgsql, SQL Server execution strategies).
+    /// With no transaction open, the implementation begins one, invokes the operation, commits on
+    /// success, and rolls back on failure; transient-failure retry is handled transparently when
+    /// supported by the provider (e.g., Npgsql, SQL Server execution strategies). With a
+    /// transaction already open — an enclosing call's, or one the caller opened itself — it joins
+    /// it: the operation runs inside it, and whoever owns that transaction commits, rolls back and
+    /// retries.
     /// </summary>
     /// <typeparam name="TState">
     /// The type of caller-owned state threaded through to <paramref name="operation"/>.
@@ -31,10 +34,12 @@ public interface ITransactionalContext
 
     /// <summary>
     /// Executes <paramref name="operation"/> inside a database transaction and returns
-    /// its result. The implementation begins a transaction, invokes the operation, commits
-    /// on success, and rolls back on failure. Transient-failure retry is handled
+    /// its result. With no transaction open, the implementation begins one, invokes the operation,
+    /// commits on success, and rolls back on failure; transient-failure retry is handled
     /// transparently when supported by the provider (e.g., Npgsql, SQL Server execution
-    /// strategies).
+    /// strategies). With a transaction already open — an enclosing call's, or one the caller opened
+    /// itself — it joins it: the operation runs inside it, and whoever owns that transaction
+    /// commits, rolls back and retries.
     /// </summary>
     /// <typeparam name="TState">
     /// The type of caller-owned state threaded through to <paramref name="operation"/>.

@@ -5,12 +5,9 @@
     <Description>Core persistence layer for MicroKit — QueryOptions, ISpecificationEvaluator, full IReadRepository contract, and PagedResult. No EF Core, no DI dependency.</Description>
     <PackageTags>persistence;repository;query-options;specification;microkit;ddd;dotnet</PackageTags>
   </PropertyGroup>
-  <!-- DEV: source ProjectReferences — CI/Release: published NuGet packages -->
-  <!-- ⚠ Any new cross-module dependency must be added to BOTH ItemGroups -->
-  <ItemGroup Condition="'$(CIReleaseBuild)' != 'true'">
+  <!-- Intra-module: sibling packages are built and released together — always an unconditional
+       ProjectReference, in every build mode (ADR-GLOBAL-002 D5) -->
+  <ItemGroup>
     <ProjectReference Include="..\MicroKit.Persistence.Abstractions\MicroKit.Persistence.Abstractions.csproj" />
-  </ItemGroup>
-  <ItemGroup Condition="'$(CIReleaseBuild)' == 'true'">
-    <PackageReference Include="MicroKit.Persistence.Abstractions" />
   </ItemGroup>
 </Project>

@@ -1,169 +1,102 @@
 # Rule: EF Core Patterns — MicroKit.Persistence
 
-## Always active for files in EntityFrameworkCore, PostgreSql, and SqlServer projects.
+Applies to the EntityFrameworkCore, PostgreSql and SqlServer projects.
 
-## Entity Configuration
+## Model configuration (consumer side)
 
-```csharp
-// ✅ Always IEntityTypeConfiguration<T> — never OnModelCreating sprawl
-public sealed class UserConfiguration : IEntityTypeConfiguration<User>
-{
-    public void Configure(EntityTypeBuilder<User> builder)
-    {
-        builder.ToTable("Users");
-        builder.HasKey(u => u.Id);
-
-        // Value object owned entity
-        builder.OwnsOne(u => u.Email, eb =>
-        {
-            eb.Property(e => e.Value)
-              .HasColumnName("Email")
-              .IsRequired()
-              .HasMaxLength(320);
-        });
-
-        // Value converter for strongly-typed IDs
-        builder.Property(u => u.Id)
-               .HasConversion(id => id.Value, value => new UserId(value));
-    }
-}
-
-// ❌ Inline configuration in OnModelCreating
-protected override void OnModelCreating(ModelBuilder builder)
-{
-    builder.Entity<User>().ToTable("Users"); // ❌ — move to IEntityTypeConfiguration
-}
-```
-
-## AsNoTracking — Enforcement
+- One `IEntityTypeConfiguration<T>` per aggregate, applied with `ApplyConfigurationsFromAssembly`;
+  no configuration sprawl in `OnModelCreating`.
+- MicroKit.Domain types are mapped by conventions, from `ConfigureConventions`:
 
 ```csharp
-// ✅ REQUIRED on every IReadRepository implementation
-public async ValueTask<IReadOnlyList<T>> ListAsync(QueryOptions<T> opts, CancellationToken ct = default)
-{
-    var query = _context.Set<T>()
-        .AsNoTracking()                    // ← line 1, mandatory
-        .Where(opts.Specification.Criteria);
-    // ...
-}
-
-// ✅ Global query tracking behavior for read DbContexts (optional pattern)
-optionsBuilder.UseQueryTrackingBehavior(QueryTrackingBehavior.NoTrackingWithIdentityResolution);
+protected override void ConfigureConventions(ModelConfigurationBuilder builder)
+    => builder.AddDomainConventions(typeof(OrderId).Assembly);
+// = AddEntityIdConventions(assemblies)  EntityId<T> and GuidId → Guid column, read back through the (Guid) ctor
+//   AddActorConvention()                Actor → string(Actor.MaxLength)
+//   AddAuditInstantConvention()         IAuditableEntity CreatedAt/UpdatedAt → UTC instants
 ```
 
-## EfSpecificationEvaluator
+An explicit `HasConversion` in `OnModelCreating` wins over each convention. Compiled models and
+NativeAOT precompiled queries are not supported by them (their converters are internal).
+
+## Write side — `EfRepository<TAggregate, TId, TContext>`
+
+- `FindAsync(TId)` requires a single-property primary key of CLR type `TId`, else
+  `InvalidOperationException`.
+- An instance already tracked is returned as is; otherwise one tracked query loads the whole
+  aggregate: every navigation reachable from the root (owned types come with their owner),
+  stopping at another `IAggregateRoot` and at cycles. Two or more collections (an owned collection mapped to JSON does
+  not count) switch the load to `AsSplitQuery()`: 1 + C round trips for C collections.
+- The plan is computed once per model entity type (`AggregateIncludePlan`).
+- Override `protected virtual IncludeAggregate(IQueryable<TAggregate>)` to narrow or extend the
+  load; tracking is re-applied after it. Custom finders reuse it:
 
 ```csharp
-// ✅ All query transformations flow through the evaluator — never inline
-public sealed class EfSpecificationEvaluator : ISpecificationEvaluator
-{
-    public IQueryable<T> GetQuery<T>(IQueryable<T> inputQuery, QueryOptions<T> opts)
-        where T : class, IAggregateRoot
-    {
-        var query = inputQuery;
-
-        if (opts.Specification is { } spec)
-            query = query.Where(spec.Criteria);
-
-        if (opts.Includes is not null)
-            query = opts.Includes(query);
-
-        if (opts.AsSplitQueryEnabled)
-            query = query.AsSplitQuery();
-
-        if (opts.Pagination is { } p)
-            query = query.Skip(p.Skip).Take(p.PageSize);  // p.Skip = (p.Page - 1) * p.PageSize
-
-        return query;
-    }
-}
+var orders = await IncludeAggregate(Context.Orders.AsTracking())
+    .Where(o => o.Number == number)
+    .ToListAsync(ct).ConfigureAwait(false);
+return orders.SingleOrDefault();
 ```
 
-## Split Query vs Single Query
+- `AddAsync` and `DeleteAsync` only stage changes; the unit of work commits.
 
-```csharp
-// ❌ Cartesian explosion — 2 levels of collections in one query
-var users = context.Users
-    .Include(u => u.Orders)
-    .ThenInclude(o => o.Lines)
-    .ToList(); // potentially millions of rows
+## Read side — `EfReadRepository<TAggregate, TContext>`
 
-// ✅ AsSplitQuery for multi-collection includes
-var opts = new QueryOptions<User>(spec)
-    .WithIncludes(q => q.Include(u => u.Orders).ThenInclude(o => o.Lines))
-    .AsSplitQuery(); // 3 SELECT statements, no Cartesian product
-```
+- `FindAsync(object[] keyValues)`: key count must match the primary key; a null value matches
+  nothing; a tracked instance is returned as is, anything else is loaded `AsNoTracking`.
+- List, paged list, any and count start from `AsNoTracking()` unless `WithTracking()`, then go
+  through `ISpecificationEvaluator`. Count and any drop includes, ordering and pagination.
+- `PaginationLimits` bounds every list: `ListPagedAsync` without pagination returns the first
+  page of `DefaultPageSize`; a requested size above `MaxPageSize` throws
+  `ArgumentOutOfRangeException`.
 
-## ITransactionalUnitOfWork
+## `EfSpecificationEvaluator` — fixed order
 
-```csharp
-// ✅ Composite interface — EF-specific, not in Abstractions
-public interface ITransactionalUnitOfWork : IUnitOfWork, ITransactionalContext { }
+1. `Where(spec.ToExpression())` 2. `Includes` 3. `AsSplitQuery()` 4. `OrderBy` 5. `Skip/Take`.
+Every query transformation goes through it; no inline composition in repositories.
 
-public sealed class EfUnitOfWork(AppDbContext ctx) : ITransactionalUnitOfWork
-{
-    private IDbContextTransaction? _currentTransaction;
+## Query filters
 
-    public async ValueTask CommitAsync(CancellationToken ct = default)
-    {
-        try
-        {
-            await ctx.SaveChangesAsync(ct).ConfigureAwait(false);
-        }
-        catch (DbUpdateConcurrencyException ex)
-        {
-            throw new PersistenceException("Concurrency conflict during commit.", ex);
-        }
-        catch (DbUpdateException ex)
-        {
-            throw new PersistenceException("Database error during commit.", ex);
-        }
-    }
+Library code never calls the parameterless `IgnoreQueryFilters()`: it disables every filter,
+a tenant filter the module does not own included. `IlCallScanTests` scans the IL of every library
+assembly for it. Only the named overload may be used.
 
-    public async ValueTask<ITransaction> BeginTransactionAsync(CancellationToken ct = default)
-    {
-        _currentTransaction = await ctx.Database.BeginTransactionAsync(ct).ConfigureAwait(false);
-        return new EfTransaction(_currentTransaction);
-    }
+## Unit of Work — `EfUnitOfWork<TContext>`
 
-    public async ValueTask CommitTransactionAsync(CancellationToken ct = default)
-    {
-        await ctx.SaveChangesAsync(ct).ConfigureAwait(false);
-        await _currentTransaction!.CommitAsync(ct).ConfigureAwait(false);
-    }
+- `CommitAsync` = `SaveChangesAsync`, translated to `PersistenceException`
+  (concurrency conflict, update failure, a provider's transient wrapper).
+- `DiscardChanges` = `ChangeTracker.Clear()`.
+- `ExecuteAsync`: execution strategy + transaction per attempt, retry by unwrapping the
+  `DbUpdateException`, join of an open transaction, rollback that never masks, tracker cleared
+  after a failed attempt — ADR-006. Do not re-implement any of this in a consumer.
+- `AddUnitOfWork<TContext>` registers it scoped as `EfUnitOfWork<TContext>`, `IUnitOfWork`,
+  `ITransactionalContext`, `ITransactionalUnitOfWork`, plus `EfDomainEventsProvider<TContext>` as
+  `IDomainEventsProvider`.
 
-    public async ValueTask RollbackTransactionAsync(CancellationToken ct = default)
-    {
-        if (_currentTransaction is not null)
-            await _currentTransaction.RollbackAsync(ct).ConfigureAwait(false);
-    }
+## Providers
 
-    public async ValueTask DisposeAsync()
-    {
-        if (_currentTransaction is not null)
-            await _currentTransaction.DisposeAsync().ConfigureAwait(false);
-    }
-}
-```
+`UsePostgreSQL<TContext>(connectionString, npgsqlOptions, options)` /
+`UseSqlServer<TContext>(connectionString, sqlServerOptions, options)`: the action configures the
+Npgsql / SQL Server builder and runs after `options`; `ProviderOptions.Retry`
+(`RetryOnFailureOptions`, default 6 retries, 30 s max delay) enables the provider's retrying
+strategy; `ProviderOptions.PoolSize` registers a `DbContext` pool instead of a plain context.
+
+With `PoolSize` set, registration throws `ArgumentException` unless the context's only public
+constructor takes just `DbContextOptions` or `DbContextOptions<TContext>` (each provider's private `EnsurePoolable`): a
+pooled context's constructor-injected scoped services are resolved once from the root provider and
+shared by every lease, so a tenant-aware context such as `MultitenantDbContext` must not be pooled.
+With `Retry` set, a transaction opened with `BeginTransaction` outside the strategy is rejected.
 
 ## Anti-Patterns
 
 ```csharp
-// ❌ PRDANA001: DbContext in query handler
-public sealed class GetUsersHandler(AppDbContext ctx) { }
-
-// ❌ PRDANA002: SaveChanges in read repository
-await _context.SaveChangesAsync(); // inside IReadRepository
-
-// ❌ PRDANA003: Missing AsNoTracking
-_context.Users.Where(u => u.IsActive).ToListAsync(); // no AsNoTracking
-
-// ❌ IQueryable<T> on public interface
-ValueTask<IQueryable<User>> GetQueryableAsync(); // leaks EF into app layer
-
-// ❌ Raw string SQL without parameterization
-.FromSqlRaw($"WHERE Email = '{email}'"); // SQL injection
-
-// ❌ Lazy loading in a read path
-// Any navigation property accessed outside Include() in a read repo is a lazy load
+public sealed class GetUsersHandler(AppDbContext ctx) { }            // ❌ DbContext in a handler — MKP004
+await _context.SaveChangesAsync();                                   // ❌ in a repository — MKP001/MKP003
+ValueTask<IQueryable<User>> QueryAsync();                            // ❌ IQueryable leak — MKP005
+_context.Users.Where(u => u.IsActive).ToListAsync();                 // ❌ raw tracked read — use IReadRepository
+.FromSqlRaw($"… WHERE Email = '{email}'");                           // ❌ injection — use FromSqlInterpolated
+.IgnoreQueryFilters();                                               // ❌ in library code — IlCallScanTests
 ```
+
+The module does not rely on lazy loading: what a read needs is loaded by the aggregate load or
+`Includes`.

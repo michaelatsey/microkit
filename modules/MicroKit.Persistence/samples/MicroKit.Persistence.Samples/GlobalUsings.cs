@@ -1,0 +1,12 @@
+global using MicroKit.Domain.Aggregates;
+global using MicroKit.Domain.Identifiers;
+global using MicroKit.Domain.Specifications;
+global using MicroKit.Domain.ValueObjects.Common;
+global using MicroKit.Persistence;
+global using MicroKit.Persistence.Abstractions;
+global using MicroKit.Persistence.EntityFrameworkCore;
+global using MicroKit.Persistence.EntityFrameworkCore.PostgreSql;
+global using MicroKit.Persistence.Specifications;
+global using MicroKit.Persistence.Testing;
+global using Microsoft.EntityFrameworkCore;
+global using Microsoft.Extensions.DependencyInjection;

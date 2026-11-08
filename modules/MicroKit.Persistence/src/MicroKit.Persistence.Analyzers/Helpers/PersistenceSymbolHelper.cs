@@ -7,10 +7,9 @@ namespace MicroKit.Persistence.Analyzers.Helpers;
 /// </summary>
 internal static class PersistenceSymbolHelper
 {
-    // Both IReadRepository<T> variants
-    private const string AbsReadRepositoryName = "MicroKit.Persistence.Abstractions.IReadRepository`1";
+    // The single read contract (Core) and the single write contract (Abstractions).
     private const string CoreReadRepositoryName = "MicroKit.Persistence.IReadRepository`1";
-    private const string RepositoryName         = "MicroKit.Persistence.Abstractions.IRepository`1";
+    private const string RepositoryName         = "MicroKit.Persistence.Abstractions.IRepository`2";
     private const string UnitOfWorkName         = "MicroKit.Persistence.Abstractions.IUnitOfWork";
     private const string TransactionalUoWName   = "MicroKit.Persistence.EntityFrameworkCore.ITransactionalUnitOfWork";
     private const string DbContextName          = "Microsoft.EntityFrameworkCore.DbContext";
@@ -19,25 +18,18 @@ internal static class PersistenceSymbolHelper
     private const string IQueryableName         = "System.Linq.IQueryable`1";
 
     /// <summary>
-    /// Returns <see langword="true"/> if <paramref name="type"/> implements either
-    /// <c>MicroKit.Persistence.Abstractions.IReadRepository&lt;T&gt;</c> (the Abstractions marker)
-    /// or <c>MicroKit.Persistence.IReadRepository&lt;T&gt;</c> (the Core extension).
+    /// Returns <see langword="true"/> if <paramref name="type"/> implements
+    /// <c>MicroKit.Persistence.IReadRepository&lt;T&gt;</c>.
     /// </summary>
     internal static bool IsReadRepositoryImplementation(INamedTypeSymbol type, Compilation compilation)
     {
-        var absMarker  = compilation.GetTypeByMetadataName(AbsReadRepositoryName);
-        var coreIface  = compilation.GetTypeByMetadataName(CoreReadRepositoryName);
-
-        if (absMarker is null && coreIface is null)
-            return false;
-
-        return ImplementsGenericInterface(type, absMarker) ||
-               ImplementsGenericInterface(type, coreIface);
+        var readRepository = compilation.GetTypeByMetadataName(CoreReadRepositoryName);
+        return readRepository is not null && ImplementsGenericInterface(type, readRepository);
     }
 
     /// <summary>
     /// Returns <see langword="true"/> if <paramref name="type"/> implements
-    /// <c>IRepository&lt;T&gt;</c> or either variant of <c>IReadRepository&lt;T&gt;</c>.
+    /// <c>IRepository&lt;TAggregate, TId&gt;</c> or <c>IReadRepository&lt;T&gt;</c>.
     /// </summary>
     internal static bool IsRepositoryImplementation(INamedTypeSymbol type, Compilation compilation)
     {

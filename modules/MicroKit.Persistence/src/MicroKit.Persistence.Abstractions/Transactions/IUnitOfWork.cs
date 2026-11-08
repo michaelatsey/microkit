@@ -5,10 +5,10 @@ namespace MicroKit.Persistence.Abstractions;
 /// committed or discarded.
 /// </summary>
 /// <remarks>
-/// Inject <see cref="IUnitOfWork"/> in command handlers only; call
-/// <see cref="CommitAsync"/> exactly once per command handler invocation,
-/// after all staging operations (<c>AddAsync</c>, <c>UpdateAsync</c>, <c>DeleteAsync</c>)
-/// have been performed.
+/// The command's single commit boundary: <c>TransactionBehavior</c> in
+/// <c>MicroKit.MediatR.Behaviors</c> calls <see cref="CommitAsync"/> once per command, after the
+/// handler has staged its changes through <see cref="IRepository{TAggregate, TId}"/>
+/// (<c>AddAsync</c>, <c>DeleteAsync</c>, or mutations of an aggregate it loaded).
 /// <para>
 /// This interface was moved from <c>MicroKit.Domain</c> to
 /// <c>MicroKit.Persistence.Abstractions</c> (ADR-001) because committing is an

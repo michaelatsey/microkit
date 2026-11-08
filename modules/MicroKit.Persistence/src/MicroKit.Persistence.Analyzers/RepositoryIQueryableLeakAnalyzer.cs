@@ -3,7 +3,7 @@ using MicroKit.Persistence.Analyzers.Helpers;
 namespace MicroKit.Persistence.Analyzers;
 
 /// <summary>
-/// MKP005: A method on an <c>IRepository&lt;T&gt;</c> or <c>IReadRepository&lt;T&gt;</c>
+/// MKP005: A method on an <c>IRepository&lt;TAggregate, TId&gt;</c> or <c>IReadRepository&lt;T&gt;</c>
 /// implementation declares <c>IQueryable&lt;T&gt;</c> as its return type.
 /// </summary>
 [DiagnosticAnalyzer(LanguageNames.CSharp)]

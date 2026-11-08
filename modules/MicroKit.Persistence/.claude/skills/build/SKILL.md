@@ -1,59 +1,57 @@
 ---
 name: build
-description: How to build MicroKit.Persistence reliably in all configurations. Use whenever you need to compile the module, troubleshoot a build error (CS1591, CPM violation, analyzer warning), restore packages, or understand the dependency-safe build order across the 8 projects.
+description: How to build MicroKit.Persistence reliably. Use whenever you need to compile the module, troubleshoot a build error (CS1591, CPM violation, MKP analyzer diagnostic, trimming warning), restore packages, or understand the build order of the 8 src projects, the tests and the samples.
 ---
 
 # Skill: Build
 
-How to build MicroKit.Persistence reliably in all configurations.
-
 ## Commands
 
 ```bash
-# Full solution build (Debug)
-dotnet build modules/MicroKit.Persistence/MicroKit.Persistence.slnx -c Debug
-
-# Full solution build (Release — TreatWarningsAsErrors enabled)
+# Module solution — always Release: TreatWarningsAsErrors applies to Release only
 dotnet build modules/MicroKit.Persistence/MicroKit.Persistence.slnx -c Release
 
-# Single project build (faster iteration)
-dotnet build modules/MicroKit.Persistence/src/MicroKit.Persistence.Abstractions/ -c Debug
+# One project
+dotnet build modules/MicroKit.Persistence/src/MicroKit.Persistence.EntityFrameworkCore/ -c Release
 
-# Restore only
+# Samples (README code, built with the analyzers — fails on any MKP diagnostic)
+dotnet build modules/MicroKit.Persistence/samples/MicroKit.Persistence.Samples/ -c Release
+
+# Restore only / detailed output
 dotnet restore modules/MicroKit.Persistence/MicroKit.Persistence.slnx
-
-# Detailed output (troubleshooting)
-dotnet build modules/MicroKit.Persistence/MicroKit.Persistence.slnx -c Debug -v d
+dotnet build modules/MicroKit.Persistence/MicroKit.Persistence.slnx -c Release -v d
 ```
 
-## Build Order (dependency-safe)
+A default build resolves `MicroKit.Domain` from source; `-p:CIReleaseBuild=true` resolves it from
+the published package instead (compatibility check, used by the release workflow).
 
-1. `MicroKit.Persistence.Abstractions`
-2. `MicroKit.Persistence` (core)
-3. `MicroKit.Persistence.EntityFrameworkCore`
-4. `MicroKit.Persistence.EntityFrameworkCore.PostgreSql` and `MicroKit.Persistence.EntityFrameworkCore.SqlServer` (parallel)
-5. `MicroKit.Persistence.Specifications`, `MicroKit.Persistence.Testing` (parallel — both depend on Core)
-6. `MicroKit.Persistence.Analyzers` (standalone)
+## Build order
 
-The `.slnx` solution file respects this order automatically.
+1. `MicroKit.Domain` (cross-module, from source)
+2. `MicroKit.Persistence.Abstractions`
+3. `MicroKit.Persistence` (core)
+4. `EntityFrameworkCore`, `Specifications`, `Testing`
+5. `EntityFrameworkCore.PostgreSql`, `EntityFrameworkCore.SqlServer`
+6. `MicroKit.Persistence.Analyzers` — standalone, `netstandard2.0`
 
-## Common Build Failures
+MSBuild derives the order from the project references.
+
+## Common failures
 
 | Error | Cause | Fix |
 |-------|-------|-----|
-| `CS1591` in src/ | Missing XML doc on public member | Add `<summary>` tag |
-| `PackageReference` with `Version=` | CPM violation | Move to `Directory.Packages.props` |
-| `PRDANA001` | DbContext in query handler | Inject typed repository instead |
-| `PRDANA002` | SaveChanges in read repo | Remove mutation call |
-| `PRDANA003` | Missing AsNoTracking | Add `.AsNoTracking()` |
-| EF Core type not found | Wrong project reference | Check layer — EF stays out of Abstractions |
-| `NETSDK1004` | Missing global.json SDK | Check `global.json` at monorepo root |
+| `CS1591` in `src/` | Missing XML doc on a public member | Add the `<summary>` (and tags) |
+| `NU1008` | `Version=` on a `PackageReference` | Move the version to the root `Directory.Packages.props` |
+| `MKP001` / `MKP002` | Read repository commits or mutates | Remove the call or the method |
+| `MKP003` | `SaveChanges(Async)` outside `IUnitOfWork` | Commit through `IUnitOfWork` |
+| `MKP004` | `DbContext` injected outside infrastructure | Inject a typed repository |
+| `MKP005` | Repository method returns `IQueryable<T>` | Return `IReadOnlyList<T>` / `IPagedResult<T>` |
+| `IL2091`, `IL2026` | Trimming analysis over EF Core generics | Already suppressed per project; do not add new suppressions without a justification |
+| EF Core type not found | Wrong layer | EF Core stays in EntityFrameworkCore and the providers |
 
-## Build Environment
+## Environment
 
-- **SDK**: version locked in `global.json` at monorepo root
-- **Target framework**: `net10.0` for all `src/` projects
-- **Nullable**: `enable` (enforced via `Directory.Build.props`)
-- **ImplicitUsings**: `enable`
-- **LangVersion**: `latest`
-- **TreatWarningsAsErrors**: `true` in Release configuration only
+Root `global.json` pins the SDK. Root `Directory.Build.props`: `net10.0`, `Nullable` and
+`ImplicitUsings` enabled, `LangVersion latest`, `AnalysisLevel latest-recommended`,
+`EnforceCodeStyleInBuild`, `GenerateDocumentationFile`, `IsTrimmable`, and
+`TreatWarningsAsErrors` in Release.

@@ -1,11 +1,9 @@
-using Abs = MicroKit.Persistence.Abstractions;
-
 namespace MicroKit.Persistence;
 
 /// <summary>
-/// Full read-side repository contract for <typeparamref name="TAggregate"/> aggregates.
-/// Extends the empty marker in <c>MicroKit.Persistence.Abstractions</c> with the query
-/// methods that depend on <see cref="QueryOptions{TAggregate}"/> (ADR-002, ADR-003).
+/// Read-side repository contract for <typeparamref name="TAggregate"/> aggregates. Declared in
+/// <c>MicroKit.Persistence</c> (Core), next to <see cref="QueryOptions{TAggregate}"/> on which its
+/// query methods depend; it is the only read repository contract.
 /// </summary>
 /// <typeparam name="TAggregate">
 /// The aggregate root type. Must be a reference type implementing <see cref="IAggregateRoot"/>.
@@ -31,12 +29,16 @@ namespace MicroKit.Persistence;
 /// </para>
 /// </remarks>
 public interface IReadRepository<TAggregate>
-    : Abs.IReadRepository<TAggregate>
     where TAggregate : class, IAggregateRoot
 {
     /// <summary>
-    /// Finds an aggregate by its primary key without change tracking.
+    /// Finds an aggregate by its primary key.
     /// </summary>
+    /// <remarks>
+    /// An aggregate the current unit of work already tracks is returned as is — same instance, same
+    /// state — so its pending change still reaches the next commit. Any other aggregate is loaded
+    /// without change tracking. A <see langword="null"/> key value matches nothing.
+    /// </remarks>
     /// <param name="keyValues">
     /// The primary key values. Pass a single-element array for simple PKs;
     /// multiple elements for composite PKs, in the same order as the key definition.
@@ -56,6 +58,14 @@ public interface IReadRepository<TAggregate>
     /// A read-only list of matching aggregates. Returns an empty list (never
     /// <see langword="null"/>) when no aggregates match.
     /// </returns>
+    /// <remarks>
+    /// Without <see cref="QueryOptions{TAggregate}.Pagination"/> every matching aggregate is
+    /// returned; use <see cref="ListPagedAsync"/> for a bounded page.
+    /// </remarks>
+    /// <exception cref="ArgumentOutOfRangeException">
+    /// <see cref="QueryOptions{TAggregate}.Pagination"/> asks for more than the configured
+    /// <see cref="PaginationLimits.MaxPageSize"/> items.
+    /// </exception>
     ValueTask<IReadOnlyList<TAggregate>> ListAsync(
         QueryOptions<TAggregate> opts,
         CancellationToken ct = default);
@@ -65,13 +75,19 @@ public interface IReadRepository<TAggregate>
     /// <see cref="QueryOptions{TAggregate}"/>.
     /// </summary>
     /// <param name="opts">
-    /// The query options. <see cref="QueryOptions{TAggregate}.Pagination"/> must be set.
+    /// The query options. When <see cref="QueryOptions{TAggregate}.Pagination"/> is not set, the
+    /// first page of <see cref="PaginationLimits.DefaultPageSize"/> items is returned — never the
+    /// whole result set.
     /// </param>
     /// <param name="ct">Propagates notification that operations should be cancelled.</param>
     /// <returns>
     /// An <see cref="IPagedResult{TAggregate}"/> containing the current page of results
     /// and the total count across all pages.
     /// </returns>
+    /// <exception cref="ArgumentOutOfRangeException">
+    /// <see cref="QueryOptions{TAggregate}.Pagination"/> asks for more than the configured
+    /// <see cref="PaginationLimits.MaxPageSize"/> items.
+    /// </exception>
     ValueTask<IPagedResult<TAggregate>> ListPagedAsync(
         QueryOptions<TAggregate> opts,
         CancellationToken ct = default);

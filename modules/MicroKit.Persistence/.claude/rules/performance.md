@@ -1,106 +1,60 @@
 # Rule: Performance — MicroKit.Persistence
 
-Every query in a consuming application flows through these repositories. Overhead multiplies
-by database request rate — it must be invisible.
+Every query of a consuming application flows through these repositories; their overhead
+multiplies by request rate.
 
-## Mandatory Rules
+## Read paths do not track
 
-### AsNoTracking on All Read Paths
-```csharp
-// ✅ Every IReadRepository implementation starts with AsNoTracking
-var query = _context.Set<User>().AsNoTracking();
+`EfReadRepository` starts every list, any and count query from `AsNoTracking()` unless the
+options say `WithTracking()`, and `FindAsync` loads untracked (a tracked instance is returned as
+is). A typed read repository keeps that: its own queries start from `AsNoTracking()`.
 
-// ❌ Missing AsNoTracking in a read repository — change-tracker overhead + memory leak risk
-var query = _context.Set<User>(); // Analyzer PRDANA003 flags this
-```
+## Write-side loads are whole aggregates
 
-### ValueTask over Task
-Repository methods return `ValueTask<T>` — a synchronous cache-hit or in-memory path allocates
-no state-machine box.
+`EfRepository.FindAsync` loads the full aggregate in one tracked query, or 1 + C queries when it
+has C ≥ 2 collections (split). It is not a primary-key lookup; it costs what the aggregate
+weighs. Keep aggregates small, or override `IncludeAggregate` for a narrower load.
 
-```csharp
-// ✅
-public async ValueTask<User?> FindAsync(UserId id, CancellationToken ct = default)
+## ValueTask
 
-// ❌
-public async Task<User?> FindAsync(UserId id, CancellationToken ct = default)
-```
+Repository and unit-of-work methods return `ValueTask`/`ValueTask<T>`: a tracked hit or an
+in-memory double completes synchronously without allocating a task.
 
-### Single Commit per Command
-One `CommitAsync()` at the end of a command handler. Multiple commits within a single command
-handler indicate a design flaw — the work should be atomic.
+## One commit per command
 
-```csharp
-// ✅
-user.UpdateEmail(cmd.NewEmail);
-user.AddRole(role);
-await _uow.CommitAsync(ct);  // single SaveChanges call under the hood
+One `IUnitOfWork.CommitAsync` per command, at the end (`TransactionBehavior` issues it when the
+MicroKit.MediatR pipeline is used); never a commit mid-handler.
 
-// ❌ Multiple commits
-await _uow.CommitAsync(ct); // mid-handler
-// ... more work ...
-await _uow.CommitAsync(ct); // second commit — not atomic
-```
+## Existence checks
 
-### AnyAsync over CountAsync for Existence Checks
-```csharp
-// ✅
-var exists = await _context.Users.AnyAsync(u => u.Email == email, ct);
+`AnyAsync` over `CountAsync(...) > 0`. Both drop includes, ordering and pagination.
 
-// ❌ Materializes count for a boolean result
-var exists = await _context.Users.CountAsync(u => u.Email == email, ct) > 0;
-```
+## Project on the server
 
-### Server-Side Projection
-```csharp
-// ✅ Project on the database — never load full entities for DTO reads
-var dtos = await _context.Users
-    .AsNoTracking()
-    .Where(spec.Criteria)
-    .Select(UserDto.Projection) // Expression<Func<User, UserDto>>
-    .ToListAsync(ct);
+A read that returns DTOs projects in the query (`.Select(Dto.Projection)`) inside a typed read
+repository, rather than loading entities and mapping in memory.
 
-// ❌ Load entities then map in memory
-var users = await _context.Users.Where(...).ToListAsync(ct);
-var dtos = users.Select(u => new UserDto(u)); // wasteful — loads columns not needed
-```
+## Paginate in the database
 
-### Pagination at DB Level
-```csharp
-// ✅ Skip/Take before ToListAsync
-query = query.Skip((page - 1) * pageSize).Take(pageSize);
+`QueryOptions.WithPagination` becomes `Skip/Take` in SQL. `PaginationLimits` bounds every list
+(default 50, max 500); `ListPagedAsync` issues a count and a page query. Always order a paginated
+query (`WithOrderBy…`) so page boundaries are deterministic.
 
-// ❌ In-memory pagination — loads entire table
-var all = await _context.Users.ToListAsync(ct);
-var page = all.Skip(offset).Take(pageSize);
-```
+## Split queries
 
-### Compiled Queries for Hot Paths
-```csharp
-// ✅ Compile once, reuse across requests
-private static readonly Func<AppDbContext, Guid, CancellationToken, Task<User?>> _findById =
-    EF.CompileAsyncQuery((AppDbContext ctx, Guid id, CancellationToken ct) =>
-        ctx.Users.AsNoTracking().FirstOrDefault(u => u.Id == id));
-```
+Two or more collection includes in `QueryOptions` call for `AsSplitQuery()`; the write-side
+aggregate load switches to split by itself.
 
-### No Sync-over-Async
-```csharp
-// ❌ Thread-pool starvation
-var user = _context.Users.FindAsync(id).Result;
+## Compiled queries
 
-// ✅
-var user = await _context.Users.FindAsync([id], ct).ConfigureAwait(false);
-```
+For a measured hot path, a typed repository may hold an `EF.CompileAsyncQuery` delegate in a
+`static readonly` field.
 
-### ConfigureAwait(false)
-Every `await` in library code uses `.ConfigureAwait(false)`.
+## No sync-over-async; ConfigureAwait(false)
 
-## Performance Budget
-See `.claude-context/standards/performance-budget.md` for concrete targets.
+Never `.Result`/`.Wait()`. Every `await` in library code has `.ConfigureAwait(false)`.
 
-A PR that regresses FindAsync or ListAsync overhead by > 10% requires `performance-reviewer` approval.
+## Budget
 
-## Verification
-```bash
-dotnet run --project benchmarks/MicroKit.Persistence.Benchmarks/ -c Release --filter *
-```
+Targets: `.claude-context/standards/performance-budget.md`. There is no benchmark project yet, so
+the budget is a review reference, not a gate.

@@ -24,7 +24,7 @@ directive to `MicroKit.Persistence.Abstractions`.
    This is an infrastructure concern. The domain layer (aggregates, value objects, domain events)
    should have no knowledge of how persistence works or when changes are committed.
 2. **Avoiding circular-ish coupling.** If `MicroKit.Domain` declares `IUnitOfWork` and
-   `MicroKit.Persistence.Abstractions` depends on `MicroKit.Domain.Abstractions` (for
+   `MicroKit.Persistence.Abstractions` depends on `MicroKit.Domain` (for
    `IAggregateRoot`), then `IUnitOfWork` lives at Level 0. But the *implementation* of that contract
    (`EfUnitOfWork`) lives at Level 2. This is fine for the interface, but it puts a persistence
    concept in the domain layer, which erodes the clean separation between domain and infrastructure.
@@ -104,7 +104,22 @@ pagination, split queries). The two types are separate and never merged.
   Any attempt to add `AddInclude()`, `ApplyPaging()`, or similar to `Specification<T>` is a violation.
 - `QueryOptions<T>` is assembled in the query handler, not in domain services.
 - The evaluator's application order is canonical (criteria → includes → split → order → paginate).
-  See `.claude-context/standards/query-options.md`.
+
+### Amendment — #196 D1, D6 (2026-11-08)
+
+- **D1.** `QueryOptions<T>.IncludeDeleted` (and `IncludeSoftDeleted()`) is removed, together with the
+  evaluator's "step 0", which called the parameterless `IgnoreQueryFilters()`. That call disabled
+  **every** query filter of the model — a tenant filter included — while the module owns no soft
+  delete. The original order "IgnoreQueryFilters → criteria → …" is superseded by the five steps above.
+  `IlCallScanTests` fails on any library call to the parameterless overload; #197 reintroduces the
+  flag on a *named* filter (`IgnoreQueryFilters(["<name>"])`).
+- **Wording.** Since #169, `Specification<T>` in `MicroKit.Domain` exposes `ToExpression()` (and
+  `IsSatisfiedBy`), not `AddCriteria` / `Criteria`: read the rationale and consequences above with
+  that API. The decision itself — criteria only, no includes or paging in a specification — stands.
+- **D6.** Pagination is validated (`PaginationOptions(page >= 1, pageSize >= 1)`, offset within
+  `int`) and bounded: `PaginationLimits` (default page 50, maximum 500, configured by
+  `ConfigurePagination`) makes `ListPagedAsync` without pagination return the default page instead
+  of the whole result set, and rejects — never clamps — a larger page. This supersedes DN-002.
 
 ---
 
@@ -145,7 +160,20 @@ NOT in Abstractions:
 - `QueryOptions<T>` lives in Core.
 - Consumers that want `QueryOptions<T>` depend on Core, not just Abstractions — this is expected
   and acceptable (most consumers will want both).
-- The `dependency-check` hook and `dependency-guardian` agent enforce this automatically.
+- The `dependency-guardian` agent checks this on every `.csproj` change.
+
+### Amendment — #196 D8, D9, D10, D12, D17 (2026-11-08)
+
+The inventory in the Decision above is superseded. Abstractions now holds exactly:
+
+- `IRepository<TAggregate, TId>` — the only write-side contract (D10); no `CommitAsync` (D9);
+- `IUnitOfWork`, `ITransactionalContext`, `IPagedResult<T>`, `PersistenceException`.
+
+Removed: the empty `IReadRepository<T>` marker (D8 — the read contract needs `QueryOptions`, so it
+lives in Core, the only `IReadRepository<T>`), and `ITransaction` / `ITransactionManager` (D12 —
+implemented and used nowhere). The package references `MicroKit.Domain` only: the `MicroKit.Result`
+reference is removed (D17), because nothing in Abstractions used it; the earlier claim that
+repository methods "return `Result<T>`" never matched the code.
 
 ---
 
@@ -174,7 +202,8 @@ NOT in Abstractions:
 
 ### Consequences
 
-- DI registration uses the triple-registration pattern (see `.claude-context/standards/transaction-contracts.md`).
+- DI registration maps one scoped `EfUnitOfWork<TContext>` to `IUnitOfWork`, `ITransactionalContext`
+  and `ITransactionalUnitOfWork` (`AddUnitOfWork<TContext>`).
 - `ITransactionalUnitOfWork` is not part of the published API in Abstractions — it is an
   implementation detail of the EF Core integration.
 - If a future `Marten` or `Dapper` provider is added, it registers its own scoped service implementing
@@ -352,6 +381,12 @@ revision of this ADR asserted the opposite ("navigation fixup stops and lazy loa
 wrong on both halves, and the correction is recorded here because the claim had already been copied
 into the `IUnitOfWork.DiscardChanges` XML documentation.
 
+> **Superseded in part by #196 D4.** The paragraph below says nested dispatch "is already blocked
+> upstream — EF Core rejects `BeginTransactionAsync` while a transaction is open". Since #196 D4,
+> `ExecuteAsync` joins an open transaction instead of beginning one, so nothing blocks a nested
+> command any more, and its `DiscardChanges` on an inner failure still clears the outer command's
+> staged work. The consequence is recorded in ADR-006; the original reasoning is kept below.
+
 **Nested command dispatch stays unsupported, now for a second reason.** A command dispatched from
 inside another command's handler would, on inner failure, clear the outer command's staged work. This
 is already blocked upstream — EF Core rejects `BeginTransactionAsync` while a transaction is open on
@@ -433,9 +468,167 @@ choice. All 8 packages share one version — whichever number is chosen, all 8 r
 
 ---
 
+## ADR-006: Transaction Semantics of EfUnitOfWork — Retry, Join, Rollback (#196 D3–D5)
+
+**Status:** Accepted
+**Date:** 2026-11-08
+**Source:** Issue #196, phase 1 (D3, D4, D5). Supersedes DN-001.
+
+### Decision
+
+`EfUnitOfWork<TContext>` keeps its public surface (`IUnitOfWork`, `ITransactionalContext` and
+`ITransactionalUnitOfWork` are frozen) and changes behaviour as follows.
+
+1. **Translation (D3).** `CommitAsync` always translates to `PersistenceException`: a
+   `DbUpdateException`, and the `InvalidOperationException(DbUpdateException)` that a provider's
+   non-retrying strategy (Npgsql, SQL Server) raises inside `SaveChangesAsync` for a failure it
+   classifies as transient.
+2. **Retry (D3).** Inside the execution-strategy delegate, `ExecuteAsync` unwraps a
+   `PersistenceException` whose inner exception is a `DbUpdateException` and rethrows that inner
+   exception, so the strategy can classify it — `ExecutionStrategy.CallOnWrappedException` only
+   looks through exceptions EF Core created. Once the strategy gives up, the outermost call surfaces
+   a `PersistenceException` only:
+   - the original one, for a non-transient commit failure;
+   - a new one wrapping `RetryLimitExceededException`, when retries are exhausted;
+   - a new one wrapping the `DbException`, for a failure of the transaction itself (BEGIN, COMMIT,
+     a deferred constraint) or of raw SQL the operation ran, or the provider's
+     `InvalidOperationException` wrapper of a transient one;
+   - a new one wrapping the `DbUpdateException` (or the provider's `InvalidOperationException`
+     wrapper of it), when the operation flushed through the `DbContext` itself rather than
+     `CommitAsync`.
+3. **Join (D4).** While `Database.CurrentTransaction` is not null — an enclosing `ExecuteAsync`, or
+   a transaction the caller opened — `ExecuteAsync` runs the operation directly: no execution
+   strategy (a retrying one throws on an existing transaction, `ExecutionStrategy.OnFirstExecution`),
+   no begin, commit or rollback, no translation. The transaction's owner commits, rolls back,
+   retries and translates. An ambient `System.Transactions` transaction is not joined.
+4. **Failed attempt (D5).** The rollback runs with `CancellationToken.None`; rollback and dispose
+   failures are swallowed, so the exception in flight is never replaced. The change tracker is then
+   cleared: the database was rolled back, so a retried attempt must start from a clean tracker
+   (otherwise a change `SaveChanges` already accepted before a failed COMMIT is applied twice).
+
+### Rationale
+
+- **The presumption was proven** (`EfUnitOfWorkRetryTests`, retrying strategy, PostgreSQL): before
+  the change, a transient `SaveChangesAsync` failure inside `ExecuteAsync` ran once and surfaced
+  `PersistenceException → DbUpdateException → transient cause`; it was never retried.
+- **Unwrap inside, not "don't translate while running"**: the issue first proposed that `CommitAsync`
+  stop translating while an `ExecuteAsync` runs. That would hand a handler that catches
+  `PersistenceException` a raw `DbUpdateException`, breaking `IUnitOfWork.CommitAsync`'s documented
+  contract. Unwrapping in `ExecuteAsync` gets the retry without touching `CommitAsync`'s contract.
+- **The original instance is surfaced** for a non-transient failure, so a handler that recorded it
+  (for logging, for mapping) sees the same exception the caller sees.
+- **Joining** gives nested `ExecuteAsync` calls and caller-owned transactions a defined behaviour
+  instead of the `InvalidOperationException` EF Core raised from `BeginTransactionAsync`
+  ("The connection is already in a transaction").
+
+### Consequences
+
+- **At-least-once.** With a retrying strategy the whole operation re-runs after a transient
+  failure. A failure of the COMMIT itself is ambiguous (the database may have committed);
+  `verifySucceeded` is not used, so a non-idempotent operation (store-generated keys, external side
+  effects) can apply twice. Keep retries off for those, or make them idempotent.
+- **Nested command dispatch is no longer blocked (finding for `MicroKit.MediatR`).**
+  `TransactionBehavior.cs:65-68` states that nested dispatch is unsupported and that EF Core rejects
+  it upstream because `BeginTransactionAsync` throws while a transaction is open. After D4 nothing
+  rejects it: the inner command's `ExecuteAsync` joins the outer transaction. On an inner business
+  failure (`TransactionBehavior.cs:129`) or exception (`:149`), the inner behaviour calls
+  `DiscardChanges()`, which clears the whole scoped change tracker — including the outer command's
+  staged aggregates and their events. If the outer handler continues and returns success, its
+  commit writes only what was staged after the discard, and the transaction commits: the outer
+  command's earlier work is lost without an error. A pipeline that discards per command must
+  detect the nesting (an open transaction) and either reject it or discard only at the outermost
+  level. This module leaves `TransactionBehavior` untouched (#196 perimeter).
+- **Tests.** `EfUnitOfWorkRetryTests`, `EfUnitOfWorkJoinTests` (each case under the default and a
+  retrying strategy), `EfUnitOfWorkRollbackTests` — all against PostgreSQL.
+
+---
+
+## ADR-007: Whole-Aggregate Typed Load, No Update, No Repository Commit (#196 D9–D11)
+
+**Status:** Accepted
+**Date:** 2026-11-08
+**Source:** Issue #196, phase 2.
+
+### Decision
+
+1. **One write-side contract.** `IRepository<TAggregate, TId>` (`TAggregate : class, IAggregateRoot`,
+   `TId : IEntityId`) replaces `IRepository<TAggregate>`: `FindAsync(TId)`, `AddAsync`, `DeleteAsync`.
+2. **No commit on the repository (D9).** Committing belongs to `IUnitOfWork` only; the repository's
+   `CommitAsync` let a handler commit outside `TransactionBehavior`, which MKP003 exists to prevent.
+3. **No update (D11).** A loaded aggregate is tracked, so its changes need no call; `DbSet.Update`
+   marked a whole graph `Modified` — redundant when tracked, unsafe when detached.
+4. **Typed, whole load (D10).** `EfRepository<TAggregate, TId, TContext>.FindAsync(id)`:
+   - returns an aggregate the unit of work already tracks as is, without a query;
+   - otherwise builds the id predicate from the EF model's single-property primary key (whose CLR type
+     must be `TId`; no `AggregateRoot<TId>` base class is required) and loads, tracked, every
+     navigation — reference, collection, skip; derived types included — whose target is not an
+     `IAggregateRoot`, recursively, a cycle being cut against the current path's ancestors only;
+   - splits the load when the aggregate has two or more collections (owned collections mapped to a
+     table included); otherwise leaves the context's split setting alone.
+   The protected virtual `IncludeAggregate` is the seam #197's per-aggregate load profiles replace.
+
+### Consequences
+
+- An entity not marked `IAggregateRoot` is inside the boundary — reference data included — and a
+  self-referencing child is followed one level only; `IncludeAggregate` overrides both.
+- A split load is not snapshot-consistent under Read Committed (documented on `IncludeAggregate`).
+- `InMemoryRepository<TAggregate, TId>` implements both repository contracts on one store, and fails
+  fast where EF Core fails (an `Id` of another type, a duplicate `AddAsync`).
+- Tests: `EfRepositoryAggregateLoadTests` (SQLite and PostgreSQL).
+
+---
+
+## ADR-008: MicroKit.Domain Mapping Conventions (#196 D13, D14)
+
+**Status:** Accepted
+**Date:** 2026-11-08
+**Source:** Issue #196, phase 3. Resolves #172.
+
+### Decision
+
+`DomainConventionExtensions` (for `ConfigureConventions`) ships the mappings every consumer otherwise
+writes by hand:
+
+- `AddEntityIdConventions(assemblies)` — every `record X : EntityId<X>` of the given assemblies, and
+  `GuidId`, to a `Guid` column (pre-convention configuration). Values are read back through the
+  type's `(Guid)` constructor whatever its accessibility (`EntityId<T>`'s own constructor is
+  protected and `MicroKit.Domain` is not modified); model building fails, naming the type, when
+  there is none. Converted keys stay `ValueGenerated.Never` (EF Core's default for them).
+- `AddActorConvention()` — `Actor` to a string of at most `Actor.MaxLength`, read back through
+  `Actor.Restore`, so the built-in actors keep their shared instances.
+- `AddAuditInstantConvention()` (D14) — an interactive property-added convention that normalises
+  `IAuditableEntity.CreatedAt` / `UpdatedAt` to offset zero on read and write, and rejects a stored
+  `default` instant on read. Writes and query parameters are only normalised: rejecting `default`
+  there would fail `CreatedAt >= DateTimeOffset.MinValue`.
+
+### Rationale
+
+Materialisation writes the audit backing fields directly, bypassing the `Auditable*` constructors:
+a row stored with a non-zero offset (SQL Server `datetimeoffset`, SQLite text) came back with it,
+and a later write to a PostgreSQL `timestamptz` column failed; a `0001-01-01` row loaded silently.
+Scope is limited to audit instants: other `DateTimeOffset` properties keep their offset by design.
+
+### Consequences
+
+- A conversion configured explicitly — or a pre-convention `DateTimeOffset` converter — takes
+  precedence and turns the normalisation off for those properties.
+- Compiled models and NativeAOT precompiled queries are not supported: a `dotnet ef dbcontext
+  optimize` spike showed the generated model instantiating the internal converters and calling
+  internal `UtcInstant` members, so it does not compile. Making the converters public is additive and
+  can be done later.
+- `IEntityId` record structs other than `GuidId` still need a hand-written converter.
+- Tests: `DomainConventionTests`, `DomainConventionModelTests`, `AuditInstantNormalisationTests`.
+
+---
+
 ## DN-001: Execution Strategy Coverage Gap in EfUnitOfWork.CommitAsync
 
-**Status:** Deferred (v1.1 candidate)
+**Status:** Superseded by ADR-006 (#196). Its observation was wrong: outside a transaction,
+`SaveChangesAsync` already runs through the provider's execution strategy, so a direct `CommitAsync`
+was retried. The real gap was the opposite path — inside `ExecuteAsync`, where `CommitAsync`'s
+translation hid the `DbUpdateException` from the strategy. The original note is kept below.
+
+**Original status:** Deferred (v1.1 candidate)
 **Date:** 2026-05-31
 **Source:** Architect pre-release review — NOTE 7
 
@@ -484,7 +677,11 @@ A guard is required: skip the inner strategy when a transaction is already activ
 
 ## DN-002: ListPagedAsync Fallback PageSize When totalCount Is Zero
 
-**Status:** Deferred (v1.1 candidate)
+**Status:** Superseded by #196 D6. `ListPagedAsync` without pagination no longer returns the whole
+result set as one page: it returns page 1 of `PaginationLimits.DefaultPageSize` items (50 unless
+configured), so `PageSize` always reports the page size applied. The original note is kept below.
+
+**Original status:** Deferred (v1.1 candidate)
 **Date:** 2026-05-31
 **Source:** Architect pre-release review — NOTE 9
 

@@ -44,7 +44,7 @@ public sealed class QueryOptionsSpecificationExtensionsTests
     {
         Func<IQueryable<TestAggregate>, IQueryable<TestAggregate>> includes = q => q;
         Func<IQueryable<TestAggregate>, IOrderedQueryable<TestAggregate>> orderBy = q => q.OrderBy(a => a.Active);
-        var pagination = new PaginationOptions(Page: 2, PageSize: 10);
+        var pagination = new PaginationOptions(page: 2, pageSize: 10);
 
         var original = new QueryOptions<TestAggregate>() with
         {
@@ -53,7 +53,6 @@ public sealed class QueryOptionsSpecificationExtensionsTests
             Pagination         = pagination,
             AsNoTrackingEnabled = false,
             AsSplitQueryEnabled = true,
-            IncludeDeleted      = true,
         };
 
         var updated = original.WithSpec(new MatchAllSpec());
@@ -63,7 +62,6 @@ public sealed class QueryOptionsSpecificationExtensionsTests
         updated.Pagination.ShouldBe(pagination);
         updated.AsNoTrackingEnabled.ShouldBeFalse();
         updated.AsSplitQueryEnabled.ShouldBeTrue();
-        updated.IncludeDeleted.ShouldBeTrue();
     }
 
     [Fact]
