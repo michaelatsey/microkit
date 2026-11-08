@@ -15,8 +15,8 @@ Every version lives in the root `Directory.Packages.props`
 | `EntityFrameworkCore.PostgreSql` | EntityFrameworkCore | `Npgsql.EntityFrameworkCore.PostgreSQL` |
 | `EntityFrameworkCore.SqlServer` | EntityFrameworkCore | `Microsoft.EntityFrameworkCore.SqlServer` |
 | `Specifications` | core | — |
-| `Testing` | core | `NSubstitute` |
-| `Analyzers` | — | `Microsoft.CodeAnalysis.CSharp` (build-time) |
+| `Testing` | core | — |
+| `Analyzers` | — | `Microsoft.CodeAnalysis.CSharp` (build-time, `PrivateAssets="all"`) |
 
 `Specifications`, `Testing`, `PostgreSql` and `SqlServer` are siblings: none references another
 (`LayerDependencyTests`).
@@ -46,7 +46,7 @@ MediatR.Contracts (`LayerDependencyTests`).
 | `Microsoft.EntityFrameworkCore*` | EntityFrameworkCore and the providers |
 | `Npgsql.EntityFrameworkCore.PostgreSQL` | PostgreSql |
 | `Microsoft.EntityFrameworkCore.SqlServer` | SqlServer |
-| `NSubstitute` | Testing (and test projects) |
+| `NSubstitute` | test projects |
 | `Microsoft.CodeAnalysis.CSharp` | Analyzers (and test projects) |
 | `FluentAssertions` | forbidden everywhere (root `.claude/rules/testing-libraries.md`) |
 

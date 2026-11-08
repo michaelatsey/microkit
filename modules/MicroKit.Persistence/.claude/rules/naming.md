@@ -35,9 +35,9 @@
 | Evaluator | `ISpecificationEvaluator` / `EfSpecificationEvaluator` |
 
 Builder extensions use the `With-` prefix (`WithIncludes`, `WithPagination`, `WithTracking`,
-`WithOrderBy`, `WithThenBy`, `WithSpec`), except `AsNoTracking()` and `AsSplitQuery()`, named
-after their EF Core counterparts. Core's `OrderBy(...)` extension shares its name with the
-`QueryOptions.OrderBy` property and cannot be called with extension syntax — see `specifications.md`.
+`WithOrdering`, `WithOrderBy`, `WithThenBy`, `WithSpec`), except `AsNoTracking()` and
+`AsSplitQuery()`, named after their EF Core counterparts. No extension is named after a
+`QueryOptions` property: the property would win — see `specifications.md`.
 
 ## Specifications (in MicroKit.Domain)
 

@@ -32,11 +32,10 @@ MicroKit.Persistence.Specifications
 │   └── → core
 │
 MicroKit.Persistence.Testing
-│   ├── → core
-│   └── NuGet: NSubstitute
+│   └── → core
 │
 MicroKit.Persistence.Analyzers            (netstandard2.0)
-    └── NuGet: Microsoft.CodeAnalysis.CSharp
+    └── NuGet: Microsoft.CodeAnalysis.CSharp (PrivateAssets="all": not a package dependency)
 ```
 
 Intra-module references are unconditional `ProjectReference` (ADR-GLOBAL-002 D5).
@@ -90,5 +89,5 @@ All versions in the root `Directory.Packages.props`.
 | `Microsoft.Extensions.DependencyInjection.Abstractions` | EntityFrameworkCore |
 | `Npgsql.EntityFrameworkCore.PostgreSQL` | PostgreSql, IntegrationTests |
 | `Microsoft.EntityFrameworkCore.SqlServer` | SqlServer |
-| `NSubstitute` | Testing, UnitTests, IntegrationTests |
+| `NSubstitute` | UnitTests, IntegrationTests |
 | `Microsoft.CodeAnalysis.CSharp` | Analyzers, IntegrationTests |

@@ -25,6 +25,7 @@ compile in `samples/MicroKit.Persistence.Samples`.
 #### MicroKit.Persistence (Core)
 - **D1** — `QueryOptions<T>.IncludeDeleted` and `QueryOptionsExtensions.IncludeSoftDeleted()` are removed. They called the parameterless `IgnoreQueryFilters()`, which disables **every** query filter of the model — a tenant filter included — while the module owns no soft delete. #197 reintroduces the flag on a *named* filter.
 - **D6** — `PaginationOptions` is no longer a positional record: `new PaginationOptions(page, pageSize)` validates `page >= 1`, `pageSize >= 1` and that the offset fits in an `int`, and `Page`, `PageSize`, `Skip` are get-only (no `Deconstruct`, no `with { Page = … }`). Named arguments change from `Page:`/`PageSize:` to `page:`/`pageSize:`.
+- `QueryOptionsExtensions.OrderBy(Func<IQueryable<T>, IOrderedQueryable<T>>)` is renamed `WithOrdering`. Named `OrderBy`, it lost to the `QueryOptions<T>.OrderBy` property and could only be called statically (`QueryOptionsExtensions.OrderBy(opts, …)`); replace that call with `opts.WithOrdering(…)`.
 
 #### MicroKit.Persistence.EntityFrameworkCore
 - **D10** — `EfRepository<TAggregate, TContext>(TContext, IUnitOfWork)` becomes `EfRepository<TAggregate, TId, TContext>(TContext)`. The protected `FindByKeyAsync(object[])`, which loaded the root without its children, is removed; `FindAsync(TId)` loads the whole aggregate (every navigation to a non-root entity, recursively; split when it has two or more collections), and the protected virtual `IncludeAggregate(IQueryable<TAggregate>)` lets a typed repository apply or replace those includes.
@@ -38,6 +39,7 @@ compile in `samples/MicroKit.Persistence.Samples`.
 #### MicroKit.Persistence.Testing
 - **D10** — `InMemoryRepository<TAggregate>` becomes `InMemoryRepository<TAggregate, TId>`: `FindAsync(TId)` replaces `FindById(object)`; `UpdateAsync` and `CommitAsync` are removed; the key-selector constructors take a `Func<TAggregate, TId>`.
 - **D6** — `InMemoryRepository<T>` and `InMemoryReadRepository<T>` enforce `PaginationLimits` like the EF Core read repository (new constructor overloads take one); `ListPagedAsync` without pagination returns the default page.
+- The package no longer depends on `NSubstitute`, which none of its code used. A test project that used NSubstitute only through it must now reference `NSubstitute` itself.
 
 #### MicroKit.Persistence.Abstractions
 - `IUnitOfWork` gains `void DiscardChanges()` — abandons the pending change set without writing it. Every implementer must add the member. Consumers that only inject `IUnitOfWork` are unaffected: the member is called by `TransactionBehavior`, not by handlers.
@@ -82,6 +84,9 @@ compile in `samples/MicroKit.Persistence.Samples`.
 - **D5** — the rollback after a failed operation ran with the caller's token, so after a cancellation it threw `OperationCanceledException` and masked the original exception; a failing rollback masked it too.
 - `ExecuteAsync` let a raw `DbUpdateException` escape when the operation flushed through the `DbContext` itself rather than `CommitAsync`, instead of the documented `PersistenceException`.
 - `EfReadRepository` list, paged list, any and count queries with `WithTracking()` ran untracked on a context configured with `QueryTrackingBehavior.NoTracking`, so changes to the aggregates they returned were silently lost at commit.
+
+#### MicroKit.Persistence.Analyzers
+- The package declared `Microsoft.CodeAnalysis.CSharp` as a NuGet dependency, so every consumer restored Roslyn as a package. The reference is now `PrivateAssets="all"`: the compiler that loads the analyzer provides Roslyn, and the nuspec declares no dependency.
 
 #### MicroKit.Persistence.Testing
 - `InMemoryReadRepository.FindAsync` and `InMemoryRepository.FindAsync(object[])` threw `ArgumentNullException` for a null key value, where `EfReadRepository.FindAsync` returns `null`.

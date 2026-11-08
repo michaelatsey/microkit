@@ -51,8 +51,8 @@ Consume them from a local folder feed in a real consumer before any publish.
 - core → `MicroKit.Persistence.Abstractions` only
 - `EntityFrameworkCore` → core + EF Core (+ Relational) + DI.Abstractions
 - each provider → `EntityFrameworkCore` + its provider package
-- `Testing` → core + `NSubstitute`
-- `Analyzers` → no `lib/` folder in the nupkg
+- `Testing` → core only
+- `Analyzers` → no `lib/` folder in the nupkg, no dependency (`Microsoft.CodeAnalysis.CSharp` is private)
 - no `FluentAssertions` anywhere
 
 ### 5. Workflow

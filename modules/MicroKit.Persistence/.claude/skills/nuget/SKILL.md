@@ -50,5 +50,5 @@ declared dependencies in `.claude/rules/packaging.md`; the Analyzers package mus
 | `Microsoft.EntityFrameworkCore*` | EntityFrameworkCore and the providers |
 | `Npgsql.EntityFrameworkCore.PostgreSQL` | PostgreSql |
 | `Microsoft.EntityFrameworkCore.SqlServer` | SqlServer |
-| `NSubstitute` | Testing, test projects |
+| `NSubstitute` | test projects |
 | `FluentAssertions` | nowhere |

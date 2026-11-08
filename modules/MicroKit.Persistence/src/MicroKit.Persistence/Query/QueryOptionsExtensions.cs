@@ -118,9 +118,16 @@ public static class QueryOptionsExtensions
     }
 
     /// <summary>
-    /// Returns a new <see cref="QueryOptions{TAggregate}"/> with the specified ordering delegate.
-    /// Ordering is applied after filtering and includes, and before pagination.
+    /// Returns a new <see cref="QueryOptions{TAggregate}"/> with the specified ordering delegate,
+    /// replacing any previous ordering. Ordering is applied after filtering and includes, and before
+    /// pagination.
     /// </summary>
+    /// <remarks>
+    /// Named with the <c>With</c> prefix, like <c>WithOrderBy</c> and <c>WithThenBy</c>: an extension
+    /// named <c>OrderBy</c> loses to the <see cref="QueryOptions{TAggregate}.OrderBy"/> property and
+    /// cannot be called with extension syntax. For a key selector, the
+    /// <c>MicroKit.Persistence.Specifications</c> package offers <c>WithOrderBy</c> and <c>WithThenBy</c>.
+    /// </remarks>
     /// <typeparam name="TAggregate">The aggregate root type.</typeparam>
     /// <param name="opts">The source options to derive from.</param>
     /// <param name="orderBy">
@@ -129,7 +136,7 @@ public static class QueryOptionsExtensions
     /// Example: <c>q =&gt; q.OrderByDescending(u =&gt; u.CreatedAt)</c>.
     /// </param>
     /// <returns>A new options instance with <see cref="QueryOptions{TAggregate}.OrderBy"/> set.</returns>
-    public static QueryOptions<TAggregate> OrderBy<TAggregate>(
+    public static QueryOptions<TAggregate> WithOrdering<TAggregate>(
         this QueryOptions<TAggregate> opts,
         Func<IQueryable<TAggregate>, IOrderedQueryable<TAggregate>> orderBy)
         where TAggregate : class, IAggregateRoot

@@ -56,8 +56,9 @@ opts.WithSpec(new OpenOrdersSpec())       // replace the specification (null cle
 
 `QueryOptions<T>` has a delegate property `OrderBy`. Instance members win over extension
 methods, so `opts.OrderBy(lambda)` is a delegate invocation on the property and does not compile.
-The same applies to core's `QueryOptionsExtensions.OrderBy(Func<…>)`, reachable only as a static
-call. Use `WithOrderBy…`, or `opts with { OrderBy = q => … }` for a custom ordering delegate.
+That is why core's delegate-based extension is `WithOrdering(Func<IQueryable<T>, IOrderedQueryable<T>>)`
+(it was `OrderBy`, reachable only as a static call). Use `WithOrderBy…` for a key selector,
+`WithOrdering(q => …)` for a custom ordering delegate.
 
 ## Rules
 

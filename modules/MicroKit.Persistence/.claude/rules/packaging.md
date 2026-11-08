@@ -40,8 +40,8 @@ the replacement model; no tag is cut until steps 1–4 of its migration land.
 | `PostgreSql` | `MicroKit.Persistence.EntityFrameworkCore`, `Npgsql.EntityFrameworkCore.PostgreSQL` |
 | `SqlServer` | `MicroKit.Persistence.EntityFrameworkCore`, `Microsoft.EntityFrameworkCore.SqlServer` |
 | `Specifications` | `MicroKit.Persistence` |
-| `Testing` | `MicroKit.Persistence`, `NSubstitute` |
-| `Analyzers` | `Microsoft.CodeAnalysis.CSharp` — referenced without `PrivateAssets="all"`, so the nuspec declares it |
+| `Testing` | `MicroKit.Persistence` |
+| `Analyzers` | none — `Microsoft.CodeAnalysis.CSharp` is referenced with `PrivateAssets="all"`; the compiler provides Roslyn |
 
 ## Analyzers Package
 

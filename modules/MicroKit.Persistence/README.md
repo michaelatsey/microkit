@@ -292,7 +292,7 @@ same pagination limits as the EF Core repository.
 | `PersistenceException` | Abstractions | Every database failure surfaced by the module |
 | `IReadRepository<TAggregate>` | Core | Read side: find, list, page, any, count |
 | `QueryOptions<TAggregate>` | Core | Specification + includes, tracking, ordering, pagination |
-| `QueryOptionsExtensions` | Core | `WithIncludes`, `WithPagination`, `AsNoTracking`, `WithTracking`, `AsSplitQuery`, `OrderBy` |
+| `QueryOptionsExtensions` | Core | `WithIncludes`, `WithPagination`, `AsNoTracking`, `WithTracking`, `AsSplitQuery`, `WithOrdering` |
 | `PaginationOptions` | Core | A validated page request |
 | `PaginationLimits` | Core | Default and maximum page sizes |
 | `PagedResult<T>` | Core | `IPagedResult<T>` implementation |

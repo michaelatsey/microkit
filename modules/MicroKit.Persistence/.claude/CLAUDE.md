@@ -83,8 +83,8 @@ MicroKit.Persistence.EntityFrameworkCore  ← Microsoft.EntityFrameworkCore(.Rel
 MicroKit.Persistence.EntityFrameworkCore.PostgreSql  ← Npgsql.EntityFrameworkCore.PostgreSQL
 MicroKit.Persistence.EntityFrameworkCore.SqlServer   ← Microsoft.EntityFrameworkCore.SqlServer
 MicroKit.Persistence.Specifications  ← core
-MicroKit.Persistence.Testing         ← core + NSubstitute
-MicroKit.Persistence.Analyzers       ← Microsoft.CodeAnalysis.CSharp (no project reference)
+MicroKit.Persistence.Testing         ← core (no package)
+MicroKit.Persistence.Analyzers       ← Microsoft.CodeAnalysis.CSharp, PrivateAssets="all" (no project reference)
 ```
 
 Incoming: `MicroKit.MediatR.Behaviors` → Abstractions; `MicroKit.Tenancy.EntityFrameworkCore` →

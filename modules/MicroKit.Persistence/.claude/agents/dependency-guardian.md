@@ -1,6 +1,6 @@
 ---
 name: dependency-guardian
-description: Use this agent on any .csproj or project-reference change in MicroKit.Persistence. Fast PASS/BLOCK verdict. Invoke it after every .csproj or Directory.Packages.props change. Checks CPM compliance, reference patterns (intra-module unconditional, cross-module two-ItemGroup), layer isolation (EF Core out of Abstractions and core), and package confinement (Npgsql/SqlServer only in providers, NSubstitute only in Testing, Analyzers build-only).
+description: Use this agent on any .csproj or project-reference change in MicroKit.Persistence. Fast PASS/BLOCK verdict. Invoke it after every .csproj or Directory.Packages.props change. Checks CPM compliance, reference patterns (intra-module unconditional, cross-module two-ItemGroup), layer isolation (EF Core out of Abstractions and core), and package confinement (Npgsql/SqlServer only in providers, NSubstitute only in test projects, Analyzers build-only).
 tools: Read, Glob, Grep
 model: haiku
 ---
@@ -25,8 +25,9 @@ model: haiku
 6. **Providers** — PostgreSql: EntityFrameworkCore + `Npgsql.EntityFrameworkCore.PostgreSQL`;
    SqlServer: EntityFrameworkCore + `Microsoft.EntityFrameworkCore.SqlServer`.
 7. **Siblings** — `Specifications`, `Testing`, `PostgreSql`, `SqlServer` never reference one another.
-8. **NSubstitute** — `Testing` and test projects only.
-9. **Analyzers** — no project reference; only `Microsoft.CodeAnalysis.CSharp`. Inside the
+8. **NSubstitute** — test projects only; the `Testing` package references no package.
+9. **Analyzers** — no project reference; only `Microsoft.CodeAnalysis.CSharp`, with
+   `PrivateAssets="all"` so the nuspec declares no dependency. Inside the
    repository it is referenced with `OutputItemType="Analyzer" ReferenceOutputAssembly="false"`.
 10. **No reverse edge** — nothing in this module references MediatR, Messaging, Tenancy or Http.
 
