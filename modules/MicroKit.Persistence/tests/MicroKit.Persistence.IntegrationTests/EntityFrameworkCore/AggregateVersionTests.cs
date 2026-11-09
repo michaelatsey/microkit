@@ -160,6 +160,34 @@ public abstract class AggregateVersionScenarios
     }
 
     [DockerRequiredFact]
+    public async Task AGrandChildUnderAChildWithAByteArrayKey_BumpsTheRoot()
+    {
+        await using var db = await CreateDatabaseAsync<ArchiveDbContext>(o => new ArchiveDbContext(o));
+        var archive = new Archive { Id = new CartId(Guid.NewGuid()) };
+        var document = new ArchivedDocument { Code = [1, 2, 3], Title = "minutes" };
+        document.Pages.Add(new ArchivedPage { Text = "page one" });
+        archive.Documents.Add(document);
+        await using (var context = db.Create())
+        {
+            await new EfRepository<Archive, CartId, ArchiveDbContext>(context).AddAsync(archive);
+            await new EfUnitOfWork<ArchiveDbContext>(context).CommitAsync();
+        }
+
+        await using (var context = db.Create())
+        {
+            var loaded = (await new EfRepository<Archive, CartId, ArchiveDbContext>(context).FindAsync(archive.Id)).ShouldNotBeNull();
+            // The page's foreign key is another byte[] instance than its document's key: matched by
+            // EF Core's key comparer, not by reference.
+            loaded.Documents.Single().Pages.Single().Text = "page one, amended";
+            await new EfUnitOfWork<ArchiveDbContext>(context).CommitAsync();
+        }
+
+        await using var verify = db.Create();
+        (await verify.Set<Archive>().Where(a => a.Id == archive.Id).Select(a => EF.Property<long>(a, AggregateVersion.PropertyName)).SingleAsync())
+            .ShouldBe(2);
+    }
+
+    [DockerRequiredFact]
     public async Task TwoSaves_BumpTwice()
     {
         await using var db = await CreateCartDatabaseAsync();
@@ -755,7 +783,8 @@ public class CartDbContext(DbContextOptions options) : DbContext(options)
             b.HasMany(c => c.Lines).WithOne().HasForeignKey("CartId").OnDelete(DeleteBehavior.Cascade);
             b.OwnsOne(c => c.Shipping);
             b.HasMany(c => c.Coupons).WithMany();
-            b.HasOne(c => c.PrimaryContact).WithMany().HasForeignKey(c => c.PrimaryContactId);
+            b.Navigation(c => c.Coupons).IsOutsideAggregate(); // many-to-many: coupons are reference data
+            b.HasOne(c => c.PrimaryContact).WithOne().HasForeignKey<Cart>(c => c.PrimaryContactId); // one-to-one
         });
         modelBuilder.Entity<CartLine>(b =>
         {
@@ -920,6 +949,7 @@ public sealed class LabelledBasketDbContext(DbContextOptions<LabelledBasketDbCon
                     join.HasOne(l => l.AddedBy).WithMany().HasForeignKey(l => l.AddedById);
                 });
         });
+        modelBuilder.Entity<Basket>().Navigation(x => x.Labels).IsOutsideAggregate(); // many-to-many: reference data
         modelBuilder.Entity<BasketTag>().Property(t => t.Id).ValueGeneratedNever();
         modelBuilder.Entity<Clerk>().Property(c => c.Id).ValueGeneratedNever();
     }
@@ -941,5 +971,49 @@ public sealed class VersionProbeInterceptor : Microsoft.EntityFrameworkCore.Diag
         SeenVersion = context.ChangeTracker.Entries<Cart>().Single().Property<long>(AggregateVersion.PropertyName).CurrentValue;
         context.ChangeTracker.AutoDetectChangesEnabled = auto;
         return base.SavingChangesAsync(eventData, result, cancellationToken);
+    }
+}
+
+/// <summary>An aggregate whose child has a byte[] key, the key of a grand-child's foreign key.</summary>
+public sealed class Archive : IAggregateRoot
+{
+    public CartId Id { get; init; }
+
+    public List<ArchivedDocument> Documents { get; } = [];
+}
+
+public sealed class ArchivedDocument
+{
+    public byte[] Code { get; init; } = [];
+
+    public string Title { get; set; } = string.Empty;
+
+    public List<ArchivedPage> Pages { get; } = [];
+}
+
+public sealed class ArchivedPage
+{
+    public Guid Id { get; init; } = Guid.NewGuid();
+
+    public string Text { get; set; } = string.Empty;
+}
+
+public sealed class ArchiveDbContext(DbContextOptions<ArchiveDbContext> options) : DbContext(options)
+{
+    protected override void OnModelCreating(ModelBuilder modelBuilder)
+    {
+        modelBuilder.Entity<Archive>(b =>
+        {
+            b.HasKey(a => a.Id);
+            b.Property(a => a.Id).HasConversion(id => id.Value, v => new CartId(v)).ValueGeneratedNever();
+            b.HasMany(a => a.Documents).WithOne().HasForeignKey("ArchiveId");
+        });
+        modelBuilder.Entity<ArchivedDocument>(b =>
+        {
+            b.HasKey(d => d.Code);
+            b.Property(d => d.Code).HasMaxLength(16).ValueGeneratedNever();
+            b.HasMany(d => d.Pages).WithOne().HasForeignKey("DocumentCode");
+        });
+        modelBuilder.Entity<ArchivedPage>().Property(p => p.Id).ValueGeneratedNever();
     }
 }

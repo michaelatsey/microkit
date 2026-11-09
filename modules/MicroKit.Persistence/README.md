@@ -218,6 +218,12 @@ Model building fails, naming the types, when an entity that is not an aggregate 
 boundary of two roots — directly, or through a base type and one of its derived types. Each ownership
 of an owned type is its own entity type, so the same owned type under two roots is not shared.
 
+Uniqueness holds per row too: a navigation brings an entity into the boundary only if each of its rows
+has one parent row — a collection or a reference whose child holds the foreign key, or a one-to-one
+whose parent holds a unique foreign key. A many-to-one reference held by the parent, or a many-to-many
+navigation, that reaches a non-root entity fails model building, naming the navigation: make the
+target an aggregate root, or mark the navigation `IsOutsideAggregate()`.
+
 The boundary validation and the record of the roots a repository loaded whole come with
 `UseMicroKitPersistence()`. `AddDbContext`, `UsePostgreSQL` and `UseSqlServer` call it; a context
 configured another way calls it itself, or `EfRepository` refuses to load:
@@ -293,10 +299,8 @@ Known limits:
 - MicroKit bumps the versions in a `SaveChanges` interceptor that runs before the interceptors the
   application adds with `AddInterceptors`: a change those make to an aggregate during `SavingChanges`
   is written without a bump.
-- A child the parent references (the parent holds the foreign key, such as a `PrimaryContact`) or the
-  target of a many-to-many navigation can be referenced by several aggregates. Changing it bumps only
-  the referencing aggregates the context tracks. Model such an entity as reference data
-  (`IsOutsideAggregate()`) when several aggregates share it.
+- Adding or removing a many-to-many link bumps the aggregate that declares the navigation, even when
+  its target is reference data or another aggregate.
 
 ## Transactions
 

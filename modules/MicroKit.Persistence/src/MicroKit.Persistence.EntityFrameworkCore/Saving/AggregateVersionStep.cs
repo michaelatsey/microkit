@@ -147,8 +147,9 @@ internal static class AggregateVersionStep
         {
             if (!link.ChildIsDependent || !link.ForeignKey.DeclaringEntityType.IsAssignableFrom(entry.Metadata))
                 continue;
-            if (!AggregateSave.ValuesOf(entry, link.ForeignKey.Properties, original: true)
-                    .Equals(AggregateSave.ValuesOf(entry, link.ForeignKey.Properties, original: false)))
+            if (!save.ComparerFor(link.ForeignKey).Equals(
+                    AggregateSave.ValuesOf(entry, link.ForeignKey.Properties, original: true),
+                    AggregateSave.ValuesOf(entry, link.ForeignKey.Properties, original: false)))
                 return true;
         }
 

@@ -34,7 +34,7 @@ internal static class EfRepositoryAggregateLoadScenarios
             "a navigation declared on a derived child type");
         order.PrimaryContact.ShouldNotBeNull("two navigations to the same child type: the first");
         order.BillingContact.ShouldNotBeNull("two navigations to the same child type: the second");
-        order.Tags.Select(t => t.Label).ShouldBe(["gift", "priority"], ignoreOrder: true, "a skip navigation");
+        order.Tags.ShouldBeEmpty("a many-to-many navigation reaches reference data: marked outside the aggregate");
         order.Shipping.ShouldNotBeNull().City.ShouldBe("Lyon", "an owned entity");
         order.Lines.ShouldAllBe(l => l.Notes.All(n => n.Line == l), "the back-reference cycle was resolved, not followed");
 
@@ -145,7 +145,7 @@ internal static class EfRepositoryAggregateLoadScenarios
         await using (var context = store.CreateContext(customerCommands))
             await new EfRepository<Customer, CustomerId, OrderDbContext>(context).FindAsync(customerId);
 
-        orderCommands.Count.ShouldBeGreaterThan(1, "Lines, Notes and Tags are collections: the load is split");
+        orderCommands.Count.ShouldBeGreaterThan(1, "Lines and Notes are collections: the load is split");
         customerCommands.Count.ShouldBe(1, "a single collection: one query");
     }
 }
@@ -442,9 +442,11 @@ public sealed class OrderDbContext(DbContextOptions<OrderDbContext> options) : D
             b.Property(o => o.CustomerId).HasConversion(id => id.Value, v => new CustomerId(v));
             b.HasOne(o => o.Customer).WithMany().HasForeignKey(o => o.CustomerId);
             b.HasMany(o => o.Lines).WithOne(l => l.Order).HasForeignKey("OrderId");
-            b.HasOne(o => o.PrimaryContact).WithMany().HasForeignKey("PrimaryContactId");
-            b.HasOne(o => o.BillingContact).WithMany().HasForeignKey("BillingContactId");
+            // One-to-one (a unique foreign key on the order): each contact row has one order.
+            b.HasOne(o => o.PrimaryContact).WithOne().HasForeignKey<Order>("PrimaryContactId");
+            b.HasOne(o => o.BillingContact).WithOne().HasForeignKey<Order>("BillingContactId");
             b.HasMany(o => o.Tags).WithMany();
+            b.Navigation(o => o.Tags).IsOutsideAggregate(); // many-to-many: tags are shared reference data
             b.OwnsOne(o => o.Shipping);
         });
 
@@ -454,7 +456,7 @@ public sealed class OrderDbContext(DbContextOptions<OrderDbContext> options) : D
             b.HasMany(l => l.Notes).WithOne(n => n.Line).HasForeignKey("LineId");
         });
 
-        modelBuilder.Entity<GiftLine>().HasOne(g => g.Wrapping).WithMany().HasForeignKey("WrappingId");
+        modelBuilder.Entity<GiftLine>().HasOne(g => g.Wrapping).WithOne().HasForeignKey<GiftLine>("WrappingId");
         modelBuilder.Entity<GiftWrapping>().Property(w => w.Id).ValueGeneratedNever();
         modelBuilder.Entity<LineNote>().Property(n => n.Id).ValueGeneratedNever();
         modelBuilder.Entity<Contact>().Property(c => c.Id).ValueGeneratedNever();

@@ -15,6 +15,9 @@ namespace MicroKit.Persistence.EntityFrameworkCore;
 ///     another aggregate root is outside the boundary and is never loaded.</description></item>
 ///   <item><description>A navigation marked <c>IsOutsideAggregate()</c> is not followed: its target
 ///     (reference data) is outside the boundary.</description></item>
+///   <item><description>A many-to-one reference held by the parent, or a skip navigation, never
+///     reaches a non-root entity: <see cref="AggregateBoundaryConvention"/> refuses it at model
+///     building (per-row uniqueness).</description></item>
 ///   <item><description>Navigations declared on derived types of the root or of a child are
 ///     followed too: a string include names a navigation of a derived type.</description></item>
 ///   <item><description>A cycle is detected only against the ancestors on the current path, never

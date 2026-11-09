@@ -55,6 +55,43 @@ public abstract class AggregateBoundaryScenarios
         thrown.Message.ShouldContain("'DeltaRoot'");
     }
 
+    [DockerRequiredTheory]
+    [InlineData(RowSharing.ManyToOneReference, "'RowSharingRoot.Contact'", "many-to-one reference")]
+    [InlineData(RowSharing.ManyToMany, "'RowSharingRoot.Tags'", "many-to-many navigation")]
+    public void ANavigationThroughWhichARowCouldBelongToSeveralAggregates_FailsModelBuilding(
+        RowSharing shape,
+        string navigation,
+        string kind)
+    {
+        using var context = new RowSharingDbContext(Options<RowSharingDbContext>("unused"), shape);
+
+        var thrown = Should.Throw<InvalidOperationException>(() => _ = context.Model);
+
+        thrown.Message.ShouldContain(navigation);
+        thrown.Message.ShouldContain(kind);
+        thrown.Message.ShouldContain("make the target an aggregate root, or mark the navigation IsOutsideAggregate()");
+    }
+
+    [DockerRequiredFact]
+    public void AOneToOneReferenceHeldByTheParent_StaysInTheBoundary()
+    {
+        using var context = new RowSharingDbContext(Options<RowSharingDbContext>("unused"), RowSharing.OneToOne);
+
+        Should.NotThrow(() => _ = context.Model);
+        AggregateIncludePlanPathsOf(context).ShouldContain("Contact");
+    }
+
+    [DockerRequiredTheory]
+    [InlineData(RowSharing.ManyToOneOutside)]
+    [InlineData(RowSharing.ManyToManyOutside)]
+    [InlineData(RowSharing.ManyToOneToARoot)]
+    public void ASharedShapeMarkedOutsideOrReachingARoot_Builds(RowSharing shape)
+    {
+        using var context = new RowSharingDbContext(Options<RowSharingDbContext>("unused"), shape);
+
+        Should.NotThrow(() => _ = context.Model);
+    }
+
     [DockerRequiredFact]
     public void WithoutUseMicroKitPersistence_ASharedChildIsNotValidated()
     {
@@ -486,6 +523,13 @@ public abstract class AggregateBoundaryScenarios
         thrown.Message.ShouldContain("did not load it whole");
     }
 
+    // The include paths the write side applies: read through a load's SQL would need a database.
+    private static List<string> AggregateIncludePlanPathsOf(RowSharingDbContext context) =>
+        context.Model.FindEntityType(typeof(RowSharingRoot))!.GetNavigations()
+            .Where(n => n.FindAnnotation("MicroKit:OutsideAggregate") is null)
+            .Select(n => n.Name)
+            .ToList();
+
     private static EfReadRepository<Shelf, LibraryDbContext> ReadRepository(LibraryDbContext context) =>
         new(context, new EfSpecificationEvaluator(), PaginationLimits.Default);
 
@@ -737,7 +781,7 @@ public class LibraryDbContext(DbContextOptions options) : DbContext(options)
         {
             b.HasKey(r => r.Id);
             b.Property(r => r.Id).HasConversion(id => id.Value, v => new ReaderId(v)).ValueGeneratedNever();
-            b.HasOne(r => r.FavouriteGenre).WithMany().HasForeignKey("FavouriteGenreId");
+            b.HasOne(r => r.FavouriteGenre).WithOne().HasForeignKey<Reader>("FavouriteGenreId");
             b.OwnsOne(r => r.Home);
         });
     }
@@ -874,5 +918,94 @@ public sealed class PetDbContext(DbContextOptions<PetDbContext> options) : DbCon
         });
         modelBuilder.Entity<Cat>().HasMany(c => c.Toys).WithOne().HasForeignKey("CatId");
         modelBuilder.Entity<Toy>().Property(t => t.Id).ValueGeneratedNever();
+    }
+}
+
+public enum RowSharing
+{
+    ManyToOneReference,
+    ManyToMany,
+    OneToOne,
+    ManyToOneOutside,
+    ManyToManyOutside,
+    ManyToOneToARoot,
+}
+
+public sealed class RowSharingRoot : IAggregateRoot
+{
+    public Guid Id { get; init; }
+
+    public Guid? ContactId { get; set; }
+
+    public RowSharingContact? Contact { get; set; }
+
+    public Guid? OwnerId { get; set; }
+
+    public RowSharingOwner? Owner { get; set; }
+
+    public List<RowSharingTag> Tags { get; } = [];
+}
+
+public sealed class RowSharingContact
+{
+    public Guid Id { get; init; }
+}
+
+public sealed class RowSharingTag
+{
+    public Guid Id { get; init; }
+}
+
+/// <summary>Another aggregate root: a many-to-one reference to it is outside the boundary.</summary>
+public sealed class RowSharingOwner : IAggregateRoot
+{
+    public Guid Id { get; init; }
+}
+
+public sealed class RowSharingDbContext(DbContextOptions<RowSharingDbContext> options, RowSharing shape) : DbContext(options)
+{
+    public RowSharing Shape { get; } = shape;
+
+    protected override void OnModelCreating(ModelBuilder modelBuilder)
+    {
+        var root = modelBuilder.Entity<RowSharingRoot>();
+        root.Ignore(r => r.Owner);
+        root.Ignore(r => r.Tags);
+        switch (Shape)
+        {
+            case RowSharing.ManyToOneReference:
+                root.HasOne(r => r.Contact).WithMany().HasForeignKey(r => r.ContactId);
+                break;
+            case RowSharing.ManyToOneOutside:
+                root.HasOne(r => r.Contact).WithMany().HasForeignKey(r => r.ContactId);
+                root.Navigation(r => r.Contact).IsOutsideAggregate();
+                break;
+            case RowSharing.OneToOne:
+                root.HasOne(r => r.Contact).WithOne().HasForeignKey<RowSharingRoot>(r => r.ContactId);
+                break;
+            case RowSharing.ManyToMany:
+                root.Ignore(r => r.Contact);
+                modelBuilder.Entity<RowSharingRoot>().HasMany(r => r.Tags).WithMany();
+                break;
+            case RowSharing.ManyToManyOutside:
+                root.Ignore(r => r.Contact);
+                modelBuilder.Entity<RowSharingRoot>().HasMany(r => r.Tags).WithMany();
+                modelBuilder.Entity<RowSharingRoot>().Navigation(r => r.Tags).IsOutsideAggregate();
+                break;
+            case RowSharing.ManyToOneToARoot:
+                root.Ignore(r => r.Contact);
+                modelBuilder.Entity<RowSharingRoot>().HasOne(r => r.Owner).WithMany().HasForeignKey(r => r.OwnerId);
+                break;
+        }
+    }
+
+    // One model per shape: the model cache key includes it.
+    protected override void OnConfiguring(DbContextOptionsBuilder optionsBuilder) =>
+        optionsBuilder.ReplaceService<Microsoft.EntityFrameworkCore.Infrastructure.IModelCacheKeyFactory, ShapeCacheKeyFactory>();
+
+    private sealed class ShapeCacheKeyFactory : Microsoft.EntityFrameworkCore.Infrastructure.IModelCacheKeyFactory
+    {
+        public object Create(DbContext context, bool designTime) =>
+            (context.GetType(), ((RowSharingDbContext)context).Shape, designTime);
     }
 }

@@ -34,7 +34,9 @@ NativeAOT precompiled queries are not supported by them (their converters are in
   `AsSplitQuery()`: 1 + C round trips for C collections.
 - The plan is computed once per model entity type (`AggregateIncludePlan`, private
   `IncludeAggregate`); the boundary is the model's only — no override. A model-finalizing
-  convention fails model building when a non-root entity is inside two roots' boundaries.
+  convention fails model building when a non-root entity is inside two roots' boundaries, or when a
+  many-to-one reference held by the parent or a many-to-many navigation reaches a non-root entity
+  (per-row uniqueness; a one-to-one with a unique FK is fine).
 - Custom finders call `protected LoadAggregatesAsync(predicate, ct)`, which loads, tracks,
   records and checks the returned roots after the query (identity resolution):
 
@@ -55,8 +57,9 @@ return orders.SingleOrDefault();
   version step (`AggregateVersionStep`) is last — phase 4's soft-delete conversion goes before it.
 - Roots are resolved through `AggregateBoundaryMap` with an index over `ChangeTracker.Entries()`:
   dependent children by original FK (deleted, moved out) or current FK; principal-side children by
-  the parents' original or current FK; skip navigations through the join entity. Entities outside
-  every boundary are ignored; a changed child without a tracked root, or a move between aggregates
+  the parents' original or current FK; join rows of a many-to-many declared inside a boundary
+  belong to the declaring aggregate; keys compared with EF Core's key value comparers. Entities
+  outside every boundary are ignored; a changed child without a tracked root, or a move between aggregates
   not both recorded, fails the save.
 - Bump: `Added` → 1, otherwise original + 1, `Deleted` untouched. Do not bump by hand, and do not
   write aggregate rows with `ExecuteUpdate`/raw SQL when the version must hold.

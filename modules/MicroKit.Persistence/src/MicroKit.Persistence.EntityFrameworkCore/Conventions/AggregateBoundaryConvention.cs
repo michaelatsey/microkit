@@ -18,6 +18,14 @@ namespace MicroKit.Persistence.EntityFrameworkCore;
 /// that root.
 /// </para>
 /// <para>
+/// Uniqueness also holds per row: a navigation brings a non-root entity into the boundary only if
+/// each of its rows can belong to one parent row — a collection or a reference whose child holds the
+/// foreign key, or a reference whose parent holds a unique foreign key (one-to-one). A many-to-one
+/// reference held by the parent, or a skip navigation (many-to-many), that reaches a non-root entity
+/// fails model building, naming the navigation and the fix: one row could otherwise sit inside several
+/// aggregate instances, and a change to it would bump only the roots that happen to be tracked.
+/// </para>
+/// <para>
 /// It validates only: it writes no annotation, so a compiled model has nothing to generate for it.
 /// </para>
 /// </remarks>
@@ -55,6 +63,9 @@ internal sealed class AggregateBoundaryConvention : IModelFinalizingConvention
         Dictionary<IReadOnlyEntityType, List<IReadOnlyEntityType>> owners) =>
         AggregateIncludePlan.Walk(root, step =>
         {
+            foreach (var navigation in step.Navigations)
+                EnsureOneParentRow(root, navigation);
+
             if (step.Target.IsOwned())
                 return;
 
@@ -66,6 +77,27 @@ internal sealed class AggregateBoundaryConvention : IModelFinalizingConvention
                     roots.Add(root);
             }
         });
+
+    // A row reached through this navigation must have a single parent row.
+    private static void EnsureOneParentRow(IReadOnlyEntityType root, IReadOnlyNavigationBase navigation)
+    {
+        var kind = navigation switch
+        {
+            IReadOnlySkipNavigation => "a many-to-many navigation",
+            IReadOnlyNavigation reference when reference.IsOnDependent && !reference.ForeignKey.IsUnique =>
+                $"a many-to-one reference (the foreign key on '{reference.DeclaringEntityType.ClrType.Name}' is not unique)",
+            _ => null,
+        };
+        if (kind is null)
+            return;
+
+        var target = navigation.TargetEntityType.ClrType.Name;
+        throw new InvalidOperationException(
+            $"'{navigation.DeclaringEntityType.ClrType.Name}.{navigation.Name}' brings '{target}' into the aggregate boundary of " +
+            $"'{root.ClrType.Name}', but it is {kind}: one '{target}' row could belong to several aggregates, and a change to " +
+            $"it would bump only those that happen to be tracked. To fix it, make the target an aggregate root, or mark the " +
+            "navigation IsOutsideAggregate() (reference data).");
+    }
 
     // An owned entity is always loaded with its owner: marking its navigation outside the aggregate
     // would only drop the owned type's own navigations from the load, leaving the aggregate partial.

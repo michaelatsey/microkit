@@ -662,6 +662,12 @@ Scope is limited to audit instants: other `DateTimeOffset` properties keep their
    derived type of one — is reached from two roots. Each ownership of an owned type is its own entity
    type and is never shared. The convention writes no annotation; the include plan stays computed from
    the runtime model and cached per `IEntityType`.
+   **Uniqueness also holds per row** (Spec amended 2026-11-09T14:50Z): a navigation brings a non-root
+   entity into the boundary only if each of its rows can belong to one parent row — a collection or a
+   reference whose child holds the foreign key, or a reference whose parent holds a **unique** foreign
+   key (one-to-one). A many-to-one reference held by the parent, or a skip navigation (many-to-many),
+   that reaches a non-root entity fails model building, naming the navigation and the fix: make the
+   target an aggregate root, or mark the navigation `IsOutsideAggregate()`.
 4. **Only whole roots are tracked through the write side.** The record holds, by reference, the roots
    `EfRepository` loaded with the whole plan:
    - a root the repository's load **returned**, once that load has **completed**, and only if it was
@@ -782,10 +788,16 @@ whole ones only.
   service provider (MicroKit's) before those added with `AddInterceptors` (pinned by
   `AnInterceptorAddedByTheApplication_RunsAfterTheVersionStep`): a change an application interceptor
   makes during `SavingChanges` is not bumped. MicroKit's own steps keep their fixed order.
-- **Known limit — shared principal-side children.** Phase 1 makes the boundary unique per entity
-  type, not per row: a principal-side child (`Order.PrimaryContactId`) or a many-to-many target can be
-  referenced by several aggregate instances, and a change to it bumps only the referencing roots the
-  context tracks. Such entities are reference data and belong outside the boundary.
+- **No shared rows.** ADR-009's per-row uniqueness (amended 2026-11-09) refuses, at model building, the
+  shapes through which one row could sit inside several aggregate instances (a many-to-one reference
+  held by the parent, a many-to-many navigation to a non-root). A principal-side child is therefore
+  a one-to-one with a unique foreign key, and a change to it bumps its single root.
+- **Many-to-many links.** The join row of a many-to-many navigation declared inside a boundary belongs
+  to the declaring aggregate even when the target is outside (reference data, another root): adding
+  or removing a link bumps the declaring root; a link between two roots that both declare the
+  navigation bumps both.
+- Keys are matched with EF Core's key value comparers (`IProperty.GetKeyValueComparer()`), so a
+  `byte[]` key or a key with a custom comparer resolves like the change tracker resolves it.
 - A delete is version-checked: `DeleteAsync` then a commit fails when another command changed the
   aggregate since it was loaded.
 - A conflict stays a `PersistenceException` wrapping `DbUpdateConcurrencyException` (frozen); its

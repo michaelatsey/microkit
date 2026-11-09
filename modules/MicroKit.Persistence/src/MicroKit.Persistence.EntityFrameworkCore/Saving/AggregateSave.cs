@@ -1,3 +1,4 @@
+using Microsoft.EntityFrameworkCore.ChangeTracking;
 using Microsoft.EntityFrameworkCore.Metadata;
 
 namespace MicroKit.Persistence.EntityFrameworkCore;
@@ -16,6 +17,7 @@ internal sealed class AggregateSave
     private readonly IReadOnlyList<EntityEntry> _entries;
     private readonly Dictionary<IKey, Dictionary<KeyValues, EntityEntry>> _byKey = [];
     private readonly Dictionary<IForeignKey, Dictionary<KeyValues, List<EntityEntry>>> _byForeignKey = [];
+    private readonly Dictionary<IForeignKey, KeyValuesComparer> _foreignKeyComparers = [];
 
     private AggregateSave(DbContext context, IReadOnlyList<EntityEntry> entries, IReadOnlyList<EntityEntry> changed)
     {
@@ -68,7 +70,7 @@ internal sealed class AggregateSave
     {
         if (!_byKey.TryGetValue(key, out var index))
         {
-            _byKey[key] = index = [];
+            _byKey[key] = index = new Dictionary<KeyValues, EntityEntry>(new KeyValuesComparer(key.Properties));
             foreach (var entry in _entries)
             {
                 if (key.DeclaringEntityType.IsAssignableFrom(entry.Metadata))
@@ -87,7 +89,7 @@ internal sealed class AggregateSave
     {
         if (!_byForeignKey.TryGetValue(foreignKey, out var index))
         {
-            _byForeignKey[foreignKey] = index = [];
+            _byForeignKey[foreignKey] = index = new Dictionary<KeyValues, List<EntityEntry>>(ComparerFor(foreignKey));
             foreach (var entry in _entries)
             {
                 if (!foreignKey.DeclaringEntityType.IsAssignableFrom(entry.Metadata))
@@ -96,12 +98,23 @@ internal sealed class AggregateSave
                 var current = ValuesOf(entry, foreignKey.Properties, original: false);
                 var original = ValuesOf(entry, foreignKey.Properties, original: true);
                 AddTo(index, current, entry);
-                if (!original.Equals(current))
+                if (!ComparerFor(foreignKey).Equals(original, current))
                     AddTo(index, original, entry);
             }
         }
 
         return index.TryGetValue(values, out var found) ? found : [];
+    }
+
+    /// <summary>
+    /// Compares the values of <paramref name="foreignKey"/> with EF Core's key value comparers of the
+    /// principal key it references — a <c>byte[]</c> key or a custom comparer included.
+    /// </summary>
+    internal KeyValuesComparer ComparerFor(IForeignKey foreignKey)
+    {
+        if (!_foreignKeyComparers.TryGetValue(foreignKey, out var comparer))
+            _foreignKeyComparers[foreignKey] = comparer = new KeyValuesComparer(foreignKey.PrincipalKey.Properties);
+        return comparer;
     }
 
     private static void AddTo(Dictionary<KeyValues, List<EntityEntry>> index, KeyValues values, EntityEntry entry)
@@ -114,35 +127,43 @@ internal sealed class AggregateSave
     }
 }
 
-/// <summary>The values of a key or foreign key, compared element by element.</summary>
-internal readonly struct KeyValues(object?[] values) : IEquatable<KeyValues>
+/// <summary>The values of a key or foreign key, in key order.</summary>
+internal readonly struct KeyValues(object?[] values)
 {
-    private readonly object?[] _values = values;
+    internal object?[] Values { get; } = values;
 
-    internal bool HasNull => Array.Exists(_values, v => v is null);
+    internal bool HasNull => Array.Exists(Values, v => v is null);
 
-    public bool Equals(KeyValues other)
+    public override string ToString() => string.Join(", ", Values.Select(v => v is byte[] bytes ? Convert.ToHexString(bytes) : v));
+}
+
+/// <summary>
+/// Compares <see cref="KeyValues"/> element by element with EF Core's key value comparers
+/// (<c>IProperty.GetKeyValueComparer()</c>), so a <c>byte[]</c> key, or a key with a custom
+/// comparer, matches the way the change tracker matches it.
+/// </summary>
+internal sealed class KeyValuesComparer(IReadOnlyList<IProperty> properties) : IEqualityComparer<KeyValues>
+{
+    private readonly ValueComparer[] _comparers = [.. properties.Select(p => p.GetKeyValueComparer())];
+
+    public bool Equals(KeyValues x, KeyValues y)
     {
-        if (_values.Length != other._values.Length)
+        if (x.Values.Length != _comparers.Length || y.Values.Length != _comparers.Length)
             return false;
-        for (var i = 0; i < _values.Length; i++)
+        for (var i = 0; i < _comparers.Length; i++)
         {
-            if (!Equals(_values[i], other._values[i]))
+            if (!_comparers[i].Equals(x.Values[i], y.Values[i]))
                 return false;
         }
 
         return true;
     }
 
-    public override bool Equals(object? obj) => obj is KeyValues other && Equals(other);
-
-    public override int GetHashCode()
+    public int GetHashCode(KeyValues obj)
     {
         var hash = new HashCode();
-        foreach (var value in _values)
-            hash.Add(value);
+        for (var i = 0; i < _comparers.Length && i < obj.Values.Length; i++)
+            hash.Add(obj.Values[i] is null ? 0 : _comparers[i].GetHashCode(obj.Values[i]));
         return hash.ToHashCode();
     }
-
-    public override string ToString() => string.Join(", ", _values);
 }

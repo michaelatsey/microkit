@@ -19,6 +19,11 @@ namespace MicroKit.Persistence.EntityFrameworkCore;
 ///     join rows that reference it).</description></item>
 /// </list>
 /// <para>
+/// The join entity of a many-to-many navigation declared inside a boundary is inside it too, linked
+/// to the declaring side, even when the navigation's target is outside (reference data, another
+/// root): adding or removing a link changes the aggregate's collection.
+/// </para>
+/// <para>
 /// An entity type that is neither a root nor reached from any root's boundary — an outbox row,
 /// reference data, an <c>IsOutsideAggregate()</c> target no root reaches otherwise — is outside
 /// every boundary.
@@ -52,8 +57,10 @@ internal sealed class AggregateBoundaryMap
         var map = new AggregateBoundaryMap();
         foreach (var root in model.GetEntityTypes().Where(AggregateBoundaryConvention.IsTopMostRoot))
         {
+            var boundary = new List<IEntityType>(root.GetDerivedTypesInclusive());
             AggregateIncludePlan.Walk(root, step =>
             {
+                boundary.AddRange(((IEntityType)step.Target).GetDerivedTypesInclusive());
                 foreach (var navigation in step.Navigations)
                 {
                     switch (navigation)
@@ -75,6 +82,21 @@ internal sealed class AggregateBoundaryMap
                     }
                 }
             });
+
+            // A many-to-many link from inside the boundary to reference data or to another root: the
+            // target is outside, but the link row — a change to the aggregate's collection — belongs
+            // to the aggregate that declares the navigation.
+            foreach (var type in boundary.Distinct())
+            {
+                foreach (var skip in type.GetDeclaredSkipNavigations())
+                {
+                    if (IsRoot(skip.TargetEntityType)
+                        || skip.FindAnnotation(AggregateIncludePlan.OutsideAggregateAnnotation)?.Value is true)
+                    {
+                        map.Add(root, skip.JoinEntityType, new ParentLink(skip.ForeignKey, ChildIsDependent: true));
+                    }
+                }
+            }
         }
 
         return map;

@@ -35,8 +35,9 @@ public interface IOrderLineRepository : IRepository<OrderLine, OrderLineId> { }
   boundary; `FindAsync(id, expectedVersion)` makes the expected value the token's original, checked
   in the commit's `UPDATE`. Bulk writes (`ExecuteUpdate`, raw SQL) bypass it.
 - The boundary lives in the model only (ADR-009): reference data leaves it through
-  `IsOutsideAggregate()`; no repository overrides the load. A typed finder calls
-  `protected LoadAggregatesAsync(predicate, ct)`.
+  `IsOutsideAggregate()`; no repository overrides the load. Each row has one parent: a many-to-one
+  reference held by the parent, or a many-to-many navigation, never reaches a non-root entity. A
+  typed finder calls `protected LoadAggregatesAsync(predicate, ct)`.
 
 ## Read side — `IReadRepository<TAggregate>` (core)
 
