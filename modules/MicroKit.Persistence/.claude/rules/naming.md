@@ -37,7 +37,7 @@
 | Page bounds | `PaginationLimits` |
 | Evaluator | `ISpecificationEvaluator` / `EfSpecificationEvaluator` |
 
-Builder extensions use the `With-` prefix (`WithIncludes`, `WithPagination`, `WithOrdering`,
+Builder extensions use the `With-` prefix (`WithIncludes`, `WithPagination`, `WithOrdering`, `WithDeleted`,
 `WithOrderBy`, `WithThenBy`, `WithSpec`), except `AsSplitQuery()`, named after its EF Core
 counterpart. No extension is named after a `QueryOptions` property: the property would win —
 see `specifications.md`.
@@ -70,6 +70,7 @@ UseMicroKitPersistence(this DbContextOptionsBuilder)              // + the DbCon
 IsOutsideAggregate(this NavigationBuilder)
 UseMicroKitPersistence(this DbContextOptionsBuilder, IDatabaseFailureClassifier)  // + the generic overload
 HasAggregateErrorName(this EntityTypeBuilder, string)                             // + EntityTypeBuilder<T>
+HasSoftDelete(this EntityTypeBuilder)                                             // + EntityTypeBuilder<T>
 ```
 
 ## Namespaces

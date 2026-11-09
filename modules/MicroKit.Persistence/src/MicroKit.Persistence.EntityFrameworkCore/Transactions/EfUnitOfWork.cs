@@ -55,6 +55,11 @@ public sealed class EfUnitOfWork<TContext>(TContext context)
     /// (<see cref="RetryLimitExceededException"/>). The original exception is preserved as
     /// <see cref="Exception.InnerException"/>.
     /// </exception>
+    /// <exception cref="InvalidOperationException">
+    /// A save-time refusal of <c>UseMicroKitPersistence()</c>, before anything is written: a changed child
+    /// whose aggregate root is not tracked, a move between aggregates not both loaded whole (ADR-010), a
+    /// soft delete of a root not loaded whole (ADR-012).
+    /// </exception>
     public async ValueTask CommitAsync(CancellationToken ct = default)
     {
         try

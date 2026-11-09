@@ -25,7 +25,9 @@ public sealed class IlCallScanTests
     /// <summary>
     /// The parameterless <c>IgnoreQueryFilters()</c> disables every query filter of the model,
     /// including a tenant filter the library does not own (#196 D1). Only the named overload,
-    /// <c>IgnoreQueryFilters(IReadOnlyCollection&lt;string&gt;)</c>, may ever be used.
+    /// <c>IgnoreQueryFilters(IReadOnlyCollection&lt;string&gt;)</c>, may ever be used — as
+    /// <c>EfSpecificationEvaluator</c> does for <c>QueryOptions.IncludeDeleted</c>, with
+    /// <c>SoftDelete.FilterName</c> only (#197 phase 4).
     /// </summary>
     [Fact]
     public void LibraryAssemblies_NeverCallParameterlessIgnoreQueryFilters()

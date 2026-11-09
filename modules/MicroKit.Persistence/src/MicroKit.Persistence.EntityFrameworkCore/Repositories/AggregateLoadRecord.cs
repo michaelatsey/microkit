@@ -85,12 +85,22 @@ internal sealed class AggregateLoadRecord(ICurrentDbContext currentContext) : IR
         _recorded.AddOrUpdate(root, Marker);
     }
 
+    /// <summary>Forgets one root: it was soft-deleted and detached, like a root a save deleted.</summary>
+    internal void Forget(object root) => _recorded.Remove(root);
+
+    /// <summary>
+    /// The entities the soft-delete step marked or restored, until a save succeeds and they are detached.
+    /// Cleared with the record: entities of a cleared tracker, or of a pooled lease, are never detached later.
+    /// </summary>
+    internal List<object> SoftDeleted { get; } = [];
+
     /// <summary>Gets a value indicating whether <paramref name="root"/> was loaded whole.</summary>
     internal bool IsRecorded(object root) => _recorded.TryGetValue(root, out _);
 
     /// <summary>Forgets every recorded root: the change tracker was cleared.</summary>
     internal void Reset()
     {
+        SoftDeleted.Clear();
         _recorded.Clear();
         _candidates.Clear();
         _loading = null;

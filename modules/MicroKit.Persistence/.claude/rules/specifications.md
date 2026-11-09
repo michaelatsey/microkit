@@ -25,7 +25,8 @@ var opts = new QueryOptions<Order>(new OpenOrdersSpec())     // WHAT
     .WithIncludes(q => q.Include(o => o.Lines))              // HOW: eager loading
     .WithOrderByDescending(o => o.CreatedAt)                 //      ordering (Specifications package)
     .WithPagination(page: 1, pageSize: 20)                   //      pagination (validated: page ≥ 1, size ≥ 1)
-    .AsSplitQuery();                                         //      split collections
+    .AsSplitQuery()                                          //      split collections
+    .WithDeleted();                                          //      soft-deleted aggregates too (ADR-012)
 ```
 
 The read side never tracks: there is no tracking option (ADR-009).

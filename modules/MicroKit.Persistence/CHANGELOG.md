@@ -2,6 +2,35 @@
 
 ## [Unreleased]
 
+### #197 phase 4 — soft delete
+
+An aggregate opts in to soft delete on its root (`HasSoftDelete()`): deleting the root marks the whole
+aggregate instead of deleting it, and a named query filter hides the marked rows. ADR-012 records the
+decision.
+
+#### Breaking Changes
+
+##### MicroKit.Persistence
+- `QueryOptions<T>.IncludeDeleted` returns with a narrower meaning than the one #196 removed: it ignores only the soft-delete filter `SoftDelete.FilterName`, never every query filter. A row hidden by an application's own filter stays hidden; ignore that filter by name in a typed read repository. The extension is now `WithDeleted()` (it was `IncludeSoftDeleted()`).
+
+##### MicroKit.Persistence.EntityFrameworkCore
+For an aggregate that opts in with `HasSoftDelete()`:
+- The name `AggregateDeletedAt` is reserved on every entity type of a soft-deletable aggregate: model building fails when one maps it to a CLR member, gives it a type other than `DateTimeOffset?`, or maps another property of its table to its column.
+- `HasSoftDelete()` is a schema change: **a migration** adds a nullable `AggregateDeletedAt` column to the table of every entity type of the aggregate (on the root type of each hierarchy; owned types follow their owner).
+- Model building fails, for a soft-deletable aggregate, when one of its entities carries an anonymous query filter (name it), when a relationship inside it is required and does not cascade (`Restrict`, `NoAction`, `ClientSetNull`, `SetNull`), when `HasSoftDelete()` is set on a type that is not a top-most aggregate root, and when the mark is configured beyond its column (required, a default or computed value, value generation, a converter).
+- A foreign key into a soft-deletable aggregate from outside it (another aggregate, an entity outside every aggregate, the join rows of an outside many-to-many) is `DeleteBehavior.ClientNoAction` by convention, instead of phase 2's `Restrict`: EF Core no longer nulls, refuses or deletes a tracked dependent when the root is removed. **A migration is needed on PostgreSQL**: those constraints change from `RESTRICT` to `NO ACTION` (SQL Server keeps `NO ACTION`). An explicit other behaviour on such a key fails model building, naming it.
+
+#### Added
+- `HasSoftDelete()` on `EntityTypeBuilder` (`SoftDeleteBuilderExtensions`), stored as the `MicroKit:SoftDelete` annotation; `SoftDelete.PropertyName` (`AggregateDeletedAt`) and `SoftDelete.FilterName` (`MicroKit.SoftDelete`).
+- The save turns the deletion of a soft-deletable root into an `UPDATE` that marks the root and every tracked entity of its aggregate, whatever their state, with one UTC instant per save from the application's `TimeProvider`; owned values are kept, a change made before the delete is written, the version is bumped and checked, and the aggregate is detached after the commit. Deleting a root that was not loaded whole fails the save.
+- `QueryOptions<T>.IncludeDeleted` and `WithDeleted()` (core): the EF Core read side then ignores the soft-delete filter only (`IgnoreQueryFilters([SoftDelete.FilterName])`); every other named filter still applies.
+
+#### Known limits
+- A unique index still sees soft-deleted rows; filter it on the live rows (`HasFilter("\"AggregateDeletedAt\" IS NULL")`, valid on PostgreSQL and SQL Server).
+- Bulk `ExecuteDelete` and raw SQL delete for real. There is no undelete.
+- A required navigation from another aggregate to a soft-deleted root is hidden by the filter (EF Core warns about it).
+- The in-memory doubles delete for real; `WithDeleted()` has no effect on them.
+
 ### #197 phase 3 — persistence failures as `Result`
 
 Unique-constraint violations, foreign-key violations and concurrency conflicts can be returned as

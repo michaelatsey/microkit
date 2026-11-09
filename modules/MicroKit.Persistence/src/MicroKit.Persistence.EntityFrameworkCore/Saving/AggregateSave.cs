@@ -30,6 +30,9 @@ internal sealed class AggregateSave
 
     internal DbContext Context { get; }
 
+    /// <summary>Gets every tracked entry, whatever its state.</summary>
+    internal IReadOnlyList<EntityEntry> All => _entries;
+
     /// <summary>Gets the entries that are <c>Added</c>, <c>Modified</c> or <c>Deleted</c>.</summary>
     internal IReadOnlyList<EntityEntry> Changed { get; }
 
@@ -49,6 +52,70 @@ internal sealed class AggregateSave
             .Where(e => e.State is EntityState.Added or EntityState.Modified or EntityState.Deleted)
             .ToList();
         return changed.Count == 0 ? null : new AggregateSave(context, entries, changed);
+    }
+
+    // The roots an entry belongs to, through its parent links, with the entry's original or current
+    // foreign keys. Ancestors are followed with their own current keys, or original ones when deleted.
+    // Unresolved: a foreign key on the way points to a parent the context does not track.
+    // Strict: a parent that holds the key to the entry (a principal-side child) counts only when its
+    // current key — or original key, when resolving by original keys — names the entry; otherwise a
+    // parent whose original or current key names it counts (the version step bumps both).
+    internal ResolvedRoots RootsOf(EntityEntry entry, bool original, bool strict = false)
+    {
+        var roots = new List<EntityEntry>();
+        var visited = new HashSet<object>(ReferenceEqualityComparer.Instance);
+        var unresolved = false;
+        Collect(this, entry, original, strict, roots, visited, ref unresolved);
+        return new ResolvedRoots(roots, unresolved);
+    }
+
+    private static void Collect(
+        AggregateSave save,
+        EntityEntry entry,
+        bool original,
+        bool strict,
+        List<EntityEntry> roots,
+        HashSet<object> visited,
+        ref bool unresolved)
+    {
+        if (!visited.Add(entry.Entity))
+            return;
+
+        if (AggregateBoundaryMap.IsRoot(entry.Metadata))
+        {
+            if (!roots.Exists(r => ReferenceEquals(r.Entity, entry.Entity)))
+                roots.Add(entry);
+            return;
+        }
+
+        foreach (var link in save.Map.LinksOf(entry.Metadata))
+        {
+            var foreignKey = link.ForeignKey;
+            if (link.ChildIsDependent)
+            {
+                if (!foreignKey.DeclaringEntityType.IsAssignableFrom(entry.Metadata))
+                    continue;
+                var values = AggregateSave.ValuesOf(entry, foreignKey.Properties, original);
+                if (values.HasNull)
+                    continue;
+                if (save.FindByKey(foreignKey.PrincipalKey, values) is { } parent)
+                    Collect(save, parent, parent.State == EntityState.Deleted, strict, roots, visited, ref unresolved);
+                else
+                    unresolved = true;
+            }
+            else
+            {
+                if (!foreignKey.PrincipalEntityType.IsAssignableFrom(entry.Metadata))
+                    continue;
+                var key = AggregateSave.ValuesOf(entry, foreignKey.PrincipalKey.Properties, original: false);
+                foreach (var parent in save.FindByForeignKey(foreignKey, key))
+                {
+                    if (strict && !save.ComparerFor(foreignKey).Equals(AggregateSave.ValuesOf(parent, foreignKey.Properties, original), key))
+                        continue;
+                    Collect(save, parent, parent.State == EntityState.Deleted, strict, roots, visited, ref unresolved);
+                }
+            }
+        }
     }
 
     /// <summary>The value of <paramref name="property"/>: the original one when asked and it exists.</summary>
@@ -128,6 +195,12 @@ internal sealed class AggregateSave
 }
 
 /// <summary>The values of a key or foreign key, in key order.</summary>
+/// <summary>The roots an entry resolves to; <c>Unresolved</c> when a foreign key on the way points to an untracked parent.</summary>
+internal readonly record struct ResolvedRoots(IReadOnlyList<EntityEntry> Roots, bool Unresolved)
+{
+    internal static ResolvedRoots None { get; } = new([], false);
+}
+
 internal readonly struct KeyValues(object?[] values)
 {
     internal object?[] Values { get; } = values;

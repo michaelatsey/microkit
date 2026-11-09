@@ -65,6 +65,15 @@ composite keys, includes or tracking.
   `IsOutsideAggregate`; every way to track a partial root is refused; the record survives pooling,
   `DiscardChanges` and a failed `ExecuteAsync` attempt.
 - Unit of work: commit translation to `PersistenceException`, `DiscardChanges`, cancellation.
+- Soft delete (`SoftDeleteTests`, both servers): the whole boundary marked, no row gone, owned values kept,
+  version bumped; a child removed from a live root deleted; removed in the same save, marked; two aggregates
+  in one save; `OnSaveChanges` timings; `ClientSetNull`/`ClientNoAction` children; a moved child; an added
+  child; child `DbSet` hidden; `WithDeleted` with another named filter; detached after the commit; the
+  filtered unique index; not-loaded root refused; stale version; model refusals; a child moved in or out; a
+  principal-side child taken by a live root; outside references `ClientNoAction` (tracked dependent kept,
+  `REFERENCE` on a real delete); owned replacements; complex properties with detection off; retried,
+  discarded and pooled failures; table splitting; a mapped base type. EF Core facts:
+  `SoftDeleteFoundationTests` (SQLite).
 - `Result` path (`PersistenceResultTests`, both servers): DUPLICATE with neither flush persisted;
   REFERENCE; CONCURRENCY from a second context, a stale expected version and a staged root found at a
   version other than 0; the root of a child, no root for two aggregates or none; a fixed name; a failed

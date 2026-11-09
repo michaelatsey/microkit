@@ -40,7 +40,8 @@ NativeAOT precompiled queries are not supported by them (their converters are in
   one-to-one with a unique FK is fine; links are a link entity, a child of the root).
 - `AggregateReferenceConvention`: a foreign key from inside an aggregate to another root or to an
   entity outside every aggregate is `Restrict`; an explicit `Cascade`/`SetNull` on it fails model
-  building. Keys inside one boundary keep their behaviour.
+  building. Keys inside one boundary keep their behaviour. A key into a soft-deletable aggregate from
+  outside it is `ClientNoAction` instead (ADR-012).
 - Custom finders call `protected LoadAggregatesAsync(predicate, ct)`, which loads, tracks,
   records and checks the returned roots after the query (identity resolution):
 
@@ -88,6 +89,27 @@ return orders.SingleOrDefault();
   the annotation on a non-root, on an invalid default name.
 - An ambient `System.Transactions` transaction is rejected (EF Core's own refusals, pinned by tests).
 
+## Soft delete — ADR-012
+
+- `HasSoftDelete()` on a top-most root. `SoftDeleteConvention` (second finalizing convention) gives the root
+  type of each hierarchy of the aggregate (owned types follow their owner) the shadow
+  `DateTimeOffset? AggregateDeletedAt` and the named filter `MicroKit.SoftDelete`, keeping other named
+  filters. It fails on: an anonymous filter; a required boundary link with `Restrict`/`NoAction`/
+  `ClientSetNull`/`SetNull` (EF Core throws at `Remove` under `Immediate` timing); the annotation on a
+  non-root; the reserved name misused.
+- `AggregateSoftDeleteStep` runs before the version step (and before EF Core's `CascadeChanges`): for each
+  `Deleted` soft-deletable root (recorded, or the save fails), every tracked entry of its boundary — any
+  state, resolved by current keys first (strict for principal-side children), original keys only when the
+  current ones name no tracked root; a child moved to a live root is not marked — gets its nulled FK back
+  (which clears a conceptual null), `Deleted` → `Unchanged` with changed properties (complex ones too)
+  re-flagged, and the mark `TimeProvider.GetUtcNow()` (one per save). Owned entries of a marked entity are
+  restored without a mark while their owner holds them; an added replacement that `Immediate` cascade
+  detached is tracked again. After the commit the still-tracked entities are detached (the list lives on
+  `AggregateLoadRecord`, cleared with it).
+- A key into a soft-deletable aggregate from outside it is `ClientNoAction` (`AggregateReferenceConvention`,
+  replacing `Restrict`); an explicit other behaviour fails model building.
+- `EfSpecificationEvaluator` step 0: `IncludeDeleted` → `IgnoreQueryFilters([SoftDelete.FilterName])`.
+
 ## Read side — `EfReadRepository<TAggregate, TContext>`
 
 - `FindAsync(object[] keyValues)`: key count must match the primary key; a null value matches
@@ -108,7 +130,8 @@ Every query transformation goes through it; no inline composition in repositorie
 ## Query filters
 
 Library code never calls the parameterless `IgnoreQueryFilters()`: it disables every filter,
-a tenant filter the module does not own included. `IlCallScanTests` scans the IL of every library
+a tenant filter the module does not own included. `IncludeDeleted` uses the named overload with
+`SoftDelete.FilterName` only. `IlCallScanTests` scans the IL of every library
 assembly for it. Only the named overload may be used.
 
 ## Unit of Work — `EfUnitOfWork<TContext>`

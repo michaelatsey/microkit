@@ -52,6 +52,28 @@ internal sealed class AggregateReferenceConvention : IModelFinalizingConvention
             });
         }
 
+        // A key into a soft-deletable aggregate from outside it — another aggregate, or an entity outside
+        // every boundary, join rows of an outside many-to-many included — is ClientNoAction: the principal is
+        // never deleted, so EF Core must not null, refuse or delete a tracked dependent on Remove(root).
+        var intoSoftDeletable = new HashSet<IReadOnlyForeignKey>();
+        foreach (var type in model.GetEntityTypes().ToList())
+        {
+            aggregateOf.TryGetValue(type, out var dependentRoot);
+            foreach (var foreignKey in type.GetDeclaredForeignKeys().ToList())
+            {
+                if (foreignKey.IsOwnership
+                    || !aggregateOf.TryGetValue(foreignKey.PrincipalEntityType, out var principalRoot)
+                    || ReferenceEquals(principalRoot, dependentRoot)
+                    || !SoftDeleteConvention.IsSoftDeletable(principalRoot))
+                {
+                    continue;
+                }
+
+                intoSoftDeletable.Add(foreignKey);
+                ClientNoAction(principalRoot, foreignKey);
+            }
+        }
+
         foreach (var type in model.GetEntityTypes().ToList())
         {
             if (!aggregateOf.TryGetValue(type, out var root))
@@ -59,9 +81,29 @@ internal sealed class AggregateReferenceConvention : IModelFinalizingConvention
 
             foreach (var foreignKey in type.GetDeclaredForeignKeys().ToList())
             {
-                if (!inside.Contains(foreignKey))
+                if (!inside.Contains(foreignKey) && !intoSoftDeletable.Contains(foreignKey))
                     Restrict(root, foreignKey);
             }
+        }
+    }
+
+    private static void ClientNoAction(IReadOnlyEntityType principalRoot, IConventionForeignKey foreignKey)
+    {
+        var source = foreignKey.GetDeleteBehaviorConfigurationSource();
+        if (source is not (ConfigurationSource.Explicit or ConfigurationSource.DataAnnotation))
+        {
+            foreignKey.Builder.OnDelete(DeleteBehavior.ClientNoAction);
+            return;
+        }
+
+        if (foreignKey.DeleteBehavior != DeleteBehavior.ClientNoAction)
+        {
+            var key = $"{foreignKey.DeclaringEntityType.ClrType.Name}.{string.Join(", ", foreignKey.Properties.Select(p => p.Name))}";
+            throw new InvalidOperationException(
+                $"The foreign key '{key}' references '{foreignKey.PrincipalEntityType.ClrType.Name}', inside the soft-deletable " +
+                $"aggregate '{principalRoot.ClrType.Name}', from outside it, and is configured with " +
+                $"OnDelete(DeleteBehavior.{foreignKey.DeleteBehavior}): EF Core would change or delete a tracked dependent when " +
+                "the root is removed, although soft delete never deletes it. Remove that OnDelete: such a key is ClientNoAction.");
         }
     }
 

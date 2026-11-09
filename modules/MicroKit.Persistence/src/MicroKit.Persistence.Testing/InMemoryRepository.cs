@@ -43,9 +43,10 @@ namespace MicroKit.Persistence.Testing;
 /// fixes with <c>HasAggregateErrorName</c> is unknown to it.
 /// </para>
 /// <para>
-/// <see cref="QueryOptions{TAggregate}.Includes"/> and
-/// <see cref="QueryOptions{TAggregate}.AsSplitQueryEnabled"/> are accepted but ignored — they are
-/// EF Core execution concerns with no in-memory equivalent.
+/// <see cref="QueryOptions{TAggregate}.Includes"/>,
+/// <see cref="QueryOptions{TAggregate}.AsSplitQueryEnabled"/> and
+/// <see cref="QueryOptions{TAggregate}.IncludeDeleted"/> are accepted but ignored — EF Core execution
+/// concerns with no in-memory equivalent; the double deletes for real, so nothing is soft-deleted.
 /// </para>
 /// </remarks>
 public sealed class InMemoryRepository<TAggregate, TId>

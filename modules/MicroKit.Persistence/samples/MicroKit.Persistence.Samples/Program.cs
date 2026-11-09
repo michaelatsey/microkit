@@ -15,5 +15,11 @@ await using (var context = new CatalogDbContext(
     _ = context.Model;
 }
 
+await using (var context = new BillingDbContext(
+    new DbContextOptionsBuilder<BillingDbContext>().UseNpgsql("Host=localhost;Database=unused").UseMicroKitPersistence().Options))
+{
+    _ = context.Model;
+}
+
 await TestingSample.RunAsync();
 await ResultTestingSample.RunAsync();

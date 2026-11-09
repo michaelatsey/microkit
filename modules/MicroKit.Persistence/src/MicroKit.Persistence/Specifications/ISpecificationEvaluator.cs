@@ -13,6 +13,8 @@ namespace MicroKit.Persistence;
 /// <para>
 /// The canonical evaluation order applied by all conforming implementations is:
 /// <list type="number">
+///   <item><description><b>Soft-deleted rows</b> (step 0) — when <see cref="QueryOptions{T}.IncludeDeleted"/> is
+///     set, ignores the provider's soft-delete filter, and only that one: never every query filter</description></item>
 ///   <item><description><b>Specification criteria</b> — applies <c>.Where(spec.ToExpression())</c></description></item>
 ///   <item><description><b>Includes</b> — applies the <c>Includes</c> delegate (e.g., <c>.Include(...).ThenInclude(...)</c>)</description></item>
 ///   <item><description><b>Split-query hint</b> — applies <c>.AsSplitQuery()</c> when <see cref="QueryOptions{T}.AsSplitQueryEnabled"/> is <see langword="true"/></description></item>

@@ -85,6 +85,23 @@ public static class QueryOptionsExtensions
     }
 
     /// <summary>
+    /// Returns a new <see cref="QueryOptions{TAggregate}"/> that also returns soft-deleted aggregates
+    /// (<see cref="QueryOptions{TAggregate}.IncludeDeleted"/>): only the soft-delete filter is ignored,
+    /// every other query filter still applies.
+    /// </summary>
+    /// <typeparam name="TAggregate">The aggregate root type.</typeparam>
+    /// <param name="opts">The source options to derive from.</param>
+    /// <returns>A new options instance with <see cref="QueryOptions{TAggregate}.IncludeDeleted"/> set to <see langword="true"/>.</returns>
+    /// <exception cref="ArgumentNullException"><paramref name="opts"/> is <see langword="null"/>.</exception>
+    public static QueryOptions<TAggregate> WithDeleted<TAggregate>(
+        this QueryOptions<TAggregate> opts)
+        where TAggregate : class, IAggregateRoot
+    {
+        ArgumentNullException.ThrowIfNull(opts);
+        return opts with { IncludeDeleted = true };
+    }
+
+    /// <summary>
     /// Returns a new <see cref="QueryOptions{TAggregate}"/> with the specified ordering delegate,
     /// replacing any previous ordering. Ordering is applied after filtering and includes, and before
     /// pagination.

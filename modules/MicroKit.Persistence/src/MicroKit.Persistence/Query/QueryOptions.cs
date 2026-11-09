@@ -3,7 +3,7 @@ namespace MicroKit.Persistence;
 /// <summary>
 /// Encapsulates the loading strategy for a read query over <typeparamref name="TAggregate"/>
 /// aggregates. Combines the WHAT (a domain <see cref="Specification{T}"/>) with the HOW
-/// (eager includes, split query, ordering, pagination) — ADR-002.
+/// (eager includes, split query, ordering, pagination, soft-deleted rows) — ADR-002.
 /// </summary>
 /// <typeparam name="TAggregate">
 /// The aggregate root type. Must be a reference type implementing <see cref="IAggregateRoot"/>.
@@ -90,4 +90,16 @@ public sealed record QueryOptions<TAggregate>
     /// null), to ensure deterministic page boundaries across requests.
     /// </remarks>
     public Func<IQueryable<TAggregate>, IOrderedQueryable<TAggregate>>? OrderBy { get; init; }
+
+    /// <summary>
+    /// Gets a value indicating whether soft-deleted aggregates are returned too.
+    /// </summary>
+    /// <remarks>
+    /// The EF Core read side then ignores the soft-delete filter only (its named filter,
+    /// <c>SoftDelete.FilterName</c>), for the whole query: an included navigation that reaches another
+    /// soft-deletable aggregate returns its soft-deleted rows too. Every other query filter of the model,
+    /// named or anonymous (a tenant filter), still applies. It has no effect on the in-memory doubles,
+    /// which delete for real. The write side never loads a soft-deleted aggregate.
+    /// </remarks>
+    public bool IncludeDeleted { get; init; }
 }

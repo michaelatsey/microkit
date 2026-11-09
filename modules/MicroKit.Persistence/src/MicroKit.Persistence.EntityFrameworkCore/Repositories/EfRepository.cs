@@ -68,7 +68,7 @@ public class EfRepository<TAggregate, TId, TContext>(TContext context)
     /// </summary>
     /// <param name="id">The aggregate's identifier.</param>
     /// <param name="ct">Propagates notification that operations should be cancelled.</param>
-    /// <returns>The aggregate, or <see langword="null"/> if none has this identifier.</returns>
+    /// <returns>The aggregate, or <see langword="null"/> if none has this identifier or it is soft-deleted.</returns>
     /// <exception cref="InvalidOperationException">
     /// <typeparamref name="TAggregate"/> is not part of the context's model, has no primary key, or
     /// its primary key is not a single property of type <typeparamref name="TId"/>; the context was
@@ -248,6 +248,11 @@ public class EfRepository<TAggregate, TId, TContext>(TContext context)
     /// <summary>
     /// Stages an aggregate for deletion. Nothing is written until the unit of work commits.
     /// </summary>
+    /// <remarks>
+    /// For an aggregate with <c>HasSoftDelete()</c>, the commit writes an <c>UPDATE</c> that marks the root
+    /// and every entity of its aggregate instead of a <c>DELETE</c> (<see cref="SoftDelete"/>); it fails with
+    /// <see cref="InvalidOperationException"/> when the root was not loaded whole by this repository.
+    /// </remarks>
     /// <param name="aggregate">The aggregate to delete.</param>
     /// <param name="ct">Propagates notification that operations should be cancelled.</param>
     public ValueTask DeleteAsync(TAggregate aggregate, CancellationToken ct = default)

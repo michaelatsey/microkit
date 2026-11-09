@@ -36,6 +36,19 @@ public sealed class QueryOptionsExtensionsTests
     }
 
     [Fact]
+    public void WithDeleted_SetsIncludeDeleted_AndLeavesTheSourceUnchanged()
+    {
+        var original = new QueryOptions<TestAggregate>().WithOrderBy(a => a.Name);
+
+        var updated = original.WithDeleted();
+
+        updated.IncludeDeleted.ShouldBeTrue();
+        updated.OrderBy.ShouldBeSameAs(original.OrderBy);
+        original.IncludeDeleted.ShouldBeFalse();
+        Should.Throw<ArgumentNullException>(() => ((QueryOptions<TestAggregate>)null!).WithDeleted());
+    }
+
+    [Fact]
     public void WithOrdering_WhenOptsIsNull_ThrowsArgumentNullException()
     {
         QueryOptions<TestAggregate> opts = null!;

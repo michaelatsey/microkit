@@ -79,7 +79,8 @@ public class EfReadRepository<TAggregate, TContext>(
     /// The aggregate is loaded <b>without tracking</b> by a query on the primary key, even when the
     /// context already tracks it: the result is a new instance, never attached to the change
     /// tracker, never wired into the navigations of entities the command tracks, and a later commit
-    /// cannot write it. A pending change of the command is therefore not visible through it.
+    /// cannot write it. A pending change of the command is therefore not visible through it. The model's
+    /// query filters apply: a soft-deleted aggregate is not found (use <c>WithDeleted()</c> on a list).
     /// </remarks>
     public async ValueTask<TAggregate?> FindAsync(object[] keyValues, CancellationToken ct = default)
     {

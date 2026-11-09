@@ -39,6 +39,9 @@ public interface IOrderLineRepository : IRepository<OrderLine, OrderLineId> { }
   reference held by the parent never reaches a non-root entity, and a many-to-many navigation is
   only allowed marked outside — links are a link entity, a child of the root. A reference out of an
   aggregate is `Restrict`. A typed finder calls `protected LoadAggregatesAsync(predicate, ct)`.
+- An aggregate whose root has `HasSoftDelete()` (ADR-012) is never deleted: `DeleteAsync` then a commit
+  marks the root and every entity of its boundary; the named filter hides them; the write side never
+  loads them again.
 
 ## The `Result` path — `IResultUnitOfWork` (core, ADR-011)
 
@@ -125,7 +128,8 @@ var opts = new QueryOptions<Order>(new OpenOrdersSpec())   // WHAT — Specifica
     .WithPagination(page: 1, pageSize: 20);
 ```
 
-The read side never tracks; `QueryOptions` has no tracking option (ADR-009).
+The read side never tracks; `QueryOptions` has no tracking option (ADR-009). `WithDeleted()` sets
+`IncludeDeleted`: soft-deleted aggregates (ADR-012) are returned too, every other filter still applies.
 
 ## CQRS Data-Access Alignment
 

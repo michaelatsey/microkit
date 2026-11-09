@@ -9,6 +9,8 @@ namespace MicroKit.Persistence.Testing;
 /// <remarks>
 /// Use this double when testing query handlers that inject <see cref="IReadRepository{TAggregate}"/>
 /// and you want to verify they perform no mutations. Seed with a fixed collection at construction.
+/// <see cref="QueryOptions{TAggregate}.IncludeDeleted"/> is accepted and ignored: the doubles hold no
+/// soft-deleted aggregate.
 /// </remarks>
 public sealed class InMemoryReadRepository<TAggregate> : IReadRepository<TAggregate>
     where TAggregate : class, IAggregateRoot

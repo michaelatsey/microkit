@@ -169,6 +169,11 @@ NOT in Abstractions:
   and acceptable (most consumers will want both).
 - The `dependency-guardian` agent checks this on every `.csproj` change.
 
+### Amendment — #197 phase 4 (2026-11-09)
+
+The evaluation order gains a step 0: `QueryOptions.IncludeDeleted` ignores the soft-delete filter only
+(`IgnoreQueryFilters([SoftDelete.FilterName])`), before the criteria — ADR-012 §8.
+
 ### Amendment — #196 D8, D9, D10, D12, D17 (2026-11-08)
 
 The inventory in the Decision above is superseded. Abstractions now holds exactly:
@@ -786,7 +791,7 @@ whole ones only.
    `SavingChanges` runs before EF Core's own `DetectChanges` (step-0 spike) — then runs its steps in
    a fixed order in code, never left to EF Core's interceptor order. The version step is always last:
    #197 phase 4 inserts its soft-delete conversion (a `Deleted` root becomes `Modified`) in front of it,
-   so a soft-deleted root is bumped like any modified one.
+   so a soft-deleted root is bumped like any modified one — done: `AggregateSoftDeleteStep`, ADR-012.
 8. **The database never changes an aggregate on behalf of something outside it** (Spec Phase 2,
    amended 2026-11-09). `AggregateReferenceConvention` (after the boundary convention) gives
    `DeleteBehavior.Restrict` to every foreign key whose dependent lies in an aggregate (a root, or an
@@ -921,6 +926,112 @@ SQL Server 547). Builds on ADR-006 (transactions), ADR-009 (one root per entity 
   at the find); it never returns `DUPLICATE` or `REFERENCE`.
 - Tests: `PersistenceResultTests` (PostgreSQL and SQL Server), `InMemoryResultUnitOfWorkTests`,
   `PersistenceErrorsTests`, `ContractPlacementTests`, `LayerDependencyTests`.
+
+---
+
+## ADR-012: Soft Delete of Whole Aggregates (#197 phase 4)
+
+**Status:** Accepted
+**Date:** 2026-11-09
+**Source:** Issue #197, phase 4. User decisions 2026-11-09: the mark is `DateTimeOffset? AggregateDeletedAt`;
+the opt-in is `HasSoftDelete()`; every tracked entry of the boundary is marked, whatever its state; owned
+entries are restored without a mark; the mark is `TimeProvider.GetUtcNow()`; a required relationship that
+does not cascade is refused at model building; a key into the aggregate from outside it is
+`ClientNoAction`. Builds on ADR-009 (one root per entity type, the loaded-root
+record) and ADR-010 (one save pipeline, the version step last).
+
+### Decision
+
+1. **Opt-in per aggregate, in the model.** `HasSoftDelete()` sets the annotation `MicroKit:SoftDelete` on a
+   top-most root; anywhere else model building fails. `MicroKit.Domain` is unchanged.
+2. **The mark and the filter.** `SoftDeleteConvention` (a finalizing convention, second after the version
+   convention so naming conventions apply) gives the root type of every hierarchy of the aggregate — the
+   root's and those the boundary walk reaches; an owned type follows its owner — the shadow
+   `DateTimeOffset? AggregateDeletedAt` and the named filter `MicroKit.SoftDelete`
+   (`EF.Property<DateTimeOffset?>(e, "AggregateDeletedAt") == null`). A hierarchy root is the only place EF
+   Core accepts a filter — a mapped base type that is no aggregate root included. Named filters already
+   there are kept. The name is reserved like the version's (CLR member, type, a column shared with another
+   property — except the mark of another type of the same aggregate split onto the same table), and only
+   its column may be configured: a required mark, a default or computed value, value generation or a
+   converter fails model building (a default would make every new row deleted).
+3. **Model refusals.** An anonymous filter on an entity of the aggregate fails model building, naming the
+   entity and the fix (name the other filter): EF Core 10 rejects an anonymous filter combined with a named
+   one. A boundary link whose foreign key is required with `Restrict`, `NoAction`, `ClientSetNull` or
+   `SetNull` fails model building, naming the key and the fix (`Cascade` inside the aggregate): under EF
+   Core's default `Immediate` cascade timing, `Remove(root)` throws for it at once ("the association … has
+   been severed", pinned by `SoftDeleteFoundationTests`), inside `DeleteAsync`, before any save step can
+   run. `Cascade`, `ClientCascade` and `ClientNoAction` are accepted.
+   - **A key into the aggregate from outside it** — its principal is the root or an entity of its boundary,
+     its dependent another aggregate or an entity outside every boundary, join rows of a many-to-many marked
+     `IsOutsideAggregate()` included — is `DeleteBehavior.ClientNoAction` by convention
+     (`AggregateReferenceConvention`), replacing ADR-010's `Restrict` for those keys; an explicit other
+     behaviour fails model building, naming the key. Reason: a soft-deleted principal is never deleted, and
+     with any other behaviour EF Core reacts to `Remove(root)` on a *tracked* dependent only — nulls an
+     optional key and writes `NULL`, throws for a required one, deletes a cascading one. The database
+     constraint stays a no-action one (`NO ACTION`; on PostgreSQL `RESTRICT` becomes `NO ACTION`: a
+     migration); a real delete of a referenced child still fails in the database, and the `Result` path
+     returns `REFERENCE`.
+4. **When the step runs** (EF Core 10 source, `release/10.0`). `DbContext.SaveChangesAsync` runs the
+   `SaveChangesStartingAsync` interceptors, then `TryDetectChanges`, then `StateManager.SaveChangesAsync`;
+   only there does `GetEntriesToSave(cascadeChanges: true)` call `CascadeChanges`, which first handles
+   conceptual nulls (`HandleConceptualNulls`, which throws for a required key that is not cascading) and
+   then runs `CascadeDelete` for every entry still `Deleted`. So when the step runs, a boundary child may
+   still be `Unchanged` (`ClientNoAction`; `CascadeDeleteTiming` or `DeleteOrphansTiming`
+   `OnSaveChanges`), already `Deleted` (`Immediate` cascade), `Modified` with a nulled foreign key
+   (`ClientSetNull`), or carry a conceptual null. Pinned by `SoftDeleteFoundationTests` (SQLite, without
+   MicroKit): a `SavingChanges` interceptor sees `Unchanged`, `Modified` or `Deleted` per configuration.
+5. **The step.** `AggregateSoftDeleteStep`, before the version step:
+   - the soft-deleted roots are the `Deleted` top-most roots of opted-in aggregates; one the record does not
+     hold (ADR-009) fails the save — its untracked entities could not be marked;
+   - **every tracked entry** of their boundaries is marked, whatever its state. An entry's root is resolved
+     through the boundary map by its **current** keys first — even for a `Deleted` entry (a child moved
+     into the deleted root and cascaded with it is marked; one moved out to a live root and removed there is
+     a real delete) — and by its original keys only when its current keys name no tracked root (a key EF
+     Core nulled, a child let go). For a principal-side child, only the parent whose current (or, in the
+     fallback, original) key names it counts: a contact the deleted root let go and a live root took is not
+     marked. A conceptual null still reads the original value, so the current key finds the root.
+     Everything is computed before anything is changed;
+   - for each marked entry: a nulled foreign key gets its original value back, and writing the value also
+     clears a conceptual null (`PropertyEntry.CurrentValue = original`, pinned); a `Deleted` entry becomes
+     `Unchanged`, and every property whose value differs from its original is flagged modified again, so a
+     change made before the delete is written; then the mark is set. An `Added` entry is inserted marked;
+   - an **owned** entry of a marked entity (its owner chain) has no mark column: it is restored the same way
+     without a mark, while its owner still holds it — otherwise a table-split `OwnsOne` would be written as
+     an `UPDATE` that nulls its columns, and an `OwnsMany` in its own table would be deleted. An owned value
+     the command replaced or removed stays deleted; one it added, which `Immediate` cascade timing detached
+     on `Remove(root)`, is tracked again as `Added` with its owner's key, so the replacement is written;
+   - complex properties are re-flagged too, so a value-object change made before the delete is written
+     even with automatic change detection off;
+   - **the mark** is `TimeProvider.GetUtcNow()` — offset zero, which Npgsql requires for `timestamptz` —
+     one instant per save shared by every entry, from the context's application services
+     (`CoreOptionsExtension.ApplicationServiceProvider`), else `TimeProvider.System`;
+   - no entry of the boundary is left `Deleted`, so `CascadeChanges` finds nothing to cascade or reject for
+     it; the version step then bumps the root, now `Modified`, and checks it (`WHERE AggregateVersion = @original`).
+6. **After the commit** the marked and restored entities still tracked are detached and the root leaves the
+   record, as a hard delete detaches. The list lives on the scoped `AggregateLoadRecord` and is cleared with
+   it (`DiscardChanges`, a failed `ExecuteAsync` attempt, a pooled lease's reset), so nothing of a cleared
+   tracker is ever detached later. A failed save leaves the entries marked and `Modified`: a later save in
+   the same scope writes those marks as they are (the step does not run again, and an entity attached to
+   the aggregate in between is not marked).
+7. **What stays a real delete:** a child removed from an aggregate that stays alive, an aggregate without
+   `HasSoftDelete()`, bulk `ExecuteDelete` and raw SQL.
+8. **Reads.** `QueryOptions<T>.IncludeDeleted` (`WithDeleted()`, core) makes `EfSpecificationEvaluator`
+   apply `IgnoreQueryFilters([SoftDelete.FilterName])` first: the named overload, so every other filter —
+   a tenant's — still applies; the parameterless overload stays banned (`IlCallScanTests`). The write side
+   and `FindAsync(keyValues)` never see a soft-deleted aggregate; there is no undelete.
+
+### Consequences
+
+- A migration per opted-in aggregate: a nullable column on each of its tables.
+- A unique index still sees soft-deleted rows. The README shows the recipe — a filtered unique index,
+  `HasFilter("\"AggregateDeletedAt\" IS NULL")`, valid on PostgreSQL and on SQL Server (filtered indexes
+  run with `QUOTED_IDENTIFIER ON`) — and no convention rewrites the application's indexes.
+- A required navigation from another aggregate to a soft-deleted root is hidden by the filter (EF Core's
+  `PossibleIncorrectRequiredNavigationWithQueryFilterInteractionWarning`).
+- `MicroKit.Tenancy`'s anonymous tenant filter must be named before a tenant entity can be soft-deletable;
+  Tenancy names it during its own upgrade (Spec: no issue).
+- The in-memory doubles delete for real.
+- Tests: `SoftDeleteTests` (PostgreSQL and SQL Server), `SoftDeleteFoundationTests` (EF Core facts).
 
 ---
 

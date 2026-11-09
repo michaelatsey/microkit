@@ -90,7 +90,14 @@ internal sealed class AggregateSaveInterceptor : SaveChangesInterceptor
         if (AggregateSave.Begin(context) is not { } save)
             return;
 
-        // The steps, in order. Phase 4's soft-delete conversion goes here, before the version step.
+        // The steps, in order: the soft-delete conversion turns deletes into updates, which the version
+        // step then bumps like any other write.
+        // The entities it marked are detached once a save succeeds, as EF Core detaches what a save deleted;
+        // the list lives on the scoped record, so a cleared tracker or a pooled lease drops it.
+        var softDeleted = AggregateSoftDeleteStep.Apply(save);
+        if (softDeleted.Count > 0)
+            save.Record?.SoftDeleted.AddRange(softDeleted.Select(e => e.Entity));
+
         var bumps = AggregateVersionStep.Apply(save);
         if (bumps.Count > 0)
             s_inFlight.AddOrUpdate(context, bumps);
@@ -98,8 +105,20 @@ internal sealed class AggregateSaveInterceptor : SaveChangesInterceptor
 
     private static void Forget(DbContext? context)
     {
-        if (context is not null)
-            s_inFlight.Remove(context);
+        if (context is null)
+            return;
+        s_inFlight.Remove(context);
+        if (KeyLookup.FindLoadRecord(context) is not { SoftDeleted.Count: > 0 } record)
+            return;
+
+        var softDeleted = new HashSet<object>(record.SoftDeleted, ReferenceEqualityComparer.Instance);
+        record.SoftDeleted.Clear();
+        foreach (var entity in softDeleted)
+            record.Forget(entity);
+
+        // Through the tracker's current entries: only what is still tracked is detached.
+        foreach (var entry in context.ChangeTracker.Entries().Where(e => softDeleted.Contains(e.Entity)).ToList())
+            entry.State = EntityState.Detached;
     }
 
     private static void Undo(DbContext? context)

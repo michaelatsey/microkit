@@ -43,10 +43,10 @@ internal static class AggregateVersionStep
             if (!save.Map.IsInside(entry.Metadata))
                 continue; // outside every boundary
 
-            var current = entry.State == EntityState.Deleted ? Resolved.None : RootsOf(save, entry, original: false);
+            var current = entry.State == EntityState.Deleted ? ResolvedRoots.None : save.RootsOf(entry, original: false);
             var original = entry.State == EntityState.Added || (entry.State == EntityState.Modified && !LinkChanged(save, entry))
-                ? Resolved.None
-                : RootsOf(save, entry, original: true);
+                ? ResolvedRoots.None
+                : save.RootsOf(entry, original: true);
 
             if (current.Unresolved || original.Unresolved || (current.Roots.Count == 0 && original.Roots.Count == 0))
                 throw RootNotTracked(save, entry);
@@ -81,62 +81,6 @@ internal static class AggregateVersionStep
                 version.IsModified = false; // back to the loaded value, and to Unchanged when nothing else changed
             else
                 version.CurrentValue = bump.Previous;
-        }
-    }
-
-    // The roots an entry belongs to, through its parent links, with the entry's original or current
-    // foreign keys. Ancestors are followed with their own current keys, or original ones when deleted.
-    // Unresolved: a foreign key on the way points to a parent the context does not track.
-    private static Resolved RootsOf(AggregateSave save, EntityEntry entry, bool original)
-    {
-        var roots = new List<EntityEntry>();
-        var visited = new HashSet<object>(ReferenceEqualityComparer.Instance);
-        var unresolved = false;
-        Collect(save, entry, original, roots, visited, ref unresolved);
-        return new Resolved(roots, unresolved);
-    }
-
-    private static void Collect(
-        AggregateSave save,
-        EntityEntry entry,
-        bool original,
-        List<EntityEntry> roots,
-        HashSet<object> visited,
-        ref bool unresolved)
-    {
-        if (!visited.Add(entry.Entity))
-            return;
-
-        if (AggregateBoundaryMap.IsRoot(entry.Metadata))
-        {
-            if (!roots.Exists(r => ReferenceEquals(r.Entity, entry.Entity)))
-                roots.Add(entry);
-            return;
-        }
-
-        foreach (var link in save.Map.LinksOf(entry.Metadata))
-        {
-            var foreignKey = link.ForeignKey;
-            if (link.ChildIsDependent)
-            {
-                if (!foreignKey.DeclaringEntityType.IsAssignableFrom(entry.Metadata))
-                    continue;
-                var values = AggregateSave.ValuesOf(entry, foreignKey.Properties, original);
-                if (values.HasNull)
-                    continue;
-                if (save.FindByKey(foreignKey.PrincipalKey, values) is { } parent)
-                    Collect(save, parent, parent.State == EntityState.Deleted, roots, visited, ref unresolved);
-                else
-                    unresolved = true;
-            }
-            else
-            {
-                if (!foreignKey.PrincipalEntityType.IsAssignableFrom(entry.Metadata))
-                    continue;
-                var key = AggregateSave.ValuesOf(entry, foreignKey.PrincipalKey.Properties, original: false);
-                foreach (var parent in save.FindByForeignKey(foreignKey, key))
-                    Collect(save, parent, parent.State == EntityState.Deleted, roots, visited, ref unresolved);
-            }
         }
     }
 
@@ -199,10 +143,6 @@ internal static class AggregateVersionStep
         return new VersionBump(root, previous);
     }
 
-    private readonly record struct Resolved(IReadOnlyList<EntityEntry> Roots, bool Unresolved)
-    {
-        internal static Resolved None { get; } = new([], false);
-    }
 }
 
 /// <summary>A version the step changed: the root and the value it held before.</summary>

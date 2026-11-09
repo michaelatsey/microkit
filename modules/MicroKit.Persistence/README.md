@@ -364,6 +364,74 @@ Known limits:
 - A many-to-many navigation marked `IsOutsideAggregate()` is not versioned: its join rows lie outside
   every aggregate. Use a link entity for links the aggregate owns.
 
+## Soft delete
+
+An aggregate opts in on its root; deleting the root then marks the whole aggregate instead of deleting
+it. It needs `UseMicroKitPersistence()` on the context (`AddDbContext`, `UsePostgreSQL` and
+`UseSqlServer` call it): without it the annotation does nothing and a delete is real.
+
+```csharp
+        // README: "Soft delete"
+        modelBuilder.Entity<Invoice>(invoice =>
+        {
+            invoice.Ignore(i => i.DomainEvents);
+            invoice.HasSoftDelete(); // the invoice and its lines are marked, never deleted
+            invoice.HasMany(i => i.Lines).WithOne().HasForeignKey("InvoiceId").IsRequired(); // Cascade inside the aggregate
+
+            // A soft-deleted invoice still holds its number: filter the unique index on the live rows.
+            invoice.HasIndex(i => i.Number).IsUnique().HasFilter("\"AggregateDeletedAt\" IS NULL");
+        });
+```
+
+- **The model.** Every entity type of the aggregate gets a shadow `DateTimeOffset?` column,
+  `AggregateDeletedAt` (`SoftDelete.PropertyName`), and the named query filter `MicroKit.SoftDelete`
+  (`SoftDelete.FilterName`), on the root type of each hierarchy; an owned type follows its owner. The
+  property name is reserved on those types; its column may be configured, and a naming convention
+  applies. It is a schema change: a migration adds a nullable column to each table of the aggregate.
+- **The save.** `DeleteAsync(root)` then a commit writes an `UPDATE` that sets the mark — one UTC instant
+  per save, from the application's `TimeProvider` (`TimeProvider.System` if none) — on the root and on
+  every tracked entity of its aggregate, whatever EF Core's cascade timing or delete behaviour left it
+  as; no row is deleted, and owned values are kept. A change made before the delete in the same save is
+  written with the mark. The root's version is bumped and checked like any write. After the commit the
+  aggregate is detached, as a deleted one is, and `FindAsync` no longer finds it.
+- **What stays a real delete.** A child removed from an aggregate that stays alive; an aggregate without
+  `HasSoftDelete()`; bulk `ExecuteDelete` and raw SQL, which bypass the change tracker.
+- **References from outside.** A foreign key into the aggregate from outside it (another aggregate, an
+  entity outside every aggregate, join rows of an outside many-to-many) is `ClientNoAction`: EF Core leaves
+  a tracked dependent alone when the root is removed, and the database constraint is `NO ACTION`. A real
+  delete of a referenced child still fails, and `TryExecuteAsync` returns `REFERENCE`. Configuring another
+  behaviour on such a key fails model building.
+- **Refusals.** Deleting a root its repository did not load whole fails the save: its untracked entities
+  could not be marked. Model building fails when an entity of the aggregate carries an anonymous query
+  filter (name it: `HasQueryFilter("Tenant", …)`, so both filters combine), and when a relationship
+  inside the aggregate is required and does not cascade (`Restrict`, `NoAction`, `ClientSetNull`,
+  `SetNull`): EF Core would reject the removal of the root before the save could mark it.
+- **Reads.** The filter hides soft-deleted rows from every query, a direct query on a child's `DbSet`
+  included. `QueryOptions.WithDeleted()` returns them on the read side by ignoring that filter only
+  (`IgnoreQueryFilters([SoftDelete.FilterName])`), for the whole query — an `Include` that reaches another
+  soft-deletable aggregate returns its soft-deleted rows too. Every other filter, named or anonymous (a
+  tenant filter), still applies.
+- **Tenancy.** `MicroKit.Tenancy`'s tenant filter is anonymous today: a tenant entity cannot be part of a
+  soft-deletable aggregate until that filter is named (model building fails, naming the entity).
+
+```csharp
+    // README: "Soft delete" — the read side, with the soft-deleted invoices too
+    public ValueTask<IReadOnlyList<Invoice>> ListAllAsync(CancellationToken ct = default) =>
+        ListAsync(new QueryOptions<Invoice>().WithDeleted().WithOrderBy(i => i.Number), ct);
+```
+
+Known limits:
+
+- A unique index still sees soft-deleted rows: a soft-deleted invoice keeps its number. Filter the index
+  on the live rows, as above (`HasFilter("\"AggregateDeletedAt\" IS NULL")`, valid on PostgreSQL and on
+  SQL Server, whose filtered indexes run with `QUOTED_IDENTIFIER ON`; with a naming convention, name the
+  converted column). No convention rewrites the application's indexes.
+- A required navigation from another aggregate to a soft-deleted root: EF Core warns that the filter can
+  hide the principal of a required relationship (`PossibleIncorrectRequiredNavigationWithQueryFilterInteractionWarning`),
+  and an `Include` of it drops the dependent rows.
+- There is no undelete: the write side never loads a soft-deleted aggregate.
+- The in-memory doubles delete for real; `WithDeleted()` has no effect on them.
+
 ## Transactions
 
 `ITransactionalContext.ExecuteAsync` runs an operation in a transaction:
@@ -575,8 +643,8 @@ the find, where EF Core checks it at the commit.
 | `PersistenceErrors` | Core | The `PERSISTENCE.<ROOT>.<REASON>` errors, `DefaultErrorName`, `IsValidErrorName` |
 | `AggregateVersionConflictException` | Core | Inner exception of a version conflict a repository detects itself |
 | `IReadRepository<TAggregate>` | Core | Read side, untracked: find, list, page, any, count |
-| `QueryOptions<TAggregate>` | Core | Specification + includes, split query, ordering, pagination |
-| `QueryOptionsExtensions` | Core | `WithIncludes`, `WithPagination`, `AsSplitQuery`, `WithOrdering` |
+| `QueryOptions<TAggregate>` | Core | Specification + includes, split query, ordering, pagination, `IncludeDeleted` |
+| `QueryOptionsExtensions` | Core | `WithIncludes`, `WithPagination`, `AsSplitQuery`, `WithOrdering`, `WithDeleted` |
 | `PaginationOptions` | Core | A validated page request |
 | `PaginationLimits` | Core | Default and maximum page sizes |
 | `PagedResult<T>` | Core | `IPagedResult<T>` implementation |
@@ -596,6 +664,7 @@ the find, where EF Core checks it at the commit.
 | `AggregateErrorNameBuilderExtensions` | EntityFrameworkCore | `HasAggregateErrorName` on a root |
 | `AggregateBoundaryNavigationBuilderExtensions` | EntityFrameworkCore | `IsOutsideAggregate()` on a navigation |
 | `AggregateVersion` | EntityFrameworkCore | `PropertyName` of the version token, for projections |
+| `SoftDelete`, `SoftDeleteBuilderExtensions` | EntityFrameworkCore | `HasSoftDelete()` on a root; `PropertyName` and `FilterName` of the deletion mark |
 | `PostgreSqlEfCoreBuilderExtensions` | PostgreSql | `UsePostgreSQL<TContext>` |
 | `PostgreSqlFailureClassifier` | PostgreSql | `23505`, `23503` |
 | `SqlServerEfCoreBuilderExtensions` | SqlServer | `UseSqlServer<TContext>` |

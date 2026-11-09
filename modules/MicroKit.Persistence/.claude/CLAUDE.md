@@ -12,7 +12,7 @@ keep the CQRS data-access split honest.
 
 Consumer documentation: `README.md`. Every C# sample in it lives in, and builds from,
 `samples/MicroKit.Persistence.Samples`. Decisions: `.claude-context/context/architectural-decisions.md`
-(ADR-001 to ADR-011, DN-001, DN-002).
+(ADR-001 to ADR-012, DN-001, DN-002).
 
 ---
 
@@ -112,8 +112,8 @@ AggregateVersionConflictException  // inner of a version conflict a repository d
 
 // Core — read side (the only read contract)
 IReadRepository<TAggregate>    // FindAsync(object[] keyValues) · ListAsync · ListPagedAsync · AnyAsync · CountAsync
-QueryOptions<TAggregate>       // Specification, Includes, Pagination, AsSplitQueryEnabled, OrderBy
-                               // (no tracking option: the read side never tracks)
+QueryOptions<TAggregate>       // Specification, Includes, Pagination, AsSplitQueryEnabled, OrderBy,
+                               // IncludeDeleted (WithDeleted); no tracking option: the read side never tracks
 PaginationLimits               // DefaultPageSize 50, MaxPageSize 500; ListPagedAsync applies the default
                                // page, ListAsync and ListPagedAsync reject a size above the maximum
 
@@ -129,6 +129,8 @@ AggregateVersion.PropertyName  // shadow long concurrency token on every root, b
 HasAggregateErrorName(name)    // on EntityTypeBuilder: the <ROOT> of the PERSISTENCE codes (ADR-011)
 IDatabaseFailureClassifier     // provider error codes; PostgreSqlFailureClassifier, SqlServerFailureClassifier
 UseMicroKitPersistence(classifier)  // UsePostgreSQL / UseSqlServer pass theirs
+HasSoftDelete()                // on the root's EntityTypeBuilder: deleting the root marks the whole aggregate
+                               // (SoftDelete.PropertyName AggregateDeletedAt, FilterName MicroKit.SoftDelete — ADR-012)
 ```
 
 Composition:
@@ -201,7 +203,7 @@ strategy (ADR-002). `IUnitOfWork` moved here from MicroKit.Domain (ADR-001).
 
 ```
 .claude-context/
-├── context/architectural-decisions.md   ADR-001…ADR-011, DN-001, DN-002
+├── context/architectural-decisions.md   ADR-001…ADR-012, DN-001, DN-002
 ├── context/dependency-graph.md          project and package graph as declared
 ├── context/ecosystem-overview.md        position among MicroKit modules
 ├── standards/performance-budget.md      targets (no benchmark project yet)
