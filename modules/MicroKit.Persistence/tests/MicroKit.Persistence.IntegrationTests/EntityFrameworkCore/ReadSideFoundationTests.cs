@@ -225,17 +225,17 @@ public abstract class ReadSideFoundationScenarios
 }
 
 [Collection(PostgreSqlSuite.Name)]
-public sealed class ReadSideFoundationPostgreSqlTests(PostgreSqlFixture fixture) : ReadSideFoundationScenarios
+public sealed class ReadSideFoundationPostgreSqlTests(PostgreSqlSuiteFixture fixture) : ReadSideFoundationScenarios
 {
     protected override void UseProvider(DbContextOptionsBuilder builder, string database) =>
-        builder.UseNpgsql(new NpgsqlConnectionStringBuilder(fixture.ConnectionString) { Database = database }.ConnectionString);
+        builder.UseNpgsql(fixture.GetConnectionString(database));
 }
 
 [Collection(SqlServerSuite.Name)]
-public sealed class ReadSideFoundationSqlServerTests(SqlServerFixture fixture) : ReadSideFoundationScenarios
+public sealed class ReadSideFoundationSqlServerTests(SqlServerSuiteFixture fixture) : ReadSideFoundationScenarios
 {
     protected override void UseProvider(DbContextOptionsBuilder builder, string database) =>
-        builder.UseSqlServer(new SqlConnectionStringBuilder(fixture.ConnectionString) { InitialCatalog = database }.ConnectionString);
+        builder.UseSqlServer(fixture.GetConnectionString(database));
 }
 
 public readonly record struct FdItemId(Guid Value);

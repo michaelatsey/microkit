@@ -14,7 +14,7 @@ namespace MicroKit.Persistence.IntegrationTests.PostgreSql;
 /// Every case runs with the default (non-retrying) strategy and with a retrying one.
 /// </summary>
 [Collection(PostgreSqlSuite.Name)]
-public sealed class EfUnitOfWorkJoinTests(PostgreSqlFixture fixture)
+public sealed class EfUnitOfWorkJoinTests(PostgreSqlSuiteFixture fixture)
 {
     [DockerRequiredTheory]
     [InlineData(null)]

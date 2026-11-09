@@ -25,7 +25,7 @@ public sealed class DbContextInjectionAnalyzer : DiagnosticAnalyzer
                    + "EntityFrameworkCore, Repository, Data. "
                    + "This is a best-effort heuristic — suppress with #pragma warning disable MKP004 "
                    + "for legitimate infrastructure classes that do not use conventional namespace naming.",
-        helpLinkUri: $"https://github.com/michaelatsey/microkit/docs/analyzers/{DiagnosticId}");
+        helpLinkUri: HelpLinks.For(DiagnosticId));
 
     // Namespace keywords that identify the infrastructure/persistence layer
     private static readonly string[] InfrastructureKeywords =

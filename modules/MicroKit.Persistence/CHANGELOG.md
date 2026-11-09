@@ -2,6 +2,45 @@
 
 ## [Unreleased]
 
+### #197 phase 7 — testing kit and documentation
+
+The relational test fixtures ship in their own packages, with the Docker probe of phase 1; the analyzers'
+help links open their README sections. ADR-015 records the decision.
+
+#### Added
+
+##### MicroKit.Persistence.Testing.PostgreSql, MicroKit.Persistence.Testing.SqlServer (new packages)
+- `PostgreSqlFixture` and `SqlServerFixture`: one database server in a Docker container (Testcontainers), with an
+  `IAsyncDisposable` lifecycle and no test framework. `StartAsync(ct)` starts one container whoever calls it and
+  however often: the start runs under no caller's token and carries no caller's ambient state, a caller's token
+  cancels only its own wait, and a start that fails is rethrown to every later call; faults come through the
+  returned task. `ConnectionString` (the server's
+  default database) and `GetConnectionString(database)` (the same server, another database, the name quoted) throw
+  `InvalidOperationException` before a successful start. `DisposeAsync` cancels a running start, waits for it and
+  removes the container; it is idempotent (every call completes once the container is removed) and safe on a
+  fixture that never started. After it, every other member throws `ObjectDisposedException`.
+- `DefaultImage` (`postgres:17-alpine`, `mcr.microsoft.com/mssql/server:2022-latest`), read at run time, and a
+  constructor taking the image. Using `SqlServerFixture` accepts the SQL Server licence: Testcontainers' builder sets
+  `ACCEPT_EULA=Y`.
+- Neither package references a test framework or EF Core.
+
+##### MicroKit.Persistence.Testing
+- `DockerProbe.IsAvailable`: whether a Docker daemon answers `GET /_ping` with HTTP 200, through `DOCKER_HOST` or
+  the default Unix sockets and Windows pipe — framework-neutral, cheap (about 4 s per source at most, once per
+  process) and never throwing. A Windows pipe that accepts and never answers now gives up at the deadline; phase 1's
+  probe, inside the tests, hung there. The package still takes no Testcontainers dependency. The probe does not read what
+  only Testcontainers reads (`~/.testcontainers.properties`, Docker contexts, Docker Desktop's own socket): where
+  only those reach the daemon it answers `false`, and a test using it is skipped although it could run.
+
+#### Changed
+- The help link of every analyzer diagnostic (MKP001–MKP009) opens its own section of the module README; it pointed
+  at a page that did not exist.
+
+#### Tests
+- The module's PostgreSQL and SQL Server suites run on the published fixtures, through a ten-line xUnit adapter;
+  `DockerRequiredFact` / `DockerRequiredTheory` stay in the tests, built on `DockerProbe`. A test pins that the probe
+  and Testcontainers' own discovery agree on the machine running the suite.
+
 ### #197 phase 6 — query-shape analyzers
 
 Four analyzers flag costly or unsafe query shapes. What they cannot see they do not guess, and they ship no code
@@ -131,6 +170,7 @@ entity of its aggregate. ADR-010 records the decision.
 - `EfRepository.FindAsync(id, expectedVersion)`: the expected version becomes the token's original value, checked in the root's `UPDATE` or `DELETE`. A stale version conflicts even when the command changes nothing. On a staged root not inserted yet it is checked at the find: anything but 0 throws `PersistenceException`.
 - `EfRepository.GetVersion(aggregate)`; an `Added` root reads 0 until its commit writes 1, and a failed save puts the version back.
 - `AggregateVersion.PropertyName`, for projections (`EF.Property<long>(o, AggregateVersion.PropertyName)`).
+- A child is resolved to its root with EF Core's key value comparers, so `byte[]` keys and keys with a custom comparer are matched.
 - `InMemoryRepository.SetVersion(aggregate, version)`; the double checks the expected version at the find.
 
 #### Known limits

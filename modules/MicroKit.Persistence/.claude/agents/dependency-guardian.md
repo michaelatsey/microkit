@@ -24,12 +24,16 @@ model: haiku
    no provider package.
 6. **Providers** — PostgreSql: EntityFrameworkCore + `Npgsql.EntityFrameworkCore.PostgreSQL`;
    SqlServer: EntityFrameworkCore + `Microsoft.EntityFrameworkCore.SqlServer`.
-7. **Siblings** — `Specifications`, `Testing`, `PostgreSql`, `SqlServer` never reference one another.
+7. **Siblings** — `Specifications`, `Testing`, `EntityFrameworkCore.PostgreSql`, `EntityFrameworkCore.SqlServer` never
+   reference one another (the fixture packages sit above `Testing`: rule 9).
 8. **NSubstitute** — test projects only; the `Testing` package references no package.
-9. **Analyzers** — no project reference; only `Microsoft.CodeAnalysis.CSharp`, with
+9. **Fixture packages** — `Testing.PostgreSql`: `Testing` + `Testcontainers.PostgreSql`; `Testing.SqlServer`:
+   `Testing` + `Testcontainers.MsSql`. No test framework (xunit, NUnit, MSTest), no EF Core, no provider package,
+   neither each other nor `Specifications` (ADR-015). Testcontainers anywhere else in `src/` is a BLOCK.
+10. **Analyzers** — no project reference; only `Microsoft.CodeAnalysis.CSharp`, with
    `PrivateAssets="all"` so the nuspec declares no dependency. Inside the
    repository it is referenced with `OutputItemType="Analyzer" ReferenceOutputAssembly="false"`.
-10. **No reverse edge** — nothing in this module references MediatR, Messaging, Tenancy or Http.
+11. **No reverse edge** — nothing in this module references MediatR, Messaging, Tenancy or Http.
 
 ## Reference patterns
 

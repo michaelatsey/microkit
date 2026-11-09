@@ -39,6 +39,13 @@ public sealed class SealedClassTests
     }
 
     [Fact]
+    public void TheRelationalFixtures_AreSealed()
+    {
+        IsSealed(typeof(MicroKit.Persistence.Testing.PostgreSql.PostgreSqlFixture)).ShouldBeTrue();
+        IsSealed(typeof(MicroKit.Persistence.Testing.SqlServer.SqlServerFixture)).ShouldBeTrue();
+    }
+
+    [Fact]
     public void InMemoryRepository_IsSealed()
     {
         IsSealed(typeof(MicroKit.Persistence.Testing.InMemoryRepository<,>)).ShouldBeTrue();

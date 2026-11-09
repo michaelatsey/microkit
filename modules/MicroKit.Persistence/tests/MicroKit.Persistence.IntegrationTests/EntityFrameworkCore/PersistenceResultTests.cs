@@ -759,7 +759,7 @@ public abstract class PersistenceResultScenarios
 }
 
 [Collection(PostgreSqlSuite.Name)]
-public sealed class PersistenceResultPostgreSqlTests(PostgreSqlFixture fixture) : PersistenceResultScenarios
+public sealed class PersistenceResultPostgreSqlTests(PostgreSqlSuiteFixture fixture) : PersistenceResultScenarios
 {
     protected override IDatabaseFailureClassifier Classifier => PostgreSqlFailureClassifier.Instance;
 
@@ -776,11 +776,11 @@ public sealed class PersistenceResultPostgreSqlTests(PostgreSqlFixture fixture) 
         builder.UsePostgreSQL<ResultsDbContext>(ConnectionString(database));
 
     private string ConnectionString(string database) =>
-        new NpgsqlConnectionStringBuilder(fixture.ConnectionString) { Database = database }.ConnectionString;
+        fixture.GetConnectionString(database);
 }
 
 [Collection(SqlServerSuite.Name)]
-public sealed class PersistenceResultSqlServerTests(SqlServerFixture fixture) : PersistenceResultScenarios
+public sealed class PersistenceResultSqlServerTests(SqlServerSuiteFixture fixture) : PersistenceResultScenarios
 {
     protected override IDatabaseFailureClassifier Classifier => SqlServerFailureClassifier.Instance;
 
@@ -797,7 +797,7 @@ public sealed class PersistenceResultSqlServerTests(SqlServerFixture fixture) : 
         builder.UseSqlServer<ResultsDbContext>(ConnectionString(database));
 
     private string ConnectionString(string database) =>
-        new SqlConnectionStringBuilder(fixture.ConnectionString) { InitialCatalog = database }.ConnectionString;
+        fixture.GetConnectionString(database);
 }
 
 public readonly record struct AccountId(Guid Value) : IEntityId;

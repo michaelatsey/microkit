@@ -435,21 +435,21 @@ public abstract class ReadSideScenarios
 }
 
 [Collection(PostgreSqlSuite.Name)]
-public sealed class ReadSidePostgreSqlTests(PostgreSqlFixture fixture) : ReadSideScenarios
+public sealed class ReadSidePostgreSqlTests(PostgreSqlSuiteFixture fixture) : ReadSideScenarios
 {
     protected override IDatabaseFailureClassifier Classifier => MicroKit.Persistence.EntityFrameworkCore.PostgreSql.PostgreSqlFailureClassifier.Instance;
 
     protected override void UseProvider(DbContextOptionsBuilder builder, string database) =>
-        builder.UseNpgsql(new NpgsqlConnectionStringBuilder(fixture.ConnectionString) { Database = database }.ConnectionString);
+        builder.UseNpgsql(fixture.GetConnectionString(database));
 }
 
 [Collection(SqlServerSuite.Name)]
-public sealed class ReadSideSqlServerTests(SqlServerFixture fixture) : ReadSideScenarios
+public sealed class ReadSideSqlServerTests(SqlServerSuiteFixture fixture) : ReadSideScenarios
 {
     protected override IDatabaseFailureClassifier Classifier => MicroKit.Persistence.EntityFrameworkCore.SqlServer.SqlServerFailureClassifier.Instance;
 
     protected override void UseProvider(DbContextOptionsBuilder builder, string database) =>
-        builder.UseSqlServer(new SqlConnectionStringBuilder(fixture.ConnectionString) { InitialCatalog = database }.ConnectionString);
+        builder.UseSqlServer(fixture.GetConnectionString(database));
 }
 
 public readonly record struct RsOrderId(Guid Value) : IEntityId;

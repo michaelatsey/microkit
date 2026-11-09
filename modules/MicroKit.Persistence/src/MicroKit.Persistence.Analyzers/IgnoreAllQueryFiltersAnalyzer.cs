@@ -24,7 +24,7 @@ public sealed class IgnoreAllQueryFiltersAnalyzer : DiagnosticAnalyzer
                    + "code does not own included. EF Core 10 names query filters: ignore only the ones meant, with "
                    + "IgnoreQueryFilters([\"name\"]); MicroKit's soft delete has WithDeleted(). The parameterless overload is "
                    + "the only way to ignore an anonymous filter: suppress the warning there.",
-        helpLinkUri: $"https://github.com/michaelatsey/microkit/docs/analyzers/{DiagnosticId}");
+        helpLinkUri: HelpLinks.For(DiagnosticId));
 
     /// <inheritdoc />
     public override ImmutableArray<DiagnosticDescriptor> SupportedDiagnostics => ImmutableArray.Create(Rule);

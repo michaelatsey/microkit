@@ -4,17 +4,18 @@
 
 | Project | Tests |
 |---------|-------|
-| `UnitTests` | `QueryOptions` and its extensions, `PaginationOptions`, `PersistenceErrors`, the in-memory doubles — no database |
-| `IntegrationTests` | EF Core against SQLite in-memory, PostgreSQL and SQL Server via Testcontainers (`EntityFrameworkCore/`, `PostgreSql/`, `SqlServer/`), the Docker probe (`Docker/`), provider registration (`Providers/`) |
-| `ArchitectureTests` | NetArchTest layering, contract placement, sealing, namespaces; `IlCallScanTests` (Mono.Cecil) |
-| `Analyzers.Tests` | MKP001–MKP009 — see `analyzers.md` (MKP006–MKP009 compile `Stubs/QueryStubs.cs` against the .NET 9 reference assemblies) |
+| `UnitTests` | `QueryOptions` and its extensions, `PaginationOptions`, `PersistenceErrors`, the in-memory doubles, the fixtures' container lifecycle (`Testing/ContainerLifecycleTests`, a fake container) and the Docker probe (`Docker/DockerProbeTests`) — no database |
+| `IntegrationTests` | EF Core against SQLite in-memory, PostgreSQL and SQL Server through the published fixtures (`EntityFrameworkCore/`, `PostgreSql/`, `SqlServer/`), the xUnit Docker attributes (`Docker/`), the fixtures against real servers (`Testing/`), provider registration (`Providers/`) |
+| `ArchitectureTests` | NetArchTest layering, contract placement, sealing, namespaces; `IlCallScanTests` (Mono.Cecil); `PackageClosureTests` (the resolved dependency graph) |
+| `Analyzers.Tests` | MKP001–MKP009 — see `analyzers.md` (MKP006–MKP009 compile `Stubs/QueryStubs.cs` against the .NET 9 reference assemblies); `HelpLinkTests` (every help link opens a README heading) |
 
 There is no performance-test or benchmark project.
 
-PostgreSQL and SQL Server tests use `PostgreSqlFixture` / `SqlServerFixture` (collections
-`PostgreSqlSuite` / `SqlServerSuite`) and `[DockerRequiredFact]` / `[DockerRequiredTheory]`. These
-skip only when no Docker daemon answers `GET /_ping` (`DockerEndpoint`: a leftover socket file does
-not count), so `dotnet test` stays green without Docker — but a skipped database test is a missing
+PostgreSQL and SQL Server tests use `PostgreSqlSuiteFixture` / `SqlServerSuiteFixture` (collections
+`PostgreSqlSuite` / `SqlServerSuite`), xUnit adapters over the published `PostgreSqlFixture` / `SqlServerFixture`
+(ADR-015) — a per-test database is `fixture.GetConnectionString(database)` — and `[DockerRequiredFact]` /
+`[DockerRequiredTheory]`. These skip only when no Docker daemon answers `GET /_ping` (`DockerProbe`: a leftover
+socket file does not count), so `dotnet test` stays green without Docker — but a skipped database test is a missing
 proof: every phase of #197 ends with none skipped. Transaction semantics (retry, join, rollback —
 ADR-006) are tested on PostgreSQL.
 

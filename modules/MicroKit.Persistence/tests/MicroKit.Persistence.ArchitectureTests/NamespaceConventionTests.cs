@@ -102,6 +102,20 @@ public sealed class NamespaceConventionTests
         result.IsSuccessful.ShouldBeTrue(result.FailingTypeNames?.ToString() ?? string.Empty);
     }
 
+    // Exact match, not ResideInNamespace's prefix: MicroKit.Persistence.Testing.PostgreSql starts with
+    // MicroKit.Persistence.Testing (#197 phase 7).
+    [Theory]
+    [InlineData(typeof(MicroKit.Persistence.Testing.DockerProbe), "MicroKit.Persistence.Testing")]
+    [InlineData(typeof(MicroKit.Persistence.Testing.PostgreSql.PostgreSqlFixture), "MicroKit.Persistence.Testing.PostgreSql")]
+    [InlineData(typeof(MicroKit.Persistence.Testing.SqlServer.SqlServerFixture), "MicroKit.Persistence.Testing.SqlServer")]
+    public void TestingFamilyPublicTypes_ResideExactlyInTheirAssemblysNamespace(Type marker, string expected)
+    {
+        var assembly = marker.Assembly;
+
+        assembly.GetName().Name.ShouldBe(expected);
+        assembly.GetExportedTypes().Where(type => type.Namespace != expected).Select(type => type.FullName).ShouldBeEmpty();
+    }
+
     [Fact]
     public void ExtensionClasses_InCoreAssembly_AreStatic()
     {

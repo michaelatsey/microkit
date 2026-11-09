@@ -954,12 +954,12 @@ public abstract class SoftDeleteScenarios
 }
 
 [Collection(PostgreSqlSuite.Name)]
-public sealed class SoftDeletePostgreSqlTests(PostgreSqlFixture fixture) : SoftDeleteScenarios
+public sealed class SoftDeletePostgreSqlTests(PostgreSqlSuiteFixture fixture) : SoftDeleteScenarios
 {
     protected override IDatabaseFailureClassifier Classifier => MicroKit.Persistence.EntityFrameworkCore.PostgreSql.PostgreSqlFailureClassifier.Instance;
 
     protected override void UseProvider(DbContextOptionsBuilder builder, string database, int? maxRetryCount = null) =>
-        builder.UseNpgsql(new NpgsqlConnectionStringBuilder(fixture.ConnectionString) { Database = database }.ConnectionString, npgsql =>
+        builder.UseNpgsql(fixture.GetConnectionString(database), npgsql =>
         {
             if (maxRetryCount is { } retries)
                 npgsql.ExecutionStrategy(d => new MarkerRetryingExecutionStrategy(d, retries));
@@ -967,12 +967,12 @@ public sealed class SoftDeletePostgreSqlTests(PostgreSqlFixture fixture) : SoftD
 }
 
 [Collection(SqlServerSuite.Name)]
-public sealed class SoftDeleteSqlServerTests(SqlServerFixture fixture) : SoftDeleteScenarios
+public sealed class SoftDeleteSqlServerTests(SqlServerSuiteFixture fixture) : SoftDeleteScenarios
 {
     protected override IDatabaseFailureClassifier Classifier => MicroKit.Persistence.EntityFrameworkCore.SqlServer.SqlServerFailureClassifier.Instance;
 
     protected override void UseProvider(DbContextOptionsBuilder builder, string database, int? maxRetryCount = null) =>
-        builder.UseSqlServer(new SqlConnectionStringBuilder(fixture.ConnectionString) { InitialCatalog = database }.ConnectionString, sql =>
+        builder.UseSqlServer(fixture.GetConnectionString(database), sql =>
         {
             if (maxRetryCount is { } retries)
                 sql.ExecutionStrategy(d => new MarkerRetryingExecutionStrategy(d, retries));

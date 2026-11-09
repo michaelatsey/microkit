@@ -1322,6 +1322,86 @@ Builds on ADR-009 (the aggregate load's split), ADR-012 (named soft-delete filte
   - `AggregateSave`: `ChangeTracker.Entries().ToList()`.
 - Tests: `CollectionIncludeAnalyzerTests`, `QueryInLoopAnalyzerTests`, `MaterializeBeforeFilterAnalyzerTests`,
   `IgnoreAllQueryFiltersAnalyzerTests` (stubs in `Stubs/QueryStubs.cs`, .NET 9 reference assemblies).
+- **Help links (#197 phase 7).** Every MKP descriptor's `helpLinkUri` is
+  `https://github.com/michaelatsey/microkit/blob/main/modules/MicroKit.Persistence/README.md#mkpnnn`
+  (`HelpLinks.For(id)`): one `### MKPnnn` heading per ID in the README's Analyzers section. `HelpLinkTests` checks
+  that the analyzers declare exactly MKP001–MKP009 and that each anchor is the GitHub slug of exactly one heading.
+
+---
+
+## ADR-015: Relational Test Fixtures in Their Own Packages, a Framework-Neutral Docker Probe (#197 phase 7)
+
+**Status:** Accepted
+**Date:** 2026-11-10
+**Source:** Issue #197, phase 7: "The relational fixtures ship in their own packages,
+`MicroKit.Persistence.Testing.PostgreSql` and `MicroKit.Persistence.Testing.SqlServer`, with the Docker probe of
+phase 1. `MicroKit.Persistence.Testing` keeps the in-memory doubles and takes no Testcontainers dependency. The
+fixtures expose an `IAsyncDisposable` lifecycle and force no test framework."
+
+User decisions 2026-11-10: option A for the probe (phase 1's probe, BCL only, in `MicroKit.Persistence.Testing`,
+with a test of its agreement with Testcontainers and its limit documented); the shared start runs under no caller's
+token, each caller's token cancels only its own wait, and only a failure of the start itself, or a dispose during it,
+is cached.
+
+### Decision
+
+1. **The probe.** `DockerProbe.IsAvailable` (public static, in `MicroKit.Persistence.Testing`) is phase 1's probe:
+   `GET /_ping`, an HTTP 200 only, a 2-second connect and a 2-second deadline on the whole ping exchange, no process,
+   no exception. One defect of phase 1 is fixed: a named pipe has no read timeout, so a pipe that accepted and never
+   answered hung the probe; each operation of the ping is now abandoned at the deadline; sources
+   `DOCKER_HOST` (with the `DOCKER_TLS_VERIFY` fallback: an accepted connection counts), else
+   `/var/run/docker.sock`, `$XDG_RUNTIME_DIR/docker.sock`, the `docker_engine` pipe; cached per process. It is the
+   only public member: the per-endpoint seams stay internal, tested from `UnitTests`. It is a property because
+   xUnit attribute constructors need a synchronous answer.
+2. **Its limit.** Testcontainers for .NET finds a daemon through more sources (`~/.testcontainers.properties`, TLS,
+   Docker contexts, Docker Desktop's and the rootless sockets — `TestcontainersSettings`). Copying that discovery
+   would drift silently with each Testcontainers release, so the probe does not; where only those sources reach the
+   daemon it answers `false`. `DockerProbeAgreementTests` asserts that it agrees with Testcontainers' public
+   `TestcontainersSettings.OS.DockerEndpointAuthConfig` (non-null only when a daemon it found answered) on the
+   machine running the suite.
+3. **The fixtures.** `PostgreSqlFixture` and `SqlServerFixture` (sealed, `IAsyncDisposable`), one container each:
+   `StartAsync(ct)`, `ConnectionString` (the default database), `GetConnectionString(database)` (the `Database` key
+   replaced through the BCL's `DbConnectionStringBuilder`, `Initial Catalog` removed), `DisposeAsync`; a
+   parameterless constructor on `DefaultImage` (a static property, read at run time — a `const` or an optional
+   parameter would be compiled into the caller) and one taking the image. No Testcontainers type is in their
+   public API, so they expose no builder customisation: a Testcontainers major version cannot break a consumer
+   through them. No test framework, no EF Core: the fixture is the container.
+4. **The lifecycle** (`ContainerLifecycle<TContainer>`, internal to `Testing`, shared by both fixtures through
+   `InternalsVisibleTo`; the packages ship together, as core and EntityFrameworkCore do):
+   - one start, run under the lifecycle's own token only; every caller, the first included, waits through
+     `WaitAsync(ct)`, so a caller's token cancels its own wait and nothing else; an already-cancelled token throws
+     before anything starts;
+   - a start that fails is cached: every later `StartAsync` rethrows it; once disposed, every call throws
+     `ObjectDisposedException`, and a call already waiting when a dispose interrupts the start receives the start's
+     `OperationCanceledException`; a caller's cancelled wait is not cached; faults come through the returned task,
+     never at the call site;
+   - the start runs with `ExecutionContext` flow suppressed: it carries no caller's ambient state (AsyncLocals);
+   - `DisposeAsync` cancels a running start, waits for it, ignores its outcome and disposes the container if one was
+     built (a start can fail after the container exists), even when a cancellation callback throws; idempotent, every
+     call returning the one disposal, so a concurrent second call completes only once the container is removed;
+     afterwards every other member throws
+     `ObjectDisposedException`; before a successful start, `ConnectionString` throws `InvalidOperationException`
+     naming `StartAsync` and `DockerProbe.IsAvailable`.
+5. **The fixtures do not consult the probe.** Testcontainers reaches endpoints the probe does not (`ssh://`, a host
+   override): gating `StartAsync` would refuse a working setup. The caller asks the probe and skips in its own
+   framework's way, so a probe that disagrees can skip a test, never fail one — and the module's "0 skipped" gate
+   shows a skip.
+6. **No framework adapter ships.** An adapter would force a framework. The module's own suites run on the fixtures
+   through `PostgreSqlSuiteFixture` / `SqlServerSuiteFixture`, xUnit `IAsyncLifetime` adapters that start the fixture
+   when the probe answers; `DockerRequiredFact` / `DockerRequiredTheory` stay xUnit attributes in the tests.
+
+### Consequences
+
+- Two new packages; `Testing` gains `DockerProbe`, and `InternalsVisibleTo` to the two fixture packages and
+  `UnitTests`. `Testcontainers.PostgreSql` / `.MsSql` move from a test-only dependency to a shipped dependency of
+  their fixture package.
+- Using `SqlServerFixture` accepts the SQL Server licence: Testcontainers' builder sets `ACCEPT_EULA=Y`. Its default
+  image is amd64, emulated on ARM.
+- A machine whose daemon only Testcontainers' extra sources find skips the database tests; set `DOCKER_HOST`.
+- Tests: `ContainerLifecycleTests` and `DockerProbeTests` (UnitTests, no Docker); `RelationalFixtureTests` (the
+  agreement pin, the fixtures before a start and after a dispose, against real servers, a removed container, a failed
+  start); `PackageClosureTests` (the resolved dependency graph: no Testcontainers in `Testing`, no test framework or EF
+  Core in the fixture packages) and `LayerDependencyTests`.
 
 ---
 

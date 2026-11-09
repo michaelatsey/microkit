@@ -25,7 +25,7 @@ public sealed class MaterializeBeforeFilterAnalyzer : DiagnosticAnalyzer
                    + "way (collation, precision) and that tracked entities' unsaved values do not matter. Reported only for a "
                    + "query from a DbSet the filter commutes with, and a predicate over mapped scalar properties; AsEnumerable() "
                    + "states a deliberate in-memory filter.",
-        helpLinkUri: $"https://github.com/michaelatsey/microkit/docs/analyzers/{DiagnosticId}");
+        helpLinkUri: HelpLinks.For(DiagnosticId));
 
     /// <inheritdoc />
     public override ImmutableArray<DiagnosticDescriptor> SupportedDiagnostics => ImmutableArray.Create(Rule);

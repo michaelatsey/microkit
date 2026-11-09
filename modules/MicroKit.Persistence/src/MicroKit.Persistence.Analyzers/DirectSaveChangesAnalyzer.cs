@@ -25,7 +25,7 @@ public sealed class DirectSaveChangesAnalyzer : DiagnosticAnalyzer
                    + "Classes implementing IUnitOfWork (e.g. EfUnitOfWork) are excluded from this rule. "
                    + "Custom DbContext subclasses overriding SaveChangesAsync for auditing should suppress "
                    + "with #pragma warning disable MKP003.",
-        helpLinkUri: $"https://github.com/michaelatsey/microkit/docs/analyzers/{DiagnosticId}");
+        helpLinkUri: HelpLinks.For(DiagnosticId));
 
     /// <inheritdoc />
     public override ImmutableArray<DiagnosticDescriptor> SupportedDiagnostics =>

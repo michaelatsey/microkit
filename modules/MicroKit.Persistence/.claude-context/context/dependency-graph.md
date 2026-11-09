@@ -6,7 +6,7 @@ checks against it. Rules: `.claude/rules/dependencies.md`.
 
 ---
 
-## Projects (8 src)
+## Projects (10 src)
 
 ```
 MicroKit.Persistence.Abstractions
@@ -33,7 +33,15 @@ MicroKit.Persistence.Specifications
 │   └── → core
 │
 MicroKit.Persistence.Testing
-│   └── → core
+│   └── → core   (in-memory doubles, DockerProbe; BCL only, no Testcontainers)
+│
+MicroKit.Persistence.Testing.PostgreSql
+│   ├── → Testing
+│   └── NuGet: Testcontainers.PostgreSql
+│
+MicroKit.Persistence.Testing.SqlServer
+│   ├── → Testing
+│   └── NuGet: Testcontainers.MsSql
 │
 MicroKit.Persistence.Analyzers            (netstandard2.0)
     └── NuGet: Microsoft.CodeAnalysis.CSharp (PrivateAssets="all": not a package dependency)
@@ -41,18 +49,23 @@ MicroKit.Persistence.Analyzers            (netstandard2.0)
 
 Intra-module references are unconditional `ProjectReference` (ADR-GLOBAL-002 D5).
 `PostgreSql`, `SqlServer`, `Specifications` and `Testing` are siblings — none references another.
-Core grants `InternalsVisibleTo` to `EntityFrameworkCore`, `Testing` and `UnitTests` (the keyset cursor's codec and
-rules, ADR-013); it is not a reference, and no other project declares one.
+`Testing.PostgreSql` and `Testing.SqlServer` sit above `Testing`, not beside it; they reference no EF Core, no provider
+package, not `Specifications` and not each other, and bring no test framework (ADR-015; `LayerDependencyTests`,
+`PackageClosureTests`).
+Two projects grant `InternalsVisibleTo`; it is not a reference:
+- core → `EntityFrameworkCore`, `Testing`, `UnitTests` (the keyset cursor's codec and rules, ADR-013);
+- `Testing` → `Testing.PostgreSql`, `Testing.SqlServer` (the shared container lifecycle, ADR-015) and `UnitTests`, a
+  test assembly that is never packed (the lifecycle and the Docker probe's seams).
 
 ## Tests and samples
 
 | Project | References |
 |---------|-----------|
-| `UnitTests` | Specifications, Testing |
-| `IntegrationTests` | EntityFrameworkCore, PostgreSql, SqlServer (+ MicroKit.Domain); SQLite, Npgsql, Testcontainers.PostgreSql, Testcontainers.MsSql |
-| `ArchitectureTests` | every src project except Analyzers; NetArchTest.Rules, Mono.Cecil |
+| `UnitTests` | Specifications, Testing (internals: the container lifecycle, the probe) |
+| `IntegrationTests` | EntityFrameworkCore, PostgreSql, SqlServer, Testing.PostgreSql, Testing.SqlServer (+ MicroKit.Domain); SQLite, Npgsql (Testcontainers through the fixture packages) |
+| `ArchitectureTests` | every src project except Analyzers (the two fixture packages included); NetArchTest.Rules, Mono.Cecil |
 | `Analyzers.Tests` | Analyzers; Microsoft.CodeAnalysis.CSharp.Analyzer.Testing |
-| `samples/MicroKit.Persistence.Samples` | EntityFrameworkCore, PostgreSql, Specifications, Testing, Analyzers (as analyzer) |
+| `samples/MicroKit.Persistence.Samples` | EntityFrameworkCore, PostgreSql, Specifications, Testing, Testing.PostgreSql, Analyzers (as analyzer) (+ MicroKit.Domain) |
 
 All test projects use xUnit, Shouldly; UnitTests and IntegrationTests also NSubstitute.
 
@@ -97,6 +110,9 @@ All versions in the root `Directory.Packages.props`.
 | `Microsoft.EntityFrameworkCore.SqlServer` | SqlServer |
 | `NSubstitute` | UnitTests, IntegrationTests |
 | `Microsoft.CodeAnalysis.CSharp` | Analyzers, IntegrationTests |
+| `Microsoft.EntityFrameworkCore.Sqlite` | IntegrationTests |
+| `Testcontainers.PostgreSql` | Testing.PostgreSql (IntegrationTests, ArchitectureTests and the samples through it) |
+| `Testcontainers.MsSql` | Testing.SqlServer (IntegrationTests and ArchitectureTests through it) |
 
 The provider classifiers use the ADO.NET exception types through their EF Core provider package, with
 no direct reference: `Npgsql.PostgresException` (PostgreSql, from `Npgsql.EntityFrameworkCore.PostgreSQL`)

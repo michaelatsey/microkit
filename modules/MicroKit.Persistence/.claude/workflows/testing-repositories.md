@@ -10,7 +10,7 @@ Commands: `.claude/skills/testing/SKILL.md`. Conventions and cases: `.claude/rul
 | QueryOptions, pagination, the doubles | UnitTests | plain xUnit + Shouldly |
 | EF Core mapping, aggregate load, pagination | IntegrationTests/EntityFrameworkCore | SQLite in-memory |
 | A feature (boundary, record, untracked reads, …) on both servers | IntegrationTests/EntityFrameworkCore | abstract scenario class + `…PostgreSqlTests` / `…SqlServerTests`, `[DockerRequiredFact]` |
-| Transactions, retries, uniqueness, concurrency | IntegrationTests/PostgreSql (and SqlServer) | `PostgreSqlFixture`, `SqlServerFixture`, `[DockerRequiredFact]` |
+| Transactions, retries, uniqueness, concurrency | IntegrationTests/PostgreSql (and SqlServer) | `PostgreSqlSuiteFixture`, `SqlServerSuiteFixture`, `[DockerRequiredFact]` |
 | Provider registration | IntegrationTests/Providers | service-collection assertions |
 | Layering, placement, sealing, IL calls | ArchitectureTests | NetArchTest, Mono.Cecil |
 | MKP diagnostics | Analyzers.Tests | `CSharpAnalyzerTest`, `PersistenceStubs.All` |
@@ -33,8 +33,9 @@ The doubles store on `AddAsync` (no staging), ignore `Includes`, and reject comp
 ## Integration test
 
 One SQLite connection per test (and per `Task.Run`), schema created by `EnsureCreated`; a
-PostgreSQL or SQL Server test runs against the server `PostgreSqlFixture` / `SqlServerFixture`
-starts once for the `PostgreSqlSuite` / `SqlServerSuite` collection, creates its own database, and
+PostgreSQL or SQL Server test runs against the server `PostgreSqlSuiteFixture` / `SqlServerSuiteFixture` (over the
+published `PostgreSqlFixture` / `SqlServerFixture`) starts once for the `PostgreSqlSuite` / `SqlServerSuite`
+collection, creates its own database (`fixture.GetConnectionString(database)`), and
 skips only when no Docker daemon answers. A context a test builds by hand for `EfRepository` calls
 `UseMicroKitPersistence()`.
 

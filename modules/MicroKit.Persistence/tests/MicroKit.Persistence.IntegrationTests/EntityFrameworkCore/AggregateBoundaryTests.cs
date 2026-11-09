@@ -652,7 +652,7 @@ public abstract class AggregateBoundaryScenarios
 }
 
 [Collection(PostgreSqlSuite.Name)]
-public sealed class AggregateBoundaryPostgreSqlTests(PostgreSqlFixture fixture) : AggregateBoundaryScenarios
+public sealed class AggregateBoundaryPostgreSqlTests(PostgreSqlSuiteFixture fixture) : AggregateBoundaryScenarios
 {
     protected override void UseProvider(DbContextOptionsBuilder builder, string database) =>
         builder.UseNpgsql(ConnectionString(database));
@@ -661,11 +661,11 @@ public sealed class AggregateBoundaryPostgreSqlTests(PostgreSqlFixture fixture) 
         builder.UsePostgreSQL<LibraryDbContext>(ConnectionString(database), options: new ProviderOptions { PoolSize = 4 });
 
     private string ConnectionString(string database) =>
-        new NpgsqlConnectionStringBuilder(fixture.ConnectionString) { Database = database }.ConnectionString;
+        fixture.GetConnectionString(database);
 }
 
 [Collection(SqlServerSuite.Name)]
-public sealed class AggregateBoundarySqlServerTests(SqlServerFixture fixture) : AggregateBoundaryScenarios
+public sealed class AggregateBoundarySqlServerTests(SqlServerSuiteFixture fixture) : AggregateBoundaryScenarios
 {
     protected override void UseProvider(DbContextOptionsBuilder builder, string database) =>
         builder.UseSqlServer(ConnectionString(database));
@@ -674,7 +674,7 @@ public sealed class AggregateBoundarySqlServerTests(SqlServerFixture fixture) : 
         builder.UseSqlServer<LibraryDbContext>(ConnectionString(database), options: new ProviderOptions { PoolSize = 4 });
 
     private string ConnectionString(string database) =>
-        new SqlConnectionStringBuilder(fixture.ConnectionString) { InitialCatalog = database }.ConnectionString;
+        fixture.GetConnectionString(database);
 }
 
 /// <summary>A typed repository whose finder goes through <c>LoadAggregatesAsync</c>.</summary>

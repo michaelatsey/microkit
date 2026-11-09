@@ -68,13 +68,15 @@ public sealed class AuditableAggregateRoundTripSqliteTests
 }
 
 [Collection(PostgreSqlSuite.Name)]
-public sealed class AuditableAggregateRoundTripPostgreSqlTests(PostgreSqlFixture fixture)
+public sealed class AuditableAggregateRoundTripPostgreSqlTests(PostgreSqlSuiteFixture fixture)
 {
     [DockerRequiredFact]
     public void AuditableAggregate_RoundTripsThroughEfCore_OnPostgreSql()
     {
+        // Its own database: the round trip drops and recreates the one it is given.
+        var connectionString = fixture.GetConnectionString("ledger_" + Guid.NewGuid().ToString("N"));
         AuditableAggregateRoundTrip.Run(() => new LedgerDbContext(
-            new DbContextOptionsBuilder<LedgerDbContext>().UseNpgsql(fixture.ConnectionString).Options));
+            new DbContextOptionsBuilder<LedgerDbContext>().UseNpgsql(connectionString).Options));
     }
 }
 

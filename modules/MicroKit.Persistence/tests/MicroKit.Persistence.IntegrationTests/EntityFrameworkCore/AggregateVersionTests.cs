@@ -857,11 +857,11 @@ public abstract class AggregateVersionScenarios
 }
 
 [Collection(PostgreSqlSuite.Name)]
-public sealed class AggregateVersionPostgreSqlTests(PostgreSqlFixture fixture) : AggregateVersionScenarios
+public sealed class AggregateVersionPostgreSqlTests(PostgreSqlSuiteFixture fixture) : AggregateVersionScenarios
 {
     protected override void UseProvider(DbContextOptionsBuilder builder, string database, int? maxRetryCount = null) =>
         builder.UseNpgsql(
-            new NpgsqlConnectionStringBuilder(fixture.ConnectionString) { Database = database }.ConnectionString,
+            fixture.GetConnectionString(database),
             npgsql =>
             {
                 if (maxRetryCount is { } retries)
@@ -870,11 +870,11 @@ public sealed class AggregateVersionPostgreSqlTests(PostgreSqlFixture fixture) :
 }
 
 [Collection(SqlServerSuite.Name)]
-public sealed class AggregateVersionSqlServerTests(SqlServerFixture fixture) : AggregateVersionScenarios
+public sealed class AggregateVersionSqlServerTests(SqlServerSuiteFixture fixture) : AggregateVersionScenarios
 {
     protected override void UseProvider(DbContextOptionsBuilder builder, string database, int? maxRetryCount = null) =>
         builder.UseSqlServer(
-            new SqlConnectionStringBuilder(fixture.ConnectionString) { InitialCatalog = database }.ConnectionString,
+            fixture.GetConnectionString(database),
             sql =>
             {
                 if (maxRetryCount is { } retries)

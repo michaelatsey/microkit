@@ -2,7 +2,7 @@
 
 ## Packages
 
-Eight packages, one per `src/` project, package ID = project name:
+Ten packages, one per `src/` project, package ID = project name:
 
 ```
 MicroKit.Persistence.Abstractions
@@ -12,6 +12,8 @@ MicroKit.Persistence.EntityFrameworkCore.PostgreSql
 MicroKit.Persistence.EntityFrameworkCore.SqlServer
 MicroKit.Persistence.Specifications
 MicroKit.Persistence.Testing
+MicroKit.Persistence.Testing.PostgreSql
+MicroKit.Persistence.Testing.SqlServer
 MicroKit.Persistence.Analyzers
 ```
 
@@ -25,7 +27,7 @@ from the root `Directory.Build.props`. Each `.csproj` sets its own `Description`
 
 ## Versioning and Tags
 
-All 8 packages ship under one version. A `persistence-v<semver>` tag (e.g.
+All 10 packages ship under one version. A `persistence-v<semver>` tag (e.g.
 `persistence-v1.0.0-preview.4`) triggers `.github/workflows/release-persistence.yml`, which takes
 the version from the tag. `version.json` is not read by the build. ADR-GLOBAL-002 (root) defines
 the replacement model; no tag is cut until steps 1–4 of its migration land.
@@ -41,6 +43,8 @@ the replacement model; no tag is cut until steps 1–4 of its migration land.
 | `SqlServer` | `MicroKit.Persistence.EntityFrameworkCore`, `Microsoft.EntityFrameworkCore.SqlServer` |
 | `Specifications` | `MicroKit.Persistence` |
 | `Testing` | `MicroKit.Persistence` |
+| `Testing.PostgreSql` | `MicroKit.Persistence.Testing`, `Testcontainers.PostgreSql` — no test framework (`PackageClosureTests`) |
+| `Testing.SqlServer` | `MicroKit.Persistence.Testing`, `Testcontainers.MsSql` — no test framework (`PackageClosureTests`) |
 | `Analyzers` | none — `Microsoft.CodeAnalysis.CSharp` is referenced with `PrivateAssets="all"`; the compiler provides Roslyn |
 
 ## Analyzers Package

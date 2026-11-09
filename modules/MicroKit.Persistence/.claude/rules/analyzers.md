@@ -96,7 +96,9 @@ method name to the end of its argument list.
 1. Next ID (`MKP010`, …); category `Usage` (behaviour), `Design` (structure) or `Performance` (query cost).
 2. Severity: `Error` for a definite violation, `Warning` for a heuristic, `Info` for a suggestion the code may rightly
    decline.
-3. Add the `DiagnosticDescriptor`, update `SupportedDiagnostics`, update this table.
+3. Add the `DiagnosticDescriptor` with `helpLinkUri: HelpLinks.For(DiagnosticId)`, update `SupportedDiagnostics`,
+   update this table, and add a `### MKPnnn` section under the README's Analyzers heading (the link's anchor;
+   `HelpLinkTests` fails without it, and when the analyzers' IDs are not exactly the registered ones).
 4. Tests: the violation, valid code and an edge case.
 5. A code fix ships only where it provably preserves semantics; record why, or why not, in an ADR.
 
@@ -115,5 +117,7 @@ references it with `OutputItemType="Analyzer" ReferenceOutputAssembly="false"`
 - MKP006–MKP009 run through `QueryTest<TAnalyzer>.RunAsync(code, StubSet)`: standalone stub documents
   (`QueryStubs`: MicroKit, EF Core, relational, a shop model) compiled beside the code against
   `ReferenceAssemblies.Net.Net90`. Leaving a stub set out tests the null guard.
+- `HelpLinkTests`: every descriptor's `HelpLinkUri` is `…/modules/MicroKit.Persistence/README.md#mkpnnn` and the
+  anchor is the GitHub slug of exactly one README heading.
 - Auxiliary assertions may use Shouldly or a bare `Xunit.Assert` (root
   `.claude/rules/testing-libraries.md`); never FluentAssertions.

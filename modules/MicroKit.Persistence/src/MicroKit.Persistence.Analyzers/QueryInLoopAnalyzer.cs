@@ -23,7 +23,7 @@ public sealed class QueryInLoopAnalyzer : DiagnosticAnalyzer
                    + "before the loop. Composing a query in a loop (Where, Include) runs nothing and is not reported; neither "
                    + "are while and do loops or a for loop without a condition (the batching, polling and retry idioms), nor a page "
                    + "walk with ListKeysetAsync or ListPagedAsync.",
-        helpLinkUri: $"https://github.com/michaelatsey/microkit/docs/analyzers/{DiagnosticId}");
+        helpLinkUri: HelpLinks.For(DiagnosticId));
 
     /// <inheritdoc />
     public override ImmutableArray<DiagnosticDescriptor> SupportedDiagnostics => ImmutableArray.Create(Rule);

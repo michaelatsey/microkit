@@ -75,10 +75,19 @@ HasAggregateErrorName(this EntityTypeBuilder, string)                           
 HasSoftDelete(this EntityTypeBuilder)                                             // + EntityTypeBuilder<T>
 ```
 
+## Test fixtures
+
+| Type | Convention | Example |
+|---|---|---|
+| Relational fixture (package) | `{Server}Fixture`, sealed, `IAsyncDisposable` | `PostgreSqlFixture`, `SqlServerFixture` |
+| Framework adapter (tests only) | `{Server}SuiteFixture` | `PostgreSqlSuiteFixture` (xUnit `IAsyncLifetime`) |
+| Docker check | `DockerProbe.IsAvailable` | |
+
 ## Namespaces
 
 One namespace per project, equal to the assembly name (`NamespaceConventionTests`):
 `MicroKit.Persistence.Abstractions`, `MicroKit.Persistence`, `MicroKit.Persistence.EntityFrameworkCore`
 (DI, conventions and `ProviderOptions` included), `….EntityFrameworkCore.PostgreSql`,
 `….EntityFrameworkCore.SqlServer`, `MicroKit.Persistence.Specifications`,
-`MicroKit.Persistence.Testing`, `MicroKit.Persistence.Analyzers`.
+`MicroKit.Persistence.Testing`, `….Testing.PostgreSql`, `….Testing.SqlServer` (each checked exactly, not by prefix),
+`MicroKit.Persistence.Analyzers`.

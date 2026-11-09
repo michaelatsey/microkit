@@ -12,7 +12,7 @@ keep the CQRS data-access split honest and flag costly query shapes.
 
 Consumer documentation: `README.md`. Every C# sample in it lives in, and builds from,
 `samples/MicroKit.Persistence.Samples`. Decisions: `.claude-context/context/architectural-decisions.md`
-(ADR-001 to ADR-014, DN-001, DN-002).
+(ADR-001 to ADR-015, DN-001, DN-002).
 
 ---
 
@@ -59,11 +59,14 @@ MicroKit.Persistence/
 │   ├── MicroKit.Persistence.EntityFrameworkCore.SqlServer/   UseSqlServer<TContext>, SqlServerFailureClassifier
 │   ├── MicroKit.Persistence.Specifications/       WithOrderBy/WithThenBy…, WithSpec
 │   ├── MicroKit.Persistence.Testing/              InMemoryRepository<TAggregate, TId>,
-│   │                                              InMemoryReadRepository<T>, InMemoryUnitOfWork
+│   │                                              InMemoryReadRepository<T>, InMemoryUnitOfWork, DockerProbe
+│   ├── MicroKit.Persistence.Testing.PostgreSql/   PostgreSqlFixture (Testcontainers, IAsyncDisposable)
+│   ├── MicroKit.Persistence.Testing.SqlServer/    SqlServerFixture (Testcontainers, IAsyncDisposable)
 │   └── MicroKit.Persistence.Analyzers/            MKP001–MKP009 (netstandard2.0, build-time only)
 ├── tests/
-│   ├── MicroKit.Persistence.UnitTests/            QueryOptions, pagination, PersistenceErrors, in-memory doubles
-│   ├── MicroKit.Persistence.IntegrationTests/     SQLite + PostgreSQL + SQL Server (Testcontainers)
+│   ├── MicroKit.Persistence.UnitTests/            QueryOptions, pagination, PersistenceErrors, in-memory doubles,
+│   │                                              the container lifecycle and the Docker probe
+│   ├── MicroKit.Persistence.IntegrationTests/     SQLite + PostgreSQL + SQL Server (the Testing.* fixtures)
 │   ├── MicroKit.Persistence.ArchitectureTests/    NetArchTest layering + IL call scan (Mono.Cecil)
 │   └── MicroKit.Persistence.Analyzers.Tests/
 └── samples/MicroKit.Persistence.Samples/          README code, built in Release with the analyzers
@@ -86,6 +89,9 @@ MicroKit.Persistence.EntityFrameworkCore.PostgreSql  ← Npgsql.EntityFrameworkC
 MicroKit.Persistence.EntityFrameworkCore.SqlServer   ← Microsoft.EntityFrameworkCore.SqlServer
 MicroKit.Persistence.Specifications  ← core
 MicroKit.Persistence.Testing         ← core (no package; MicroKit.Result through core)
+        ↑
+MicroKit.Persistence.Testing.PostgreSql  ← Testcontainers.PostgreSql (no test framework, no EF Core)
+MicroKit.Persistence.Testing.SqlServer   ← Testcontainers.MsSql
 MicroKit.Persistence.Analyzers       ← Microsoft.CodeAnalysis.CSharp, PrivateAssets="all" (no project reference)
 ```
 
@@ -134,6 +140,11 @@ IDatabaseFailureClassifier     // provider error codes; PostgreSqlFailureClassif
 UseMicroKitPersistence(classifier)  // UsePostgreSQL / UseSqlServer pass theirs
 HasSoftDelete()                // on the root's EntityTypeBuilder: deleting the root marks the whole aggregate
                                // (SoftDelete.PropertyName AggregateDeletedAt, FilterName MicroKit.SoftDelete — ADR-012)
+
+// Testing (ADR-015) — no test framework
+DockerProbe.IsAvailable        // Testing: GET /_ping answered 200; cached, never throws; BCL only
+PostgreSqlFixture, SqlServerFixture  // Testing.PostgreSql / .SqlServer: one container; StartAsync(ct) once, a caller's
+                               // token cancels only its wait · ConnectionString · GetConnectionString(database) · DisposeAsync
 ```
 
 Composition:
@@ -172,7 +183,7 @@ strategy (ADR-002). `IUnitOfWork` moved here from MicroKit.Domain (ADR-001).
 4. `Specification<T>` stays in Domain; `ISpecificationEvaluator` and `QueryOptions` stay in core.
 5. No EF Core in Abstractions or core: no `DbContext`, `DbSet`, `IQueryable` in Abstractions.
 6. Library code never calls the parameterless `IgnoreQueryFilters()` (`IlCallScanTests`).
-7. `sealed` for UoW, evaluator, events provider and in-memory doubles; `EfRepository` and
+7. `sealed` for UoW, evaluator, events provider, in-memory doubles and the relational fixtures; `EfRepository` and
    `EfReadRepository` are unsealed base classes for typed repositories (`SealedClassTests`).
    `sealed record` for `QueryOptions`, `PagedResult`, `PaginationOptions`, `PaginationLimits`,
    `ProviderOptions`.
@@ -195,7 +206,7 @@ strategy (ADR-002). `IUnitOfWork` moved here from MicroKit.Domain (ADR-001).
 | `api-reviewer` | Opus | Public surface of Abstractions or core |
 | `performance-reviewer` | Sonnet | Query path, round trips, tracking, allocations |
 | `dependency-guardian` | Haiku | Any `.csproj` change — PASS/BLOCK |
-| `release-manager` | Sonnet | Release of the 8 packages |
+| `release-manager` | Sonnet | Release of the 10 packages |
 | `test-generator` | Sonnet | Shouldly + NSubstitute suites over the in-memory doubles |
 
 ---
@@ -218,6 +229,6 @@ strategy (ADR-002). `IUnitOfWork` moved here from MicroKit.Domain (ADR-001).
 ## Versioning
 
 A `persistence-v<semver>` tag triggers `.github/workflows/release-persistence.yml`, which stamps
-all 8 packages with the tag's version (`-p:PackageVersion`) and publishes them. `version.json`
+all 10 packages with the tag's version (`-p:PackageVersion`) and publishes them. `version.json`
 (`1.0.0-preview.3`) is not read by any build: Nerdbank.GitVersioning is not referenced.
 ADR-GLOBAL-002 (root) replaces this model; no tag is cut until steps 1–4 of its migration land.

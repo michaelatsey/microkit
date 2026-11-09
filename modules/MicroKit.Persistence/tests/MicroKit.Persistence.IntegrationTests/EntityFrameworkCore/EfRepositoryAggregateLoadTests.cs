@@ -185,7 +185,7 @@ public sealed class EfRepositoryAggregateLoadSqliteTests
 }
 
 [Collection(PostgreSqlSuite.Name)]
-public sealed class EfRepositoryAggregateLoadPostgreSqlTests(PostgreSqlFixture fixture)
+public sealed class EfRepositoryAggregateLoadPostgreSqlTests(PostgreSqlSuiteFixture fixture)
 {
     [DockerRequiredFact]
     public Task FindAsync_LoadsEveryEntityOfTheAggregate_AndNothingBeyondIt() => EfRepositoryAggregateLoadScenarios.FindAsync_LoadsEveryEntityOfTheAggregate_AndNothingBeyondIt(CreateStoreAsync);
@@ -213,10 +213,7 @@ public sealed class EfRepositoryAggregateLoadPostgreSqlTests(PostgreSqlFixture f
 
     private async Task<OrderStore> CreateStoreAsync()
     {
-        var connectionString = new NpgsqlConnectionStringBuilder(fixture.ConnectionString)
-        {
-            Database = "orders_" + Guid.NewGuid().ToString("N"),
-        }.ConnectionString;
+        var connectionString = fixture.GetConnectionString("orders_" + Guid.NewGuid().ToString("N"));
 
         OrderStore? store = null;
         store = await OrderStore.CreateAsync(o => o.UseNpgsql(connectionString), async () =>

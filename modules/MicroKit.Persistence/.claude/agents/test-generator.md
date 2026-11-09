@@ -1,6 +1,6 @@
 ---
 name: test-generator
-description: Use this agent to generate test suites for MicroKit.Persistence repositories, specifications, QueryOptions, and Unit of Work behaviour. Produces xUnit + Shouldly + NSubstitute tests — unit tests over the MicroKit.Persistence.Testing in-memory doubles, integration tests over SQLite, PostgreSQL or SQL Server (Testcontainers).
+description: Use this agent to generate test suites for MicroKit.Persistence repositories, specifications, QueryOptions, and Unit of Work behaviour. Produces xUnit + Shouldly + NSubstitute tests — unit tests over the MicroKit.Persistence.Testing in-memory doubles, integration tests over SQLite, PostgreSQL or SQL Server (the Testing.PostgreSql / .SqlServer fixtures, Testcontainers).
 tools: Read, Glob, Grep
 model: sonnet
 ---
@@ -11,8 +11,9 @@ model: sonnet
 - **xUnit**, **Shouldly**, **NSubstitute**; FluentAssertions is forbidden (commercial licence)
 - `InMemoryRepository<TAggregate, TId>` (write + read), `InMemoryReadRepository<T>`,
   `InMemoryUnitOfWork` (`CommitCount`, `DiscardCount`) from `MicroKit.Persistence.Testing`
-- SQLite in-memory for EF Core behaviour; PostgreSQL and SQL Server via `PostgreSqlFixture` /
-  `SqlServerFixture` + `[DockerRequiredFact]`/`[DockerRequiredTheory]` for transactions, uniqueness,
+- SQLite in-memory for EF Core behaviour; PostgreSQL and SQL Server via `PostgreSqlSuiteFixture` /
+  `SqlServerSuiteFixture` (xUnit adapters over the published `PostgreSqlFixture` / `SqlServerFixture`; a per-test
+  database is `fixture.GetConnectionString(database)`) + `[DockerRequiredFact]`/`[DockerRequiredTheory]` for transactions, uniqueness,
   concurrency and every new feature (one abstract scenario class, one sealed subclass per server)
 
 ## Context to load

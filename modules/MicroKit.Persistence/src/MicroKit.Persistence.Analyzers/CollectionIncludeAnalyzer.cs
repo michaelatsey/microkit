@@ -24,7 +24,7 @@ public sealed class CollectionIncludeAnalyzer : DiagnosticAnalyzer
                    + "combination. AsSplitQuery() loads each collection in its own query, which is no longer one snapshot under "
                    + "concurrent writes; AsSingleQuery() keeps the single query on purpose. On MicroKit's QueryOptions, call "
                    + "AsSplitQuery() on the options. One collection is a single LEFT JOIN and is not reported.",
-        helpLinkUri: $"https://github.com/michaelatsey/microkit/docs/analyzers/{DiagnosticId}");
+        helpLinkUri: HelpLinks.For(DiagnosticId));
 
     /// <inheritdoc />
     public override ImmutableArray<DiagnosticDescriptor> SupportedDiagnostics => ImmutableArray.Create(Rule);

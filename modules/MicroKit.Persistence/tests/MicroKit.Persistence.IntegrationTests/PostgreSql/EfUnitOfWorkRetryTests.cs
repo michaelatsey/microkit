@@ -14,7 +14,7 @@ namespace MicroKit.Persistence.IntegrationTests.PostgreSql;
 /// <c>DiscardChanges</c> and rethrow on failure.
 /// </summary>
 [Collection(PostgreSqlSuite.Name)]
-public sealed class EfUnitOfWorkRetryTests(PostgreSqlFixture fixture)
+public sealed class EfUnitOfWorkRetryTests(PostgreSqlSuiteFixture fixture)
 {
     [DockerRequiredFact]
     public async Task ExecuteAsync_WhenCommitFailsTransientlyOnce_RetriesTheOperationAndWritesOnce()

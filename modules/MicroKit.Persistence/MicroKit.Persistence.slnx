@@ -7,6 +7,8 @@
     <Project Path="src/MicroKit.Persistence.EntityFrameworkCore.SqlServer/MicroKit.Persistence.EntityFrameworkCore.SqlServer.csproj" />
     <Project Path="src/MicroKit.Persistence.Specifications/MicroKit.Persistence.Specifications.csproj" />
     <Project Path="src/MicroKit.Persistence.Testing/MicroKit.Persistence.Testing.csproj" />
+    <Project Path="src/MicroKit.Persistence.Testing.PostgreSql/MicroKit.Persistence.Testing.PostgreSql.csproj" />
+    <Project Path="src/MicroKit.Persistence.Testing.SqlServer/MicroKit.Persistence.Testing.SqlServer.csproj" />
     <Project Path="src/MicroKit.Persistence.Analyzers/MicroKit.Persistence.Analyzers.csproj" />
   </Folder>
   <Folder Name="/samples/">
@@ -20,7 +22,8 @@
   </Folder>
   <Folder Name="/deps/">
     <!-- Other modules reached through ProjectReference (root .claude/rules/cross-module-references.md):
-         Abstractions → MicroKit.Domain, core → MicroKit.Result -->
+         Abstractions → MicroKit.Domain, core → MicroKit.Result;
+         IntegrationTests and the samples also reference MicroKit.Domain directly -->
     <Project Path="../MicroKit.Domain/src/MicroKit.Domain/MicroKit.Domain.csproj" />
     <Project Path="../MicroKit.Result/src/MicroKit.Result/MicroKit.Result.csproj" />
   </Folder>

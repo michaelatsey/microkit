@@ -15,14 +15,22 @@ Every version lives in the root `Directory.Packages.props`
 | `EntityFrameworkCore.PostgreSql` | EntityFrameworkCore | `Npgsql.EntityFrameworkCore.PostgreSQL` |
 | `EntityFrameworkCore.SqlServer` | EntityFrameworkCore | `Microsoft.EntityFrameworkCore.SqlServer` |
 | `Specifications` | core | — |
-| `Testing` | core | — |
+| `Testing` | core | — (the Docker probe is BCL only) |
+| `Testing.PostgreSql` | Testing | `Testcontainers.PostgreSql` |
+| `Testing.SqlServer` | Testing | `Testcontainers.MsSql` |
 | `Analyzers` | — | `Microsoft.CodeAnalysis.CSharp` (build-time, `PrivateAssets="all"`) |
 
-Core grants `InternalsVisibleTo` to `EntityFrameworkCore`, `Testing` and `UnitTests` for the keyset cursor's
-codec and rules (ADR-013): they ship with core under one version. No other project has it.
+Two projects grant `InternalsVisibleTo`, and no other:
+- core → `EntityFrameworkCore`, `Testing`, `UnitTests`, for the keyset cursor's codec and rules (ADR-013);
+- `Testing` → `Testing.PostgreSql`, `Testing.SqlServer` (the shared container lifecycle and connection-string edit,
+  ADR-015) and `UnitTests`, a test assembly that is never packed (the lifecycle and the Docker probe's seams).
+
+The grantees ship with their grantor under one version, or are never packed.
 
 `Specifications`, `Testing`, `PostgreSql` and `SqlServer` are siblings: none references another
-(`LayerDependencyTests`).
+(`LayerDependencyTests`). `Testing.PostgreSql` and `Testing.SqlServer` sit above `Testing`, not beside it: they
+reference no EF Core, no provider package, not `Specifications` and not each other, and bring no test framework
+(`LayerDependencyTests`, and `PackageClosureTests` over the resolved graph).
 
 ## Reference Rules
 
@@ -48,10 +56,12 @@ MediatR.Contracts (`LayerDependencyTests`).
 | Package | Confined to |
 |---------|-------------|
 | `Microsoft.EntityFrameworkCore*` | EntityFrameworkCore and the providers |
-| `Npgsql.EntityFrameworkCore.PostgreSQL` | PostgreSql |
+| `Npgsql.EntityFrameworkCore.PostgreSQL` | PostgreSql (and IntegrationTests, which uses it directly) |
+| `Microsoft.EntityFrameworkCore.Sqlite` | IntegrationTests |
 | `Microsoft.EntityFrameworkCore.SqlServer` | SqlServer |
 | `NSubstitute` | test projects |
-| `Testcontainers.PostgreSql`, `Testcontainers.MsSql` | IntegrationTests |
+| `Testcontainers.PostgreSql`, `Testcontainers.MsSql` | `Testing.PostgreSql`, `Testing.SqlServer` respectively; IntegrationTests, ArchitectureTests and the samples receive them through those |
+| xunit, NUnit, MSTest | test projects only — never a `src/` package (`PackageClosureTests`) |
 | `Microsoft.CodeAnalysis.CSharp` | Analyzers (and test projects) |
 | `FluentAssertions` | forbidden everywhere (root `.claude/rules/testing-libraries.md`) |
 
