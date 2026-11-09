@@ -404,6 +404,23 @@ public abstract class AggregateBoundaryScenarios
     }
 
     [DockerRequiredFact]
+    public async Task ARootAddedDirectlyOnTheContext_IsReturnedWhileAdded_AndRefusedOnceCommitted()
+    {
+        await using var db = await CreateDatabaseAsync();
+        await using var context = db.CreateContext();
+        var sut = new EfRepository<Shelf, ShelfId, LibraryDbContext>(context);
+        var shelf = new Shelf { Id = new ShelfId(Guid.NewGuid()), Name = "direct" };
+        context.Add(shelf); // not EfRepository.AddAsync: never recorded (ADR-009)
+
+        (await sut.FindAsync(shelf.Id)).ShouldBeSameAs(shelf, "an Added root is returned");
+
+        await new EfUnitOfWork<LibraryDbContext>(context).CommitAsync();
+        context.Entry(shelf).State.ShouldBe(EntityState.Unchanged);
+
+        await ShouldRefuseAsync(sut, shelf.Id);
+    }
+
+    [DockerRequiredFact]
     public async Task ARootWhoseLoadFailedMidway_IsRefused()
     {
         await using var db = await CreateDatabaseAsync();
