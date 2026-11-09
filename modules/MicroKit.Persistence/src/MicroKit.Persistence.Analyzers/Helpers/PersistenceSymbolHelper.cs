@@ -18,6 +18,12 @@ internal static class PersistenceSymbolHelper
     private const string IQueryableName         = "System.Linq.IQueryable`1";
 
     /// <summary>
+    /// Resolves, once per compilation, the symbols of the query-shape analyzers (MKP006–MKP009). Each is
+    /// <see langword="null"/> when its package is not referenced.
+    /// </summary>
+    internal static QuerySymbols ResolveQuerySymbols(Compilation compilation) => new(compilation);
+
+    /// <summary>
     /// Returns <see langword="true"/> if <paramref name="type"/> implements
     /// <c>MicroKit.Persistence.IReadRepository&lt;T&gt;</c>.
     /// </summary>

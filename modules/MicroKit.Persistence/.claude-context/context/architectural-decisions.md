@@ -1168,6 +1168,163 @@ Builds on ADR-002 (`QueryOptions`), ADR-009 (the read side never tracks) and ADR
 
 ---
 
+## ADR-014: Query-Shape Analyzers MKP006–MKP009, Without Code Fixes (#197 phase 6)
+
+**Status:** Accepted
+**Date:** 2026-11-09
+**Source:** Issue #197, phase 6. Its Spec:
+- names the four shapes;
+- sets the collection `Include` analyzer at two or more collection includes in one query, as a suggestion
+  (`Info`) with no code fix ("one collection is a single `LEFT JOIN`, with no cartesian product; EF Core's
+  `MultipleCollectionIncludeWarning` and the module's own split also start at two");
+- ships a code fix only where it preserves semantics, and records the reason for each analyzer without one.
+
+User decision 2026-11-09: a third diagnostic category, `MicroKit.Persistence.Performance`, for MKP006–MKP008.
+
+Builds on ADR-009 (the aggregate load's split), ADR-012 (named soft-delete filter) and ADR-013 (keyset pages).
+
+### Decision
+
+1. **Four diagnostics** in `MicroKit.Persistence.Analyzers`:
+
+   | ID | Analyzer | Category | Severity |
+   |---|---|---|---|
+   | MKP006 | `CollectionIncludeAnalyzer` | Performance | Info |
+   | MKP007 | `QueryInLoopAnalyzer` | Performance | Warning |
+   | MKP008 | `MaterializeBeforeFilterAnalyzer` | Performance | Warning |
+   | MKP009 | `IgnoreAllQueryFiltersAnalyzer` | Usage | Warning |
+
+2. **Precision over recall.** What an analyzer cannot see, it does not guess: it stays silent. A missed report
+   costs one review; a false one teaches teams to suppress the rule.
+   - **MKP006 and MKP008** judge a whole query chain in one expression, from its root (a `DbSet`, `Set<T>()`, or
+     for MKP006 the lambda handed to `QueryOptions.WithIncludes`/`Includes`) to its execution. A query composed
+     over several statements is not seen.
+   - **MKP007** judges each executing call where it stands, on any query or repository.
+   - **None of them sees** the model, the global `UseQuerySplittingBehavior`, or a typed finder declared outside
+     a repository type.
+3. **Symbols** are resolved once per compilation, by metadata name, through `PersistenceSymbolHelper`. Each rule
+   group is gated on its own symbols (EF Core, relational, the MicroKit contracts). So MKP007's repository rule runs
+   in an application project that references MicroKit core without EF Core, and MKP006 is silent on a provider
+   without `AsSplitQuery` (Cosmos).
+4. **MKP006 — two or more collections in one query.**
+   - **What it counts.** The `Include`/`ThenInclude` lambda overloads whose navigation type is a collection
+     (`string` excepted; a filtered include counts), deduplicated by navigation path. `Include(string)` names no
+     navigation the analyzer can see.
+   - **Where it reports.** On the include of the second collection, when neither `AsSplitQuery()` nor
+     `AsSingleQuery()` is in the chain.
+   - **Ignored includes.** EF Core ignores the includes of a query that returns no entity, so the analyzer is
+     silent after a projection (`Select`, `SelectMany`, `GroupBy`, a join) or before a scalar executor (`Count`,
+     `Any`, `All`, `Sum`, `Min`, `Max`, `Average`, `Contains`, their async forms).
+   - **QueryOptions.** The options' `AsSplitQuery()` or `AsSplitQueryEnabled = true` settles it, in the same
+     expression, before or after `WithIncludes`. Options passed inline to `CountAsync`, `AnyAsync` or a projection
+     drop the includes, so they are silent too.
+   - **Options built over several statements.** Unlike a raw EF query, options are reported without being seen
+     executed: they exist to be read. Options split in a later statement are reported, which an `Info` diagnostic
+     tolerates.
+   - **One collection is not reported.** It is a single `LEFT JOIN`, and the module's own load keeps it as one query
+     (`AggregateIncludePlan` splits from two collections) — the Spec's threshold.
+5. **MKP007 — a query on each iteration of a `foreach`, `await foreach` or `for` loop.**
+   - **What counts as a query:**
+     - a LINQ operator that executes a query: `Queryable` returning no query; `Enumerable` materializers and scalars
+       over one;
+     - EF Core's async executors and `Load`;
+     - `Find`/`FindAsync`;
+     - explicit loading (`NavigationEntry.Load*`);
+     - a nested `foreach` over a query;
+     - the awaitable methods of a MicroKit repository, typed finders included.
+   - **Not reported:**
+     - composition (a loop that only builds the query: `query = query.Include(path)`);
+     - the staging verbs (`Add*`, `Delete*`, `Remove*`);
+     - `ListKeysetAsync`/`ListPagedAsync`, called once per page by design;
+     - LINQ to objects through `AsQueryable()`;
+     - EF Core's `Execute*` bulk writes.
+   - **Where in the loop:**
+     - the body, a `for` condition and its incrementors run on each iteration;
+     - a `foreach` collection and a `for` initializer run once, for that loop only (the search goes on outward);
+     - a lambda or local function stops the search: when it runs is unknown;
+     - `while` and `do` loops, and a `for` loop without a condition, are the batching, polling and retry idioms, and
+       do not count.
+6. **MKP008 — materialized, then filtered.** It reports `ToList()`/`ToArray()` on a query, or an awaited
+   `ToListAsync()`/`ToArrayAsync()`, that is immediately the receiver of a filter with an expression-bodied predicate.
+   The filter is `Where` (not its index overload), or the predicate overloads of `First*`, `Single*`, `Any`, `All`,
+   `Count`, `LongCount`, and `Last*` only after an `OrderBy`, which EF Core requires. It reports only when the filter
+   can follow the materialization into the query:
+   - **The query commutes with a filter.** It is rooted at a `DbSet`, and only operators a filter moves past lie
+     between root and materializer (`Where`, the orderings, the includes, the tracking and split hints,
+     `IgnoreQueryFilters`, `TagWith`). A `Take`, `Skip`, `Distinct`, projection, grouping or join changes what a
+     filter after it means.
+   - **The predicate plainly translates.**
+     - Every part reading the element is one of:
+       - a single hop to a property with a public getter, a setter, no `[NotMapped]` and a scalar type;
+       - a literal;
+       - a built-in or scalar-type operator;
+       - a built-in conversion, `??` or `?:`;
+       - `string.Contains`/`StartsWith`/`EndsWith(string)`;
+       - a `Contains` over a captured collection.
+     - Every other part is captured: EF Core evaluates it and sends it as a parameter. A captured part is limited
+       to locals, parameters, fields, properties, calls with explicit arguments, literals, operators, conversions
+       and arrays; anything else there (`?:`, `??`, `new`, an interpolated string) makes the rule silent.
+     - A deeper hop (`o.Id.Value` reads inside a value-converted `GuidId`) is silent, and so is any call on the
+       element, a user-defined operator, a pattern, `?.`, or a block body.
+   - **Not reported.** `AsEnumerable()` before the filter is the explicit in-memory idiom.
+7. **MKP009 — the parameterless `IgnoreQueryFilters()`.** It reports the invocation and the method group, an
+   expression tree included. It is silent on the named overload (the evaluator's
+   `IgnoreQueryFilters([SoftDelete.FilterName])`), `WithDeleted()` and `nameof`. It is a Warning, not an Error,
+   because an anonymous query filter has no name: the parameterless overload is the only way to ignore one.
+   `IlCallScanTests` stays the module's own guard, over its assemblies' IL.
+8. **No code fix ships.** No rewrite of these shapes provably preserves semantics:
+   - **MKP006**:
+     - `AsSplitQuery()` turns one snapshot into 1 + C reads, which disagree under concurrent writes, and with
+       `Skip`/`Take` page differently unless the ordering is unique;
+     - `AsSingleQuery()` only silences the rule, and overrides a global split behaviour the analyzer cannot see.
+   - **MKP007**. Batching the loop into one `Contains` query changes:
+     - the order and the duplicates of the results;
+     - missing keys (`null` per iteration, against an absent row);
+     - the state each iteration observes when the loop writes;
+     - when side effects run relative to the reads.
+   - **MKP008**. Moving the filter into SQL changes its result:
+     - a tracking query's in-memory filter sees the unsaved values of instances the context already tracks, where
+       SQL sees the stored rows;
+     - SQL Server's default collation compares strings case-insensitively, and PostgreSQL uses the column's
+       collation;
+     - `StartsWith(string)` is culture-sensitive in memory, unlike `LIKE`;
+     - a captured call runs once per element in memory, once in SQL;
+     - precision is the column's;
+     - a translation EF Core lacks fails at run time.
+
+     The analyzer cannot check any of these; the developer must.
+   - **MKP009**. The analyzer cannot see which filters the model has, so it cannot name them; inserting
+     `[SoftDelete.FilterName]` or `WithDeleted()` changes which rows return, and that choice is the developer's.
+
+   The package therefore stays diagnostic-only: no `Microsoft.CodeAnalysis.CSharp.Workspaces`, no code-fix project.
+
+### Consequences
+
+- MKP007–MKP009 are warnings: a build with `TreatWarningsAsErrors` reports them as errors. Where a loop means its
+  queries, or a model configures splitting globally, `.editorconfig` sets the severity
+  (`dotnet_diagnostic.MKP006.severity = none`) or a `#pragma` suppresses one site.
+- **Blind spots, by the precision rule.**
+  - **What the analyzers cannot see:**
+    - queries composed over several statements (MKP006, MKP008);
+    - a global split behaviour;
+    - `Task.WhenAll(ids.Select(…))`;
+    - `while`, `do` and condition-less `for` loops;
+    - a finder outside a repository type;
+    - the model's mappings beyond the setter and `[NotMapped]` rules.
+  - **Not reported on purpose:**
+    - a single collection include, and includes EF Core ignores;
+    - a materialization filtered in a later statement.
+- The analyzers do not run on the module's own code (its src projects do not load them). Tests reproduce the
+  module's internal shapes and assert they are silent:
+  - `EfRepository.IncludeAggregate`: string includes in a loop, then the split decision;
+  - `EfRepository.LoadAsync`: `await foreach` over the query;
+  - `EfSpecificationEvaluator`: the named `IgnoreQueryFilters`;
+  - `AggregateSave`: `ChangeTracker.Entries().ToList()`.
+- Tests: `CollectionIncludeAnalyzerTests`, `QueryInLoopAnalyzerTests`, `MaterializeBeforeFilterAnalyzerTests`,
+  `IgnoreAllQueryFiltersAnalyzerTests` (stubs in `Stubs/QueryStubs.cs`, .NET 9 reference assemblies).
+
+---
+
 ## DN-001: Execution Strategy Coverage Gap in EfUnitOfWork.CommitAsync
 
 **Status:** Superseded by ADR-006 (#196). Its observation was wrong: outside a transaction,

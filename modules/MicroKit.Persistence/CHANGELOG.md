@@ -2,6 +2,24 @@
 
 ## [Unreleased]
 
+### #197 phase 6 — query-shape analyzers
+
+Four analyzers flag costly or unsafe query shapes. What they cannot see they do not guess, and they ship no code
+fix: no rewrite of these shapes keeps the query's results. ADR-014 records the decision.
+
+#### Breaking Changes
+
+##### MicroKit.Persistence.Analyzers
+- MKP007, MKP008 and MKP009 are warnings: a build with `TreatWarningsAsErrors` reports them as errors. Set their
+  severity in `.editorconfig`, or suppress a site with `#pragma warning disable`.
+
+#### Added
+- **MKP006** (Info, `MicroKit.Persistence.Performance`): one query includes two or more collection navigations without `AsSplitQuery()` or `AsSingleQuery()`. On `QueryOptions`, the options' `AsSplitQuery()` or `AsSplitQueryEnabled = true` settles it; options passed to `CountAsync`, `AnyAsync` or a projection drop the includes and are not reported. One collection, `Include(string)`, a reference include, and includes EF Core ignores (a projection, a count or another scalar) are not reported.
+- **MKP007** (Warning, Performance): a query runs on each iteration of a `foreach`, `await foreach` or `for` loop. The reported calls are LINQ executors over a query, EF Core's async executors and `Load`, `Find`, explicit loading, a nested `foreach` over a query, and a MicroKit repository's reads, typed finders included. A loop that only composes the query, staging (`Add*`, `Delete*`, `Remove*`), EF Core's `Execute*` bulk writes, `ListKeysetAsync`/`ListPagedAsync` page walks, `while`/`do` loops, a `for` loop without a condition, and code inside a lambda or a local function are not reported.
+- **MKP008** (Warning, Performance): a query from a `DbSet` is materialized (`ToList`, `ToArray`, or an awaited `ToListAsync`/`ToArrayAsync`), then filtered in memory. It is reported only when the filter could move before the materialization: only filter-commuting operators before it, and a predicate over public, settable, mapped scalar properties that translates. `AsEnumerable()` marks a deliberate in-memory filter.
+- **MKP009** (Warning, Usage): the parameterless `IgnoreQueryFilters()`, which disables every query filter, tenant filters included. Name the filters to ignore, or use `WithDeleted()`. The named overload is not reported.
+- `MicroKit.Persistence.Performance`: a third diagnostic category.
+
 ### #197 phase 5 — read side
 
 The read side projects to DTOs in the database, pages by keyset (cursor) as well as by offset, and runs its

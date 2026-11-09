@@ -7,7 +7,7 @@
 | `UnitTests` | `QueryOptions` and its extensions, `PaginationOptions`, `PersistenceErrors`, the in-memory doubles — no database |
 | `IntegrationTests` | EF Core against SQLite in-memory, PostgreSQL and SQL Server via Testcontainers (`EntityFrameworkCore/`, `PostgreSql/`, `SqlServer/`), the Docker probe (`Docker/`), provider registration (`Providers/`) |
 | `ArchitectureTests` | NetArchTest layering, contract placement, sealing, namespaces; `IlCallScanTests` (Mono.Cecil) |
-| `Analyzers.Tests` | MKP001–MKP005 — see `analyzers.md` |
+| `Analyzers.Tests` | MKP001–MKP009 — see `analyzers.md` (MKP006–MKP009 compile `Stubs/QueryStubs.cs` against the .NET 9 reference assemblies) |
 
 There is no performance-test or benchmark project.
 

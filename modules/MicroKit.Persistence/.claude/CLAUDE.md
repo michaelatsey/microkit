@@ -4,7 +4,7 @@
 
 An opinionated persistence layer for .NET 10: repository and Unit of Work contracts, an EF Core
 implementation, `QueryOptions` over `MicroKit.Domain` specifications, and Roslyn analyzers that
-keep the CQRS data-access split honest.
+keep the CQRS data-access split honest and flag costly query shapes.
 
 > The domain defines what is persisted; this module defines how. Command handlers load and stage
 > aggregates through `IRepository<TAggregate, TId>` and commit through `IUnitOfWork`; query
@@ -12,7 +12,7 @@ keep the CQRS data-access split honest.
 
 Consumer documentation: `README.md`. Every C# sample in it lives in, and builds from,
 `samples/MicroKit.Persistence.Samples`. Decisions: `.claude-context/context/architectural-decisions.md`
-(ADR-001 to ADR-013, DN-001, DN-002).
+(ADR-001 to ADR-014, DN-001, DN-002).
 
 ---
 
@@ -26,7 +26,7 @@ Consumer documentation: `README.md`. Every C# sample in it lives in, and builds 
 | Adding a provider | `workflows/adding-provider.md` | `implementer` → `ef-core-specialist` |
 | Adding a specification | `workflows/adding-specification.md` + `rules/specifications.md` | `implementer` |
 | EF Core concern (mapping, query, transaction) | `rules/ef-core-patterns.md` | `ef-core-specialist` |
-| Analyzer (MKP001–MKP005) | `rules/analyzers.md` | `analyzer-specialist` |
+| Analyzer (MKP001–MKP009) | `rules/analyzers.md` + ADR-014 | `analyzer-specialist` |
 | Performance concern | `rules/performance.md` + `.claude-context/standards/performance-budget.md` | `performance-reviewer` |
 | Public API change | `rules/abstractions.md` + `rules/naming.md` | `api-reviewer` |
 | `.csproj` / reference change | `rules/dependencies.md` + `.claude-context/context/dependency-graph.md` | `dependency-guardian` |
@@ -60,7 +60,7 @@ MicroKit.Persistence/
 │   ├── MicroKit.Persistence.Specifications/       WithOrderBy/WithThenBy…, WithSpec
 │   ├── MicroKit.Persistence.Testing/              InMemoryRepository<TAggregate, TId>,
 │   │                                              InMemoryReadRepository<T>, InMemoryUnitOfWork
-│   └── MicroKit.Persistence.Analyzers/            MKP001–MKP005 (netstandard2.0, build-time only)
+│   └── MicroKit.Persistence.Analyzers/            MKP001–MKP009 (netstandard2.0, build-time only)
 ├── tests/
 │   ├── MicroKit.Persistence.UnitTests/            QueryOptions, pagination, PersistenceErrors, in-memory doubles
 │   ├── MicroKit.Persistence.IntegrationTests/     SQLite + PostgreSQL + SQL Server (Testcontainers)
@@ -206,7 +206,7 @@ strategy (ADR-002). `IUnitOfWork` moved here from MicroKit.Domain (ADR-001).
 
 ```
 .claude-context/
-├── context/architectural-decisions.md   ADR-001…ADR-013, DN-001, DN-002
+├── context/architectural-decisions.md   ADR-001…ADR-014, DN-001, DN-002
 ├── context/dependency-graph.md          project and package graph as declared
 ├── context/ecosystem-overview.md        position among MicroKit modules
 ├── standards/performance-budget.md      targets (no benchmark project yet)

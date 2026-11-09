@@ -19,7 +19,7 @@ Release with the module; `ReadmeSamplesTests` fails if a sample drifts from it.
 | `MicroKit.Persistence.EntityFrameworkCore.SqlServer` | `UseSqlServer` | EntityFrameworkCore, SQL Server provider |
 | `MicroKit.Persistence.Specifications` | Ordering and specification-swap extensions for `QueryOptions` | Core |
 | `MicroKit.Persistence.Testing` | In-memory repository and unit-of-work doubles | Core |
-| `MicroKit.Persistence.Analyzers` | MKP001–MKP005, build-time only | — |
+| `MicroKit.Persistence.Analyzers` | MKP001–MKP009, build-time only | — |
 
 ## Composition
 
@@ -706,6 +706,24 @@ the find, where EF Core checks it at the commit.
 | MKP003 | Warning | `SaveChanges` called directly on a `DbContext`, bypassing `IUnitOfWork` |
 | MKP004 | Warning | A `DbContext` injected outside the infrastructure layer |
 | MKP005 | Error | A repository method returns `IQueryable<T>` |
+| MKP006 | Info | One query includes two or more collections without `AsSplitQuery()` or `AsSingleQuery()` (on `QueryOptions`, the options' `AsSplitQuery()` settles it) |
+| MKP007 | Warning | A query runs on each iteration of a `foreach` or `for` loop: a LINQ executor, `Find`, explicit loading, a repository read |
+| MKP008 | Warning | A query from a `DbSet` is materialized (`ToList`, `ToArray`, their async forms), then filtered in memory by a predicate that translates |
+| MKP009 | Warning | The parameterless `IgnoreQueryFilters()`, which disables every filter, tenant filters included; name the filters, or use `WithDeleted()` |
+
+MKP006–MKP009 check query shapes. What they cannot see they do not guess — MKP006 and MKP008 judge a query chain in
+one expression — and they ship no code fix: no rewrite of these shapes keeps the query's results (ADR-014). Where a team means the shape, `.editorconfig` sets
+the severity — a model that configures splitting globally, or a loop over a handful of keys:
+
+```ini
+[*.cs]
+dotnet_diagnostic.MKP006.severity = none      # UseQuerySplittingBehavior(SplitQuery) is configured
+dotnet_diagnostic.MKP007.severity = suggestion
+```
+
+`while`, `do` and condition-less `for` loops are not reported (the batching and retry idioms), nor is a page walk
+with `ListKeysetAsync` or `ListPagedAsync`. MKP006 is silent when EF Core ignores the includes (a projection, a count). MKP009 stays a warning, not an error: an anonymous query filter can only be ignored by the
+parameterless overload.
 
 ## Public types
 
@@ -755,6 +773,7 @@ the find, where EF Core checks it at the commit.
 | `InMemoryReadRepository<TAggregate>` | Testing | Read-only double |
 | `InMemoryUnitOfWork` | Testing | Counts commits and discards; `IResultUnitOfWork` double |
 | `ReadRepositoryMutationAnalyzer`, `DirectSaveChangesAnalyzer`, `DbContextInjectionAnalyzer`, `RepositoryIQueryableLeakAnalyzer` | Analyzers | MKP001–MKP005 |
+| `CollectionIncludeAnalyzer`, `QueryInLoopAnalyzer`, `MaterializeBeforeFilterAnalyzer`, `IgnoreAllQueryFiltersAnalyzer` | Analyzers | MKP006–MKP009 |
 
 ## Decisions
 
