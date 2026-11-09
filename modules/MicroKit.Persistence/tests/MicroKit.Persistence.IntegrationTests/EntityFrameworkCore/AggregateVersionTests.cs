@@ -379,6 +379,7 @@ public abstract class AggregateVersionScenarios
 
         var order = (await new EfRepository<TaggedOrder, CartId, TaggedOrderDbContext>(context).FindAsync(orderId)).ShouldNotBeNull();
         order.TagLinks.ShouldHaveSingleItem().LabelId.ShouldBe(labelId);
+        context.ChangeTracker.Entries<Label>().ShouldBeEmpty("the load does not track the linked root");
 
         // The link references the other root without tracking it: its own repository loads it whole.
         var label = await new EfRepository<Label, LabelId, TaggedOrderDbContext>(context).FindAsync(labelId);
@@ -458,6 +459,55 @@ public abstract class AggregateVersionScenarios
         (await verify.Set<TaggedOrderLine>().CountAsync()).ShouldBe(0);
         (await verify.Set<TagLink>().CountAsync()).ShouldBe(0);
         (await verify.Set<Label>().CountAsync()).ShouldBe(1, "the label, another aggregate, is untouched");
+    }
+
+    [DockerRequiredFact]
+    public void ABidirectionalManyToManyBetweenTwoRoots_NeitherSideMarked_FailsModelBuilding()
+    {
+        using var context = new BidirectionalTagsDbContext(Options<BidirectionalTagsDbContext>("unused"), markOrderTags: false);
+
+        var thrown = Should.Throw<InvalidOperationException>(() => _ = context.Model);
+
+        thrown.Message.ShouldContain("many-to-many navigation");
+        thrown.Message.ShouldContain("an explicit link entity, a child of the root");
+        (thrown.Message.Contains("'BiOrder.Tags'", StringComparison.Ordinal)
+            || thrown.Message.Contains("'BiTag.Orders'", StringComparison.Ordinal)).ShouldBeTrue(thrown.Message);
+    }
+
+    [DockerRequiredFact]
+    public async Task ABidirectionalManyToManyMarkedOnOneSide_IsOutsideBothAggregates_NeitherLoadedNorVersioned()
+    {
+        // Only Order.Tags is marked: the relationship is outside, Tag.Orders included.
+        await using var db = await CreateDatabaseAsync<BidirectionalTagsDbContext>(o => new BidirectionalTagsDbContext(o, markOrderTags: true));
+        var order = new BiOrder { Id = new CartId(Guid.NewGuid()) };
+        var tag = new BiTag { Id = new LabelId(Guid.NewGuid()) };
+        order.Tags.Add(tag);
+        await using (var context = db.Create())
+        {
+            await new EfRepository<BiOrder, CartId, BidirectionalTagsDbContext>(context).AddAsync(order);
+            await new EfRepository<BiTag, LabelId, BidirectionalTagsDbContext>(context).AddAsync(tag);
+            await new EfUnitOfWork<BidirectionalTagsDbContext>(context).CommitAsync();
+        }
+
+        var other = new BiOrder { Id = new CartId(Guid.NewGuid()) };
+        await using (var context = db.Create())
+        {
+            var loadedTag = (await new EfRepository<BiTag, LabelId, BidirectionalTagsDbContext>(context).FindAsync(tag.Id)).ShouldNotBeNull();
+            loadedTag.Orders.ShouldBeEmpty("Tag.Orders is not loaded with the tag");
+            var loadedOrder = (await new EfRepository<BiOrder, CartId, BidirectionalTagsDbContext>(context).FindAsync(order.Id)).ShouldNotBeNull();
+            loadedOrder.Tags.ShouldBeEmpty("Order.Tags is not loaded with the order");
+
+            await new EfRepository<BiOrder, CartId, BidirectionalTagsDbContext>(context).AddAsync(other);
+            loadedTag.Orders.Add(other); // a new join row, from the tag's side
+            await new EfUnitOfWork<BidirectionalTagsDbContext>(context).CommitAsync();
+        }
+
+        await using var verify = db.Create();
+        (await verify.Set<BiTag>().Where(t => t.Id == tag.Id).Select(t => EF.Property<long>(t, AggregateVersion.PropertyName)).SingleAsync())
+            .ShouldBe(1, "the join rows lie outside every boundary: the tag is not bumped");
+        (await verify.Set<BiOrder>().Where(o => o.Id == order.Id).Select(o => EF.Property<long>(o, AggregateVersion.PropertyName)).SingleAsync())
+            .ShouldBe(1);
+        (await verify.Set<BiTag>().Where(t => t.Id == tag.Id).SelectMany(t => t.Orders).CountAsync()).ShouldBe(2, "the link was written");
     }
 
     // ---- Entities outside every boundary -----------------------------------------------------
@@ -987,7 +1037,7 @@ public sealed class PlainVersionRoot : IAggregateRoot
 }
 
 public sealed class MisusedVersionDbContext(DbContextOptions<MisusedVersionDbContext> options, VersionMisuse misuse)
-    : DbContext(options)
+    : DbContext(options), IModelVariant
 {
     public VersionMisuse Misuse { get; } = misuse;
 
@@ -1014,15 +1064,10 @@ public sealed class MisusedVersionDbContext(DbContextOptions<MisusedVersionDbCon
         }
     }
 
-    // One model per misuse: the model cache key includes it.
-    protected override void OnConfiguring(DbContextOptionsBuilder optionsBuilder) =>
-        optionsBuilder.ReplaceService<Microsoft.EntityFrameworkCore.Infrastructure.IModelCacheKeyFactory, MisuseCacheKeyFactory>();
+    object IModelVariant.Variant => Misuse;
 
-    private sealed class MisuseCacheKeyFactory : Microsoft.EntityFrameworkCore.Infrastructure.IModelCacheKeyFactory
-    {
-        public object Create(DbContext context, bool designTime) =>
-            (context.GetType(), ((MisusedVersionDbContext)context).Misuse, designTime);
-    }
+    // One model per variant: the shared cache key factory includes it.
+    protected override void OnConfiguring(DbContextOptionsBuilder optionsBuilder) => ModelVariantCacheKeyFactory.Use(optionsBuilder);
 }
 
 /// <summary>Not an aggregate: a row that happens to carry its own AggregateVersion column.</summary>
@@ -1207,7 +1252,7 @@ public enum ReferenceMisuse
 }
 
 public sealed class TaggedOrderDbContext(DbContextOptions<TaggedOrderDbContext> options, ReferenceMisuse misuse = ReferenceMisuse.None)
-    : DbContext(options)
+    : DbContext(options), IModelVariant
 {
     public ReferenceMisuse Misuse { get; } = misuse;
 
@@ -1248,13 +1293,51 @@ public sealed class TaggedOrderDbContext(DbContextOptions<TaggedOrderDbContext> 
         });
     }
 
-    // One model per misuse: the model cache key includes it.
-    protected override void OnConfiguring(DbContextOptionsBuilder optionsBuilder) =>
-        optionsBuilder.ReplaceService<Microsoft.EntityFrameworkCore.Infrastructure.IModelCacheKeyFactory, MisuseCacheKeyFactory>();
+    object IModelVariant.Variant => Misuse;
 
-    private sealed class MisuseCacheKeyFactory : Microsoft.EntityFrameworkCore.Infrastructure.IModelCacheKeyFactory
+    // One model per variant: the shared cache key factory includes it.
+    protected override void OnConfiguring(DbContextOptionsBuilder optionsBuilder) => ModelVariantCacheKeyFactory.Use(optionsBuilder);
+}
+
+/// <summary>Two roots linked by a many-to-many declared on both sides, both visible.</summary>
+public sealed class BiOrder : IAggregateRoot
+{
+    public CartId Id { get; init; }
+
+    public List<BiTag> Tags { get; } = [];
+}
+
+public sealed class BiTag : IAggregateRoot
+{
+    public LabelId Id { get; init; }
+
+    public List<BiOrder> Orders { get; } = [];
+}
+
+public sealed class BidirectionalTagsDbContext(DbContextOptions<BidirectionalTagsDbContext> options, bool markOrderTags = true)
+    : DbContext(options), IModelVariant
+{
+    public bool MarkOrderTags { get; } = markOrderTags;
+
+    protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
-        public object Create(DbContext context, bool designTime) =>
-            (context.GetType(), ((TaggedOrderDbContext)context).Misuse, designTime);
+        modelBuilder.Entity<BiOrder>(b =>
+        {
+            b.HasKey(o => o.Id);
+            b.Property(o => o.Id).HasConversion(id => id.Value, v => new CartId(v)).ValueGeneratedNever();
+            b.HasMany(o => o.Tags).WithMany(t => t.Orders);
+            if (MarkOrderTags)
+                b.Navigation(o => o.Tags).IsOutsideAggregate(); // Tag.Orders is not marked
+        });
+        modelBuilder.Entity<BiTag>(b =>
+        {
+            b.HasKey(t => t.Id);
+            b.Property(t => t.Id).HasConversion(id => id.Value, v => new LabelId(v)).ValueGeneratedNever();
+        });
     }
+
+    object IModelVariant.Variant => MarkOrderTags;
+
+    // One model per variant: the shared cache key factory includes it.
+    protected override void OnConfiguring(DbContextOptionsBuilder optionsBuilder) => ModelVariantCacheKeyFactory.Use(optionsBuilder);
 }

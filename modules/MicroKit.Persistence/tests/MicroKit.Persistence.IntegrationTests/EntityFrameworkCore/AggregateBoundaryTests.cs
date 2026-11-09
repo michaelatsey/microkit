@@ -972,7 +972,7 @@ public sealed class RowSharingOwner : IAggregateRoot
     public Guid Id { get; init; }
 }
 
-public sealed class RowSharingDbContext(DbContextOptions<RowSharingDbContext> options, RowSharing shape) : DbContext(options)
+public sealed class RowSharingDbContext(DbContextOptions<RowSharingDbContext> options, RowSharing shape) : DbContext(options), IModelVariant
 {
     public RowSharing Shape { get; } = shape;
 
@@ -1019,13 +1019,8 @@ public sealed class RowSharingDbContext(DbContextOptions<RowSharingDbContext> op
         }
     }
 
-    // One model per shape: the model cache key includes it.
-    protected override void OnConfiguring(DbContextOptionsBuilder optionsBuilder) =>
-        optionsBuilder.ReplaceService<Microsoft.EntityFrameworkCore.Infrastructure.IModelCacheKeyFactory, ShapeCacheKeyFactory>();
+    object IModelVariant.Variant => Shape;
 
-    private sealed class ShapeCacheKeyFactory : Microsoft.EntityFrameworkCore.Infrastructure.IModelCacheKeyFactory
-    {
-        public object Create(DbContext context, bool designTime) =>
-            (context.GetType(), ((RowSharingDbContext)context).Shape, designTime);
-    }
+    // One model per variant: the shared cache key factory includes it.
+    protected override void OnConfiguring(DbContextOptionsBuilder optionsBuilder) => ModelVariantCacheKeyFactory.Use(optionsBuilder);
 }
