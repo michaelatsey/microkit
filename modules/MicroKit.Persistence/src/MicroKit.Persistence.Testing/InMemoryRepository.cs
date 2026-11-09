@@ -26,8 +26,14 @@ namespace MicroKit.Persistence.Testing;
 /// unit of work commits.
 /// </para>
 /// <para>
-/// <see cref="QueryOptions{TAggregate}.Includes"/>, <see cref="QueryOptions{TAggregate}.AsNoTrackingEnabled"/>
-/// and <see cref="QueryOptions{TAggregate}.AsSplitQueryEnabled"/> are accepted but ignored — they are
+/// A second difference: the read methods return the stored instances too, the very ones
+/// <see cref="FindAsync(TId, CancellationToken)"/> hands to a command, so a pending mutation is
+/// visible through them at once. <c>EfReadRepository</c> never tracks and returns new instances
+/// loaded from the database: a query handler must not rely on seeing a command's uncommitted change.
+/// </para>
+/// <para>
+/// <see cref="QueryOptions{TAggregate}.Includes"/> and
+/// <see cref="QueryOptions{TAggregate}.AsSplitQueryEnabled"/> are accepted but ignored — they are
 /// EF Core execution concerns with no in-memory equivalent.
 /// </para>
 /// </remarks>
@@ -121,6 +127,7 @@ public sealed class InMemoryRepository<TAggregate, TId>
     /// <remarks>
     /// The in-memory double supports single-element key arrays only.
     /// Composite PKs (arrays with length &gt; 1) throw <see cref="NotSupportedException"/>.
+    /// Unlike <c>EfReadRepository</c>, it returns the stored instance, the one a command mutates.
     /// </remarks>
     public ValueTask<TAggregate?> FindAsync(object[] keyValues, CancellationToken ct = default)
     {

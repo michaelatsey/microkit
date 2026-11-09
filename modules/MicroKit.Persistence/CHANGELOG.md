@@ -2,6 +2,38 @@
 
 ## [Unreleased]
 
+### #197 phase 1 — aggregate boundaries
+
+The boundary of an aggregate lives in the model, and a partial aggregate can no longer be tracked
+through a repository. ADR-009 records the decision; it amends ADR-002 and ADR-007 and reverses
+#196 D2.
+
+#### Breaking Changes
+
+##### MicroKit.Persistence (Core)
+- `QueryOptions<T>.AsNoTrackingEnabled`, `QueryOptionsExtensions.WithTracking()` and `QueryOptionsExtensions.AsNoTracking()` are removed: the read side never tracks. Load what a command modifies through `IRepository<TAggregate, TId>`. Remove `AsNoTracking()` calls on `QueryOptions` (they restated the default); replace `WithTracking()` reads by a write-side load.
+
+##### MicroKit.Persistence.EntityFrameworkCore
+- `EfRepository.IncludeAggregate` is no longer `protected virtual`: no repository can redefine the boundary. A typed finder calls the new `protected LoadAggregatesAsync(Expression<Func<TAggregate, bool>> predicate, CancellationToken ct = default)`, which loads, tracks and records whole aggregates; it takes a predicate, so a finder cannot add a filtered or partial include. Exclude reference data from the boundary with `IsOutsideAggregate()` instead of overriding the includes.
+- `EfRepository` requires a context configured with `UseMicroKitPersistence()`; without it, `FindAsync` and `LoadAggregatesAsync` throw `InvalidOperationException`. `AddDbContext`, `UsePostgreSQL` and `UseSqlServer` call it; a context built with `new DbContextOptionsBuilder<T>()`, `OnConfiguring` or a plain `services.AddDbContext` must call it.
+- `EfRepository.FindAsync` and `LoadAggregatesAsync` refuse, with an `InvalidOperationException` naming the root type, a tracked root that the repository did not load whole and that is not `Added` — a root tracked by a direct `DbSet` query, a filtered `Include`, an explicit load, `Attach`, `Update`, or a reattachment after `ChangeTracker.Clear()`. #196 returned such a root as is. A root is recorded only once the load that returned it has completed (a load that fails midway, or a root of the same hierarchy auto-included by the model, records nothing); a root staged by `AddAsync` is recorded and stays returnable after the commit.
+- On a context configured with `UseMicroKitPersistence()` (a plain `services.AddDbContext` is unaffected), model building fails, naming the types, when a non-root entity type lies inside the boundary of two aggregate roots (directly, or through a base type and one of its derived types). Each ownership of an owned type is its own entity type and is not shared. Two derived types declaring same-named navigations to different types now fail at model building rather than at the first load. An owned navigation marked `IsOutsideAggregate()` fails model building too.
+- **Reverses #196 D2** — `EfReadRepository.FindAsync`, `ListAsync`, `ListPagedAsync`, `AnyAsync` and `CountAsync` never consult the change tracker: `FindAsync` no longer returns the instance the unit of work tracks, but a new untracked one loaded from the database (a pending change of the command is not visible through it). An `AsTracking()` inside an `Includes` or `OrderBy` delegate no longer makes a read track.
+
+##### MicroKit.Persistence.EntityFrameworkCore.PostgreSql, .SqlServer
+- `UsePostgreSQL` and `UseSqlServer` call `UseMicroKitPersistence()` on the context they register: the boundary validation applies to its model.
+
+#### Added
+- `UseMicroKitPersistence()` on `DbContextOptionsBuilder` and `DbContextOptionsBuilder<TContext>` (`MicroKitPersistenceDbContextOptionsExtensions`): registers the boundary validation and the scoped record of the roots loaded whole in the context's internal service provider. The record is reset by `DiscardChanges`, by a failed `ExecuteAsync` attempt, and when a pooled context returns to its pool.
+- `IsOutsideAggregate()` on `NavigationBuilder` (`AggregateBoundaryNavigationBuilderExtensions`): sets the model annotation `MicroKit:OutsideAggregate`; the navigation is neither loaded with the aggregate nor counted as part of it. Reference, collection and skip navigations.
+
+#### Fixed
+- `EfReadRepository.FindAsync` checks each key value against its key property's CLR type and throws `ArgumentException`, as `DbSet.Find` does; the check used to come from the change-tracker lookup that the read side no longer performs.
+
+#### Tests
+- `DockerRequiredFact` / `DockerRequiredTheory` skip only when no Docker daemon answers `GET /_ping`: a leftover socket file no longer makes the database tests fail instead of skipping.
+- A SQL Server fixture (`Testcontainers.MsSql`) runs next to the PostgreSQL one; every phase 1 scenario runs on both.
+
 Issue #196 settles the module before 2.0.0 stable. The entries below are grouped by package; the
 decision number (D1–D17) points at the issue. D3's presumption was confirmed by a test (a transient
 commit failure was not retried) before the retry was fixed; D7 was dropped — a drain already runs

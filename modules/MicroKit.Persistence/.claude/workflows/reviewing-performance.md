@@ -2,7 +2,7 @@
 
 ## When
 
-- A change to `EfRepository` (aggregate load, `IncludeAggregate`), `EfReadRepository`,
+- A change to `EfRepository` (aggregate load, `AggregateIncludePlan`), `EfReadRepository`,
   `EfSpecificationEvaluator`, `EfUnitOfWork` or the in-memory doubles
 - A consumer reports N+1 queries, slow pages or high memory
 
@@ -31,7 +31,7 @@ joins, `OFFSET … FETCH` without `ORDER BY`, columns a DTO read does not need.
 
 ## 4. Fix
 
-Server-side projection, `Includes` or an `IncludeAggregate` override, `AsSplitQuery()`,
+Server-side projection, `Includes` (read side) or `IsOutsideAggregate()` (write side), `AsSplitQuery()`,
 `AnyAsync` over `CountAsync() > 0`, ordering on paginated queries, a compiled query on a measured
 hot path.
 

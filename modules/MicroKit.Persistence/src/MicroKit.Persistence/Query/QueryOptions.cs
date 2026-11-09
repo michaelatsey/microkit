@@ -3,7 +3,7 @@ namespace MicroKit.Persistence;
 /// <summary>
 /// Encapsulates the loading strategy for a read query over <typeparamref name="TAggregate"/>
 /// aggregates. Combines the WHAT (a domain <see cref="Specification{T}"/>) with the HOW
-/// (eager includes, change-tracking hint, ordering, pagination) — ADR-002.
+/// (eager includes, split query, ordering, pagination) — ADR-002.
 /// </summary>
 /// <typeparam name="TAggregate">
 /// The aggregate root type. Must be a reference type implementing <see cref="IAggregateRoot"/>.
@@ -16,9 +16,8 @@ namespace MicroKit.Persistence;
 /// extension methods in <see cref="QueryOptionsExtensions"/> to derive modified options.
 /// </para>
 /// <para>
-/// <see cref="AsNoTrackingEnabled"/> defaults to <see langword="true"/> — read paths must not
-/// track entities. Set <see langword="false"/> only when the aggregate will be mutated inside a
-/// command handler after loading it via a read path.
+/// There is no tracking option: the read side never tracks. An aggregate a command modifies is
+/// loaded whole through <c>IRepository&lt;TAggregate, TId&gt;</c>, never through a read query.
 /// </para>
 /// <example>
 /// <code>
@@ -70,16 +69,6 @@ public sealed record QueryOptions<TAggregate>
     /// items. A requested page size above <see cref="PaginationLimits.MaxPageSize"/> is rejected.
     /// </summary>
     public PaginationOptions? Pagination { get; init; }
-
-    /// <summary>
-    /// Gets a value indicating whether queries execute without EF Core change tracking.
-    /// </summary>
-    /// <value>
-    /// <see langword="true"/> by default. Set to <see langword="false"/> only when the loaded
-    /// aggregate will be mutated and committed by the <c>IUnitOfWork</c>; the usual way to load an
-    /// aggregate for modification is <c>IRepository&lt;TAggregate, TId&gt;.FindAsync</c>.
-    /// </value>
-    public bool AsNoTrackingEnabled { get; init; } = true;
 
     /// <summary>
     /// Gets a value indicating whether EF Core split-query mode is active.

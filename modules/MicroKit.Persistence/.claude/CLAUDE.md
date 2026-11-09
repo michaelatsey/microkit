@@ -12,7 +12,7 @@ keep the CQRS data-access split honest.
 
 Consumer documentation: `README.md`. Every C# sample in it lives in, and builds from,
 `samples/MicroKit.Persistence.Samples`. Decisions: `.claude-context/context/architectural-decisions.md`
-(ADR-001 to ADR-008, DN-001, DN-002).
+(ADR-001 to ADR-009, DN-001, DN-002).
 
 ---
 
@@ -61,7 +61,7 @@ MicroKit.Persistence/
 │   └── MicroKit.Persistence.Analyzers/            MKP001–MKP005 (netstandard2.0, build-time only)
 ├── tests/
 │   ├── MicroKit.Persistence.UnitTests/            QueryOptions, pagination, in-memory doubles
-│   ├── MicroKit.Persistence.IntegrationTests/     SQLite + PostgreSQL (Testcontainers)
+│   ├── MicroKit.Persistence.IntegrationTests/     SQLite + PostgreSQL + SQL Server (Testcontainers)
 │   ├── MicroKit.Persistence.ArchitectureTests/    NetArchTest layering + IL call scan (Mono.Cecil)
 │   └── MicroKit.Persistence.Analyzers.Tests/
 └── samples/MicroKit.Persistence.Samples/          README code, built in Release with the analyzers
@@ -104,15 +104,18 @@ ITransactionalContext          // ExecuteAsync<TState>(op, state, ct) · Execute
 
 // Core — read side (the only read contract)
 IReadRepository<TAggregate>    // FindAsync(object[] keyValues) · ListAsync · ListPagedAsync · AnyAsync · CountAsync
-QueryOptions<TAggregate>       // Specification, Includes, Pagination, AsNoTrackingEnabled (default true),
-                               // AsSplitQueryEnabled, OrderBy
+QueryOptions<TAggregate>       // Specification, Includes, Pagination, AsSplitQueryEnabled, OrderBy
+                               // (no tracking option: the read side never tracks)
 PaginationLimits               // DefaultPageSize 50, MaxPageSize 500; ListPagedAsync applies the default
                                // page, ListAsync and ListPagedAsync reject a size above the maximum
 
 // EntityFrameworkCore
-EfRepository<TAggregate, TId, TContext>     // unsealed; protected virtual IncludeAggregate
+EfRepository<TAggregate, TId, TContext>     // unsealed; protected LoadAggregatesAsync(predicate, ct);
+                                            // refuses a tracked root it did not load whole (ADR-009)
 EfReadRepository<TAggregate, TContext>(context, evaluator, paginationLimits)  // unsealed
 EfUnitOfWork<TContext> : ITransactionalUnitOfWork   // = IUnitOfWork + ITransactionalContext
+UseMicroKitPersistence()       // on DbContextOptionsBuilder: boundary convention + AggregateLoadRecord
+IsOutsideAggregate()           // on NavigationBuilder: reference data, outside the boundary
 ```
 
 Composition:
@@ -144,9 +147,10 @@ strategy (ADR-002). `IUnitOfWork` moved here from MicroKit.Domain (ADR-001).
 1. Commit through `IUnitOfWork.CommitAsync` only; no repository commits, and no public
    `SaveChangesAsync`.
 2. `IReadRepository` never commits or mutates (MKP001/MKP002).
-3. Read paths do not track: `EfReadRepository.FindAsync` returns an instance the context already
-   tracks as is and loads anything else untracked; list, any and count queries run untracked unless
-   `QueryOptions.WithTracking()`. The write-side `FindAsync` loads a tracked whole aggregate.
+3. Read paths never track and never consult the change tracker: every `EfReadRepository` method
+   runs `AsNoTracking()` and returns new instances. Only the write side tracks roots, and only
+   whole ones: `EfRepository` refuses a tracked root it did not load whole and that is not `Added`.
+   The boundary lives in the model only (`IsOutsideAggregate()`, no override) — ADR-009.
 4. `Specification<T>` stays in Domain; `ISpecificationEvaluator` and `QueryOptions` stay in core.
 5. No EF Core in Abstractions or core: no `DbContext`, `DbSet`, `IQueryable` in Abstractions.
 6. Library code never calls the parameterless `IgnoreQueryFilters()` (`IlCallScanTests`).
@@ -184,7 +188,7 @@ strategy (ADR-002). `IUnitOfWork` moved here from MicroKit.Domain (ADR-001).
 
 ```
 .claude-context/
-├── context/architectural-decisions.md   ADR-001…ADR-008, DN-001, DN-002
+├── context/architectural-decisions.md   ADR-001…ADR-009, DN-001, DN-002
 ├── context/dependency-graph.md          project and package graph as declared
 ├── context/ecosystem-overview.md        position among MicroKit modules
 ├── standards/performance-budget.md      targets (no benchmark project yet)

@@ -34,10 +34,10 @@
 | Page bounds | `PaginationLimits` |
 | Evaluator | `ISpecificationEvaluator` / `EfSpecificationEvaluator` |
 
-Builder extensions use the `With-` prefix (`WithIncludes`, `WithPagination`, `WithTracking`,
-`WithOrdering`, `WithOrderBy`, `WithThenBy`, `WithSpec`), except `AsNoTracking()` and
-`AsSplitQuery()`, named after their EF Core counterparts. No extension is named after a
-`QueryOptions` property: the property would win — see `specifications.md`.
+Builder extensions use the `With-` prefix (`WithIncludes`, `WithPagination`, `WithOrdering`,
+`WithOrderBy`, `WithThenBy`, `WithSpec`), except `AsSplitQuery()`, named after its EF Core
+counterpart. No extension is named after a `QueryOptions` property: the property would win —
+see `specifications.md`.
 
 ## Specifications (in MicroKit.Domain)
 
@@ -63,6 +63,8 @@ AddDbContext<TContext>(this EfCoreBuilder, Action<DbContextOptionsBuilder>?)
 AddUnitOfWork<TContext>(this EfCoreBuilder)
 UsePostgreSQL<TContext>(this EfCoreBuilder, string, Action<NpgsqlDbContextOptionsBuilder>?, ProviderOptions?)
 UseSqlServer<TContext>(this EfCoreBuilder, string, Action<SqlServerDbContextOptionsBuilder>?, ProviderOptions?)
+UseMicroKitPersistence(this DbContextOptionsBuilder)              // + the DbContextOptionsBuilder<TContext> overload
+IsOutsideAggregate(this NavigationBuilder)
 ```
 
 ## Namespaces

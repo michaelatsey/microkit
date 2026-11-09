@@ -23,18 +23,23 @@ NativeAOT precompiled queries are not supported by them (their converters are in
 
 - `FindAsync(TId)` requires a single-property primary key of CLR type `TId`, else
   `InvalidOperationException`.
-- An instance already tracked is returned as is; otherwise one tracked query loads the whole
-  aggregate: every navigation reachable from the root (owned types come with their owner),
-  stopping at another `IAggregateRoot` and at cycles. Two or more collections (an owned collection mapped to JSON does
-  not count) switch the load to `AsSplitQuery()`: 1 + C round trips for C collections.
-- The plan is computed once per model entity type (`AggregateIncludePlan`).
-- Override `protected virtual IncludeAggregate(IQueryable<TAggregate>)` to narrow or extend the
-  load; tracking is re-applied after it. Custom finders reuse it:
+- Requires `UseMicroKitPersistence()` on the context (`AddDbContext`, `UsePostgreSQL`,
+  `UseSqlServer` call it); otherwise `InvalidOperationException`.
+- A root the repository loaded whole (recorded in the scoped `AggregateLoadRecord`), or one that
+  is `Added`, is returned as is; any other tracked root is refused (`InvalidOperationException`
+  naming the type) — ADR-009. Otherwise one tracked query loads the whole aggregate: every
+  navigation reachable from the root (owned types come with their owner), stopping at another
+  `IAggregateRoot`, at a navigation marked `IsOutsideAggregate()` and at cycles. Two or more
+  collections (an owned collection mapped to JSON does not count) switch the load to
+  `AsSplitQuery()`: 1 + C round trips for C collections.
+- The plan is computed once per model entity type (`AggregateIncludePlan`, private
+  `IncludeAggregate`); the boundary is the model's only — no override. A model-finalizing
+  convention fails model building when a non-root entity is inside two roots' boundaries.
+- Custom finders call `protected LoadAggregatesAsync(predicate, ct)`, which loads, tracks,
+  records and checks the returned roots after the query (identity resolution):
 
 ```csharp
-var orders = await IncludeAggregate(Context.Orders.AsTracking())
-    .Where(o => o.Number == number)
-    .ToListAsync(ct).ConfigureAwait(false);
+var orders = await LoadAggregatesAsync(o => o.Number == number, ct).ConfigureAwait(false);
 return orders.SingleOrDefault();
 ```
 
@@ -43,9 +48,11 @@ return orders.SingleOrDefault();
 ## Read side — `EfReadRepository<TAggregate, TContext>`
 
 - `FindAsync(object[] keyValues)`: key count must match the primary key; a null value matches
-  nothing; a tracked instance is returned as is, anything else is loaded `AsNoTracking`.
-- List, paged list, any and count start from `AsNoTracking()` unless `WithTracking()`, then go
-  through `ISpecificationEvaluator`. Count and any drop includes, ordering and pagination.
+  nothing; a value of another CLR type than its key property throws `ArgumentException`; the
+  aggregate is always loaded `AsNoTracking`, the change tracker is never consulted.
+- List, paged list, any and count start from `AsNoTracking()` (re-applied after the evaluator, so an
+  `Includes` delegate cannot opt back in), then go through `ISpecificationEvaluator`. Count and
+  any drop includes, ordering and pagination.
 - `PaginationLimits` bounds every list: `ListPagedAsync` without pagination returns the first
   page of `DefaultPageSize`; a requested size above `MaxPageSize` throws
   `ArgumentOutOfRangeException`.
@@ -65,7 +72,7 @@ assembly for it. Only the named overload may be used.
 
 - `CommitAsync` = `SaveChangesAsync`, translated to `PersistenceException`
   (concurrency conflict, update failure, a provider's transient wrapper).
-- `DiscardChanges` = `ChangeTracker.Clear()`.
+- `DiscardChanges` = `ChangeTracker.Clear()`, plus a reset of the `AggregateLoadRecord`.
 - `ExecuteAsync`: execution strategy + transaction per attempt, retry by unwrapping the
   `DbUpdateException`, join of an open transaction, rollback that never masks, tracker cleared
   after a failed attempt — ADR-006. Do not re-implement any of this in a consumer.

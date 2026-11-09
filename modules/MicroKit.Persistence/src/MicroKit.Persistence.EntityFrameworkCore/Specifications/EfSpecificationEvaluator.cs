@@ -20,10 +20,11 @@ namespace MicroKit.Persistence.EntityFrameworkCore;
 /// </list>
 /// </para>
 /// <para>
-/// <b>AsNoTracking responsibility:</b> this evaluator does not apply <c>AsNoTracking()</c>.
-/// The repository calling <see cref="GetQuery{T}"/> is responsible for passing a queryable
-/// that already has the correct tracking behaviour applied. This keeps the evaluator
-/// stateless and provider-agnostic.
+/// <b>Tracking:</b> this evaluator does not apply a tracking behaviour. The repository calling
+/// <see cref="GetQuery{T}"/> does: <see cref="EfReadRepository{TAggregate, TContext}"/> runs every
+/// query with <c>AsNoTracking()</c>, applied again to the result because an <c>Includes</c> or
+/// <c>OrderBy</c> delegate may call <c>AsTracking()</c>. This keeps the evaluator stateless and
+/// provider-agnostic.
 /// </para>
 /// </remarks>
 public sealed class EfSpecificationEvaluator : ISpecificationEvaluator
@@ -34,9 +35,8 @@ public sealed class EfSpecificationEvaluator : ISpecificationEvaluator
     /// </summary>
     /// <typeparam name="T">The aggregate root type.</typeparam>
     /// <param name="inputQuery">
-    /// The base <c>IQueryable&lt;T&gt;</c> to transform. The calling repository must have
-    /// already applied <c>AsNoTracking()</c> when
-    /// <see cref="QueryOptions{T}.AsNoTrackingEnabled"/> is <see langword="true"/>.
+    /// The base <c>IQueryable&lt;T&gt;</c> to transform, with the tracking behaviour the calling
+    /// repository chose already applied.
     /// </param>
     /// <param name="opts">The query options to apply.</param>
     /// <returns>

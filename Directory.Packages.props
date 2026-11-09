@@ -87,6 +87,9 @@
     <!-- Real PostgreSQL for the outbox concurrency tests. MIT. Requires Docker; the tests that
          use it are skipped, not failed, when no Docker endpoint is reachable. -->
     <PackageVersion Include="Testcontainers.PostgreSql" Version="4.14.0" />
+    <!-- Real SQL Server for the MicroKit.Persistence integration tests. MIT. Requires Docker, like
+         Testcontainers.PostgreSql; kept on the same version. -->
+    <PackageVersion Include="Testcontainers.MsSql" Version="4.14.0" />
   </ItemGroup>
   <ItemGroup Label="Analyzers">
     <PackageVersion Include="Microsoft.CodeAnalysis.NetAnalyzers" Version="10.0.300" />

@@ -174,26 +174,63 @@ public sealed class EfOrderRepository(ShopDbContext context)
 {
     public async ValueTask<Order?> FindByNumberAsync(string number, CancellationToken ct = default)
     {
-        var orders = await IncludeAggregate(Context.Orders.AsTracking())
-            .Where(o => o.Number == number)
-            .ToListAsync(ct)
-            .ConfigureAwait(false);
+        var orders = await LoadAggregatesAsync(o => o.Number == number, ct).ConfigureAwait(false);
         return orders.SingleOrDefault();
     }
 }
 ```
 
-`EfRepository.FindAsync(id)`:
+`EfRepository.FindAsync(id)`, and `LoadAggregatesAsync(predicate)` for a typed finder:
 
-- returns an aggregate the unit of work already tracks as is, without a query;
-- otherwise loads the **whole aggregate**, tracked: every navigation to an entity that does not
-  implement `IAggregateRoot`, recursively (derived types and many-to-many included), never another
-  aggregate root; owned entities come with it;
-- splits the load (`AsSplitQuery`) when the aggregate has two or more collections. A split load runs one
+- load the **whole aggregate**, tracked, as the model's boundary defines it (below); owned entities
+  come with it. A finder states which roots it wants, never what is loaded with them: there is no
+  include to add and no query to shape;
+- return a root a repository over the same context already loaded whole or staged with `AddAsync`
+  (committed or not), or any `Added` root, as is — `FindAsync` without a query;
+- **refuse** any other root the context tracks, with an `InvalidOperationException` naming its type:
+  a root tracked by a direct `DbSet` query, a filtered `Include`, an explicit load, an `Attach` or
+  `Update`, or a reattachment after `ChangeTracker.Clear()` may be partial, and a partial aggregate
+  must never reach a command;
+- split the load (`AsSplitQuery`) when the aggregate has two or more collections. A split load runs one
   statement per collection: under Read Committed they can see different snapshots, so protect an
   invariant spanning root and children with a concurrency token or a stricter isolation level.
 
-Override `IncludeAggregate` to load another shape.
+### The aggregate boundary
+
+The boundary lives in the model, and only there. By default it is every navigation to an entity that
+does not implement `IAggregateRoot`, recursively — derived types and many-to-many included; another
+aggregate root is never part of it. Mark a navigation to reference data `IsOutsideAggregate()`: it is
+neither loaded with the aggregate nor counted as part of it.
+
+```csharp
+modelBuilder.Entity<CatalogItem>(item =>
+{
+    item.Ignore(i => i.DomainEvents);
+    item.HasOne(i => i.Origin).WithMany().HasForeignKey(i => i.OriginCode);
+    item.Navigation(i => i.Origin).IsOutsideAggregate(); // reference data: never loaded with the item
+});
+```
+
+Model building fails, naming the types, when an entity that is not an aggregate root lies inside the
+boundary of two roots — directly, or through a base type and one of its derived types. Each ownership
+of an owned type is its own entity type, so the same owned type under two roots is not shared.
+
+The boundary validation and the record of the roots a repository loaded whole come with
+`UseMicroKitPersistence()`. `AddDbContext`, `UsePostgreSQL` and `UseSqlServer` call it; a context
+configured another way calls it itself, or `EfRepository` refuses to load:
+
+```csharp
+new DbContextOptionsBuilder<ShopDbContext>()
+    .UseNpgsql(connectionString)
+    .UseMicroKitPersistence()
+    .Options;
+```
+
+A root is recorded once the load that returned it has completed — a load that fails midway records
+nothing, and a root the model auto-includes without its own aggregate is never recorded. The record
+follows the change tracker: `IUnitOfWork.DiscardChanges()` and a failed `ExecuteAsync` attempt reset
+it, and a pooled context resets it when it returns to the pool. An owned navigation cannot be marked
+`IsOutsideAggregate()`: an owned entity is always loaded with its owner.
 
 ## Transactions
 
@@ -228,7 +265,8 @@ transactions.ExecuteAsync(
 ## The read side
 
 `IReadRepository<TAggregate>` queries through `QueryOptions<TAggregate>`, which pairs a domain
-`Specification<T>` (what) with includes, tracking, ordering and pagination (how):
+`Specification<T>` (what) with includes, split query, ordering and pagination (how). The read side
+never tracks: there is no tracking option, and every method returns new, untracked instances.
 
 ```csharp
 public sealed class OpenOrdersSpec : Specification<Order>
@@ -251,8 +289,9 @@ public sealed class ListOpenOrders(IReadRepository<Order> orders)
 - `ListPagedAsync` without pagination returns the first page of `PaginationLimits.DefaultPageSize`
   items (50 unless configured), never the whole table; a page larger than `MaxPageSize` (500) is
   rejected. `ListAsync` without pagination returns every match.
-- `FindAsync(keyValues)` returns an aggregate the unit of work tracks as is, and loads any other one
-  without tracking.
+- `FindAsync(keyValues)` and the list methods never consult the change tracker: an aggregate the
+  command tracks in the same context comes back as a new, untracked instance, and its pending change
+  is not visible through it. Load what a command modifies through `IRepository<TAggregate, TId>`.
 - Ordering is required for stable pages.
 
 ## Testing without a database
@@ -290,14 +329,14 @@ same pagination limits as the EF Core repository.
 | `ITransactionalContext` | Abstractions | Run an operation in a transaction (retry, join) |
 | `IPagedResult<T>` | Abstractions | A page of items with the total count |
 | `PersistenceException` | Abstractions | Every database failure surfaced by the module |
-| `IReadRepository<TAggregate>` | Core | Read side: find, list, page, any, count |
-| `QueryOptions<TAggregate>` | Core | Specification + includes, tracking, ordering, pagination |
-| `QueryOptionsExtensions` | Core | `WithIncludes`, `WithPagination`, `AsNoTracking`, `WithTracking`, `AsSplitQuery`, `WithOrdering` |
+| `IReadRepository<TAggregate>` | Core | Read side, untracked: find, list, page, any, count |
+| `QueryOptions<TAggregate>` | Core | Specification + includes, split query, ordering, pagination |
+| `QueryOptionsExtensions` | Core | `WithIncludes`, `WithPagination`, `AsSplitQuery`, `WithOrdering` |
 | `PaginationOptions` | Core | A validated page request |
 | `PaginationLimits` | Core | Default and maximum page sizes |
 | `PagedResult<T>` | Core | `IPagedResult<T>` implementation |
 | `ISpecificationEvaluator` | Core | Applies `QueryOptions` to an `IQueryable<T>` |
-| `EfRepository<TAggregate, TId, TContext>` | EntityFrameworkCore | EF Core write-side base |
+| `EfRepository<TAggregate, TId, TContext>` | EntityFrameworkCore | EF Core write-side base; `LoadAggregatesAsync` for typed finders |
 | `EfReadRepository<TAggregate, TContext>` | EntityFrameworkCore | EF Core read-side base |
 | `EfUnitOfWork<TContext>` | EntityFrameworkCore | `IUnitOfWork` + `ITransactionalContext` over a `DbContext` |
 | `ITransactionalUnitOfWork` | EntityFrameworkCore | The two contracts as one service |
@@ -307,6 +346,8 @@ same pagination limits as the EF Core repository.
 | `PersistenceBuilder`, `EfCoreBuilder` | EntityFrameworkCore | Registration builders |
 | `ProviderOptions`, `RetryOnFailureOptions` | EntityFrameworkCore | Opt-in retry and pooling |
 | `DomainConventionExtensions` | EntityFrameworkCore | MicroKit.Domain mappings for `ConfigureConventions` |
+| `MicroKitPersistenceDbContextOptionsExtensions` | EntityFrameworkCore | `UseMicroKitPersistence()`: boundary validation and the loaded-root record |
+| `AggregateBoundaryNavigationBuilderExtensions` | EntityFrameworkCore | `IsOutsideAggregate()` on a navigation |
 | `PostgreSqlEfCoreBuilderExtensions` | PostgreSql | `UsePostgreSQL<TContext>` |
 | `SqlServerEfCoreBuilderExtensions` | SqlServer | `UseSqlServer<TContext>` |
 | `QueryOptionsOrderingExtensions` | Specifications | `WithOrderBy`, `WithOrderByDescending`, `WithThenBy`, `WithThenByDescending` |

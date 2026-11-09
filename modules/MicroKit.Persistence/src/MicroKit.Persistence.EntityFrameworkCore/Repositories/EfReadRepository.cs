@@ -2,10 +2,9 @@ namespace MicroKit.Persistence.EntityFrameworkCore;
 
 /// <summary>
 /// Generic EF Core read-side repository base implementing <see cref="IReadRepository{TAggregate}"/>.
-/// List, any and count queries run with <c>AsNoTracking()</c>, or with <c>AsTracking()</c> after
-/// <c>WithTracking()</c>, whatever the context's default <see cref="QueryTrackingBehavior"/>; uses
-/// <see cref="ISpecificationEvaluator"/> for all <see cref="QueryOptions{TAggregate}"/>-based
-/// transformations.
+/// Every query runs with <c>AsNoTracking()</c>, whatever the context's default
+/// <see cref="QueryTrackingBehavior"/>; uses <see cref="ISpecificationEvaluator"/> for all
+/// <see cref="QueryOptions{TAggregate}"/>-based transformations.
 /// </summary>
 /// <typeparam name="TAggregate">
 /// The aggregate root type. Must be a reference type implementing <see cref="IAggregateRoot"/>.
@@ -32,8 +31,10 @@ namespace MicroKit.Persistence.EntityFrameworkCore;
 /// </code>
 /// </para>
 /// <para>
-/// <see cref="FindAsync"/> returns an aggregate the unit of work already tracks untouched, and
-/// loads any other one without tracking.
+/// The read side never tracks and never consults the change tracker: every method returns new,
+/// untracked instances, even for an aggregate the command tracks in the same context. Only the
+/// write side (<see cref="EfRepository{TAggregate, TId, TContext}"/>) tracks roots. A typed read
+/// repository keeps that: its own queries start from <c>AsNoTracking()</c>.
 /// </para>
 /// </remarks>
 /// <param name="context">The scoped application <see cref="DbContext"/>.</param>
@@ -71,25 +72,14 @@ public class EfReadRepository<TAggregate, TContext>(
     /// <returns>The matching aggregate, or <see langword="null"/> if not found.</returns>
     /// <exception cref="ArgumentException">
     /// The number of <paramref name="keyValues"/> does not match the primary key of
-    /// <typeparamref name="TAggregate"/>.
+    /// <typeparamref name="TAggregate"/>, or a key value is not of its key property's CLR type (a
+    /// converted key takes its model type, never the column's).
     /// </exception>
     /// <remarks>
-    /// <para>
-    /// The read and write repositories share the scoped <see cref="DbContext"/>. An aggregate the
-    /// current unit of work already tracks is therefore returned <b>as is</b> — same instance, same
-    /// state, <c>Added</c>, <c>Modified</c> or <c>Deleted</c> — so its pending change still reaches
-    /// the next commit.
-    /// </para>
-    /// <para>
-    /// Any other aggregate is loaded <b>without tracking</b> by a query on the primary key. It is
-    /// never attached to the change tracker, so it is never wired into the navigations of entities
-    /// the command tracks, and a later commit cannot try to write it.
-    /// </para>
-    /// <para>
-    /// The tracked lookup runs with <see cref="ChangeTracker.AutoDetectChangesEnabled"/> turned
-    /// off: reading <see cref="DbSet{TEntity}.Local"/> otherwise runs a full <c>DetectChanges</c>
-    /// over every tracked entity. The caller's setting is restored afterwards.
-    /// </para>
+    /// The aggregate is loaded <b>without tracking</b> by a query on the primary key, even when the
+    /// context already tracks it: the result is a new instance, never attached to the change
+    /// tracker, never wired into the navigations of entities the command tracks, and a later commit
+    /// cannot write it. A pending change of the command is therefore not visible through it.
     /// </remarks>
     public async ValueTask<TAggregate?> FindAsync(object[] keyValues, CancellationToken ct = default)
     {
@@ -107,9 +97,7 @@ public class EfReadRepository<TAggregate, TContext>(
         if (Array.Exists(keyValues, v => v is null))
             return null;
 
-        var tracked = KeyLookup.FindTracked(Context, set, keyValues);
-        if (tracked is not null)
-            return tracked.Entity;
+        KeyLookup.EnsureKeyValueTypes(set.EntityType, keyProperties, keyValues);
 
         return await set.AsNoTracking()
             .FirstOrDefaultAsync(KeyLookup.Predicate<TAggregate>(keyProperties, keyValues), ct)
@@ -121,7 +109,7 @@ public class EfReadRepository<TAggregate, TContext>(
     /// Returns all aggregates that satisfy the supplied <see cref="QueryOptions{TAggregate}"/>.
     /// </summary>
     /// <param name="opts">
-    /// The query options specifying the filter, includes, ordering, and tracking hint.
+    /// The query options specifying the filter, includes and ordering.
     /// </param>
     /// <param name="ct">Propagates notification that operations should be cancelled.</param>
     /// <returns>
@@ -141,7 +129,7 @@ public class EfReadRepository<TAggregate, TContext>(
     {
         ArgumentNullException.ThrowIfNull(opts);
         _paginationLimits.EnsureWithinMaximum(opts.Pagination);
-        var query = evaluator.GetQuery(GetBaseQuery(opts), opts);
+        var query = evaluator.GetQuery(GetBaseQuery(), opts).AsNoTracking(); // again: a delegate may have called AsTracking
         return await query.ToListAsync(ct).ConfigureAwait(false);
     }
 
@@ -172,7 +160,7 @@ public class EfReadRepository<TAggregate, TContext>(
     {
         ArgumentNullException.ThrowIfNull(opts);
         var pagination = _paginationLimits.ForPagedQuery(opts.Pagination);
-        var baseQuery = GetBaseQuery(opts);
+        var baseQuery = GetBaseQuery();
 
         var totalCount = await evaluator
             .GetQuery(baseQuery, AsCountQuery(opts))
@@ -180,6 +168,7 @@ public class EfReadRepository<TAggregate, TContext>(
 
         var items = await evaluator
             .GetQuery(baseQuery, opts with { Pagination = pagination })
+            .AsNoTracking() // again: a delegate may have called AsTracking
             .ToListAsync(ct).ConfigureAwait(false);
 
         return new PagedResult<TAggregate>(items, totalCount, pagination.Page, pagination.PageSize);
@@ -203,7 +192,7 @@ public class EfReadRepository<TAggregate, TContext>(
     {
         ArgumentNullException.ThrowIfNull(opts);
         return await evaluator
-            .GetQuery(GetBaseQuery(opts), AsCountQuery(opts))
+            .GetQuery(GetBaseQuery(), AsCountQuery(opts))
             .AnyAsync(ct).ConfigureAwait(false);
     }
 
@@ -221,14 +210,12 @@ public class EfReadRepository<TAggregate, TContext>(
     {
         ArgumentNullException.ThrowIfNull(opts);
         return await evaluator
-            .GetQuery(GetBaseQuery(opts), AsCountQuery(opts))
+            .GetQuery(GetBaseQuery(), AsCountQuery(opts))
             .CountAsync(ct).ConfigureAwait(false);
     }
 
-    private IQueryable<TAggregate> GetBaseQuery(QueryOptions<TAggregate> opts)
-        => opts.AsNoTrackingEnabled
-            ? Context.Set<TAggregate>().AsNoTracking()
-            : Context.Set<TAggregate>().AsTracking(); // overrides a context configured as NoTracking
+    // Overrides a context configured as TrackAll: the read side never tracks.
+    private IQueryable<TAggregate> GetBaseQuery() => Context.Set<TAggregate>().AsNoTracking();
 
     private static QueryOptions<TAggregate> AsCountQuery(QueryOptions<TAggregate> opts)
         => opts with { Includes = null, OrderBy = null, Pagination = null, AsSplitQueryEnabled = false };

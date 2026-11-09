@@ -252,6 +252,7 @@ public sealed class OrderStore : IAsyncDisposable
     {
         var builder = new DbContextOptionsBuilder<OrderDbContext>();
         _configure(builder);
+        builder.UseMicroKitPersistence();
         // The loads must never trip EF Core's row-limit or cartesian-explosion warnings.
         builder.ConfigureWarnings(w => w.Throw(
             CoreEventId.RowLimitingOperationWithoutOrderByWarning,

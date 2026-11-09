@@ -37,6 +37,7 @@
     <PackageReference Include="Microsoft.EntityFrameworkCore.Sqlite" />
     <PackageReference Include="Npgsql.EntityFrameworkCore.PostgreSQL" />
     <PackageReference Include="Testcontainers.PostgreSql" />
+    <PackageReference Include="Testcontainers.MsSql" />
     <!-- Compiles a deliberately invalid EntityId type in memory, so the scan that must reject it
          never sees it in this assembly (#196 D13). -->
     <PackageReference Include="Microsoft.CodeAnalysis.CSharp" />

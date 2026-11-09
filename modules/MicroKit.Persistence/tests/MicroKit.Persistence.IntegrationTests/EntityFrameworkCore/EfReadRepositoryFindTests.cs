@@ -8,64 +8,13 @@ using Xunit;
 namespace MicroKit.Persistence.IntegrationTests.EntityFrameworkCore;
 
 /// <summary>
-/// <see cref="EfReadRepository{TAggregate,TContext}.FindAsync"/> shares the scoped
-/// <see cref="DbContext"/> with the write side: it must never detach an entity the current
-/// command already tracks, or the next commit silently writes nothing (#196 D2).
+/// <see cref="EfReadRepository{TAggregate,TContext}.FindAsync"/> loads by primary key without
+/// tracking. #196 D2's "a tracked instance is returned as is" is reversed by #197 phase 1: the read
+/// side never consults the tracker (<c>AggregateBoundaryScenarios.ReadFindAsync_*</c> and
+/// <c>ReadListAsync_*</c> pin that, on PostgreSQL and SQL Server).
 /// </summary>
 public sealed class EfReadRepositoryFindTests
 {
-    [Fact]
-    public async Task FindAsync_WhenAggregateIsTrackedAndModified_ReturnsItUntouched_AndTheCommitWritesIt()
-    {
-        await using var h = await Harness.CreateAsync();
-        var id = await SeedAsync(h, "original");
-        var tracked = await h.Context.Aggregates.SingleAsync(a => a.Id == id);
-        tracked.Name = "renamed-by-the-command";
-
-        var found = await h.Sut.FindAsync([id]);
-
-        found.ShouldBeSameAs(tracked);
-        h.Context.Entry(tracked).State.ShouldBe(EntityState.Modified,
-            "a read through the read repository must not drop the command's pending change");
-
-        await h.Context.SaveChangesAsync();
-        (await ReadNameFromDatabaseAsync(h, id)).ShouldBe("renamed-by-the-command");
-    }
-
-    [Fact]
-    public async Task FindAsync_WhenAggregateIsTrackedAndAdded_ReturnsItUntouched_AndTheCommitInsertsIt()
-    {
-        await using var h = await Harness.CreateAsync();
-        var added = new ReadModelAggregate { Name = "staged" };
-        h.Context.Add(added);
-
-        var found = await h.Sut.FindAsync([added.Id]);
-
-        found.ShouldBeSameAs(added);
-        h.Context.Entry(added).State.ShouldBe(EntityState.Added);
-
-        await h.Context.SaveChangesAsync();
-        (await ReadNameFromDatabaseAsync(h, added.Id)).ShouldBe("staged");
-    }
-
-    [Fact]
-    public async Task FindAsync_WhenAggregateIsTrackedAndDeleted_ReturnsItUntouched_AndTheCommitDeletesIt()
-    {
-        await using var h = await Harness.CreateAsync();
-        var id = await SeedAsync(h, "to-delete");
-        var tracked = await h.Context.Aggregates.SingleAsync(a => a.Id == id);
-        h.Context.Remove(tracked);
-
-        var found = await h.Sut.FindAsync([id]);
-
-        found.ShouldBeSameAs(tracked);
-        h.Context.Entry(tracked).State.ShouldBe(EntityState.Deleted,
-            "a read must not drop the command's pending delete");
-
-        await h.Context.SaveChangesAsync();
-        (await ReadNameFromDatabaseAsync(h, id)).ShouldBeNull();
-    }
-
     [Fact]
     public async Task FindAsync_WhenAggregateIsNotTracked_LoadsItDetached()
     {

@@ -75,8 +75,10 @@ public sealed class EfUnitOfWork<TContext>(TContext context)
     /// nothing to translate into <see cref="PersistenceException"/>. It does not touch the ambient
     /// database transaction: the transaction's own commit or rollback still decides the fate of
     /// anything already flushed inside it, and rows committed before it began are unaffected.
+    /// The record of the roots the repositories loaded whole is reset with it: an instance that was
+    /// loaded before and is attached again afterwards is no longer known to be whole.
     /// </remarks>
-    public void DiscardChanges() => context.ChangeTracker.Clear();
+    public void DiscardChanges() => ClearTracker();
 
     /// <summary>
     /// Executes <paramref name="operation"/> inside a database transaction. When no transaction
@@ -111,7 +113,7 @@ public sealed class EfUnitOfWork<TContext>(TContext context)
     /// replaces the exception in flight: the caller observes the operation's own failure even when
     /// <paramref name="ct"/> was cancelled or the rollback itself failed. The change tracker is then
     /// cleared, because the database was rolled back: a retried attempt starts from a clean tracker,
-    /// and after a final failure no entity of the attempt stays tracked.
+    /// and after a final failure no entity of the attempt stays tracked, nor recorded as loaded whole.
     /// </para>
     /// <para>
     /// Because the tracker is cleared, a retried operation must load what it modifies itself:
@@ -289,7 +291,15 @@ public sealed class EfUnitOfWork<TContext>(TContext context)
         }
 #pragma warning restore CA1031
 
+        ClearTracker();
+    }
+
+    // Clears the change tracker and, when UseMicroKitPersistence() configured the context, the record
+    // of the roots loaded whole: Clear() raises no event the record could observe.
+    private void ClearTracker()
+    {
         context.ChangeTracker.Clear();
+        KeyLookup.FindLoadRecord(context)?.Reset();
     }
 
     // The escaping exception is the DbUpdateException we unwrapped, or a provider wrapper around it.

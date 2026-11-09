@@ -5,15 +5,15 @@ multiplies by request rate.
 
 ## Read paths do not track
 
-`EfReadRepository` starts every list, any and count query from `AsNoTracking()` unless the
-options say `WithTracking()`, and `FindAsync` loads untracked (a tracked instance is returned as
-is). A typed read repository keeps that: its own queries start from `AsNoTracking()`.
+`EfReadRepository` runs every query `AsNoTracking()` — there is no opt-out — and `FindAsync`
+never consults the tracker. A typed read repository keeps that: its own queries start from
+`AsNoTracking()`.
 
 ## Write-side loads are whole aggregates
 
 `EfRepository.FindAsync` loads the full aggregate in one tracked query, or 1 + C queries when it
 has C ≥ 2 collections (split). It is not a primary-key lookup; it costs what the aggregate
-weighs. Keep aggregates small, or override `IncludeAggregate` for a narrower load.
+weighs. Keep aggregates small, and mark navigations to reference data `IsOutsideAggregate()`.
 
 ## ValueTask
 

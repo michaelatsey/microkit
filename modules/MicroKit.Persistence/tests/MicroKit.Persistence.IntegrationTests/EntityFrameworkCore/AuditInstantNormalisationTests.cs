@@ -71,7 +71,7 @@ public sealed class AuditInstantNormalisationTests
 [Collection(MicroKit.Persistence.IntegrationTests.PostgreSql.PostgreSqlSuite.Name)]
 public sealed class AuditInstantNormalisationPostgreSqlTests(MicroKit.Persistence.IntegrationTests.PostgreSql.PostgreSqlFixture fixture)
 {
-    [MicroKit.Persistence.IntegrationTests.PostgreSql.DockerRequiredFact]
+    [DockerRequiredFact]
     public async Task ARangeFilterWithANonUtcInstant_IsNormalisedAndMatches()
     {
         var connectionString = new Npgsql.NpgsqlConnectionStringBuilder(fixture.ConnectionString)

@@ -22,7 +22,7 @@ integration test logs. Say so when a claim would need a measurement.
 ## Review Checklist
 
 ### Read path
-- [ ] Untracked (`EfReadRepository` default, or `AsNoTracking()` in a typed read repository)
+- [ ] Untracked (`EfReadRepository` always, and `AsNoTracking()` in a typed read repository)
 - [ ] Server-side projection for DTO reads — no client-side mapping of large sets
 - [ ] Materialised once — no `ToList()` followed by more LINQ
 - [ ] Pagination in SQL, ordered, within `PaginationLimits`
@@ -30,7 +30,8 @@ integration test logs. Say so when a claim would need a measurement.
 
 ### Write path
 - [ ] `EfRepository.FindAsync` round trips: 1, or 1 + C with C ≥ 2 collections (split)
-- [ ] An `IncludeAggregate` override does not pull in another aggregate or an unbounded collection
+- [ ] The boundary does not pull in reference data or an unbounded collection: mark such
+      navigations `IsOutsideAggregate()`, or split the aggregate
 - [ ] One `CommitAsync` per command; no `SaveChangesAsync` bypassing `IUnitOfWork`
 - [ ] Retry enabled only for operations safe to re-run (ADR-006: at-least-once)
 

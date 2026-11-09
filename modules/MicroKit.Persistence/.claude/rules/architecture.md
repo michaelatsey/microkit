@@ -26,10 +26,12 @@ public interface IOrderLineRepository : IRepository<OrderLine, OrderLineId> { }
 
 - No `CommitAsync`: committing belongs to `IUnitOfWork` only.
 - No `UpdateAsync`: an aggregate loaded through `FindAsync` is tracked; mutate it and commit.
-- `EfRepository.FindAsync` returns an instance already tracked as is; otherwise it loads the whole
-  aggregate (every navigation inside the boundary, never another aggregate root), split into
-  separate queries when it has two or more collections. A typed repository narrows or extends
-  the load by overriding `protected virtual IncludeAggregate`.
+- `EfRepository.FindAsync` returns a root it loaded whole, or an `Added` one, as is, and refuses any
+  other tracked root; otherwise it loads the whole aggregate (every navigation inside the boundary,
+  never another aggregate root), split into separate queries when it has two or more collections.
+- The boundary lives in the model only (ADR-009): reference data leaves it through
+  `IsOutsideAggregate()`; no repository overrides the load. A typed finder calls
+  `protected LoadAggregatesAsync(predicate, ct)`.
 
 ## Read side — `IReadRepository<TAggregate>` (core)
 
@@ -45,8 +47,9 @@ public interface IReadRepository<TAggregate> where TAggregate : class, IAggregat
 ```
 
 It is the only read contract (it lives in core because it takes `QueryOptions<T>`). It never
-mutates or commits (MKP001/MKP002). `EfReadRepository<TAggregate, TContext>(context, evaluator,
-paginationLimits)` implements it; a typed read repository derives from it.
+mutates or commits (MKP001/MKP002), never tracks and never consults the change tracker.
+`EfReadRepository<TAggregate, TContext>(context, evaluator, paginationLimits)` implements it; a
+typed read repository derives from it.
 
 ## Unit of Work — `IUnitOfWork` (Abstractions)
 
@@ -96,7 +99,7 @@ var opts = new QueryOptions<Order>(new OpenOrdersSpec())   // WHAT — Specifica
     .WithPagination(page: 1, pageSize: 20);
 ```
 
-Untracked by default (`AsNoTrackingEnabled = true`); `WithTracking()` opts out.
+The read side never tracks; `QueryOptions` has no tracking option (ADR-009).
 
 ## CQRS Data-Access Alignment
 

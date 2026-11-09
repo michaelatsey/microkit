@@ -228,6 +228,7 @@ public sealed class ShipmentStore : IAsyncDisposable
     {
         var builder = new DbContextOptionsBuilder<ShipmentDbContext>();
         _configure(builder);
+        builder.UseMicroKitPersistence();
         return new ShipmentDbContext(builder.Options);
     }
 

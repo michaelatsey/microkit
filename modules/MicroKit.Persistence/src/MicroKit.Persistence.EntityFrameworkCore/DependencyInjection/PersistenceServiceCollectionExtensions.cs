@@ -65,7 +65,8 @@ public static class PersistenceServiceCollectionExtensions
 
     /// <summary>
     /// Registers a <typeparamref name="TContext"/> <see cref="DbContext"/> in the service
-    /// collection. Delegates to <see cref="EntityFrameworkServiceCollectionExtensions.AddDbContext{TContext}(IServiceCollection, Action{DbContextOptionsBuilder}?, ServiceLifetime, ServiceLifetime)"/>.
+    /// collection, with <see cref="MicroKitPersistenceDbContextOptionsExtensions.UseMicroKitPersistence"/>.
+    /// Delegates to <see cref="EntityFrameworkServiceCollectionExtensions.AddDbContext{TContext}(IServiceCollection, Action{DbContextOptionsBuilder}?, ServiceLifetime, ServiceLifetime)"/>.
     /// </summary>
     /// <typeparam name="TContext">The application <see cref="DbContext"/> type.</typeparam>
     /// <param name="builder">The EF Core builder.</param>
@@ -77,7 +78,11 @@ public static class PersistenceServiceCollectionExtensions
         where TContext : DbContext
     {
         ArgumentNullException.ThrowIfNull(builder);
-        builder.Services.AddDbContext<TContext>(configure);
+        builder.Services.AddDbContext<TContext>(options =>
+        {
+            configure?.Invoke(options);
+            options.UseMicroKitPersistence();
+        });
         return builder;
     }
 

@@ -25,10 +25,7 @@ public sealed class EfOrderRepository(ShopDbContext context)
 {
     public async ValueTask<Order?> FindByNumberAsync(string number, CancellationToken ct = default)
     {
-        var orders = await IncludeAggregate(Context.Orders.AsTracking())
-            .Where(o => o.Number == number)
-            .ToListAsync(ct)
-            .ConfigureAwait(false);
+        var orders = await LoadAggregatesAsync(o => o.Number == number, ct).ConfigureAwait(false);
         return orders.SingleOrDefault();
     }
 }
@@ -36,8 +33,10 @@ public sealed class EfOrderRepository(ShopDbContext context)
 
 - No `CommitAsync`, no `UpdateAsync`: load, mutate the tracked aggregate, and let `IUnitOfWork`
   commit.
-- A finder reuses `IncludeAggregate` so it returns the same whole aggregate as `FindAsync`.
-- Override `IncludeAggregate` only to narrow or extend the default load.
+- A finder calls `LoadAggregatesAsync` so it returns the same whole aggregate as `FindAsync`, recorded
+  and checked; it states which roots, never what is loaded with them.
+- The boundary is the model's: mark reference data `IsOutsideAggregate()` in `OnModelCreating`.
+  The context needs `UseMicroKitPersistence()` (the `EfCoreBuilder` registrations call it).
 
 ## 3. Read side
 

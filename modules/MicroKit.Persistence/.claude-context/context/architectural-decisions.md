@@ -121,6 +121,13 @@ pagination, split queries). The two types are separate and never merged.
   `ConfigurePagination`) makes `ListPagedAsync` without pagination return the default page instead
   of the whole result set, and rejects — never clamps — a larger page. This supersedes DN-002.
 
+### Amendment — #197 phase 1 (2026-11-09)
+
+Tracking leaves `QueryOptions<T>`: `AsNoTrackingEnabled`, `WithTracking()` and `AsNoTracking()` are
+removed, and `QueryOptions` is the loading strategy of the read side only (includes, split query,
+ordering, pagination). The read side never tracks (ADR-009); read "whether to track" out of the
+rationale above.
+
 ---
 
 ## ADR-003: Abstractions Minimality Rule
@@ -576,6 +583,15 @@ choice. All 8 packages share one version — whichever number is chosen, all 8 r
   fast where EF Core fails (an `Id` of another type, a duplicate `AddAsync`).
 - Tests: `EfRepositoryAggregateLoadTests` (SQLite and PostgreSQL).
 
+### Amendment — #197 phase 1 (2026-11-09)
+
+`IncludeAggregate` is no longer `protected virtual`: it is private, and the boundary is read from the
+model only. Reference data leaves the boundary through `IsOutsideAggregate()` on its navigation, not
+through an override; a typed finder loads through `protected LoadAggregatesAsync(predicate)`.
+`FindAsync` returns a tracked root as is only when the repository loaded it whole or it is `Added`
+(ADR-009). The consequence "`IncludeAggregate` overrides both" no longer holds: a self-referencing
+child is still followed one level only, and there is no per-repository override.
+
 ---
 
 ## ADR-008: MicroKit.Domain Mapping Conventions (#196 D13, D14)
@@ -618,6 +634,84 @@ Scope is limited to audit instants: other `DateTimeOffset` properties keep their
   can be done later.
 - `IEntityId` record structs other than `GuidId` still need a hand-written converter.
 - Tests: `DomainConventionTests`, `DomainConventionModelTests`, `AuditInstantNormalisationTests`.
+
+---
+
+## ADR-009: The Aggregate Boundary Lives in the Model; Only Whole Roots Are Tracked (#197 phase 1)
+
+**Status:** Accepted
+**Date:** 2026-11-09
+**Source:** Issue #197, phase 1. Amends ADR-002 and ADR-007; reverses #196 D2.
+
+### Decision
+
+1. **Activation.** `DbContextOptionsBuilder.UseMicroKitPersistence()` adds an internal
+   `IDbContextOptionsExtension` that registers MicroKit's services in the context's internal service
+   provider: a convention-set plugin (an EF Core `IConventionSetPlugin`, through `TryAdd`) and a
+   scoped `AggregateLoadRecord` (through `TryAddProviderSpecificServices`, as it is not an EF Core
+   service), also registered as EF Core's `IResettableService` (through `TryAdd`) so a pooled context
+   resets it. `AddDbContext`, `UsePostgreSQL` and `UseSqlServer` call it. Repository constructors are
+   unchanged. The extension has no options: its `ExtensionInfo` returns hash 0 and shares the service
+   provider with any other instance of itself; an option added later must take part in both.
+2. **The boundary lives in the model, and only there.** Default: #196 D10's derivation (every
+   navigation to a non-`IAggregateRoot` type, recursively). `IsOutsideAggregate()` on a
+   `NavigationBuilder` sets the annotation `MicroKit:OutsideAggregate` (`bool`, code-generatable) and
+   excludes the navigation. `IncludeAggregate` is private: no repository redefines the boundary.
+3. **A child has one root.** A model-finalizing convention walks every top-most root's boundary and
+   fails model building, naming the type and the roots, when a non-root, non-owned entity type — or a
+   derived type of one — is reached from two roots. Each ownership of an owned type is its own entity
+   type and is never shared. The convention writes no annotation; the include plan stays computed from
+   the runtime model and cached per `IEntityType`.
+4. **Only whole roots are tracked through the write side.** The record holds, by reference, the roots
+   `EfRepository` loaded with the whole plan:
+   - a root the repository's load **returned**, once that load has **completed**, and only if it was
+     tracked `FromQuery` during that load, enters it — a load that fails midway records nothing, and a
+     root the model auto-includes without its own aggregate (same hierarchy included) is never
+     recorded;
+   - a root staged by `EfRepository.AddAsync` enters it: the application built it whole, and it stays
+     returnable once the commit makes it `Unchanged`. This goes beyond the Spec's "only when tracked
+     `FromQuery` during the repository's own load": read literally, an aggregate added, committed and
+     found again in the same context would be refused (code review of phase 1);
+   - any other `ChangeTracker.Tracked` event of a root, and a change to `Detached`, removes it;
+   - `DiscardChanges` and a failed `ExecuteAsync` attempt reset it (`ChangeTracker.Clear` raises no
+     event), and so does the pool. Roots are held weakly (`ConditionalWeakTable`, by reference): after
+     a `Clear()` the application calls itself, nothing recorded keeps a graph alive;
+   - every load subscribes again, idempotently, because returning a context to its pool drops every
+     change-tracker handler.
+   `FindAsync` and `LoadAggregatesAsync` refuse, with an `InvalidOperationException` naming the root
+   type, a tracked root that is neither recorded nor `Added`. `LoadAggregatesAsync` checks the roots
+   **after** its query: identity resolution returns an already-tracked partial root without a
+   `Tracked` event. `IsLoaded` is not used: a filtered `Include` marks a navigation loaded.
+5. **The read side never tracks** and never consults the change tracker. `EfReadRepository`'s five
+   methods run `AsNoTracking()` — re-applied after the evaluator, so a delegate cannot opt back in —
+   and return new instances. This reverses #196 D2 ("a tracked instance is returned as is"). It also
+   departs from the Spec's first text, which had `EfReadRepository.FindAsync` and `ListAsync` refuse
+   an unrecorded tracked root; the Spec was amended on 2026-11-09 to match: a read that never returns
+   a tracked instance cannot hand out a partial one, so a refusal there would only make reads fail.
+   The refusal applies to the write side only, identity resolution included.
+6. **An owned navigation is never outside the aggregate.** `IsOutsideAggregate()` on an ownership
+   navigation fails model building: EF Core loads an owned entity with its owner anyway, and skipping
+   it would only drop its own navigations from the load and from the one-root check.
+
+### Rationale
+
+A partial aggregate reaching a command breaks every later guarantee built on the boundary
+(concurrency per aggregate, soft delete of the whole boundary — #197 phases 2 and 4). A typed finder
+taking a predicate, not a query, cannot narrow the load. The read side returning the tracked
+instance was a way for a query to observe — and for a command to depend on — a partial aggregate;
+with the read side untracked, only the write side can hand out a tracked root, and it hands out
+whole ones only.
+
+### Consequences
+
+- A context not configured with `UseMicroKitPersistence()` cannot use `EfRepository`; the error says
+  so. `EfReadRepository` and `EfUnitOfWork` work without it.
+- Known limit: between a pool reset and the next load, an attach is not observed; the record is
+  empty then, so nothing recorded can be attached unseen.
+- `ITransactionalUnitOfWork`, `EfUnitOfWork`'s public surface, `IUnitOfWork`, `ITransactionalContext`,
+  `PersistenceException`, `AddMicroKitPersistence` and `AddUnitOfWork` are unchanged.
+- Tests: `AggregateBoundaryTests` (PostgreSQL and SQL Server), `EfReadRepositoryFindTests`,
+  `EfReadRepositoryTrackingTests`, `EfRepositoryAggregateLoadTests`.
 
 ---
 

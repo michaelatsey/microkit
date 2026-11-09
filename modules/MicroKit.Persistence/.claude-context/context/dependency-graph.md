@@ -46,7 +46,7 @@ Intra-module references are unconditional `ProjectReference` (ADR-GLOBAL-002 D5)
 | Project | References |
 |---------|-----------|
 | `UnitTests` | Specifications, Testing |
-| `IntegrationTests` | EntityFrameworkCore, PostgreSql, SqlServer (+ MicroKit.Domain); SQLite, Npgsql, Testcontainers.PostgreSql |
+| `IntegrationTests` | EntityFrameworkCore, PostgreSql, SqlServer (+ MicroKit.Domain); SQLite, Npgsql, Testcontainers.PostgreSql, Testcontainers.MsSql |
 | `ArchitectureTests` | every src project except Analyzers; NetArchTest.Rules, Mono.Cecil |
 | `Analyzers.Tests` | Analyzers; Microsoft.CodeAnalysis.CSharp.Analyzer.Testing |
 | `samples/MicroKit.Persistence.Samples` | EntityFrameworkCore, PostgreSql, Specifications, Testing, Analyzers (as analyzer) |

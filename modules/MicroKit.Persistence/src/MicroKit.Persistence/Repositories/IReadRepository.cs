@@ -14,9 +14,9 @@ namespace MicroKit.Persistence;
 /// query handlers only. Command handlers must never inject a read repository.
 /// </para>
 /// <para>
-/// All methods execute without EF Core change tracking by default when
-/// <see cref="QueryOptions{TAggregate}.AsNoTrackingEnabled"/> is <see langword="true"/>
-/// (the default).
+/// The read side never tracks: every method returns new, untracked instances, and never an
+/// instance the current unit of work tracks. Only <c>IRepository&lt;TAggregate, TId&gt;</c> loads
+/// aggregates for modification.
 /// </para>
 /// <para>
 /// Declare typed read repositories as direct extensions:
@@ -35,9 +35,9 @@ public interface IReadRepository<TAggregate>
     /// Finds an aggregate by its primary key.
     /// </summary>
     /// <remarks>
-    /// An aggregate the current unit of work already tracks is returned as is — same instance, same
-    /// state — so its pending change still reaches the next commit. Any other aggregate is loaded
-    /// without change tracking. A <see langword="null"/> key value matches nothing.
+    /// The aggregate is loaded without change tracking, as a new instance, even when the current
+    /// unit of work already tracks it: a pending change of the command is not visible through it.
+    /// A <see langword="null"/> key value matches nothing.
     /// </remarks>
     /// <param name="keyValues">
     /// The primary key values. Pass a single-element array for simple PKs;
@@ -51,7 +51,7 @@ public interface IReadRepository<TAggregate>
     /// Returns all aggregates that satisfy the supplied <see cref="QueryOptions{TAggregate}"/>.
     /// </summary>
     /// <param name="opts">
-    /// The query options specifying the filter, includes, ordering, and tracking hint.
+    /// The query options specifying the filter, includes and ordering.
     /// </param>
     /// <param name="ct">Propagates notification that operations should be cancelled.</param>
     /// <returns>

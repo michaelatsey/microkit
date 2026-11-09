@@ -47,6 +47,7 @@ MediatR.Contracts (`LayerDependencyTests`).
 | `Npgsql.EntityFrameworkCore.PostgreSQL` | PostgreSql |
 | `Microsoft.EntityFrameworkCore.SqlServer` | SqlServer |
 | `NSubstitute` | test projects |
+| `Testcontainers.PostgreSql`, `Testcontainers.MsSql` | IntegrationTests |
 | `Microsoft.CodeAnalysis.CSharp` | Analyzers (and test projects) |
 | `FluentAssertions` | forbidden everywhere (root `.claude/rules/testing-libraries.md`) |
 

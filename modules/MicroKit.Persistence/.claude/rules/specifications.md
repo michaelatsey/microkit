@@ -28,7 +28,7 @@ var opts = new QueryOptions<Order>(new OpenOrdersSpec())     // WHAT
     .AsSplitQuery();                                         //      split collections
 ```
 
-Untracked by default; `WithTracking()` opts out, `AsNoTracking()` restates the default.
+The read side never tracks: there is no tracking option (ADR-009).
 
 ## `ISpecificationEvaluator` lives in core
 
@@ -64,7 +64,7 @@ That is why core's delegate-based extension is `WithOrdering(Func<IQueryable<T>,
 
 ```
 ✅ Specification<T>: ToExpression() only
-✅ QueryOptions<T> for includes, ordering, pagination, tracking, split queries
+✅ QueryOptions<T> for includes, ordering, pagination, split queries (never tracking)
 ✅ ISpecificationEvaluator in core, EfSpecificationEvaluator in EntityFrameworkCore
 ❌ Include / OrderBy / Skip / Take inside a specification
 ❌ A specification that depends on EF Core or DbContext

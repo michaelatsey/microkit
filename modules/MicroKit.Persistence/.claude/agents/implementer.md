@@ -60,7 +60,8 @@ public interface IOrderRepository : IRepository<Order, OrderId>
 - Cross-module impact (MediatR `TransactionBehavior`, Tenancy.EntityFrameworkCore): yes/no
 
 #### 5. EF Core strategy (if applicable)
-- What is loaded (aggregate load, `IncludeAggregate` override, `Includes`) and how many round trips
+- What is loaded (aggregate load and its boundary, `IsOutsideAggregate()`, read-side `Includes`) and
+  how many round trips
 - Tracking: write side tracked, read side untracked
 - Transaction semantics touched: yes/no (ADR-006)
 - N+1 / Cartesian risk and its mitigation

@@ -1,4 +1,5 @@
 using System.Data.Common;
+using MicroKit.Persistence.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Diagnostics;
 using Microsoft.EntityFrameworkCore.Storage;
@@ -193,6 +194,7 @@ public sealed class ExecutionDatabase : IAsyncDisposable
                     npgsql.ExecutionStrategy(d => new MarkerRetryingExecutionStrategy(d, retries));
             })
             .AddInterceptors(interceptors)
+            .UseMicroKitPersistence()
             .Options;
 
         return new ExecutionDbContext(options);

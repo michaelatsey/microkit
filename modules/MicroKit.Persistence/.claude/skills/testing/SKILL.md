@@ -1,6 +1,6 @@
 ---
 name: testing
-description: How to run, filter, and interpret tests for MicroKit.Persistence. Use whenever you need to run unit, integration (SQLite, PostgreSQL via Testcontainers), architecture, or analyzer tests, filter by name, collect coverage, or diagnose a failing test. xUnit + Shouldly + NSubstitute; FluentAssertions is forbidden.
+description: How to run, filter, and interpret tests for MicroKit.Persistence. Use whenever you need to run unit, integration (SQLite, PostgreSQL and SQL Server via Testcontainers), architecture, or analyzer tests, filter by name, collect coverage, or diagnose a failing test. xUnit + Shouldly + NSubstitute; FluentAssertions is forbidden.
 ---
 
 # Skill: Testing
@@ -20,9 +20,10 @@ dotnet test modules/MicroKit.Persistence/tests/MicroKit.Persistence.Architecture
 dotnet test modules/MicroKit.Persistence/tests/MicroKit.Persistence.Analyzers.Tests/ -c Release
 ```
 
-The PostgreSQL suite (`IntegrationTests/PostgreSql/`) needs Docker; without it the
-`[DockerRequiredFact]`/`[DockerRequiredTheory]` tests are reported as skipped, not passed. Check
-the skipped count before trusting a green run that touches transactions.
+The PostgreSQL and SQL Server tests need a Docker daemon (it must answer `GET /_ping`; a stale
+socket file counts as none); without one the `[DockerRequiredFact]`/`[DockerRequiredTheory]` tests
+are reported as skipped, not passed. A skipped database test is a missing proof: check the skipped
+count before trusting a green run.
 
 ## Filter
 

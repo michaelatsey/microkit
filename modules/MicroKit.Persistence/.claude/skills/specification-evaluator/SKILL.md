@@ -31,7 +31,8 @@ registration wins).
 
 ## How `EfReadRepository` calls it
 
-- Base query: `Set<T>().AsNoTracking()`, or tracked when `AsNoTrackingEnabled` is false.
+- Base query: `Set<T>().AsNoTracking()`, always; `AsNoTracking()` is applied again after the
+  evaluator for list queries, so a delegate cannot make the read side track.
 - `ListAsync`: rejects a page size above `PaginationLimits.MaxPageSize`, then evaluates.
 - `ListPagedAsync`: applies `PaginationLimits.ForPagedQuery` (default page when none), runs a
   count without includes/ordering/pagination, then the page query.
