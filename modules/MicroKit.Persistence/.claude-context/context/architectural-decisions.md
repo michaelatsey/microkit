@@ -669,9 +669,11 @@ Scope is limited to audit instants: other `DateTimeOffset` properties keep their
      root the model auto-includes without its own aggregate (same hierarchy included) is never
      recorded;
    - a root staged by `EfRepository.AddAsync` enters it: the application built it whole, and it stays
-     returnable once the commit makes it `Unchanged`. This goes beyond the Spec's "only when tracked
-     `FromQuery` during the repository's own load": read literally, an aggregate added, committed and
-     found again in the same context would be refused (code review of phase 1);
+     returnable once the commit makes it `Unchanged`. A root added directly on the context
+     (`DbContext.Add`, `DbSet.Add`) is not recorded: it is returned while `Added`, refused once
+     committed. The Spec's first text admitted only roots tracked `FromQuery` during the repository's
+     own load, which refused an aggregate added, committed and found again in the same context (code
+     review of phase 1); that deviation is closed by the 2026-11-09 amendment;
    - any other `ChangeTracker.Tracked` event of a root, and a change to `Detached`, removes it;
    - `DiscardChanges` and a failed `ExecuteAsync` attempt reset it (`ChangeTracker.Clear` raises no
      event), and so does the pool. Roots are held weakly (`ConditionalWeakTable`, by reference): after
