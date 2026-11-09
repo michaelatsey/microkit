@@ -55,8 +55,9 @@ return orders.SingleOrDefault();
 ## Aggregate version — ADR-010
 
 - `AggregateVersionConvention` (first finalizing convention) adds the shadow `long`
-  `AggregateVersion` concurrency token to every top-most root; only the name is reserved, the column
-  may be configured.
+  `AggregateVersion` concurrency token to every top-most root; only its column may be configured (a default or
+  computed value, value generation, a converter or provider type fails, like a column shared in any table that
+  stores it — each concrete type's under TPC).
 - `AggregateSaveInterceptor` is MicroKit's single `SaveChanges` entry point: it detects changes
   (`SavingChanges` runs before EF Core's `DetectChanges`), then runs its steps in a fixed order; the
   version step (`AggregateVersionStep`) is last — phase 4's soft-delete conversion goes before it.
@@ -94,9 +95,9 @@ return orders.SingleOrDefault();
 - `HasSoftDelete()` on a top-most root. `SoftDeleteConvention` (second finalizing convention) gives the root
   type of each hierarchy of the aggregate (owned types follow their owner) the shadow
   `DateTimeOffset? AggregateDeletedAt` and the named filter `MicroKit.SoftDelete`, keeping other named
-  filters. It fails on: an anonymous filter; a required boundary link with `Restrict`/`NoAction`/
-  `ClientSetNull`/`SetNull` (EF Core throws at `Remove` under `Immediate` timing); the annotation on a
-  non-root; the reserved name misused.
+  filters. It fails on: an anonymous filter; a required key between two types of the aggregate, navigation
+  or not, inherited or to a mapped base of a member, with `Restrict`/`NoAction`/`ClientSetNull`/`SetNull` (EF Core throws at `Remove` under `Immediate`
+  timing; `ClientNoAction` is accepted and marked); the annotation on a non-root; the reserved name misused.
 - `AggregateSoftDeleteStep` runs before the version step (and before EF Core's `CascadeChanges`): for each
   `Deleted` soft-deletable root (recorded, or the save fails), every tracked entry of its boundary — any
   state, resolved by current keys first (strict for principal-side children), original keys only when the
@@ -104,7 +105,9 @@ return orders.SingleOrDefault();
   (which clears a conceptual null), `Deleted` → `Unchanged` with changed properties (complex ones too)
   re-flagged, and the mark `TimeProvider.GetUtcNow()` (one per save). Owned entries of a marked entity are
   restored without a mark while their owner holds them; an added replacement that `Immediate` cascade
-  detached is tracked again. After the commit the still-tracked entities are detached (the list lives on
+  detached is tracked again. Once their changes are accepted the still-tracked entities are detached (after each save, and before
+  `FindAsync`/`LoadAggregatesAsync`, for `AcceptAllChanges()`); after `SaveChanges(false)` they stay tracked, so
+  a retried save writes the mark (the list lives on
   `AggregateLoadRecord`, cleared with it).
 - A key into a soft-deletable aggregate from outside it is `ClientNoAction` (`AggregateReferenceConvention`,
   replacing `Restrict`); an explicit other behaviour fails model building.

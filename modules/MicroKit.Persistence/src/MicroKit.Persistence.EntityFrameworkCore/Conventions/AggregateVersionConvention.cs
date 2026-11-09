@@ -19,7 +19,10 @@ namespace MicroKit.Persistence.EntityFrameworkCore;
 ///   <item><description>is mapped to a CLR member of the root or of a derived type;</description></item>
 ///   <item><description>is not a <see langword="long"/>;</description></item>
 ///   <item><description>is no longer a concurrency token;</description></item>
-///   <item><description>shares its column with another property mapped to the root's table.</description></item>
+///   <item><description>is given a default value (or SQL), a computed column, value generation, a value converter or
+///     a provider type: the save step alone writes the version, and the commit's <c>UPDATE</c> compares it;</description></item>
+///   <item><description>shares its column with another property mapped to a table of the root's hierarchy — its
+///     table, or each concrete type's under TPC.</description></item>
 /// </list>
 /// </remarks>
 internal sealed class AggregateVersionConvention : IModelFinalizingConvention
@@ -49,30 +52,47 @@ internal sealed class AggregateVersionConvention : IModelFinalizingConvention
             if (!token.IsConcurrencyToken)
                 throw Reserved(root, "it is configured not to be a concurrency token");
 
+            EnsureOnlyTheColumnIsConfigured(root, token);
             EnsureOwnColumn(model, root, token);
         }
     }
 
-    // The token's column must not be shared with another property of the root's table: derived types
-    // (TPH), owned types and other entity types split onto it.
+    // The save step writes the version (Added: 1, otherwise original + 1) and the UPDATE compares it: a value
+    // the database or a converter supplies would be overwritten, or compared in another form.
+    private static void EnsureOnlyTheColumnIsConfigured(IReadOnlyEntityType root, IConventionProperty token)
+    {
+        if (token.GetDefaultValueSql() is not null || token.TryGetDefaultValue(out _) || token.GetComputedColumnSql() is not null)
+            throw Reserved(root, "it is given a default value, or a computed one");
+        if (token.ValueGenerated != ValueGenerated.Never)
+            throw Reserved(root, "it is configured as generated");
+        if (token.GetValueConverter() is not null || token.GetProviderClrType() is not null)
+            throw Reserved(root, "it is given a value converter");
+    }
+
+    // The token's column must not be shared with another property of a table that stores it: derived types
+    // (TPH), owned types and other entity types split onto it; under TPC, each concrete type's table. A view or
+    // SQL query root has no table to collide in.
     private static void EnsureOwnColumn(IConventionModel model, IConventionEntityType root, IConventionProperty token)
     {
-        if (StoreObjectIdentifier.Create(root, StoreObjectType.Table) is not { } table)
-            return; // a view or SQL query root has no table to collide in
-
-        var column = token.GetColumnName(table);
-        foreach (var type in model.GetEntityTypes())
+        foreach (var table in TableColumns.TablesOf(root))
         {
-            foreach (var property in type.GetDeclaredProperties())
-            {
-                if (ReferenceEquals(property, token))
-                    continue;
+            if (token.GetColumnName(table) is not { } column)
+                continue;
 
-                if (string.Equals(property.GetColumnName(table), column, StringComparison.OrdinalIgnoreCase))
+            foreach (var (property, other) in TableColumns.PropertiesIn(model, table))
+            {
+                // Two roots under one mapped TPH base that is no root each have their own version, in one column.
+                if (property.Name == AggregateVersion.PropertyName
+                    && property.DeclaringType is IReadOnlyEntityType owner && AggregateBoundaryConvention.IsTopMostRoot(owner))
+                {
+                    continue;
+                }
+
+                if (!ReferenceEquals(property, token) && string.Equals(other, column, StringComparison.OrdinalIgnoreCase))
                 {
                     throw Reserved(
                         root,
-                        $"its column '{column}' in '{table.DisplayName()}' is also mapped by '{type.ClrType.Name}.{property.Name}'");
+                        $"its column '{column}' in '{table.DisplayName()}' is also mapped by '{property.DeclaringType.ClrType.Name}.{property.Name}'");
                 }
             }
         }

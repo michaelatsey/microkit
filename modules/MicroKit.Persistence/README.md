@@ -317,9 +317,10 @@ wrapping `DbUpdateConcurrencyException`, and nothing of it is written. The check
 - A child that moves from one aggregate to another bumps both, and both must have been loaded or
   staged by their repository; a changed child whose root is not tracked fails the save. Entities
   outside every aggregate (an outbox row, reference data) are ignored.
-- The property name is reserved on aggregate roots. Its column may be configured
+- The property name is reserved on aggregate roots. Only its column may be configured
   (`Property<long>(AggregateVersion.PropertyName).HasColumnName("row_version")`), and a naming
-  convention applies to it.
+  convention applies to it; a default or computed value, value generation, a value converter or a
+  provider type fails model building.
 
 Across requests — an HTTP `ETag` / `If-Match` — read the version from a loaded aggregate or from a
 projection, and state it on the command:
@@ -393,7 +394,9 @@ it. It needs `UseMicroKitPersistence()` on the context (`AddDbContext`, `UsePost
   every tracked entity of its aggregate, whatever EF Core's cascade timing or delete behaviour left it
   as; no row is deleted, and owned values are kept. A change made before the delete in the same save is
   written with the mark. The root's version is bumped and checked like any write. After the commit the
-  aggregate is detached, as a deleted one is, and `FindAsync` no longer finds it.
+  aggregate is detached, as a deleted one is, and `FindAsync` no longer finds it — once the save accepts
+  its changes: after `SaveChanges(acceptAllChangesOnSuccess: false)` it stays tracked, so a save retried
+  after a rollback writes the mark again; after `AcceptAllChanges()` the repository no longer returns it.
 - **What stays a real delete.** A child removed from an aggregate that stays alive; an aggregate without
   `HasSoftDelete()`; bulk `ExecuteDelete` and raw SQL, which bypass the change tracker.
 - **References from outside.** A foreign key into the aggregate from outside it (another aggregate, an
@@ -403,9 +406,10 @@ it. It needs `UseMicroKitPersistence()` on the context (`AddDbContext`, `UsePost
   behaviour on such a key fails model building.
 - **Refusals.** Deleting a root its repository did not load whole fails the save: its untracked entities
   could not be marked. Model building fails when an entity of the aggregate carries an anonymous query
-  filter (name it: `HasQueryFilter("Tenant", …)`, so both filters combine), and when a relationship
-  inside the aggregate is required and does not cascade (`Restrict`, `NoAction`, `ClientSetNull`,
-  `SetNull`): EF Core would reject the removal of the root before the save could mark it.
+  filter (name it: `HasQueryFilter("Tenant", …)`, so both filters combine), and when a foreign key
+  between two entity types of the aggregate is required and does not cascade (`Restrict`, `NoAction`,
+  `ClientSetNull`, `SetNull`), whether or not a navigation reaches it: EF Core would reject the removal
+  of the root before the save could mark it. `ClientNoAction` is accepted; its child is marked.
 - **Reads.** The filter hides soft-deleted rows from every query, a direct query on a child's `DbSet`
   included. `QueryOptions.WithDeleted()` returns them on the read side by ignoring that filter only
   (`IgnoreQueryFilters([SoftDelete.FilterName])`), for the whole query — an `Include` that reaches another

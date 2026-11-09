@@ -89,7 +89,8 @@ internal sealed class AggregateLoadRecord(ICurrentDbContext currentContext) : IR
     internal void Forget(object root) => _recorded.Remove(root);
 
     /// <summary>
-    /// The entities the soft-delete step marked or restored, until a save succeeds and they are detached.
+    /// The entities the soft-delete step marked or restored, until a save that accepts its changes succeeds and
+    /// they are detached; after <c>SaveChanges(acceptAllChangesOnSuccess: false)</c> they stay.
     /// Cleared with the record: entities of a cleared tracker, or of a pooled lease, are never detached later.
     /// </summary>
     internal List<object> SoftDeleted { get; } = [];

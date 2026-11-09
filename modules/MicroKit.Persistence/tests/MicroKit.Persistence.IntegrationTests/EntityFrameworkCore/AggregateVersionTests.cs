@@ -59,6 +59,13 @@ public abstract class AggregateVersionScenarios
     [InlineData(VersionMisuse.NotLong, "not 'long'")]
     [InlineData(VersionMisuse.NotAToken, "not to be a concurrency token")]
     [InlineData(VersionMisuse.SameColumn, "is also mapped by")]
+    [InlineData(VersionMisuse.SameColumnUnderTpc, "is also mapped by")]
+    [InlineData(VersionMisuse.DefaultValue, "a default value")]
+    [InlineData(VersionMisuse.DefaultValueSql, "a default value")]
+    [InlineData(VersionMisuse.ComputedSql, "a default value, or a computed one")]
+    [InlineData(VersionMisuse.ValueGenerated, "configured as generated")]
+    [InlineData(VersionMisuse.Converted, "a value converter")]
+    [InlineData(VersionMisuse.ProviderType, "a value converter")]
     public void AMisusedVersion_FailsModelBuilding_NamingTheRoot(VersionMisuse misuse, string reason)
     {
         using var context = new MisusedVersionDbContext(Options<MisusedVersionDbContext>("unused"), misuse);
@@ -69,10 +76,13 @@ public abstract class AggregateVersionScenarios
         thrown.Message.ShouldContain(reason);
     }
 
-    [DockerRequiredFact]
-    public void AnAggregateVersionPropertyInAnotherTable_IsNotACollision()
+    [DockerRequiredTheory]
+    [InlineData(VersionMisuse.OtherTable)]
+    [InlineData(VersionMisuse.OtherTpcTable)]
+    [InlineData(VersionMisuse.SiblingRoots)]
+    public void AnAggregateVersionPropertyInAnotherTable_IsNotACollision(VersionMisuse variant)
     {
-        using var context = new MisusedVersionDbContext(Options<MisusedVersionDbContext>("unused"), VersionMisuse.OtherTable);
+        using var context = new MisusedVersionDbContext(Options<MisusedVersionDbContext>("unused"), variant);
 
         Should.NotThrow(() => _ = context.Model);
     }
@@ -1020,6 +1030,47 @@ public enum VersionMisuse
     NotAToken,
     SameColumn,
     OtherTable,
+    SameColumnUnderTpc,
+    OtherTpcTable,
+    SiblingRoots,
+    DefaultValue,
+    DefaultValueSql,
+    ComputedSql,
+    ValueGenerated,
+    Converted,
+    ProviderType,
+}
+
+/// <summary>A TPC root whose abstract base has no table: the version's columns live in each concrete type's table.</summary>
+public abstract class TpcVersionRoot : IAggregateRoot
+{
+    public Guid Id { get; init; }
+}
+
+public sealed class TpcVersionLeaf : TpcVersionRoot
+{
+    public long Legacy { get; set; }
+}
+
+/// <summary>A mapped TPH base that is no aggregate root, under two roots: each has its own version, in one column.</summary>
+public abstract class VersionDocument
+{
+    public Guid Id { get; init; }
+}
+
+public sealed class VersionInvoice : VersionDocument, IAggregateRoot;
+
+public sealed class VersionQuote : VersionDocument, IAggregateRoot;
+
+/// <summary>Not an aggregate: a TPC hierarchy whose concrete row carries its own AggregateVersion column.</summary>
+public abstract class TpcOutboxBase
+{
+    public Guid Id { get; init; }
+}
+
+public sealed class TpcOutboxRow : TpcOutboxBase
+{
+    public long AggregateVersion { get; set; }
 }
 
 public sealed class ClrVersionRoot : IAggregateRoot
@@ -1060,6 +1111,39 @@ public sealed class MisusedVersionDbContext(DbContextOptions<MisusedVersionDbCon
             case VersionMisuse.OtherTable:
                 modelBuilder.Entity<PlainVersionRoot>();
                 modelBuilder.Entity<VersionedOutboxRow>(); // not a root: its own AggregateVersion, in its own table
+                break;
+            case VersionMisuse.SameColumnUnderTpc:
+                modelBuilder.Entity<TpcVersionRoot>().UseTpcMappingStrategy();
+                modelBuilder.Entity<TpcVersionLeaf>().Property(l => l.Legacy).HasColumnName(AggregateVersion.PropertyName);
+                break;
+            case VersionMisuse.OtherTpcTable:
+                modelBuilder.Entity<PlainVersionRoot>();
+                modelBuilder.Entity<TpcOutboxBase>().UseTpcMappingStrategy();
+                modelBuilder.Entity<TpcOutboxRow>();
+                break;
+            case VersionMisuse.SiblingRoots:
+                modelBuilder.Entity<VersionDocument>();
+                modelBuilder.Entity<VersionInvoice>();
+                modelBuilder.Entity<VersionQuote>();
+                break;
+            case VersionMisuse.DefaultValue:
+                modelBuilder.Entity<PlainVersionRoot>().Property<long>(AggregateVersion.PropertyName).HasDefaultValue(1L);
+                break;
+            case VersionMisuse.DefaultValueSql:
+                modelBuilder.Entity<PlainVersionRoot>().Property<long>(AggregateVersion.PropertyName).HasDefaultValueSql("1");
+                break;
+            case VersionMisuse.ComputedSql:
+                modelBuilder.Entity<PlainVersionRoot>().Property<long>(AggregateVersion.PropertyName).HasComputedColumnSql("1");
+                break;
+            case VersionMisuse.ValueGenerated:
+                modelBuilder.Entity<PlainVersionRoot>().Property<long>(AggregateVersion.PropertyName).ValueGeneratedOnAddOrUpdate();
+                break;
+            case VersionMisuse.Converted:
+                modelBuilder.Entity<PlainVersionRoot>().Property<long>(AggregateVersion.PropertyName)
+                    .HasConversion(v => v.ToString(System.Globalization.CultureInfo.InvariantCulture), v => long.Parse(v, System.Globalization.CultureInfo.InvariantCulture));
+                break;
+            case VersionMisuse.ProviderType:
+                modelBuilder.Entity<PlainVersionRoot>().Property<long>(AggregateVersion.PropertyName).HasConversion<string>();
                 break;
         }
     }

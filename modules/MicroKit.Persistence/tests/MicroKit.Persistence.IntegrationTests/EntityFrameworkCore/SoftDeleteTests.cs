@@ -176,6 +176,24 @@ public abstract class SoftDeleteScenarios
     }
 
     [DockerRequiredFact]
+    public async Task ARequiredClientNoActionChild_IsMarked_AndNotDeleted()
+    {
+        await using var db = await CreateDatabaseAsync();
+        var id = await SeedOrderAsync(db, "SO-1");
+        await using (var context = db.Create())
+        {
+            (await Orders(context).FindAsync(id)).ShouldNotBeNull().Stamps.Add(new SdStamp { Text = "paid" });
+            await Commit(context);
+        }
+
+        await SoftDeleteAsync(db, id);
+
+        await using var verify = db.Create();
+        await AllMarkedAsync<SdStamp>(verify, expected: 1);
+        (await Unfiltered(verify.Set<SdStamp>()).SingleAsync()).OrderId.ShouldBe(id);
+    }
+
+    [DockerRequiredFact]
     public async Task AChildMovedToALiveRoot_FollowsIt_AndIsNotMarked()
     {
         await using var db = await CreateDatabaseAsync();
@@ -522,6 +540,82 @@ public abstract class SoftDeleteScenarios
         await AssertTheContextStillTracksANewAggregateAsync(context, otherId);
     }
 
+    [DockerRequiredFact]
+    public async Task ASoftDeleteSavedWithoutAcceptingItsChanges_IsWrittenAgain_WhenTheSaveIsRetried()
+    {
+        await using var db = await CreateDatabaseAsync();
+        var id = await SeedOrderAsync(db, "SO-1");
+        await using (var context = db.Create())
+        {
+            var orders = Orders(context);
+            var order = (await orders.FindAsync(id)).ShouldNotBeNull();
+            await orders.DeleteAsync(order);
+
+            // The pattern of a save retried by hand inside a transaction: SaveChanges(false), and on a failure the
+            // transaction rolls back and the same changes are saved again.
+            await using (var transaction = await context.Database.BeginTransactionAsync())
+            {
+                await context.SaveChangesAsync(acceptAllChangesOnSuccess: false);
+                await transaction.RollbackAsync();
+            }
+
+            context.Entry(order).State.ShouldBe(EntityState.Modified, "the changes were not accepted: they stay tracked");
+            await context.SaveChangesAsync();
+            context.ChangeTracker.Entries().ShouldBeEmpty("an accepted soft delete is detached");
+        }
+
+        await using var verify = db.Create();
+        var stored = await Unfiltered(verify.Set<SdOrder>()).Include(o => o.Notes).SingleAsync(o => o.Id == id);
+        Mark(verify, stored).ShouldBe(Now);
+        stored.Notes.ShouldHaveSingleItem();
+        await AllMarkedAsync<SdLine>(verify, expected: 3);
+        await AllMarkedAsync<SdOption>(verify, expected: 1);
+        await AllMarkedAsync<SdContact>(verify, expected: 1);
+        await AllMarkedAsync<SdRemark>(verify, expected: 1);
+        await AllMarkedAsync<SdMemo>(verify, expected: 1);
+    }
+
+    [DockerRequiredFact]
+    public async Task ASoftDeleteSavedWithoutAcceptingItsChanges_ThenAcceptedByHand_IsNotFoundAgain()
+    {
+        await using var db = await CreateDatabaseAsync();
+        var id = await SeedOrderAsync(db, "SO-1");
+        await using (var context = db.Create())
+        {
+            var orders = Orders(context);
+            await orders.DeleteAsync((await orders.FindAsync(id)).ShouldNotBeNull());
+
+            // EF Core's resilient pattern: SaveChanges(false), commit, then AcceptAllChanges(), which raises no
+            // SavedChanges.
+            await using (var transaction = await context.Database.BeginTransactionAsync())
+            {
+                await context.SaveChangesAsync(acceptAllChangesOnSuccess: false);
+                await transaction.CommitAsync();
+            }
+
+            context.ChangeTracker.AcceptAllChanges();
+
+            (await orders.FindAsync(id)).ShouldBeNull("the write side never loads a soft-deleted aggregate again");
+            context.ChangeTracker.Entries().ShouldBeEmpty("the accepted soft delete is detached");
+        }
+
+        await using var verify = db.Create();
+        await AllMarkedAsync<SdLine>(verify, expected: 3);
+    }
+
+    [DockerRequiredTheory]
+    [InlineData(SdBaseKeyDbContext.Variant.PrincipalIsTheRootsBase, "required foreign key 'SdDocLine.DocId'")]
+    [InlineData(SdBaseKeyDbContext.Variant.DeclaredOnAChildsBase, "'SdPartBase.OwnerId'")] // refused as a key from outside
+    public void ARequiredKeyThroughAMappedBaseType_FailsModelBuilding(SdBaseKeyDbContext.Variant variant, string reason)
+    {
+        using var context = new SdBaseKeyDbContext(Options<SdBaseKeyDbContext>("unused", ModelVariantCacheKeyFactory.Use), variant);
+
+        var thrown = Should.Throw<InvalidOperationException>(() => _ = context.Model);
+
+        thrown.Message.ShouldContain(reason);
+        thrown.Message.ShouldContain("OnDelete(DeleteBehavior.Restrict)");
+    }
+
     [DockerRequiredTheory]
     [InlineData(false)]
     [InlineData(true)]
@@ -632,7 +726,7 @@ public abstract class SoftDeleteScenarios
         using var context = new SoftDeleteDbContext(Options<SoftDeleteDbContext>("unused"));
         var model = context.Model;
 
-        foreach (var type in new[] { typeof(SdOrder), typeof(SdLine), typeof(SdOption), typeof(SdContact), typeof(SdRemark), typeof(SdMemo) })
+        foreach (var type in new[] { typeof(SdOrder), typeof(SdLine), typeof(SdOption), typeof(SdContact), typeof(SdRemark), typeof(SdMemo), typeof(SdStamp) })
         {
             var entity = model.FindEntityType(type.FullName!)!;
             entity.FindDeclaredProperty(SoftDelete.PropertyName).ShouldNotBeNull(type.Name).ClrType.ShouldBe(typeof(DateTimeOffset?));
@@ -653,9 +747,12 @@ public abstract class SoftDeleteScenarios
         AnonymousFilter,
         RequiredRestrict,
         RequiredClientSetNull,
+        RequiredWithoutNavigation,
         ClrMember,
         NotDateTimeOffset,
         SameColumn,
+        SameColumnUnderTpc,
+        UnrelatedTpcColumn,
         MarkRequired,
         MarkDefaultValueSql,
         MarkValueGenerated,
@@ -670,9 +767,11 @@ public abstract class SoftDeleteScenarios
     [InlineData(Misuse.AnonymousFilter, "carries an anonymous query filter")]
     [InlineData(Misuse.RequiredRestrict, "OnDelete(DeleteBehavior.Restrict)")]
     [InlineData(Misuse.RequiredClientSetNull, "OnDelete(DeleteBehavior.ClientSetNull)")]
+    [InlineData(Misuse.RequiredWithoutNavigation, "required foreign key 'SdGiftLine.SourceLineId' (no navigation) is configured with OnDelete(DeleteBehavior.Restrict)")]
     [InlineData(Misuse.ClrMember, "maps it to a CLR member")]
     [InlineData(Misuse.NotDateTimeOffset, "not 'DateTimeOffset?'")]
     [InlineData(Misuse.SameColumn, "is also mapped by")]
+    [InlineData(Misuse.SameColumnUnderTpc, "reserved on 'SdTpcDocument', an entity of the soft-deletable aggregate 'SdTpcDocument'")]
     [InlineData(Misuse.MarkRequired, "configures it as required")]
     [InlineData(Misuse.MarkDefaultValueSql, "gives it a default value")]
     [InlineData(Misuse.MarkValueGenerated, "configures it as generated")]
@@ -686,6 +785,15 @@ public abstract class SoftDeleteScenarios
         var thrown = Should.Throw<InvalidOperationException>(() => _ = context.Model);
 
         thrown.Message.ShouldContain(reason);
+    }
+
+    [DockerRequiredFact]
+    public void AMarkColumnInTheTableOfAnUnrelatedTpcType_IsNotACollision()
+    {
+        using var context = new SoftDeleteMisuseDbContext(
+            Options<SoftDeleteMisuseDbContext>("unused", ModelVariantCacheKeyFactory.Use), Misuse.UnrelatedTpcColumn);
+
+        Should.NotThrow(() => _ = context.Model);
     }
 
     // ---- Helpers -----------------------------------------------------------------------------------
@@ -900,6 +1008,8 @@ public class SdOrder : IAggregateRoot
 
     public List<SdMemo> Memos { get; } = [];
 
+    public List<SdStamp> Stamps { get; } = [];
+
     public SdMoney Total { get; set; } = new(0m);
 
     public List<SdLabel> Labels { get; } = [];
@@ -992,6 +1102,38 @@ public sealed class SdMemo
     public string Text { get; set; } = string.Empty;
 }
 
+/// <summary>A required child whose key is ClientNoAction: EF Core leaves it alone when its root is removed.</summary>
+public sealed class SdStamp
+{
+    public Guid Id { get; init; } = Guid.NewGuid();
+
+    public SdOrderId OrderId { get; set; }
+
+    public string Text { get; set; } = string.Empty;
+}
+
+/// <summary>A soft-deletable TPC root whose abstract base has no table.</summary>
+public abstract class SdTpcDocument : IAggregateRoot
+{
+    public Guid Id { get; init; } = Guid.NewGuid();
+}
+
+public sealed class SdTpcInvoice : SdTpcDocument
+{
+    public DateTimeOffset? Legacy { get; set; }
+}
+
+/// <summary>Outside every aggregate: a TPC hierarchy whose concrete row has its own AggregateDeletedAt column.</summary>
+public abstract class SdTpcLogBase
+{
+    public Guid Id { get; init; } = Guid.NewGuid();
+}
+
+public sealed class SdTpcLog : SdTpcLogBase
+{
+    public DateTimeOffset? AggregateDeletedAt { get; set; }
+}
+
 /// <summary>An aggregate without soft delete.</summary>
 public sealed class SdBasket : IAggregateRoot
 {
@@ -1037,6 +1179,7 @@ public class SoftDeleteDbContext(DbContextOptions options) : DbContext(options)
             b.HasOne(o => o.Contact).WithOne().HasForeignKey<SdOrder>(o => o.ContactId);
             b.HasMany(o => o.Remarks).WithOne().HasForeignKey(r => r.OrderId).IsRequired(false).OnDelete(DeleteBehavior.ClientSetNull);
             b.HasMany(o => o.Memos).WithOne().HasForeignKey(m => m.OrderId).IsRequired(false).OnDelete(DeleteBehavior.ClientNoAction);
+            b.HasMany(o => o.Stamps).WithOne().HasForeignKey(s => s.OrderId).IsRequired().OnDelete(DeleteBehavior.ClientNoAction);
             b.ComplexProperty(o => o.Total);
             b.HasMany(o => o.Labels).WithMany();
             b.Navigation(o => o.Labels).IsOutsideAggregate();
@@ -1067,6 +1210,11 @@ public class SoftDeleteDbContext(DbContextOptions options) : DbContext(options)
             b.Property(m => m.Id).ValueGeneratedNever();
             b.Property(m => m.OrderId).HasConversion(OrderIdConverter);
         });
+        modelBuilder.Entity<SdStamp>(b =>
+        {
+            b.Property(m => m.Id).ValueGeneratedNever();
+            b.Property(m => m.OrderId).HasConversion(OrderIdConverter);
+        });
         modelBuilder.Entity<SdBasket>(b =>
         {
             b.HasKey(x => x.Id);
@@ -1090,7 +1238,7 @@ public sealed class SoftDeleteMisuseDbContext(DbContextOptions options, SoftDele
             b.HasKey(o => o.Id);
             b.Property(o => o.Id).HasConversion(id => id.Value, v => new SdOrderId(v));
             b.Ignore(o => o.Address).Ignore(o => o.Notes).Ignore(o => o.Contact).Ignore(o => o.Remarks).Ignore(o => o.Memos)
-                .Ignore(o => o.Total).Ignore(o => o.Labels);
+                .Ignore(o => o.Stamps).Ignore(o => o.Total).Ignore(o => o.Labels);
             if (misuse == SoftDeleteScenarios.Misuse.MarkRequired)
                 b.Property<DateTimeOffset?>(SoftDelete.PropertyName).IsRequired();
             if (misuse == SoftDeleteScenarios.Misuse.MarkDefaultValueSql)
@@ -1120,7 +1268,28 @@ public sealed class SoftDeleteMisuseDbContext(DbContextOptions options, SoftDele
             if (misuse == SoftDeleteScenarios.Misuse.OnAChild)
                 b.HasSoftDelete();
         });
-        modelBuilder.Entity<SdGiftLine>();
+        modelBuilder.Entity<SdGiftLine>(b =>
+        {
+            // A required key between two types of the aggregate that no navigation of the boundary walk reaches.
+            if (misuse == SoftDeleteScenarios.Misuse.RequiredWithoutNavigation)
+                b.HasOne<SdLine>().WithMany().HasForeignKey("SourceLineId").IsRequired().OnDelete(DeleteBehavior.Restrict);
+        });
+        if (misuse == SoftDeleteScenarios.Misuse.UnrelatedTpcColumn)
+        {
+            modelBuilder.Entity<SdTpcLogBase>().UseTpcMappingStrategy();
+            modelBuilder.Entity<SdTpcLog>();
+        }
+
+        if (misuse == SoftDeleteScenarios.Misuse.SameColumnUnderTpc)
+        {
+            modelBuilder.Entity<SdTpcDocument>(b =>
+            {
+                b.UseTpcMappingStrategy();
+                b.HasSoftDelete();
+            });
+            modelBuilder.Entity<SdTpcInvoice>().Property(i => i.Legacy).HasColumnName(SoftDelete.PropertyName);
+        }
+
         if (misuse is SoftDeleteScenarios.Misuse.OutsideCascade or SoftDeleteScenarios.Misuse.OutsideRestrict)
         {
             modelBuilder.Entity<SdTicket>(b =>
@@ -1162,6 +1331,72 @@ public sealed class SdBaseTypeDbContext(DbContextOptions options) : DbContext(op
         modelBuilder.Entity<SdRecord>().Property(r => r.Id).ValueGeneratedNever();
         modelBuilder.Entity<SdArchive>().HasSoftDelete();
         modelBuilder.Entity<SdJournal>();
+    }
+}
+
+/// <summary>A soft-deletable root whose mapped base type, no aggregate root, holds the collection of lines.</summary>
+public abstract class SdDocBase
+{
+    public Guid Id { get; init; } = Guid.NewGuid();
+
+    public List<SdDocLine> Lines { get; } = [];
+}
+
+public sealed class SdDoc : SdDocBase, IAggregateRoot;
+
+public sealed class SdDocLine
+{
+    public Guid Id { get; init; } = Guid.NewGuid();
+
+    public Guid DocId { get; set; }
+}
+
+/// <summary>A soft-deletable root whose child type derives from a mapped base that declares a key to the root.</summary>
+public sealed class SdBinder : IAggregateRoot
+{
+    public Guid Id { get; init; } = Guid.NewGuid();
+
+    public List<SdPart> Parts { get; } = [];
+}
+
+public abstract class SdPartBase
+{
+    public Guid Id { get; init; } = Guid.NewGuid();
+
+    public Guid OwnerId { get; set; }
+}
+
+public sealed class SdPart : SdPartBase;
+
+public sealed class SdBaseKeyDbContext(DbContextOptions options, SdBaseKeyDbContext.Variant variant) : DbContext(options), IModelVariant
+{
+    public enum Variant
+    {
+        PrincipalIsTheRootsBase,
+        DeclaredOnAChildsBase,
+    }
+
+    object IModelVariant.Variant => variant;
+
+    protected override void OnModelCreating(ModelBuilder modelBuilder)
+    {
+        if (variant == Variant.PrincipalIsTheRootsBase)
+        {
+            modelBuilder.Entity<SdDocBase>()
+                .HasMany(d => d.Lines).WithOne().HasForeignKey(l => l.DocId).IsRequired().OnDelete(DeleteBehavior.Restrict);
+            modelBuilder.Entity<SdDoc>().HasSoftDelete();
+        }
+        else
+        {
+            modelBuilder.Entity<SdBinder>(b =>
+            {
+                b.HasSoftDelete();
+                b.HasMany(x => x.Parts).WithOne().HasForeignKey("BinderId").IsRequired().OnDelete(DeleteBehavior.Cascade);
+            });
+            modelBuilder.Entity<SdPartBase>()
+                .HasOne<SdBinder>().WithMany().HasForeignKey(p => p.OwnerId).IsRequired().OnDelete(DeleteBehavior.Restrict);
+            modelBuilder.Entity<SdPart>();
+        }
     }
 }
 

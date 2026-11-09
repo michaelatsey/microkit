@@ -108,16 +108,35 @@ internal sealed class AggregateSaveInterceptor : SaveChangesInterceptor
         if (context is null)
             return;
         s_inFlight.Remove(context);
+        DetachAcceptedSoftDeletes(context);
+    }
+
+    /// <summary>
+    /// Detaches the entities the soft-delete step marked or restored once their changes are accepted, and
+    /// forgets their roots. Run after every successful save and by the repository before it finds a root:
+    /// <c>AcceptAllChanges()</c> after <c>SaveChanges(false)</c> raises no <c>SavedChanges</c>.
+    /// </summary>
+    internal static void DetachAcceptedSoftDeletes(DbContext context)
+    {
         if (KeyLookup.FindLoadRecord(context) is not { SoftDeleted.Count: > 0 } record)
             return;
 
+        // Through the tracker's current entries: only what is still tracked is detached.
         var softDeleted = new HashSet<object>(record.SoftDeleted, ReferenceEqualityComparer.Instance);
+        var entries = context.ChangeTracker.Entries().Where(e => softDeleted.Contains(e.Entity)).ToList();
+
+        // EF Core accepts a save's changes before SavedChanges, and only under acceptAllChangesOnSuccess: true
+        // (StateManager.SaveChanges). After SaveChanges(false) the marked entries are still Added or Modified: the
+        // caller may roll the transaction back and save again, and that save must write the mark again. They stay
+        // tracked, and recorded, until their changes are accepted — by a save, or by AcceptAllChanges(). Acceptance
+        // covers a whole save, so it is all or none.
+        if (entries.Exists(e => e.State != EntityState.Unchanged))
+            return;
+
         record.SoftDeleted.Clear();
         foreach (var entity in softDeleted)
             record.Forget(entity);
-
-        // Through the tracker's current entries: only what is still tracked is detached.
-        foreach (var entry in context.ChangeTracker.Entries().Where(e => softDeleted.Contains(e.Entity)).ToList())
+        foreach (var entry in entries)
             entry.State = EntityState.Detached;
     }
 

@@ -58,7 +58,8 @@ composite keys, includes or tracking.
   `FindAsync` and `ListAsync` untracked even when the context tracks the root.
 - Version (`AggregateVersionTests`): every kind of write inside a boundary bumps once; moves; roots
   not tracked; entities outside every boundary; two-context conflict; a real retried attempt; a
-  stale and a current expected version; the model checks on the reserved name; link entities;
+  stale and a current expected version; the model checks on the reserved name (configuration beyond the
+  column, a shared column under TPC, an unrelated TPC table or sibling roots under one TPH base not a collision); link entities;
   cross-aggregate keys `Restrict` (deleting a linked or referenced root fails, an explicit
   `Cascade`/`SetNull` fails model building, a child still cascades with its root).
 - Boundary and record (`AggregateBoundaryTests`): a child shared by two roots fails model building;
@@ -72,7 +73,9 @@ composite keys, includes or tracking.
   filtered unique index; not-loaded root refused; stale version; model refusals; a child moved in or out; a
   principal-side child taken by a live root; outside references `ClientNoAction` (tracked dependent kept,
   `REFERENCE` on a real delete); owned replacements; complex properties with detection off; retried,
-  discarded and pooled failures; table splitting; a mapped base type. EF Core facts:
+  discarded and pooled failures; `SaveChanges(false)` rolled back then saved again, or accepted by hand; required keys through a mapped base type; a required `ClientNoAction`
+  child marked; a required key without navigation refused; a mark column shared under TPC, and one of an unrelated
+  TPC type allowed; table splitting; a mapped base type. EF Core facts:
   `SoftDeleteFoundationTests` (SQLite).
 - `Result` path (`PersistenceResultTests`, both servers): DUPLICATE with neither flush persisted;
   REFERENCE; CONCURRENCY from a second context, a stale expected version and a staged root found at a

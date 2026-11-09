@@ -752,8 +752,12 @@ whole ones only.
    `AggregateVersion` with `IsConcurrencyToken()` to every top-most aggregate root. Only the name is
    reserved: no column name is set, so a naming convention or the application's `HasColumnName` /
    `HasColumnType` applies. Model building fails, naming the root, when the property is mapped to a
-   CLR member, is not `long`, is no longer a concurrency token, or shares its column with another
-   property of the root's table. No change to `MicroKit.Domain`.
+   CLR member, is not `long`, is no longer a concurrency token, is given a default value (or SQL), a
+   computed column, value generation, a value converter or a provider type (the save step alone writes
+   it; added in the #197 phase 4 review, as for the soft-delete mark), or shares its column with another
+   property of a table that stores it — the root's, or each concrete type's under TPC, whose abstract base
+   has no table; only the entity types mapped to that table count, and two roots under one mapped TPH base
+   that is no root share their version column. No change to `MicroKit.Domain`.
 2. **The bump.** A `SaveChanges` step sets the token of every root whose boundary has an `Added`,
    `Modified` or `Deleted` entity, the root included: 1 on insertion; original + 1 otherwise,
    computed from the original value so a repeated save never adds twice; a `Deleted` root keeps its
@@ -951,16 +955,23 @@ record) and ADR-010 (one save pipeline, the version step last).
    (`EF.Property<DateTimeOffset?>(e, "AggregateDeletedAt") == null`). A hierarchy root is the only place EF
    Core accepts a filter — a mapped base type that is no aggregate root included. Named filters already
    there are kept. The name is reserved like the version's (CLR member, type, a column shared with another
-   property — except the mark of another type of the same aggregate split onto the same table), and only
+   property of a table that stores the mark — each concrete type's under TPC — except the mark of another
+   type of the same aggregate split onto the same table), and only
    its column may be configured: a required mark, a default or computed value, value generation or a
    converter fails model building (a default would make every new row deleted).
 3. **Model refusals.** An anonymous filter on an entity of the aggregate fails model building, naming the
    entity and the fix (name the other filter): EF Core 10 rejects an anonymous filter combined with a named
-   one. A boundary link whose foreign key is required with `Restrict`, `NoAction`, `ClientSetNull` or
-   `SetNull` fails model building, naming the key and the fix (`Cascade` inside the aggregate): under EF
-   Core's default `Immediate` cascade timing, `Remove(root)` throws for it at once ("the association … has
-   been severed", pinned by `SoftDeleteFoundationTests`), inside `DeleteAsync`, before any save step can
-   run. `Cascade`, `ClientCascade` and `ClientNoAction` are accepted.
+   one. A required foreign key between two entity types of the aggregate (ownership keys aside) configured
+   `Restrict`, `NoAction`, `ClientSetNull` or `SetNull` fails model building, naming the key and the fix
+   (`Cascade`, or `ClientCascade`), whether or not a navigation of the boundary walk reaches it: under EF
+   Core's default `Immediate` cascade timing, `Remove(root)` throws for such a key at once ("the
+   association … has been severed", pinned by `SoftDeleteFoundationTests`), inside `DeleteAsync`, before
+   any save step can run. Keys count through inheritance: one a member inherits from a mapped base type, and
+   one whose principal is a mapped base type of a member (a base of the root holding its collection). A key
+   declared on a mapped base type of a child that is not itself in the boundary is a key from outside (below):
+   an explicit behaviour on it fails there. `Cascade`, `ClientCascade` and `ClientNoAction` are accepted; `ClientNoAction`
+   leaves the child untouched, so the step marks it (a required `ClientNoAction` child is tested on both
+   servers).
    - **A key into the aggregate from outside it** — its principal is the root or an entity of its boundary,
      its dependent another aggregate or an entity outside every boundary, join rows of a many-to-many marked
      `IsOutsideAggregate()` included — is `DeleteBehavior.ClientNoAction` by convention
@@ -1008,7 +1019,18 @@ record) and ADR-010 (one save pipeline, the version step last).
    - no entry of the boundary is left `Deleted`, so `CascadeChanges` finds nothing to cascade or reject for
      it; the version step then bumps the root, now `Modified`, and checks it (`WHERE AggregateVersion = @original`).
 6. **After the commit** the marked and restored entities still tracked are detached and the root leaves the
-   record, as a hard delete detaches. The list lives on the scoped `AggregateLoadRecord` and is cleared with
+   record, as a hard delete detaches — **once the save accepted its changes**. EF Core 10 runs
+   `AcceptAllChanges` inside `StateManager.SaveChangesAsync`, before `SaveChangesCompleted` (the
+   `SavedChanges` interceptors), and only when `acceptAllChangesOnSuccess` is `true` (`DbContext.cs`,
+   `StateManager.cs`, `release/10.0`). After `SaveChanges(acceptAllChangesOnSuccess: false)` — the pattern of
+   a save retried by hand in a transaction (Learn: connection resiliency, execution strategies and
+   transactions) — the marked entries are still `Added` or `Modified`: they stay tracked and the root stays
+   recorded, so the save retried after a rollback writes the mark (tested on both servers). Acceptance covers
+   a whole save, so the decision is all or none: while any of them is still changed, none is detached; the
+   time they are all `Unchanged` — after a save that accepts, or after `AcceptAllChanges()` (EF Core's
+   resilient pattern: `SaveChanges(false)`, commit, `AcceptAllChanges()`, which raises no `SavedChanges`) — they
+   are detached: after every successful save, and before `EfRepository.FindAsync` and `LoadAggregatesAsync`
+   look for a root, so the write side never returns the soft-deleted root (tested on both servers). The list lives on the scoped `AggregateLoadRecord` and is cleared with
    it (`DiscardChanges`, a failed `ExecuteAsync` attempt, a pooled lease's reset), so nothing of a cleared
    tracker is ever detached later. A failed save leaves the entries marked and `Modified`: a later save in
    the same scope writes those marks as they are (the step does not run again, and an entity attached to

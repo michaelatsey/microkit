@@ -105,6 +105,7 @@ public class EfRepository<TAggregate, TId, TContext>(TContext context)
         }
 
         var record = KeyLookup.LoadRecordOf(Context);
+        AggregateSaveInterceptor.DetachAcceptedSoftDeletes(Context); // a soft delete accepted by hand is gone
         object[] keyValues = [id];
 
         var tracked = KeyLookup.FindTracked(Context, set, keyValues);
@@ -224,6 +225,7 @@ public class EfRepository<TAggregate, TId, TContext>(TContext context)
     {
         ArgumentNullException.ThrowIfNull(predicate);
         var record = KeyLookup.LoadRecordOf(Context);
+        AggregateSaveInterceptor.DetachAcceptedSoftDeletes(Context);
         return await LoadAsync(record, predicate, ct).ConfigureAwait(false);
     }
 
