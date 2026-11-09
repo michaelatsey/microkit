@@ -9,8 +9,9 @@ public static class MicroKitPersistenceDbContextOptionsExtensions
 {
     /// <summary>
     /// Adds MicroKit.Persistence to the context: the aggregate-boundary validation at model
-    /// building, and the record of the roots <see cref="EfRepository{TAggregate, TId, TContext}"/>
-    /// loaded whole.
+    /// building, the record of the roots <see cref="EfRepository{TAggregate, TId, TContext}"/>
+    /// loaded whole, the <see cref="AggregateVersion"/> token on every aggregate root — a schema
+    /// change, which needs a migration — and the <c>SaveChanges</c> step that bumps it.
     /// </summary>
     /// <param name="optionsBuilder">The context's options builder.</param>
     /// <returns><paramref name="optionsBuilder"/> for fluent chaining.</returns>
@@ -24,7 +25,8 @@ public static class MicroKitPersistenceDbContextOptionsExtensions
     /// <para>
     /// Without it, <see cref="EfRepository{TAggregate, TId, TContext}"/> refuses to load with an
     /// <see cref="InvalidOperationException"/>. <see cref="EfReadRepository{TAggregate, TContext}"/>
-    /// and <see cref="EfUnitOfWork{TContext}"/> do not need it. Calling it twice is harmless.
+    /// and <see cref="EfUnitOfWork{TContext}"/> work without it, but then no version is bumped and
+    /// commits get no aggregate concurrency. Calling it twice is harmless.
     /// </para>
     /// <para>
     /// The services are added to the internal service provider EF Core builds. A context given its

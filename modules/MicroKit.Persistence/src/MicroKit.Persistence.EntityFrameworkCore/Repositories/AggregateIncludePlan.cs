@@ -62,9 +62,10 @@ internal sealed class AggregateIncludePlan
 
     /// <summary>
     /// Visits every step of <paramref name="root"/>'s boundary: the dotted path from the root, the
-    /// target entity type and whether the navigation is a collection.
+    /// target entity type, whether the navigation is a collection, and the navigations — one, or one
+    /// per derived type declaring a navigation of that name — the step follows.
     /// </summary>
-    internal static void Walk(IReadOnlyEntityType root, Action<string, IReadOnlyEntityType, bool> visit)
+    internal static void Walk(IReadOnlyEntityType root, Action<AggregateStep> visit)
     {
         var ancestors = new HashSet<Type> { root.ClrType };
         WalkFrom(root, prefix: string.Empty, ancestors, visit);
@@ -74,14 +75,14 @@ internal sealed class AggregateIncludePlan
     {
         var paths = new List<string>();
         var collections = 0;
-        Walk(root, (path, target, isCollection) =>
+        Walk(root, step =>
         {
-            if (!target.IsOwned())
-                paths.Add(path);
+            if (!step.Target.IsOwned())
+                paths.Add(step.Path);
 
             // An owned collection mapped to its own table is a join exactly like a regular one, so
             // it counts towards the split; one mapped to JSON is a column and does not.
-            if (isCollection && !(target.IsOwned() && target.IsMappedToJson()))
+            if (step.IsCollection && !(step.Target.IsOwned() && step.Target.IsMappedToJson()))
                 collections++;
         });
         return new AggregateIncludePlan(paths, collections);
@@ -91,9 +92,9 @@ internal sealed class AggregateIncludePlan
         IReadOnlyEntityType type,
         string prefix,
         HashSet<Type> ancestors,
-        Action<string, IReadOnlyEntityType, bool> visit)
+        Action<AggregateStep> visit)
     {
-        foreach (var (name, target, isCollection) in NavigationsOf(type))
+        foreach (var (name, target, isCollection, navigations) in NavigationsOf(type))
         {
             if (typeof(IAggregateRoot).IsAssignableFrom(target.ClrType))
                 continue; // another aggregate: outside the boundary
@@ -104,7 +105,7 @@ internal sealed class AggregateIncludePlan
                 continue;
 
             var path = prefix + name;
-            visit(path, target, isCollection);
+            visit(new AggregateStep(path, target, isCollection, navigations));
 
             ancestors.Add(target.ClrType);
             WalkFrom(target, path + ".", ancestors, visit);
@@ -117,9 +118,11 @@ internal sealed class AggregateIncludePlan
     // navigation without saying on which derived type it is declared, so two derived types
     // declaring the same name with different targets cannot be expressed: that fails here, when the
     // model is built.
-    private static List<(string Name, IReadOnlyEntityType Target, bool IsCollection)> NavigationsOf(IReadOnlyEntityType type)
+    private static List<(string Name, IReadOnlyEntityType Target, bool IsCollection, List<IReadOnlyNavigationBase> Navigations)> NavigationsOf(
+        IReadOnlyEntityType type)
     {
-        var found = new Dictionary<string, (string Name, IReadOnlyEntityType Target, bool IsCollection)>(StringComparer.Ordinal);
+        var found = new Dictionary<string, (string Name, IReadOnlyEntityType Target, bool IsCollection, List<IReadOnlyNavigationBase> Navigations)>(
+            StringComparer.Ordinal);
 
         void Add(IReadOnlyNavigationBase navigation)
         {
@@ -138,10 +141,13 @@ internal sealed class AggregateIncludePlan
                         "Rename one of them.");
                 }
 
+                // The same name to the same type on two derived types: one include, two foreign keys.
+                if (!existing.Navigations.Contains(navigation))
+                    existing.Navigations.Add(navigation);
                 return;
             }
 
-            found[name] = (name, target, navigation.IsCollection);
+            found[name] = (name, target, navigation.IsCollection, [navigation]);
         }
 
         foreach (var navigation in type.GetNavigations())
@@ -160,3 +166,14 @@ internal sealed class AggregateIncludePlan
         return [.. found.Values];
     }
 }
+
+/// <summary>One step of an aggregate boundary walk (<see cref="AggregateIncludePlan.Walk"/>).</summary>
+/// <param name="Path">The dotted include path from the root.</param>
+/// <param name="Target">The entity type the step reaches.</param>
+/// <param name="IsCollection">Whether the navigation is a collection.</param>
+/// <param name="Navigations">The navigations of that name the step follows.</param>
+internal readonly record struct AggregateStep(
+    string Path,
+    IReadOnlyEntityType Target,
+    bool IsCollection,
+    IReadOnlyList<IReadOnlyNavigationBase> Navigations);

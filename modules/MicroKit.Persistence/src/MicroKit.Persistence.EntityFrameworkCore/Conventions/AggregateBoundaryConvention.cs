@@ -53,12 +53,12 @@ internal sealed class AggregateBoundaryConvention : IModelFinalizingConvention
     private static void Walk(
         IReadOnlyEntityType root,
         Dictionary<IReadOnlyEntityType, List<IReadOnlyEntityType>> owners) =>
-        AggregateIncludePlan.Walk(root, (_, target, _) =>
+        AggregateIncludePlan.Walk(root, step =>
         {
-            if (target.IsOwned())
+            if (step.Target.IsOwned())
                 return;
 
-            foreach (var type in target.GetDerivedTypesInclusive())
+            foreach (var type in step.Target.GetDerivedTypesInclusive())
             {
                 if (!owners.TryGetValue(type, out var roots))
                     owners[type] = roots = [];
@@ -89,7 +89,7 @@ internal sealed class AggregateBoundaryConvention : IModelFinalizingConvention
     }
 
     // A root whose base type is not itself a root: derived root types belong to its hierarchy.
-    private static bool IsTopMostRoot(IReadOnlyEntityType type) =>
+    internal static bool IsTopMostRoot(IReadOnlyEntityType type) =>
         !type.IsOwned()
         && typeof(IAggregateRoot).IsAssignableFrom(type.ClrType)
         && (type.BaseType is null || !typeof(IAggregateRoot).IsAssignableFrom(type.BaseType.ClrType));

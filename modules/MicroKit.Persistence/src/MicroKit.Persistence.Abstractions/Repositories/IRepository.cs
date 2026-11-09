@@ -41,6 +41,39 @@ public interface IRepository<TAggregate, TId>
     ValueTask<TAggregate?> FindAsync(TId id, CancellationToken ct = default);
 
     /// <summary>
+    /// Loads the whole aggregate identified by <paramref name="id"/>, as
+    /// <see cref="FindAsync(TId, CancellationToken)"/> does, for a command that states the version it
+    /// expects — the <c>If-Match</c> of an HTTP request, read earlier through
+    /// <see cref="GetVersion"/>.
+    /// </summary>
+    /// <param name="id">The aggregate's identifier.</param>
+    /// <param name="expectedVersion">The version the command was decided on.</param>
+    /// <param name="ct">Propagates notification that operations should be cancelled.</param>
+    /// <returns>The aggregate, or <see langword="null"/> if none has this identifier.</returns>
+    /// <remarks>
+    /// The expectation is checked when the change is written, not when the aggregate is loaded: an
+    /// aggregate whose version has moved on makes the commit fail with a concurrency conflict
+    /// (<see cref="PersistenceException"/>), and the conflicting write is not applied. An
+    /// implementation that cannot defer the check may run it at the load and say so.
+    /// </remarks>
+    /// <exception cref="PersistenceException">
+    /// An implementation that checks at the load found another version.
+    /// </exception>
+    ValueTask<TAggregate?> FindAsync(TId id, long expectedVersion, CancellationToken ct = default);
+
+    /// <summary>
+    /// Gets the version of an aggregate this repository loaded or staged — a counter that each
+    /// committed save writing any entity of the aggregate increases by one — for an HTTP <c>ETag</c>
+    /// or a later <see cref="FindAsync(TId, long, CancellationToken)"/>.
+    /// </summary>
+    /// <param name="aggregate">The aggregate.</param>
+    /// <returns>
+    /// Its version. For an aggregate staged but not yet committed, an implementation reports a
+    /// provisional value (EF Core: 0 until the commit writes 1).
+    /// </returns>
+    long GetVersion(TAggregate aggregate);
+
+    /// <summary>
     /// Stages a new aggregate for insertion. Nothing is written until the unit of work commits.
     /// </summary>
     /// <param name="aggregate">The aggregate to insert. Must not already exist.</param>

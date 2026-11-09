@@ -32,6 +32,12 @@ namespace MicroKit.Persistence.Testing;
 /// loaded from the database: a query handler must not rely on seeing a command's uncommitted change.
 /// </para>
 /// <para>
+/// Versions: a stored aggregate starts at version 1 and does not move on its own — the double
+/// cannot see mutations. <see cref="SetVersion"/> sets another one, and
+/// <see cref="FindAsync(TId, long, CancellationToken)"/> checks the expected version at the find,
+/// where EF Core checks it in the <c>UPDATE</c> of the commit.
+/// </para>
+/// <para>
 /// <see cref="QueryOptions{TAggregate}.Includes"/> and
 /// <see cref="QueryOptions{TAggregate}.AsSplitQueryEnabled"/> are accepted but ignored — they are
 /// EF Core execution concerns with no in-memory equivalent.
@@ -44,6 +50,7 @@ public sealed class InMemoryRepository<TAggregate, TId>
     where TId : IEntityId
 {
     private readonly InMemoryStore<TAggregate> _store;
+    private readonly Dictionary<object, long> _versions = [];
 
     /// <summary>
     /// Initializes an empty repository. The aggregate's identity is read from its conventional
@@ -118,7 +125,61 @@ public sealed class InMemoryRepository<TAggregate, TId>
         ArgumentNullException.ThrowIfNull(aggregate);
         ct.ThrowIfCancellationRequested();
         _store.Remove(aggregate);
+        _versions.Remove(_store.KeyOf(aggregate));
         return ValueTask.CompletedTask;
+    }
+
+    /// <inheritdoc/>
+    /// <exception cref="PersistenceException">
+    /// The stored aggregate's version is not <paramref name="expectedVersion"/>. The double checks at
+    /// the find; EF Core checks in the <c>UPDATE</c> of the commit.
+    /// </exception>
+    public ValueTask<TAggregate?> FindAsync(TId id, long expectedVersion, CancellationToken ct = default)
+    {
+        ArgumentNullException.ThrowIfNull(id);
+        ct.ThrowIfCancellationRequested();
+        var aggregate = _store.Find(id);
+        if (aggregate is not null && VersionOf(aggregate) != expectedVersion)
+        {
+            throw new PersistenceException(
+                "Optimistic concurrency conflict at the find (in-memory double).",
+                new InvalidOperationException(
+                    $"'{typeof(TAggregate).Name}' {id} is at version {VersionOf(aggregate)}, not {expectedVersion}."));
+        }
+
+        return new ValueTask<TAggregate?>(aggregate);
+    }
+
+    /// <summary>Gets the stored version of an aggregate.</summary>
+    /// <param name="aggregate">A stored aggregate.</param>
+    /// <returns>1 from <see cref="AddAsync"/>, or the value of the last <see cref="SetVersion"/>.</returns>
+    /// <exception cref="InvalidOperationException">The aggregate is not stored.</exception>
+    public long GetVersion(TAggregate aggregate)
+    {
+        ArgumentNullException.ThrowIfNull(aggregate);
+        return VersionOf(aggregate);
+    }
+
+    /// <summary>
+    /// Sets the version of a stored aggregate, so a test can exercise a stale
+    /// <see cref="FindAsync(TId, long, CancellationToken)"/>.
+    /// </summary>
+    /// <param name="aggregate">A stored aggregate.</param>
+    /// <param name="version">Its new version.</param>
+    /// <exception cref="InvalidOperationException">The aggregate is not stored.</exception>
+    public void SetVersion(TAggregate aggregate, long version)
+    {
+        ArgumentNullException.ThrowIfNull(aggregate);
+        _ = VersionOf(aggregate);
+        _versions[_store.KeyOf(aggregate)] = version;
+    }
+
+    private long VersionOf(TAggregate aggregate)
+    {
+        var key = _store.KeyOf(aggregate);
+        if (!ReferenceEquals(_store.Find(key), aggregate))
+            throw new InvalidOperationException($"This '{typeof(TAggregate).Name}' is not stored in the repository.");
+        return _versions.TryGetValue(key, out var version) ? version : 1;
     }
 
     // ---- Read side (Core.IReadRepository<TAggregate>) ----

@@ -10,6 +10,8 @@ public interface IRepository<TAggregate, TId>
     where TId : IEntityId
 {
     ValueTask<TAggregate?> FindAsync(TId id, CancellationToken ct = default); // whole aggregate, tracked
+    ValueTask<TAggregate?> FindAsync(TId id, long expectedVersion, CancellationToken ct = default); // If-Match
+    long GetVersion(TAggregate aggregate);                                     // ETag
     ValueTask AddAsync(TAggregate aggregate, CancellationToken ct = default);
     ValueTask DeleteAsync(TAggregate aggregate, CancellationToken ct = default);
 }
@@ -29,6 +31,9 @@ public interface IOrderLineRepository : IRepository<OrderLine, OrderLineId> { }
 - `EfRepository.FindAsync` returns a root it loaded whole, or an `Added` one, as is, and refuses any
   other tracked root; otherwise it loads the whole aggregate (every navigation inside the boundary,
   never another aggregate root), split into separate queries when it has two or more collections.
+- Every root carries a version (`AggregateVersion`, ADR-010), bumped by every save that writes its
+  boundary; `FindAsync(id, expectedVersion)` makes the expected value the token's original, checked
+  in the commit's `UPDATE`. Bulk writes (`ExecuteUpdate`, raw SQL) bypass it.
 - The boundary lives in the model only (ADR-009): reference data leaves it through
   `IsOutsideAggregate()`; no repository overrides the load. A typed finder calls
   `protected LoadAggregatesAsync(predicate, ct)`.

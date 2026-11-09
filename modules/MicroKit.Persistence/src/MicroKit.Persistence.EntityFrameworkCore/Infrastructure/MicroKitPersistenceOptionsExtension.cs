@@ -1,3 +1,4 @@
+using Microsoft.EntityFrameworkCore.Diagnostics;
 using Microsoft.EntityFrameworkCore.Infrastructure;
 using Microsoft.EntityFrameworkCore.Metadata.Conventions.Infrastructure;
 
@@ -14,7 +15,10 @@ namespace MicroKit.Persistence.EntityFrameworkCore;
 ///     <see cref="IResettableService"/> so a pooled context resets it when it returns to the
 ///     pool.</description></item>
 ///   <item><description><see cref="AggregateConventionSetPlugin"/>, which adds the
-///     <see cref="AggregateBoundaryConvention"/> to model building.</description></item>
+///     <see cref="AggregateVersionConvention"/> and the <see cref="AggregateBoundaryConvention"/> to
+///     model building.</description></item>
+///   <item><description><see cref="AggregateSaveInterceptor"/>, MicroKit's single
+///     <c>SaveChanges</c> entry point, as an EF Core <see cref="IInterceptor"/>.</description></item>
 /// </list>
 /// <para>
 /// The extension has no options. Any option added later must take part in both
@@ -31,7 +35,7 @@ internal sealed class MicroKitPersistenceOptionsExtension : IDbContextOptionsExt
     public DbContextOptionsExtensionInfo Info => _info ??= new ExtensionInfo(this);
 
     // AggregateLoadRecord is not an EF Core service, so it goes through TryAddProviderSpecificServices.
-    // IConventionSetPlugin and IResettableService are: they go through TryAdd, which takes their
+    // IConventionSetPlugin, IInterceptor and IResettableService are: they go through TryAdd, which takes their
     // lifetime (scoped) and multiplicity (one registration per implementation) from EF Core itself.
     // The IResettableService registration resolves the same scoped record, so the pool resets it.
 
@@ -39,6 +43,7 @@ internal sealed class MicroKitPersistenceOptionsExtension : IDbContextOptionsExt
     public void ApplyServices(IServiceCollection services) =>
         new EntityFrameworkServicesBuilder(services)
             .TryAdd<IConventionSetPlugin, AggregateConventionSetPlugin>()
+            .TryAdd<IInterceptor, AggregateSaveInterceptor>()
             .TryAdd<IResettableService, AggregateLoadRecord>(
                 static provider => provider.GetRequiredService<AggregateLoadRecord>())
             .TryAddProviderSpecificServices(static map => map

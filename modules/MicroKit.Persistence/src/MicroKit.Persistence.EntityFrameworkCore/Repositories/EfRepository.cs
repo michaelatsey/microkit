@@ -39,7 +39,7 @@ namespace MicroKit.Persistence.EntityFrameworkCore;
 /// </para>
 /// <para>
 /// A root the context tracks is returned only when a repository over this context loaded it whole
-/// (<see cref="FindAsync"/>, <see cref="LoadAggregatesAsync"/>) or staged it (<see cref="AddAsync"/>,
+/// (<see cref="FindAsync(TId, CancellationToken)"/>, <see cref="LoadAggregatesAsync"/>) or staged it (<see cref="AddAsync"/>,
 /// whether or not it was committed since), or when it is <c>Added</c>. A root tracked any other way — a tracking query on the <see cref="DbSet{TEntity}"/>,
 /// a filtered <c>Include</c>, an explicit load, an <c>Attach</c>, a reattachment after
 /// <c>ChangeTracker.Clear()</c> — may be partial, and is refused with an
@@ -47,7 +47,7 @@ namespace MicroKit.Persistence.EntityFrameworkCore;
 /// </para>
 /// <para>
 /// The repository never commits: the command's <see cref="IUnitOfWork"/> does. There is no update
-/// method: an aggregate loaded through <see cref="FindAsync"/> is tracked, and its changes are
+/// method: an aggregate loaded through <see cref="FindAsync(TId, CancellationToken)"/> is tracked, and its changes are
 /// written by the next commit.
 /// </para>
 /// </remarks>
@@ -86,9 +86,10 @@ public class EfRepository<TAggregate, TId, TContext>(TContext context)
     /// <para>
     /// A split load issues one statement per collection. Under the default Read Committed isolation
     /// each statement sees the data committed when it starts, even inside a transaction: the root and
-    /// a collection can come from two points in time. Use Snapshot or Serializable isolation, or a
-    /// concurrency token on the root bumped by every change to the aggregate, when an invariant
-    /// spans the root and its children.
+    /// a collection can come from two points in time. The aggregate's version
+    /// (<see cref="AggregateVersion"/>) makes such a torn read fail the commit — but only when the
+    /// command writes; for a read-only decision across root and children, use Snapshot or
+    /// Serializable isolation.
     /// </para>
     /// </remarks>
     public async ValueTask<TAggregate?> FindAsync(TId id, CancellationToken ct = default)
@@ -117,6 +118,81 @@ public class EfRepository<TAggregate, TId, TContext>(TContext context)
         return loaded.SingleOrDefault();
     }
 
+    /// <inheritdoc cref="IRepository{TAggregate, TId}.FindAsync(TId, long, CancellationToken)"/>
+    /// <exception cref="InvalidOperationException">As for <see cref="FindAsync(TId, CancellationToken)"/>.</exception>
+    /// <exception cref="PersistenceException">
+    /// The aggregate is staged but not inserted yet, and <paramref name="expectedVersion"/> is not 0.
+    /// </exception>
+    /// <remarks>
+    /// <para>
+    /// The aggregate is loaded as <see cref="FindAsync(TId, CancellationToken)"/> loads it, then
+    /// <paramref name="expectedVersion"/> becomes the original value of its
+    /// <see cref="AggregateVersion.PropertyName"/> token. The check runs in the <c>UPDATE</c> (or
+    /// <c>DELETE</c>) of the root that the next save writes — <c>WHERE AggregateVersion = @expected</c>
+    /// — never as a read-then-compare: a version that moved on fails that save with a concurrency
+    /// conflict (<see cref="PersistenceException"/> wrapping <see cref="DbUpdateConcurrencyException"/>)
+    /// and nothing of it is written. A stale version conflicts even when the command changes nothing.
+    /// </para>
+    /// <para>
+    /// A root staged but not inserted yet has version 0, and an <c>INSERT</c> checks nothing: for it,
+    /// the expectation is checked here, and any value other than 0 throws.
+    /// </para>
+    /// <para>
+    /// Bulk writes (<c>ExecuteUpdate</c>, <c>ExecuteDelete</c>, raw SQL) bypass the change tracker:
+    /// they neither bump the version nor conflict with it.
+    /// </para>
+    /// </remarks>
+    public async ValueTask<TAggregate?> FindAsync(TId id, long expectedVersion, CancellationToken ct = default)
+    {
+        var aggregate = await FindAsync(id, ct).ConfigureAwait(false);
+        if (aggregate is null)
+            return null;
+
+        var entry = Context.Entry(aggregate);
+        if (entry.State == EntityState.Added)
+        {
+            // Not inserted yet: its version is 0, and an INSERT checks nothing, so the check runs here.
+            if (expectedVersion != 0)
+            {
+                throw new PersistenceException(
+                    "Optimistic concurrency conflict: the expected version does not match.",
+                    new InvalidOperationException(
+                        $"This '{typeof(TAggregate).Name}' is not inserted yet: its version is 0, not {expectedVersion}."));
+            }
+
+            return aggregate;
+        }
+
+        entry.Property<long>(AggregateVersion.PropertyName).OriginalValue = expectedVersion;
+        return aggregate;
+    }
+
+    /// <inheritdoc/>
+    /// <exception cref="ArgumentNullException"><paramref name="aggregate"/> is <see langword="null"/>.</exception>
+    /// <exception cref="InvalidOperationException">
+    /// The context was not configured with <c>UseMicroKitPersistence()</c>, or does not track
+    /// <paramref name="aggregate"/>.
+    /// </exception>
+    /// <remarks>
+    /// The value read when the aggregate was loaded, or written by its last commit through this
+    /// context; a save that fails puts the value back. An <c>Added</c> root reads 0 until its
+    /// commit, which writes 1.
+    /// </remarks>
+    public long GetVersion(TAggregate aggregate)
+    {
+        ArgumentNullException.ThrowIfNull(aggregate);
+        _ = KeyLookup.LoadRecordOf(Context);
+        var entry = Context.Entry(aggregate);
+        if (entry.State == EntityState.Detached)
+        {
+            throw new InvalidOperationException(
+                $"This '{typeof(TAggregate).Name}' is not tracked by the context: its version is only known for an aggregate " +
+                "the repository loaded or staged.");
+        }
+
+        return entry.Property<long>(AggregateVersion.PropertyName).CurrentValue;
+    }
+
     /// <summary>
     /// Loads, tracked and whole, every aggregate whose root matches <paramref name="predicate"/>.
     /// The entry point for typed finders.
@@ -132,7 +208,7 @@ public class EfRepository<TAggregate, TId, TContext>(TContext context)
     /// <c>Added</c> (the query returns the tracked instance as is, so it would stay partial).
     /// </exception>
     /// <remarks>
-    /// The load is that of <see cref="FindAsync"/>: every entity of the aggregate, split into one
+    /// The load is that of <see cref="FindAsync(TId, CancellationToken)"/>: every entity of the aggregate, split into one
     /// statement per collection when it has two or more, with the same isolation caveat. It is not
     /// row-limited: a row limit on a split load needs an ordering, so materialise and take what
     /// you need.
@@ -150,7 +226,7 @@ public class EfRepository<TAggregate, TId, TContext>(TContext context)
     /// Stages a new aggregate for insertion. Nothing is written until the unit of work commits.
     /// </summary>
     /// <remarks>
-    /// The aggregate is recorded as whole: the application built it, so <see cref="FindAsync"/>
+    /// The aggregate is recorded as whole: the application built it, so <see cref="FindAsync(TId, CancellationToken)"/>
     /// returns it as is, before and after the commit.
     /// </remarks>
     /// <param name="aggregate">The aggregate to insert. Must not already exist.</param>

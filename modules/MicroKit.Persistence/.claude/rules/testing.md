@@ -56,6 +56,9 @@ composite keys, includes or tracking.
   commit, aggregate load includes the children (`EfRepositoryAggregateLoadTests`).
 - Read repository: spec filter, ordering + pagination, default page and maximum size, any, count,
   `FindAsync` and `ListAsync` untracked even when the context tracks the root.
+- Version (`AggregateVersionTests`): every kind of write inside a boundary bumps once; moves; roots
+  not tracked; entities outside every boundary; two-context conflict; a real retried attempt; a
+  stale and a current expected version; the model checks on the reserved name.
 - Boundary and record (`AggregateBoundaryTests`): a child shared by two roots fails model building;
   `IsOutsideAggregate`; every way to track a partial root is refused; the record survives pooling,
   `DiscardChanges` and a failed `ExecuteAsync` attempt.

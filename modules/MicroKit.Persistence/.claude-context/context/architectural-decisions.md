@@ -717,6 +717,85 @@ whole ones only.
 
 ---
 
+## ADR-010: Application-Managed Aggregate Version (#197 phase 2)
+
+**Status:** Accepted
+**Date:** 2026-11-09
+**Source:** Issue #197, phase 2. Builds on ADR-009 (one root per child, the loaded-root record).
+
+### Decision
+
+1. **The token.** A model-finalizing convention, first among the finalizing conventions (EF Core's
+   table-sharing concurrency convention must see it), adds a shadow `long` property
+   `AggregateVersion` with `IsConcurrencyToken()` to every top-most aggregate root. Only the name is
+   reserved: no column name is set, so a naming convention or the application's `HasColumnName` /
+   `HasColumnType` applies. Model building fails, naming the root, when the property is mapped to a
+   CLR member, is not `long`, is no longer a concurrency token, or shares its column with another
+   property of the root's table. No change to `MicroKit.Domain`.
+2. **The bump.** A `SaveChanges` step sets the token of every root whose boundary has an `Added`,
+   `Modified` or `Deleted` entity, the root included: 1 on insertion; original + 1 otherwise,
+   computed from the original value so a repeated save never adds twice; a `Deleted` root keeps its
+   original, which its `DELETE` checks. A root whose only change is a child is written for its token
+   alone (`UPDATE … SET AggregateVersion WHERE AggregateVersion = @original`), so a change confined to
+   a child conflicts — which a native `xmin`/`rowversion` would not.
+3. **Attaching a child to its root** goes through the boundary of ADR-009 (`AggregateBoundaryMap`,
+   built from the phase-1 walk): a dependent child by its original foreign key when deleted or moving
+   out, by its current one otherwise; a child the parent references (the parent holds the FK) by the
+   parents' original **or** current foreign key, so a child replaced or deleted in the same save still
+   finds its root; a skip navigation through its join entity. Lookups use the public change-tracker
+   API only (an index over `ChangeTracker.Entries()` per save).
+4. **Refusals.** A child moving between two aggregates bumps both and requires both to be recorded
+   (ADR-009); otherwise the save fails naming the roots. A changed child inside a boundary whose root
+   is not tracked fails the save — including a move to or from an aggregate whose root is not
+   tracked (a foreign key pointing to an untracked parent leaves that side unresolved). An entity outside every boundary (outbox and inbox rows, reference
+   data, an `IsOutsideAggregate()` target no root reaches otherwise) is ignored.
+5. **Across requests.** `IRepository.GetVersion(aggregate)` reads the token; `FindAsync(id,
+   expectedVersion)` loads as `FindAsync(id)` and makes `expectedVersion` the token's original value,
+   so the check runs in the commit's `UPDATE`, never as a read-then-compare. A command stating the
+   current version and changing nothing writes nothing; a stale version conflicts even then (EF Core
+   sees original ≠ loaded and writes the token). `AggregateVersion.PropertyName` serves projections.
+   The in-memory double checks the expected version at the find. A staged root not inserted yet has
+   version 0 and its `INSERT` checks nothing, so for it the expectation is checked at the find.
+   A save that fails or is canceled undoes its bumps (`SaveChangesFailed`, `SaveChangesCanceled`), so
+   `GetVersion` never reports a version that was not committed.
+7. **The version API is on `IRepository` (Abstractions).** Chosen over an EF-only
+   `EfRepository.GetVersion`/`ExpectVersion` and over a separate `IAggregateVersions` service: a
+   command handler injects only its repository, typed or not, and the ETag flow needs no EF Core
+   type. Cost: every implementation of the contract must support versions; the in-memory double
+   cannot see mutations, so it never bumps on its own (`SetVersion` for tests) and checks the
+   expectation at the find, which the contract allows.
+6. **One save pipeline.** `AggregateSaveInterceptor` (registered by `UseMicroKitPersistence()` as an
+   EF Core `IInterceptor`) is MicroKit's single `SaveChanges` entry point. It detects changes first —
+   `SavingChanges` runs before EF Core's own `DetectChanges` (step-0 spike) — then runs its steps in
+   a fixed order in code, never left to EF Core's interceptor order. The version step is always last:
+   #197 phase 4 inserts its soft-delete conversion (a `Deleted` root becomes `Modified`) in front of it,
+   so a soft-deleted root is bumped like any modified one.
+
+### Consequences
+
+- Every root's table needs a migration: a `NOT NULL` column, scaffolded with `defaultValue: 0L`;
+  existing rows start at 0 and their first change takes them to 1.
+- **Known limit — bulk writes bypass the version.** `ExecuteUpdate`, `ExecuteDelete` and raw SQL do
+  not go through the change tracker: they write an aggregate's rows without bumping its version and
+  without conflicting with a concurrent command.
+- **Known limit — application interceptors.** EF Core runs interceptors registered in the internal
+  service provider (MicroKit's) before those added with `AddInterceptors` (pinned by
+  `AnInterceptorAddedByTheApplication_RunsAfterTheVersionStep`): a change an application interceptor
+  makes during `SavingChanges` is not bumped. MicroKit's own steps keep their fixed order.
+- **Known limit — shared principal-side children.** Phase 1 makes the boundary unique per entity
+  type, not per row: a principal-side child (`Order.PrimaryContactId`) or a many-to-many target can be
+  referenced by several aggregate instances, and a change to it bumps only the referencing roots the
+  context tracks. Such entities are reference data and belong outside the boundary.
+- A delete is version-checked: `DeleteAsync` then a commit fails when another command changed the
+  aggregate since it was loaded.
+- A conflict stays a `PersistenceException` wrapping `DbUpdateConcurrencyException` (frozen); its
+  typed form is phase 3's `CONCURRENCY` error.
+- Other modules that use `UseMicroKitPersistence()` get the column on their roots and adapt during
+  their own upgrade.
+- Tests: `AggregateVersionTests` (PostgreSQL and SQL Server), `InMemoryRepositoryVersionTests`.
+
+---
+
 ## DN-001: Execution Strategy Coverage Gap in EfUnitOfWork.CommitAsync
 
 **Status:** Superseded by ADR-006 (#196). Its observation was wrong: outside a transaction,

@@ -2,6 +2,34 @@
 
 ## [Unreleased]
 
+### #197 phase 2 — optimistic concurrency
+
+Every aggregate root carries an application-managed version, bumped by every save that writes any
+entity of its aggregate. ADR-010 records the decision.
+
+#### Breaking Changes
+
+##### MicroKit.Persistence.Abstractions
+- `IRepository<TAggregate, TId>` gains `ValueTask<TAggregate?> FindAsync(TId id, long expectedVersion, CancellationToken ct = default)` and `long GetVersion(TAggregate aggregate)`. Every implementation must add them; `EfRepository` and `InMemoryRepository` do.
+
+##### MicroKit.Persistence.EntityFrameworkCore
+- On a context configured with `UseMicroKitPersistence()`, every aggregate root gets a shadow `long` concurrency token, `AggregateVersion`. **A migration is needed**: it adds a `NOT NULL` column to every root's table (EF Core scaffolds `defaultValue: 0L`), so existing rows start at 0 and their first change takes them to 1. The column name follows the model's naming conventions and may be configured.
+- The name `AggregateVersion` is reserved on aggregate roots: model building fails when a root maps it to a CLR member, gives it a type other than `long`, stops it being a concurrency token, or maps another property to its column in the root's table.
+- `SaveChanges` bumps the version of every root whose boundary has an `Added`, `Modified` or `Deleted` entity, so two commands changing different children of one aggregate now conflict (`PersistenceException` wrapping `DbUpdateConcurrencyException`, nothing of the second save written). A save that changes only a child now also issues an `UPDATE` of the root's version.
+- `DeleteAsync` followed by a commit now fails with that conflict when another command changed the aggregate in between (`DELETE … WHERE AggregateVersion = @original`); before, the delete won.
+- A save fails with `InvalidOperationException` when a changed child inside a boundary has no tracked root — including a child moved to or from an aggregate whose root is not tracked — and when a child moves between two aggregates that were not both loaded or staged by their repository. Entities outside every boundary are ignored.
+
+#### Added
+- `EfRepository.FindAsync(id, expectedVersion)`: the expected version becomes the token's original value, checked in the root's `UPDATE` or `DELETE`. A stale version conflicts even when the command changes nothing. On a staged root not inserted yet it is checked at the find: anything but 0 throws `PersistenceException`.
+- `EfRepository.GetVersion(aggregate)`; an `Added` root reads 0 until its commit writes 1, and a failed save puts the version back.
+- `AggregateVersion.PropertyName`, for projections (`EF.Property<long>(o, AggregateVersion.PropertyName)`).
+- `InMemoryRepository.SetVersion(aggregate, version)`; the double checks the expected version at the find.
+
+#### Known limits
+- `ExecuteUpdate`, `ExecuteDelete` and raw SQL bypass the change tracker: they neither bump the version nor conflict with it.
+- Interceptors the application adds with `AddInterceptors` run after MicroKit's version step: a change they make during `SavingChanges` is not bumped.
+- A principal-side child or a many-to-many target referenced by several aggregates bumps only the referencing aggregates the context tracks.
+
 ### #197 phase 1 — aggregate boundaries
 
 The boundary of an aggregate lives in the model, and a partial aggregate can no longer be tracked

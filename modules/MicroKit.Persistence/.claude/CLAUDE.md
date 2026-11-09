@@ -12,7 +12,7 @@ keep the CQRS data-access split honest.
 
 Consumer documentation: `README.md`. Every C# sample in it lives in, and builds from,
 `samples/MicroKit.Persistence.Samples`. Decisions: `.claude-context/context/architectural-decisions.md`
-(ADR-001 to ADR-009, DN-001, DN-002).
+(ADR-001 to ADR-010, DN-001, DN-002).
 
 ---
 
@@ -98,6 +98,7 @@ Abstractions + EntityFrameworkCore. Details: `.claude-context/context/dependency
 // Abstractions — write side
 IRepository<TAggregate, TId>   // TAggregate : class, IAggregateRoot; TId : IEntityId
     FindAsync(TId id, ct)      // whole aggregate, tracked
+    FindAsync(TId id, long expectedVersion, ct) · GetVersion(aggregate)   // ETag / If-Match (ADR-010)
     AddAsync(aggregate, ct) · DeleteAsync(aggregate, ct)   // stage only — no commit, no update
 IUnitOfWork                    // CommitAsync(ct) · DiscardChanges()
 ITransactionalContext          // ExecuteAsync<TState>(op, state, ct) · ExecuteAsync<TState, TResult>(…)
@@ -116,6 +117,8 @@ EfReadRepository<TAggregate, TContext>(context, evaluator, paginationLimits)  //
 EfUnitOfWork<TContext> : ITransactionalUnitOfWork   // = IUnitOfWork + ITransactionalContext
 UseMicroKitPersistence()       // on DbContextOptionsBuilder: boundary convention + AggregateLoadRecord
 IsOutsideAggregate()           // on NavigationBuilder: reference data, outside the boundary
+AggregateVersion.PropertyName  // shadow long concurrency token on every root, bumped by every save
+                               // that writes its boundary (AggregateSaveInterceptor, ADR-010)
 ```
 
 Composition:
@@ -188,7 +191,7 @@ strategy (ADR-002). `IUnitOfWork` moved here from MicroKit.Domain (ADR-001).
 
 ```
 .claude-context/
-├── context/architectural-decisions.md   ADR-001…ADR-009, DN-001, DN-002
+├── context/architectural-decisions.md   ADR-001…ADR-010, DN-001, DN-002
 ├── context/dependency-graph.md          project and package graph as declared
 ├── context/ecosystem-overview.md        position among MicroKit modules
 ├── standards/performance-budget.md      targets (no benchmark project yet)

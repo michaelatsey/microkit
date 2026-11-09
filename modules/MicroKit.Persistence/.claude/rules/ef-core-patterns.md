@@ -45,6 +45,22 @@ return orders.SingleOrDefault();
 
 - `AddAsync` and `DeleteAsync` only stage changes; the unit of work commits.
 
+## Aggregate version — ADR-010
+
+- `AggregateVersionConvention` (first finalizing convention) adds the shadow `long`
+  `AggregateVersion` concurrency token to every top-most root; only the name is reserved, the column
+  may be configured.
+- `AggregateSaveInterceptor` is MicroKit's single `SaveChanges` entry point: it detects changes
+  (`SavingChanges` runs before EF Core's `DetectChanges`), then runs its steps in a fixed order; the
+  version step (`AggregateVersionStep`) is last — phase 4's soft-delete conversion goes before it.
+- Roots are resolved through `AggregateBoundaryMap` with an index over `ChangeTracker.Entries()`:
+  dependent children by original FK (deleted, moved out) or current FK; principal-side children by
+  the parents' original or current FK; skip navigations through the join entity. Entities outside
+  every boundary are ignored; a changed child without a tracked root, or a move between aggregates
+  not both recorded, fails the save.
+- Bump: `Added` → 1, otherwise original + 1, `Deleted` untouched. Do not bump by hand, and do not
+  write aggregate rows with `ExecuteUpdate`/raw SQL when the version must hold.
+
 ## Read side — `EfReadRepository<TAggregate, TContext>`
 
 - `FindAsync(object[] keyValues)`: key count must match the primary key; a null value matches

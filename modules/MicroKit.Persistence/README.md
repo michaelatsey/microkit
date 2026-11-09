@@ -160,7 +160,8 @@ conventions.
 
 ## The write side
 
-`IRepository<TAggregate, TId>` is the only write-side contract: `FindAsync`, `AddAsync`, `DeleteAsync`.
+`IRepository<TAggregate, TId>` is the only write-side contract: `FindAsync` (optionally at an expected
+version), `AddAsync`, `DeleteAsync` and `GetVersion` (see [Optimistic concurrency](#optimistic-concurrency)).
 It never commits — `IUnitOfWork` does — and has no update method: an aggregate it returns is tracked.
 
 ```csharp
@@ -192,8 +193,10 @@ public sealed class EfOrderRepository(ShopDbContext context)
   `Update`, or a reattachment after `ChangeTracker.Clear()` may be partial, and a partial aggregate
   must never reach a command;
 - split the load (`AsSplitQuery`) when the aggregate has two or more collections. A split load runs one
-  statement per collection: under Read Committed they can see different snapshots, so protect an
-  invariant spanning root and children with a concurrency token or a stricter isolation level.
+  statement per collection: under Read Committed they can see different snapshots. The aggregate's
+  version (see [Optimistic concurrency](#optimistic-concurrency)) makes such a torn read fail the
+  commit when the command writes; a read-only decision across root and children needs Snapshot or
+  Serializable isolation.
 
 ### The aggregate boundary
 
@@ -231,6 +234,69 @@ nothing, and a root the model auto-includes without its own aggregate is never r
 follows the change tracker: `IUnitOfWork.DiscardChanges()` and a failed `ExecuteAsync` attempt reset
 it, and a pooled context resets it when it returns to the pool. An owned navigation cannot be marked
 `IsOutsideAggregate()`: an owned entity is always loaded with its owner.
+
+## Optimistic concurrency
+
+Every aggregate root carries a version: a shadow `long` concurrency token named
+`AggregateVersion` (`AggregateVersion.PropertyName`), added by `UseMicroKitPersistence()`. Every
+save that writes any entity of an aggregate — the root, a child, a grand-child, an owned type, a
+many-to-many link — bumps its root's version by one, so two commands that change different
+children of the same aggregate conflict: the second save fails with a `PersistenceException`
+wrapping `DbUpdateConcurrencyException`, and nothing of it is written. The check runs in the root's
+`UPDATE` (`WHERE AggregateVersion = @original`).
+
+- An inserted aggregate starts at 1; `GetVersion` reads 0 on an `Added` root until its commit.
+- A child that moves from one aggregate to another bumps both, and both must have been loaded or
+  staged by their repository; a changed child whose root is not tracked fails the save. Entities
+  outside every aggregate (an outbox row, reference data) are ignored.
+- The property name is reserved on aggregate roots. Its column may be configured
+  (`Property<long>(AggregateVersion.PropertyName).HasColumnName("row_version")`), and a naming
+  convention applies to it.
+
+Across requests — an HTTP `ETag` / `If-Match` — read the version from a loaded aggregate or from a
+projection, and state it on the command:
+
+```csharp
+public async ValueTask<long> HandleAsync(OrderId id, long ifMatch, string sku, Actor by, CancellationToken ct = default)
+{
+    var order = await orders.FindAsync(id, expectedVersion: ifMatch, ct).ConfigureAwait(false)
+        ?? throw new InvalidOperationException($"Order {id} does not exist.");
+
+    order.AddLine(sku, 1, by, clock);
+    await unitOfWork.CommitAsync(ct).ConfigureAwait(false); // UPDATE … WHERE AggregateVersion = @ifMatch
+
+    return orders.GetVersion(order); // the new ETag
+}
+```
+
+```csharp
+public static IQueryable<OrderSummary> Of(ShopDbContext context) =>
+    context.Orders.AsNoTracking()
+        .Select(o => new OrderSummary(o.Id, o.Number, EF.Property<long>(o, AggregateVersion.PropertyName)));
+```
+
+The expected version becomes the token's original value: the check runs in the `UPDATE` of the
+commit, never as a read-then-compare. A command that states the current version but changes
+nothing writes nothing. A command that states a stale version fails with a conflict even when it
+changes nothing: EF Core sees the original value differ from the loaded one and writes the root's
+token, `WHERE AggregateVersion = @stale`, which matches no row.
+
+A staged aggregate not inserted yet has version 0: `FindAsync(id, expectedVersion)` checks it at the
+find, and any other expected value throws. A delete is checked too: `DeleteAsync` then a commit fails
+when another command changed the aggregate since it was loaded.
+
+Known limits:
+
+- Bulk writes bypass the version: `ExecuteUpdate`, `ExecuteDelete` and raw SQL do not go through the
+  change tracker, so they write an aggregate's rows without bumping its version and without
+  conflicting with a concurrent command.
+- MicroKit bumps the versions in a `SaveChanges` interceptor that runs before the interceptors the
+  application adds with `AddInterceptors`: a change those make to an aggregate during `SavingChanges`
+  is written without a bump.
+- A child the parent references (the parent holds the foreign key, such as a `PrimaryContact`) or the
+  target of a many-to-many navigation can be referenced by several aggregates. Changing it bumps only
+  the referencing aggregates the context tracks. Model such an entity as reference data
+  (`IsOutsideAggregate()`) when several aggregates share it.
 
 ## Transactions
 
@@ -308,7 +374,9 @@ await unitOfWork.CommitAsync();
 ```
 
 `InMemoryRepository<TAggregate, TId>` implements both repository contracts on one store and enforces the
-same pagination limits as the EF Core repository.
+same pagination limits as the EF Core repository. Its versions start at 1 and do not move on their
+own (it cannot see mutations): `SetVersion` sets one, and `FindAsync(id, expectedVersion)` checks it at
+the find, where EF Core checks it at the commit.
 
 ## Analyzers
 
@@ -324,7 +392,7 @@ same pagination limits as the EF Core repository.
 
 | Type | Package | Role |
 |---|---|---|
-| `IRepository<TAggregate, TId>` | Abstractions | Write side: whole-aggregate load, add, delete |
+| `IRepository<TAggregate, TId>` | Abstractions | Write side: whole-aggregate load (optionally at an expected version), add, delete, version |
 | `IUnitOfWork` | Abstractions | Commit or discard the pending change set |
 | `ITransactionalContext` | Abstractions | Run an operation in a transaction (retry, join) |
 | `IPagedResult<T>` | Abstractions | A page of items with the total count |
@@ -346,13 +414,14 @@ same pagination limits as the EF Core repository.
 | `PersistenceBuilder`, `EfCoreBuilder` | EntityFrameworkCore | Registration builders |
 | `ProviderOptions`, `RetryOnFailureOptions` | EntityFrameworkCore | Opt-in retry and pooling |
 | `DomainConventionExtensions` | EntityFrameworkCore | MicroKit.Domain mappings for `ConfigureConventions` |
-| `MicroKitPersistenceDbContextOptionsExtensions` | EntityFrameworkCore | `UseMicroKitPersistence()`: boundary validation and the loaded-root record |
+| `MicroKitPersistenceDbContextOptionsExtensions` | EntityFrameworkCore | `UseMicroKitPersistence()`: boundary validation, the loaded-root record, the aggregate version and its `SaveChanges` step |
 | `AggregateBoundaryNavigationBuilderExtensions` | EntityFrameworkCore | `IsOutsideAggregate()` on a navigation |
+| `AggregateVersion` | EntityFrameworkCore | `PropertyName` of the version token, for projections |
 | `PostgreSqlEfCoreBuilderExtensions` | PostgreSql | `UsePostgreSQL<TContext>` |
 | `SqlServerEfCoreBuilderExtensions` | SqlServer | `UseSqlServer<TContext>` |
 | `QueryOptionsOrderingExtensions` | Specifications | `WithOrderBy`, `WithOrderByDescending`, `WithThenBy`, `WithThenByDescending` |
 | `QueryOptionsSpecificationExtensions` | Specifications | `WithSpec` |
-| `InMemoryRepository<TAggregate, TId>` | Testing | Write and read double |
+| `InMemoryRepository<TAggregate, TId>` | Testing | Write and read double; versions checked at the find (`SetVersion`) |
 | `InMemoryReadRepository<TAggregate>` | Testing | Read-only double |
 | `InMemoryUnitOfWork` | Testing | Counts commits and discards |
 | `ReadRepositoryMutationAnalyzer`, `DirectSaveChangesAnalyzer`, `DbContextInjectionAnalyzer`, `RepositoryIQueryableLeakAnalyzer` | Analyzers | MKP001–MKP005 |
