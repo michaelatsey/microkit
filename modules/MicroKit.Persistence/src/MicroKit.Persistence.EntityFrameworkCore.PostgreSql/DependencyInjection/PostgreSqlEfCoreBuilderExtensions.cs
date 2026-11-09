@@ -9,7 +9,7 @@ public static class PostgreSqlEfCoreBuilderExtensions
 {
     /// <summary>
     /// Registers <typeparamref name="TContext"/> as a scoped <see cref="DbContext"/>, with
-    /// <c>UseMicroKitPersistence()</c>, using the
+    /// <c>UseMicroKitPersistence(<see cref="PostgreSqlFailureClassifier"/>)</c>, using the
     /// Npgsql provider with the given <paramref name="connectionString"/>, leased from a context pool
     /// when <see cref="ProviderOptions.PoolSize"/> is set.
     /// </summary>
@@ -46,7 +46,7 @@ public static class PostgreSqlEfCoreBuilderExtensions
                 if (retry is not null)
                     npgsql.EnableRetryOnFailure(retry.MaxRetryCount, retry.MaxRetryDelay, errorCodesToAdd: null);
                 npgsqlOptions?.Invoke(npgsql);
-            }).UseMicroKitPersistence();
+            }).UseMicroKitPersistence(PostgreSqlFailureClassifier.Instance);
 
         if (options?.PoolSize is { } poolSize)
         {

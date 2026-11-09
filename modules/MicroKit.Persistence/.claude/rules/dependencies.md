@@ -10,7 +10,7 @@ Every version lives in the root `Directory.Packages.props`
 | Project | Project reference | Packages |
 |---------|-------------------|----------|
 | `Abstractions` | — | `MicroKit.Domain` (cross-module) |
-| core (`MicroKit.Persistence`) | Abstractions | — |
+| core (`MicroKit.Persistence`) | Abstractions | `MicroKit.Result` (cross-module) |
 | `EntityFrameworkCore` | core | `Microsoft.EntityFrameworkCore`, `Microsoft.EntityFrameworkCore.Relational`, `Microsoft.Extensions.DependencyInjection.Abstractions` |
 | `EntityFrameworkCore.PostgreSql` | EntityFrameworkCore | `Npgsql.EntityFrameworkCore.PostgreSQL` |
 | `EntityFrameworkCore.SqlServer` | EntityFrameworkCore | `Microsoft.EntityFrameworkCore.SqlServer` |
@@ -26,14 +26,16 @@ Every version lives in the root `Directory.Packages.props`
 - **Intra-module** references are unconditional `ProjectReference`, in every build mode
   (ADR-GLOBAL-002 D5). A `CIReleaseBuild` condition on one is a violation.
 - **Cross-module** references from `src/` use the two-ItemGroup pattern conditioned on
-  `CIReleaseBuild` (root `.claude/rules/cross-module-references.md`). The only one is
-  Abstractions → `MicroKit.Domain`.
+  `CIReleaseBuild` (root `.claude/rules/cross-module-references.md`). There are two:
+  Abstractions → `MicroKit.Domain`, and core → `MicroKit.Result` (#197 phase 3; Abstractions never
+  references Result, #196 D17).
 - Test projects and the samples project reference other modules with an unconditional
   `ProjectReference`.
 
 ## Ecosystem
 
-Allowed by the root graph: Persistence may depend on Result and Domain; it depends on Domain only.
+Allowed by the root graph: Persistence may depend on Result and Domain; it depends on both
+(Abstractions → Domain, core → Result).
 Persistence never depends on Messaging, Tenancy, MediatR or Http — they depend on it
 (`MicroKit.MediatR.Behaviors` → Abstractions; `MicroKit.Tenancy.EntityFrameworkCore` →
 Abstractions + EntityFrameworkCore). Core and EntityFrameworkCore do not reference

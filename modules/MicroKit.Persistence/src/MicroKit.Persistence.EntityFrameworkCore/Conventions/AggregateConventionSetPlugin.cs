@@ -4,8 +4,9 @@ using Microsoft.EntityFrameworkCore.Metadata.Conventions.Infrastructure;
 namespace MicroKit.Persistence.EntityFrameworkCore;
 
 /// <summary>
-/// Adds <see cref="AggregateVersionConvention"/>, <see cref="AggregateBoundaryConvention"/> and
-/// <see cref="AggregateReferenceConvention"/> to the context's conventions.
+/// Adds <see cref="AggregateVersionConvention"/>, <see cref="AggregateBoundaryConvention"/>,
+/// <see cref="AggregateReferenceConvention"/> and <see cref="AggregateErrorNameConvention"/> to the
+/// context's conventions.
 /// </summary>
 internal sealed class AggregateConventionSetPlugin : IConventionSetPlugin
 {
@@ -17,6 +18,7 @@ internal sealed class AggregateConventionSetPlugin : IConventionSetPlugin
         conventionSet.ModelFinalizingConventions.Insert(0, new AggregateVersionConvention());
         conventionSet.ModelFinalizingConventions.Add(new AggregateBoundaryConvention());
         conventionSet.ModelFinalizingConventions.Add(new AggregateReferenceConvention());
+        conventionSet.ModelFinalizingConventions.Add(new AggregateErrorNameConvention());
         return conventionSet;
     }
 }

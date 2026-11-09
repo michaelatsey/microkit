@@ -18,7 +18,7 @@ model: haiku
 2. **FluentAssertions** — any reference is a BLOCK.
 3. **Abstractions** — references `MicroKit.Domain` only (cross-module); no EF Core, `Npgsql.*`,
    SqlServer, `NSubstitute`, nor any `MicroKit.Persistence.*` project.
-4. **Core** — references Abstractions only; no package.
+4. **Core** — references Abstractions and, cross-module with the two-ItemGroup pattern, `MicroKit.Result` (ADR-011); no package. Abstractions never references `MicroKit.Result`.
 5. **EntityFrameworkCore** — core + `Microsoft.EntityFrameworkCore`,
    `Microsoft.EntityFrameworkCore.Relational`, `Microsoft.Extensions.DependencyInjection.Abstractions`;
    no provider package.
@@ -35,8 +35,8 @@ model: haiku
 
 - **Intra-module** (between this module's projects): unconditional `ProjectReference`, in every
   build mode (ADR-GLOBAL-002 D5). A `CIReleaseBuild` condition on one is a BLOCK.
-- **Cross-module from `src/`**: the two-ItemGroup pattern. Today the only one is
-  Abstractions → `MicroKit.Domain`.
+- **Cross-module from `src/`**: the two-ItemGroup pattern. Today there are two:
+  Abstractions → `MicroKit.Domain` and core → `MicroKit.Result`.
 - **Tests and samples** (`IsPackable=false`): unconditional `ProjectReference` to other modules.
 
 ```bash

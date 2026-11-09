@@ -26,7 +26,8 @@ public static class MicroKitPersistenceDbContextOptionsExtensions
     /// Without it, <see cref="EfRepository{TAggregate, TId, TContext}"/> refuses to load with an
     /// <see cref="InvalidOperationException"/>. <see cref="EfReadRepository{TAggregate, TContext}"/>
     /// and <see cref="EfUnitOfWork{TContext}"/> work without it, but then no version is bumped and
-    /// commits get no aggregate concurrency. Calling it twice is harmless.
+    /// commits get no aggregate concurrency. Calling it twice is harmless, and keeps a classifier given
+    /// to <see cref="UseMicroKitPersistence(DbContextOptionsBuilder, IDatabaseFailureClassifier)"/>.
     /// </para>
     /// <para>
     /// The services are added to the internal service provider EF Core builds. A context given its
@@ -50,4 +51,38 @@ public static class MicroKitPersistenceDbContextOptionsExtensions
         this DbContextOptionsBuilder<TContext> optionsBuilder)
         where TContext : DbContext =>
         (DbContextOptionsBuilder<TContext>)UseMicroKitPersistence((DbContextOptionsBuilder)optionsBuilder);
+
+    /// <summary>
+    /// Adds MicroKit.Persistence to the context, as <see cref="UseMicroKitPersistence(DbContextOptionsBuilder)"/>
+    /// does, with the provider's classifier of database errors: the <see cref="IResultUnitOfWork"/> path of
+    /// <see cref="EfUnitOfWork{TContext}"/> then converts unique and foreign-key violations too.
+    /// </summary>
+    /// <param name="optionsBuilder">The context's options builder.</param>
+    /// <param name="failureClassifier">
+    /// The provider's classifier — <c>PostgreSqlFailureClassifier.Instance</c>,
+    /// <c>SqlServerFailureClassifier.Instance</c>. <c>UsePostgreSQL</c> and <c>UseSqlServer</c> pass theirs.
+    /// </param>
+    /// <returns><paramref name="optionsBuilder"/> for fluent chaining.</returns>
+    /// <remarks>
+    /// A later call without a classifier keeps this one; a later call with another one replaces it.
+    /// </remarks>
+    /// <exception cref="ArgumentNullException"><paramref name="optionsBuilder"/> or <paramref name="failureClassifier"/> is <see langword="null"/>.</exception>
+    public static DbContextOptionsBuilder UseMicroKitPersistence(
+        this DbContextOptionsBuilder optionsBuilder,
+        IDatabaseFailureClassifier failureClassifier)
+    {
+        ArgumentNullException.ThrowIfNull(optionsBuilder);
+        ArgumentNullException.ThrowIfNull(failureClassifier);
+        ((IDbContextOptionsBuilderInfrastructure)optionsBuilder).AddOrUpdateExtension(
+            new MicroKitPersistenceOptionsExtension(failureClassifier));
+        return optionsBuilder;
+    }
+
+    /// <inheritdoc cref="UseMicroKitPersistence(DbContextOptionsBuilder, IDatabaseFailureClassifier)"/>
+    /// <typeparam name="TContext">The application <see cref="DbContext"/> type.</typeparam>
+    public static DbContextOptionsBuilder<TContext> UseMicroKitPersistence<TContext>(
+        this DbContextOptionsBuilder<TContext> optionsBuilder,
+        IDatabaseFailureClassifier failureClassifier)
+        where TContext : DbContext =>
+        (DbContextOptionsBuilder<TContext>)UseMicroKitPersistence((DbContextOptionsBuilder)optionsBuilder, failureClassifier);
 }

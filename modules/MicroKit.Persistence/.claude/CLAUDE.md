@@ -12,7 +12,7 @@ keep the CQRS data-access split honest.
 
 Consumer documentation: `README.md`. Every C# sample in it lives in, and builds from,
 `samples/MicroKit.Persistence.Samples`. Decisions: `.claude-context/context/architectural-decisions.md`
-(ADR-001 to ADR-010, DN-001, DN-002).
+(ADR-001 to ADR-011, DN-001, DN-002).
 
 ---
 
@@ -48,19 +48,21 @@ MicroKit.Persistence/
 │   │                                              ITransactionalContext, IPagedResult<T>, PersistenceException
 │   ├── MicroKit.Persistence/                      IReadRepository<T>, QueryOptions<T> + extensions,
 │   │                                              PaginationOptions, PaginationLimits, PagedResult<T>,
-│   │                                              ISpecificationEvaluator
+│   │                                              ISpecificationEvaluator; the Result path:
+│   │                                              IResultUnitOfWork, PersistenceErrors,
+│   │                                              AggregateVersionConflictException
 │   ├── MicroKit.Persistence.EntityFrameworkCore/  EfRepository, EfReadRepository, EfUnitOfWork,
 │   │                                              ITransactionalUnitOfWork, EfSpecificationEvaluator,
 │   │                                              EfDomainEventsProvider, DI builders, ProviderOptions,
 │   │                                              domain conventions (ids, Actor, audit instants)
-│   ├── MicroKit.Persistence.EntityFrameworkCore.PostgreSql/  UsePostgreSQL<TContext>
-│   ├── MicroKit.Persistence.EntityFrameworkCore.SqlServer/   UseSqlServer<TContext>
+│   ├── MicroKit.Persistence.EntityFrameworkCore.PostgreSql/  UsePostgreSQL<TContext>, PostgreSqlFailureClassifier
+│   ├── MicroKit.Persistence.EntityFrameworkCore.SqlServer/   UseSqlServer<TContext>, SqlServerFailureClassifier
 │   ├── MicroKit.Persistence.Specifications/       WithOrderBy/WithThenBy…, WithSpec
 │   ├── MicroKit.Persistence.Testing/              InMemoryRepository<TAggregate, TId>,
 │   │                                              InMemoryReadRepository<T>, InMemoryUnitOfWork
 │   └── MicroKit.Persistence.Analyzers/            MKP001–MKP005 (netstandard2.0, build-time only)
 ├── tests/
-│   ├── MicroKit.Persistence.UnitTests/            QueryOptions, pagination, in-memory doubles
+│   ├── MicroKit.Persistence.UnitTests/            QueryOptions, pagination, PersistenceErrors, in-memory doubles
 │   ├── MicroKit.Persistence.IntegrationTests/     SQLite + PostgreSQL + SQL Server (Testcontainers)
 │   ├── MicroKit.Persistence.ArchitectureTests/    NetArchTest layering + IL call scan (Mono.Cecil)
 │   └── MicroKit.Persistence.Analyzers.Tests/
@@ -76,14 +78,14 @@ There is no benchmark project and no performance-test project.
 ```
 MicroKit.Persistence.Abstractions  ← MicroKit.Domain (cross-module, two-ItemGroup pattern)
         ↑
-MicroKit.Persistence (core)        ← no package
+MicroKit.Persistence (core)        ← MicroKit.Result (cross-module, two-ItemGroup pattern)
         ↑
 MicroKit.Persistence.EntityFrameworkCore  ← Microsoft.EntityFrameworkCore(.Relational),
         ↑                                   Microsoft.Extensions.DependencyInjection.Abstractions
 MicroKit.Persistence.EntityFrameworkCore.PostgreSql  ← Npgsql.EntityFrameworkCore.PostgreSQL
 MicroKit.Persistence.EntityFrameworkCore.SqlServer   ← Microsoft.EntityFrameworkCore.SqlServer
 MicroKit.Persistence.Specifications  ← core
-MicroKit.Persistence.Testing         ← core (no package)
+MicroKit.Persistence.Testing         ← core (no package; MicroKit.Result through core)
 MicroKit.Persistence.Analyzers       ← Microsoft.CodeAnalysis.CSharp, PrivateAssets="all" (no project reference)
 ```
 
@@ -103,6 +105,11 @@ IRepository<TAggregate, TId>   // TAggregate : class, IAggregateRoot; TId : IEnt
 IUnitOfWork                    // CommitAsync(ct) · DiscardChanges()
 ITransactionalContext          // ExecuteAsync<TState>(op, state, ct) · ExecuteAsync<TState, TResult>(…)
 
+// Core — the Result path (ADR-011): conflicts as Result errors, converted after the rollback
+IResultUnitOfWork              // TryExecuteAsync(op, state, ct) ×2 · TryCommitAsync(ct) — EfUnitOfWork, InMemoryUnitOfWork
+PersistenceErrors              // PERSISTENCE.<ROOT>.<DUPLICATE|REFERENCE|CONCURRENCY>, category Conflict
+AggregateVersionConflictException  // inner of a version conflict a repository detects itself
+
 // Core — read side (the only read contract)
 IReadRepository<TAggregate>    // FindAsync(object[] keyValues) · ListAsync · ListPagedAsync · AnyAsync · CountAsync
 QueryOptions<TAggregate>       // Specification, Includes, Pagination, AsSplitQueryEnabled, OrderBy
@@ -114,11 +121,14 @@ PaginationLimits               // DefaultPageSize 50, MaxPageSize 500; ListPaged
 EfRepository<TAggregate, TId, TContext>     // unsealed; protected LoadAggregatesAsync(predicate, ct);
                                             // refuses a tracked root it did not load whole (ADR-009)
 EfReadRepository<TAggregate, TContext>(context, evaluator, paginationLimits)  // unsealed
-EfUnitOfWork<TContext> : ITransactionalUnitOfWork   // = IUnitOfWork + ITransactionalContext
+EfUnitOfWork<TContext> : ITransactionalUnitOfWork, IResultUnitOfWork   // = IUnitOfWork + ITransactionalContext
 UseMicroKitPersistence()       // on DbContextOptionsBuilder: boundary convention + AggregateLoadRecord
 IsOutsideAggregate()           // on NavigationBuilder: reference data, outside the boundary
 AggregateVersion.PropertyName  // shadow long concurrency token on every root, bumped by every save
                                // that writes its boundary (AggregateSaveInterceptor, ADR-010)
+HasAggregateErrorName(name)    // on EntityTypeBuilder: the <ROOT> of the PERSISTENCE codes (ADR-011)
+IDatabaseFailureClassifier     // provider error codes; PostgreSqlFailureClassifier, SqlServerFailureClassifier
+UseMicroKitPersistence(classifier)  // UsePostgreSQL / UseSqlServer pass theirs
 ```
 
 Composition:
@@ -191,7 +201,7 @@ strategy (ADR-002). `IUnitOfWork` moved here from MicroKit.Domain (ADR-001).
 
 ```
 .claude-context/
-├── context/architectural-decisions.md   ADR-001…ADR-010, DN-001, DN-002
+├── context/architectural-decisions.md   ADR-001…ADR-011, DN-001, DN-002
 ├── context/dependency-graph.md          project and package graph as declared
 ├── context/ecosystem-overview.md        position among MicroKit modules
 ├── standards/performance-budget.md      targets (no benchmark project yet)

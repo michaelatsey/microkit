@@ -13,6 +13,7 @@ public sealed class ShopDbContext(DbContextOptions<ShopDbContext> options) : DbC
         modelBuilder.Entity<Order>(order =>
         {
             order.Ignore(o => o.DomainEvents);
+            order.HasIndex(o => o.Number).IsUnique(); // a second SO-1: PERSISTENCE.ORDER.DUPLICATE
             order.HasMany(o => o.Lines).WithOne().HasForeignKey("OrderId");
             order.HasMany(o => o.TagLinks).WithOne().HasForeignKey(l => l.OrderId);
         });

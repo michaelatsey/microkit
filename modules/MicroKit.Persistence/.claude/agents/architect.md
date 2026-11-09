@@ -33,7 +33,8 @@ Expert in DDD, the Repository and Unit of Work patterns, CQRS data access and EF
 
 1. **Where does the type live?** Abstractions: `IRepository<TAggregate, TId>`, `IUnitOfWork`,
    `ITransactionalContext`, `IPagedResult<T>`, `PersistenceException` — nothing else. Core:
-   `IReadRepository<T>`, `QueryOptions<T>`, pagination, `ISpecificationEvaluator`.
+   `IReadRepository<T>`, `QueryOptions<T>`, pagination, `ISpecificationEvaluator`, and the `Result`
+   path (`IResultUnitOfWork`, `PersistenceErrors`, `AggregateVersionConflictException` — ADR-011).
    EntityFrameworkCore: implementations, `ITransactionalUnitOfWork`, DI, conventions, `ProviderOptions`.
 2. **Is the UoW used correctly?** Command handlers inject `IUnitOfWork`; one `CommitAsync` per
    command; query handlers never inject it; repositories never commit.

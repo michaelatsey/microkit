@@ -4,7 +4,7 @@
 
 | Project | Tests |
 |---------|-------|
-| `UnitTests` | `QueryOptions` and its extensions, `PaginationOptions`, the in-memory doubles — no database |
+| `UnitTests` | `QueryOptions` and its extensions, `PaginationOptions`, `PersistenceErrors`, the in-memory doubles — no database |
 | `IntegrationTests` | EF Core against SQLite in-memory, PostgreSQL and SQL Server via Testcontainers (`EntityFrameworkCore/`, `PostgreSql/`, `SqlServer/`), the Docker probe (`Docker/`), provider registration (`Providers/`) |
 | `ArchitectureTests` | NetArchTest layering, contract placement, sealing, namespaces; `IlCallScanTests` (Mono.Cecil) |
 | `Analyzers.Tests` | MKP001–MKP005 — see `analyzers.md` |
@@ -65,6 +65,13 @@ composite keys, includes or tracking.
   `IsOutsideAggregate`; every way to track a partial root is refused; the record survives pooling,
   `DiscardChanges` and a failed `ExecuteAsync` attempt.
 - Unit of work: commit translation to `PersistenceException`, `DiscardChanges`, cancellation.
+- `Result` path (`PersistenceResultTests`, both servers): DUPLICATE with neither flush persisted;
+  REFERENCE; CONCURRENCY from a second context, a stale expected version and a staged root found at a
+  version other than 0; the root of a child, no root for two aggregates or none; a fixed name; a failed
+  `Result` rolls back; a joined call converts nothing; a transient retried; retries exhausted
+  unconverted; `TryCommitAsync` refused in a transaction; ambient transactions rejected; SQL Server 547
+  on a table with a check constraint unconverted; model name clashes. The double:
+  `InMemoryResultUnitOfWorkTests`.
 
 ## Detecting violations
 

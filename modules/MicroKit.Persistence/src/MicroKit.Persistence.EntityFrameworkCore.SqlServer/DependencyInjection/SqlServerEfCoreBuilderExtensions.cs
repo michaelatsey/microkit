@@ -9,7 +9,7 @@ public static class SqlServerEfCoreBuilderExtensions
 {
     /// <summary>
     /// Registers <typeparamref name="TContext"/> as a scoped <see cref="DbContext"/>, with
-    /// <c>UseMicroKitPersistence()</c>, using the
+    /// <c>UseMicroKitPersistence(<see cref="SqlServerFailureClassifier"/>)</c>, using the
     /// SQL Server provider with the given <paramref name="connectionString"/>, leased from a context pool
     /// when <see cref="ProviderOptions.PoolSize"/> is set.
     /// </summary>
@@ -46,7 +46,7 @@ public static class SqlServerEfCoreBuilderExtensions
                 if (retry is not null)
                     sqlServer.EnableRetryOnFailure(retry.MaxRetryCount, retry.MaxRetryDelay, errorNumbersToAdd: null);
                 sqlServerOptions?.Invoke(sqlServer);
-            }).UseMicroKitPersistence();
+            }).UseMicroKitPersistence(SqlServerFailureClassifier.Instance);
 
         if (options?.PoolSize is { } poolSize)
         {

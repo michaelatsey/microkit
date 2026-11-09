@@ -67,6 +67,27 @@ return orders.SingleOrDefault();
 - Bump: `Added` → 1, otherwise original + 1, `Deleted` untouched. Do not bump by hand, and do not
   write aggregate rows with `ExecuteUpdate`/raw SQL when the version must hold.
 
+## Persistence failures as `Result` — ADR-011
+
+- `EfUnitOfWork` implements `IResultUnitOfWork`. `TryExecuteAsync` runs `ExecuteAsync`'s core and maps a
+  `PersistenceException` only after it has thrown (rolled back, strategy gave up); joined
+  (`CurrentTransaction` set) it converts nothing. A failed `Result` from the operation is carried out of
+  the strategy by an internal non-transient sentinel (`FailedResultRollback<TResult>`) so the attempt
+  rolls back — no flag. `TryCommitAsync` refuses an open transaction.
+- `PersistenceFailureMapper` (internal) reads the exception chain, never a message:
+  `DbUpdateConcurrencyException` / `AggregateVersionConflictException` → CONCURRENCY; a classified
+  `DbException` (under a `DbUpdateException` or bare) → DUPLICATE / REFERENCE; `RetryLimitExceededException`
+  → never. `<ROOT>` comes from the failing entries' entity types (`AggregateBoundaryMap`), one root or
+  none.
+- Provider codes: `IDatabaseFailureClassifier` from the context's options
+  (`UseMicroKitPersistence(classifier)`, passed by `UsePostgreSQL`/`UseSqlServer`). SQL Server `547`
+  (`ForeignKeyOrCheckViolation`) maps to REFERENCE only when no entity type of the failing entries'
+  tables declares a check constraint (design-time model).
+- `AggregateErrorNameConvention` (last finalizing convention) annotates each top-most root with
+  `MicroKit:ErrorName` (`HasAggregateErrorName` or UPPER_SNAKE of the CLR name) and fails on a clash, on
+  the annotation on a non-root, on an invalid default name.
+- An ambient `System.Transactions` transaction is rejected (EF Core's own refusals, pinned by tests).
+
 ## Read side — `EfReadRepository<TAggregate, TContext>`
 
 - `FindAsync(object[] keyValues)`: key count must match the primary key; a null value matches
@@ -99,8 +120,8 @@ assembly for it. Only the named overload may be used.
   `DbUpdateException`, join of an open transaction, rollback that never masks, tracker cleared
   after a failed attempt — ADR-006. Do not re-implement any of this in a consumer.
 - `AddUnitOfWork<TContext>` registers it scoped as `EfUnitOfWork<TContext>`, `IUnitOfWork`,
-  `ITransactionalContext`, `ITransactionalUnitOfWork`, plus `EfDomainEventsProvider<TContext>` as
-  `IDomainEventsProvider`.
+  `ITransactionalContext`, `ITransactionalUnitOfWork`, `IResultUnitOfWork`, plus
+  `EfDomainEventsProvider<TContext>` as `IDomainEventsProvider`.
 
 ## Providers
 

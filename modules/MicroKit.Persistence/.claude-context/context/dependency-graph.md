@@ -13,7 +13,8 @@ MicroKit.Persistence.Abstractions
 │   └── cross-module: MicroKit.Domain   (two-ItemGroup: ProjectReference / PackageReference on CIReleaseBuild)
 │
 MicroKit.Persistence (core)
-│   └── → Abstractions
+│   ├── → Abstractions
+│   └── cross-module: MicroKit.Result   (two-ItemGroup; the Result path, #197 phase 3 — ADR-011)
 │
 MicroKit.Persistence.EntityFrameworkCore
 │   ├── → core
@@ -57,12 +58,16 @@ All test projects use xUnit, Shouldly; UnitTests and IntegrationTests also NSubs
 
 ## Cross-module
 
-Outgoing (allowed by the root graph: Result, Domain — only Domain is used):
+Outgoing (allowed by the root graph: Result, Domain — both are used):
 
 ```
 MicroKit.Persistence.Abstractions → MicroKit.Domain   (IAggregateRoot, IEntityId; Domain types used by
                                                        core and EntityFrameworkCore come through it)
+MicroKit.Persistence (core)       → MicroKit.Result   (IResultUnitOfWork, PersistenceErrors; EntityFrameworkCore,
+                                                       Testing and the providers get it through core)
 ```
+
+Abstractions never references `MicroKit.Result` (#196 D17; `LayerDependencyTests`).
 
 Incoming:
 
@@ -85,9 +90,15 @@ All versions in the root `Directory.Packages.props`.
 | Package | Used by |
 |---------|---------|
 | `MicroKit.Domain` | Abstractions (release build) |
+| `MicroKit.Result` | core (release build) |
 | `Microsoft.EntityFrameworkCore`, `.Relational` | EntityFrameworkCore |
 | `Microsoft.Extensions.DependencyInjection.Abstractions` | EntityFrameworkCore |
 | `Npgsql.EntityFrameworkCore.PostgreSQL` | PostgreSql, IntegrationTests |
 | `Microsoft.EntityFrameworkCore.SqlServer` | SqlServer |
 | `NSubstitute` | UnitTests, IntegrationTests |
 | `Microsoft.CodeAnalysis.CSharp` | Analyzers, IntegrationTests |
+
+The provider classifiers use the ADO.NET exception types through their EF Core provider package, with
+no direct reference: `Npgsql.PostgresException` (PostgreSql, from `Npgsql.EntityFrameworkCore.PostgreSQL`)
+and `Microsoft.Data.SqlClient.SqlException` (SqlServer, from `Microsoft.EntityFrameworkCore.SqlServer`).
+Intentional: the ADO.NET provider's version is the one the EF Core provider was built against.

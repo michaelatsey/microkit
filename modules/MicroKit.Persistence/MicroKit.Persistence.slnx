@@ -18,4 +18,10 @@
     <Project Path="tests/MicroKit.Persistence.Analyzers.Tests/MicroKit.Persistence.Analyzers.Tests.csproj" />
     <Project Path="tests/MicroKit.Persistence.ArchitectureTests/MicroKit.Persistence.ArchitectureTests.csproj" />
   </Folder>
+  <Folder Name="/deps/">
+    <!-- Other modules reached through ProjectReference (root .claude/rules/cross-module-references.md):
+         Abstractions → MicroKit.Domain, core → MicroKit.Result -->
+    <Project Path="../MicroKit.Domain/src/MicroKit.Domain/MicroKit.Domain.csproj" />
+    <Project Path="../MicroKit.Result/src/MicroKit.Result/MicroKit.Result.csproj" />
+  </Folder>
 </Solution>

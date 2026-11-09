@@ -52,7 +52,7 @@ public sealed class InMemoryRepositoryVersionTests
             await _repo.FindAsync(item.Id, expectedVersion: 2));
 
         thrown.Message.ShouldContain("concurrency");
-        thrown.InnerException.ShouldBeOfType<InvalidOperationException>().Message.ShouldContain("version 3, not 2");
+        thrown.InnerException.ShouldBeOfType<AggregateVersionConflictException>().Message.ShouldContain("version 3, not 2");
     }
 
     [Fact]

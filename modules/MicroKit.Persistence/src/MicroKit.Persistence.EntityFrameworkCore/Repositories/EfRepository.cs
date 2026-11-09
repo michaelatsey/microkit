@@ -121,7 +121,9 @@ public class EfRepository<TAggregate, TId, TContext>(TContext context)
     /// <inheritdoc cref="IRepository{TAggregate, TId}.FindAsync(TId, long, CancellationToken)"/>
     /// <exception cref="InvalidOperationException">As for <see cref="FindAsync(TId, CancellationToken)"/>.</exception>
     /// <exception cref="PersistenceException">
-    /// The aggregate is staged but not inserted yet, and <paramref name="expectedVersion"/> is not 0.
+    /// The aggregate is staged but not inserted yet, and <paramref name="expectedVersion"/> is not 0. Its
+    /// inner exception is an <see cref="AggregateVersionConflictException"/> carrying the root's error name,
+    /// which <see cref="IResultUnitOfWork"/> converts to <see cref="PersistenceErrors.Concurrency"/>.
     /// </exception>
     /// <remarks>
     /// <para>
@@ -156,8 +158,11 @@ public class EfRepository<TAggregate, TId, TContext>(TContext context)
             {
                 throw new PersistenceException(
                     "Optimistic concurrency conflict: the expected version does not match.",
-                    new InvalidOperationException(
-                        $"This '{typeof(TAggregate).Name}' is not inserted yet: its version is 0, not {expectedVersion}."));
+                    new AggregateVersionConflictException(
+                        $"This '{typeof(TAggregate).Name}' is not inserted yet: its version is 0, not {expectedVersion}.")
+                    {
+                        ErrorName = PersistenceFailureMapper.ErrorNameOfRoot(entry.Metadata),
+                    });
             }
 
             return aggregate;

@@ -35,7 +35,7 @@ the replacement model; no tag is cut until steps 1–4 of its migration land.
 | Package | Dependencies |
 |---------|--------------|
 | `Abstractions` | `MicroKit.Domain` |
-| `MicroKit.Persistence` | `MicroKit.Persistence.Abstractions` |
+| `MicroKit.Persistence` | `MicroKit.Persistence.Abstractions`, `MicroKit.Result` |
 | `EntityFrameworkCore` | `MicroKit.Persistence`, `Microsoft.EntityFrameworkCore`, `Microsoft.EntityFrameworkCore.Relational`, `Microsoft.Extensions.DependencyInjection.Abstractions` |
 | `PostgreSql` | `MicroKit.Persistence.EntityFrameworkCore`, `Npgsql.EntityFrameworkCore.PostgreSQL` |
 | `SqlServer` | `MicroKit.Persistence.EntityFrameworkCore`, `Microsoft.EntityFrameworkCore.SqlServer` |

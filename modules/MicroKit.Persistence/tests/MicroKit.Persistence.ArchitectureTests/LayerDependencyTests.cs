@@ -28,6 +28,19 @@ public sealed class LayerDependencyTests
     // --- Abstractions assembly ---
 
     [Fact]
+    public void Abstractions_DoesNotReferenceResult()
+    {
+        // #196 D17: the Result path lives in core (#197 phase 3), never in Abstractions.
+        AbstractionsAssembly.GetReferencedAssemblies().Any(a => a.Name == "MicroKit.Result").ShouldBeFalse();
+    }
+
+    [Fact]
+    public void Core_ReferencesResult()
+    {
+        CoreAssembly.GetReferencedAssemblies().Any(a => a.Name == "MicroKit.Result").ShouldBeTrue();
+    }
+
+    [Fact]
     public void Abstractions_DoesNotReferenceEntityFrameworkCore()
     {
         var refs = AbstractionsAssembly.GetReferencedAssemblies();

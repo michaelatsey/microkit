@@ -13,7 +13,7 @@ Release with the module; `ReadmeSamplesTests` fails if a sample drifts from it.
 | Package | Contents | Depends on |
 |---|---|---|
 | `MicroKit.Persistence.Abstractions` | `IRepository<TAggregate, TId>`, `IUnitOfWork`, `ITransactionalContext`, `IPagedResult<T>`, `PersistenceException` | `MicroKit.Domain` |
-| `MicroKit.Persistence` | `IReadRepository<TAggregate>`, `QueryOptions<TAggregate>`, pagination, `ISpecificationEvaluator` | Abstractions |
+| `MicroKit.Persistence` | `IReadRepository<TAggregate>`, `QueryOptions<TAggregate>`, pagination, `ISpecificationEvaluator`, the `Result` path (`IResultUnitOfWork`, `PersistenceErrors`) | Abstractions, `MicroKit.Result` |
 | `MicroKit.Persistence.EntityFrameworkCore` | EF Core repositories, unit of work, DI registration, Domain conventions | Core, EF Core |
 | `MicroKit.Persistence.EntityFrameworkCore.PostgreSql` | `UsePostgreSQL` | EntityFrameworkCore, Npgsql |
 | `MicroKit.Persistence.EntityFrameworkCore.SqlServer` | `UseSqlServer` | EntityFrameworkCore, SQL Server provider |
@@ -41,7 +41,7 @@ return services;
 ```
 
 `AddUnitOfWork<TContext>()` binds one scoped `EfUnitOfWork<TContext>` to `IUnitOfWork`,
-`ITransactionalContext` and `ITransactionalUnitOfWork`, and registers `EfDomainEventsProvider<TContext>`
+`ITransactionalContext`, `ITransactionalUnitOfWork` and `IResultUnitOfWork`, and registers `EfDomainEventsProvider<TContext>`
 as the scoped `IDomainEventsProvider`. `MicroKit.MediatR`'s `TransactionBehavior` consumes them: it
 runs each command inside `ITransactionalContext.ExecuteAsync`, dispatches the domain events, then
 calls `IUnitOfWork.CommitAsync`.
@@ -159,6 +159,7 @@ public sealed class ShopDbContext(DbContextOptions<ShopDbContext> options) : DbC
         modelBuilder.Entity<Order>(order =>
         {
             order.Ignore(o => o.DomainEvents);
+            order.HasIndex(o => o.Number).IsUnique(); // a second SO-1: PERSISTENCE.ORDER.DUPLICATE
             order.HasMany(o => o.Lines).WithOne().HasForeignKey("OrderId");
             order.HasMany(o => o.TagLinks).WithOne().HasForeignKey(l => l.OrderId);
         });
@@ -375,7 +376,10 @@ Known limits:
   no strategy, no begin, commit or rollback;
 - the rollback never runs with a cancelled token and never replaces the original exception;
 - the outermost call surfaces every database failure as a `PersistenceException`; a joined call lets
-  the operation's exceptions through to the transaction's owner.
+  the operation's exceptions through to the transaction's owner;
+- an ambient `System.Transactions` transaction (`TransactionScope`) is rejected, as EF Core rejects it:
+  with retry on, the execution strategy refuses to start; without, beginning the transaction fails. A
+  distributed transaction is not a consistency mechanism between services: they go through the outbox.
 
 ### A command without MediatR
 
@@ -392,6 +396,111 @@ transactions.ExecuteAsync(
     (Orders: orders, UnitOfWork: unitOfWork, Clock: clock, Id: id, Sku: sku, Quantity: quantity, By: by),
     ct);
 ```
+
+## Persistence failures as `Result`
+
+`IResultUnitOfWork` (core) returns three persistence failures as `MicroKit.Result` errors of category
+`Conflict` instead of throwing; every other failure still throws `PersistenceException`:
+
+| Failure | Recognised by | Code |
+|---|---|---|
+| Unique-constraint violation | PostgreSQL `23505`, SQL Server `2627`/`2601` | `PERSISTENCE.<ROOT>.DUPLICATE` |
+| Foreign-key violation | PostgreSQL `23503`, SQL Server `547` (see below) | `PERSISTENCE.<ROOT>.REFERENCE` |
+| Concurrency conflict | `DbUpdateConcurrencyException`, a stale expected version | `PERSISTENCE.<ROOT>.CONCURRENCY` |
+
+```csharp
+public sealed class PlaceOrder(
+    IResultUnitOfWork transactions,
+    IOrderRepository orders,
+    IUnitOfWork unitOfWork,
+    TimeProvider clock)
+{
+    // README: "Persistence failures as Result"
+    public ValueTask<Result<OrderId>> HandleAsync(string number, Actor by, CancellationToken ct = default) =>
+        transactions.TryExecuteAsync(
+            static async (s, token) =>
+            {
+                if (string.IsNullOrWhiteSpace(s.Number))
+                    return Result.Failure<OrderId>(Error.Validation(ErrorCode.From("ORDER.NUMBER.EMPTY"), "An order needs a number."));
+
+                var order = Order.Place(s.Number, s.By, s.Clock);
+                await s.Orders.AddAsync(order, token).ConfigureAwait(false);
+                await s.UnitOfWork.CommitAsync(token).ConfigureAwait(false);
+                return Result.Success(order.Id);
+            },
+            (Orders: orders, UnitOfWork: unitOfWork, Clock: clock, Number: number, By: by),
+            ct);
+}
+```
+
+A second `SO-1` returns `PERSISTENCE.ORDER.DUPLICATE` (409 through `MicroKit.Result.AspNetCore`), and
+nothing of the command is written.
+
+- **Where it converts.** `TryExecuteAsync` runs the operation as `ExecuteAsync` does — transaction,
+  execution strategy, transient failures retried — and converts a failure only once the transaction it
+  owns is rolled back and the strategy has given up. Converting inside the transaction would let the
+  operation return normally, and the owner would commit what was written before it (an earlier flush,
+  an `ExecuteUpdate`, outbox rows). Joined to an open transaction, it converts nothing: the exception
+  reaches the owner, which rolls back.
+- **A failed `Result` the operation returns** is returned unchanged, and the transaction it owns is
+  rolled back instead of committed: a failed command persists none of its work. Joined, the owner
+  decides.
+- **`TryCommitAsync`** is the `Result` counterpart of `CommitAsync`, for code with no open transaction
+  (a flush is atomic by itself); inside an open transaction it throws `InvalidOperationException`.
+- **`<ROOT>`** is the failing entity's aggregate root, by default its simple CLR name in UPPER_SNAKE
+  (`OrderLine` → `ORDER_LINE`); `Entity<Billing.Order>().HasAggregateErrorName("BILLING_ORDER")` fixes
+  it, and model building fails when two roots resolve to the same name. When the failing entities belong
+  to more than one aggregate, or to none (an outbox row, a constraint checked at COMMIT), the code is
+  `PERSISTENCE.<REASON>`: a root is never guessed.
+- **The message is fixed and client-safe**: no table, constraint or column name. The provider exception
+  stays in process, in EF Core's log (`SaveChangesFailed`).
+- **Provider codes** are recognised by `PostgreSqlFailureClassifier` and `SqlServerFailureClassifier`,
+  which `UsePostgreSQL` and `UseSqlServer` configure. A context configured another way passes one:
+  `UseMicroKitPersistence(PostgreSqlFailureClassifier.Instance)`; without one, only concurrency
+  conflicts are converted.
+- **SQL Server `547`** is reported for a foreign-key and for a check violation alike. It is decided from
+  the model: `REFERENCE` only when no entity type mapped to the failing entries' tables declares a check
+  constraint (`HasCheckConstraint`); otherwise it is not converted. A check constraint that exists in the
+  database but not in the model cannot be seen, and its violation is reported as `REFERENCE`. A
+  PostgreSQL check violation (`23514`) is never converted.
+- A strategy that retries every exception, rather than the provider's transient ones, would also re-run
+  an operation that returned a failed `Result`.
+- `IResultUnitOfWork` writes nothing by itself: the operation flushes with `IUnitOfWork.CommitAsync`, so
+  a handler injects both. After a converted `TryCommitAsync` failure the change set is still pending;
+  call `DiscardChanges()` before reusing the scope.
+- Inside a transaction someone else owns — MicroKit.MediatR's `TransactionBehavior` runs every command
+  in `ExecuteAsync` — `TryExecuteAsync` is joined and converts nothing, and `TryCommitAsync` is refused:
+  the conversion belongs to the transaction's owner. MicroKit.MediatR adopts it during its own upgrade.
+
+The in-memory double follows the same transaction rules: a version conflict of `InMemoryRepository`
+(checked at the find) becomes `PERSISTENCE.<ROOT>.CONCURRENCY` with the default name inside
+`TryExecuteAsync`, and a failed operation counts no commit:
+
+```csharp
+var orders = new InMemoryRepository<Order, OrderId>();
+var unitOfWork = new InMemoryUnitOfWork();
+var order = Order.Place("SO-1", new Actor("user-1"), TimeProvider.System);
+await orders.AddAsync(order);
+orders.SetVersion(order, 2); // another command changed it
+
+var result = await unitOfWork.TryExecuteAsync(
+    static async (s, ct) =>
+    {
+        var stale = await s.Orders.FindAsync(s.Id, expectedVersion: 1, ct);
+        stale!.AddLine("BOOK", 1, new Actor("user-1"), TimeProvider.System);
+        await s.UnitOfWork.CommitAsync(ct);
+        return Result.Success();
+    },
+    (Orders: orders, UnitOfWork: unitOfWork, order.Id));
+
+// result.Error.Code == "PERSISTENCE.ORDER.CONCURRENCY", category Conflict; no commit counted.
+```
+
+The double cannot roll its store back: a failed operation's writes stay visible in it. It has no model,
+so a name fixed with `HasAggregateErrorName` is unknown to it. It has no constraints either: it never
+returns `DUPLICATE` or `REFERENCE` (adding an aggregate twice throws at `AddAsync`), and since it checks
+versions at the find, a stale find outside `TryExecuteAsync` throws instead of reaching `TryCommitAsync`
+as a `CONCURRENCY` error.
 
 ## The read side
 
@@ -462,6 +571,9 @@ the find, where EF Core checks it at the commit.
 | `ITransactionalContext` | Abstractions | Run an operation in a transaction (retry, join) |
 | `IPagedResult<T>` | Abstractions | A page of items with the total count |
 | `PersistenceException` | Abstractions | Every database failure surfaced by the module |
+| `IResultUnitOfWork` | Core | `TryExecuteAsync`, `TryCommitAsync`: conflicts as `Result` errors, converted after the rollback |
+| `PersistenceErrors` | Core | The `PERSISTENCE.<ROOT>.<REASON>` errors, `DefaultErrorName`, `IsValidErrorName` |
+| `AggregateVersionConflictException` | Core | Inner exception of a version conflict a repository detects itself |
 | `IReadRepository<TAggregate>` | Core | Read side, untracked: find, list, page, any, count |
 | `QueryOptions<TAggregate>` | Core | Specification + includes, split query, ordering, pagination |
 | `QueryOptionsExtensions` | Core | `WithIncludes`, `WithPagination`, `AsSplitQuery`, `WithOrdering` |
@@ -471,7 +583,7 @@ the find, where EF Core checks it at the commit.
 | `ISpecificationEvaluator` | Core | Applies `QueryOptions` to an `IQueryable<T>` |
 | `EfRepository<TAggregate, TId, TContext>` | EntityFrameworkCore | EF Core write-side base; `LoadAggregatesAsync` for typed finders |
 | `EfReadRepository<TAggregate, TContext>` | EntityFrameworkCore | EF Core read-side base |
-| `EfUnitOfWork<TContext>` | EntityFrameworkCore | `IUnitOfWork` + `ITransactionalContext` over a `DbContext` |
+| `EfUnitOfWork<TContext>` | EntityFrameworkCore | `IUnitOfWork` + `ITransactionalContext` + `IResultUnitOfWork` over a `DbContext` |
 | `ITransactionalUnitOfWork` | EntityFrameworkCore | The two contracts as one service |
 | `EfSpecificationEvaluator` | EntityFrameworkCore | EF Core `ISpecificationEvaluator` |
 | `EfDomainEventsProvider<TContext>` | EntityFrameworkCore | Drains the domain events of every tracked aggregate |
@@ -479,16 +591,20 @@ the find, where EF Core checks it at the commit.
 | `PersistenceBuilder`, `EfCoreBuilder` | EntityFrameworkCore | Registration builders |
 | `ProviderOptions`, `RetryOnFailureOptions` | EntityFrameworkCore | Opt-in retry and pooling |
 | `DomainConventionExtensions` | EntityFrameworkCore | MicroKit.Domain mappings for `ConfigureConventions` |
-| `MicroKitPersistenceDbContextOptionsExtensions` | EntityFrameworkCore | `UseMicroKitPersistence()`: boundary validation, the loaded-root record, the aggregate version and its `SaveChanges` step |
+| `MicroKitPersistenceDbContextOptionsExtensions` | EntityFrameworkCore | `UseMicroKitPersistence()`: boundary validation, the loaded-root record, the aggregate version and its `SaveChanges` step; `UseMicroKitPersistence(classifier)` adds the provider's error classifier |
+| `IDatabaseFailureClassifier`, `DatabaseFailure` | EntityFrameworkCore | The seam a provider package recognises its error codes through |
+| `AggregateErrorNameBuilderExtensions` | EntityFrameworkCore | `HasAggregateErrorName` on a root |
 | `AggregateBoundaryNavigationBuilderExtensions` | EntityFrameworkCore | `IsOutsideAggregate()` on a navigation |
 | `AggregateVersion` | EntityFrameworkCore | `PropertyName` of the version token, for projections |
 | `PostgreSqlEfCoreBuilderExtensions` | PostgreSql | `UsePostgreSQL<TContext>` |
+| `PostgreSqlFailureClassifier` | PostgreSql | `23505`, `23503` |
 | `SqlServerEfCoreBuilderExtensions` | SqlServer | `UseSqlServer<TContext>` |
+| `SqlServerFailureClassifier` | SqlServer | `2627`, `2601`, `547` |
 | `QueryOptionsOrderingExtensions` | Specifications | `WithOrderBy`, `WithOrderByDescending`, `WithThenBy`, `WithThenByDescending` |
 | `QueryOptionsSpecificationExtensions` | Specifications | `WithSpec` |
 | `InMemoryRepository<TAggregate, TId>` | Testing | Write and read double; versions checked at the find (`SetVersion`) |
 | `InMemoryReadRepository<TAggregate>` | Testing | Read-only double |
-| `InMemoryUnitOfWork` | Testing | Counts commits and discards |
+| `InMemoryUnitOfWork` | Testing | Counts commits and discards; `IResultUnitOfWork` double |
 | `ReadRepositoryMutationAnalyzer`, `DirectSaveChangesAnalyzer`, `DbContextInjectionAnalyzer`, `RepositoryIQueryableLeakAnalyzer` | Analyzers | MKP001–MKP005 |
 
 ## Decisions

@@ -2,6 +2,46 @@
 
 ## [Unreleased]
 
+### #197 phase 3 — persistence failures as `Result`
+
+Unique-constraint violations, foreign-key violations and concurrency conflicts can be returned as
+`MicroKit.Result` errors of category `Conflict`, coded `PERSISTENCE.<ROOT>.<REASON>`, converted only
+once the transaction is rolled back. ADR-011 records the decision. `IUnitOfWork.CommitAsync` and
+`ITransactionalContext.ExecuteAsync` are unchanged.
+
+#### Breaking Changes
+
+##### MicroKit.Persistence
+- `MicroKit.Persistence` now references `MicroKit.Result` (`MicroKit.Persistence.Abstractions` still does not). It needs `Error.Conflict(code, message)` and `CategorizedError` (#194): the published `MicroKit.Result 1.0.0-preview.2`, which the root `Directory.Packages.props` pins for the `CIReleaseBuild` package build, predates them, so `MicroKit.Result` must be released first and its pin raised before this module is.
+
+##### MicroKit.Persistence.EntityFrameworkCore
+- On a context configured with `UseMicroKitPersistence()`, model building fails when two aggregate roots resolve to the same error name — by default their simple CLR name in UPPER_SNAKE, so two `Order` classes in different namespaces — and when `HasAggregateErrorName` is set on a type that is not a top-most root. Fix a name with `HasAggregateErrorName("BILLING_ORDER")`.
+- Model building also fails, on every context with `UseMicroKitPersistence()` — whether the `Result` path is used or not — when a root's default error name is not valid UPPER_SNAKE (a CLR name with characters outside A–Z, 0–9 and `_`, such as `Opération`, or starting with `_`). Give it a name with `HasAggregateErrorName`.
+- `EfRepository.FindAsync(id, expectedVersion)` on a staged root not inserted yet now throws a `PersistenceException` whose inner exception is an `AggregateVersionConflictException` (it derives from `InvalidOperationException`, the type it was).
+
+##### MicroKit.Persistence.Testing
+- `InMemoryRepository.FindAsync(id, expectedVersion)` with a stale version: the inner exception is now an `AggregateVersionConflictException` (an `InvalidOperationException`).
+- `InMemoryUnitOfWork.CommitAsync` called inside an operation of `TryExecuteAsync` counts only when that operation succeeds.
+
+#### Added
+- `IResultUnitOfWork` (core): `TryExecuteAsync` (two overloads) and `TryCommitAsync`. `EfUnitOfWork` and `InMemoryUnitOfWork` implement it; `AddUnitOfWork` registers it.
+  - The transactional entry point converts only once the transaction it owns is rolled back and the execution strategy has given up; transient failures are retried first. Joined to an open transaction, it converts nothing.
+  - A failed `Result` the operation returns is returned unchanged, and the transaction it owns is rolled back instead of committed.
+  - `TryCommitAsync` is refused inside an open transaction.
+- `PersistenceErrors` (core): `Duplicate`, `Reference`, `Concurrency`, `DefaultErrorName`, `IsValidErrorName`; fixed, client-safe messages with no table, constraint or column name.
+- `AggregateVersionConflictException` (core): the inner exception of a version conflict a repository detects itself, carrying the root's error name.
+- `HasAggregateErrorName` on `EntityTypeBuilder`, stored as the `MicroKit:ErrorName` annotation.
+- `IDatabaseFailureClassifier` and `DatabaseFailure` (EntityFrameworkCore), `UseMicroKitPersistence(classifier)`; `PostgreSqlFailureClassifier` (`23505`, `23503`) and `SqlServerFailureClassifier` (`2627`, `2601`, `547`), configured by `UsePostgreSQL` and `UseSqlServer`.
+
+#### Changed
+- The XML doc of `EfUnitOfWork.ExecuteAsync` says an ambient `System.Transactions` transaction is rejected (EF Core raises `ExecutionStrategyExistingTransaction` with retry on, `ConflictingAmbientTransaction` without), not "not joined"; the behaviour is unchanged and now pinned by tests.
+
+#### Known limits
+- SQL Server reports a foreign-key and a check violation with one number, `547`: it is converted to `REFERENCE` only when no entity type mapped to the failing entries' tables declares a check constraint in the model. A check constraint that exists only in the database is not seen, and its violation is reported as `REFERENCE`.
+- A context with no classifier (`AddDbContext`, or `UseMicroKitPersistence()` without one) converts concurrency conflicts only.
+- A custom execution strategy that retries every exception would re-run an operation that returned a failed `Result`.
+- The in-memory double cannot roll its store back, and does not know a name fixed with `HasAggregateErrorName`.
+
 ### #197 phase 2 — optimistic concurrency
 
 Every aggregate root carries an application-managed version, bumped by every save that writes any

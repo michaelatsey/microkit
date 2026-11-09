@@ -40,6 +40,25 @@ public interface IOrderLineRepository : IRepository<OrderLine, OrderLineId> { }
   only allowed marked outside — links are a link entity, a child of the root. A reference out of an
   aggregate is `Restrict`. A typed finder calls `protected LoadAggregatesAsync(predicate, ct)`.
 
+## The `Result` path — `IResultUnitOfWork` (core, ADR-011)
+
+```csharp
+public interface IResultUnitOfWork
+{
+    ValueTask<Result> TryCommitAsync(CancellationToken ct = default);                    // flush, no open transaction
+    ValueTask<Result> TryExecuteAsync<TState>(Func<TState, CancellationToken, Task<Result>> operation, TState state, CancellationToken ct = default);
+    ValueTask<Result<TValue>> TryExecuteAsync<TState, TValue>(Func<TState, CancellationToken, Task<Result<TValue>>> operation, TState state, CancellationToken ct = default);
+}
+```
+
+- Unique, foreign-key and concurrency failures become `PersistenceErrors` (`PERSISTENCE.<ROOT>.<REASON>`,
+  category `Conflict`); everything else still throws `PersistenceException`.
+- It converts only at the owner of the transaction, after the rollback and once the strategy gave up;
+  joined, it converts nothing. A failed `Result` the operation returns rolls the owned transaction back.
+  `TryCommitAsync` is refused inside an open transaction.
+- The contract, codes, messages and `AggregateVersionConflictException` live in core (which references
+  `MicroKit.Result`; Abstractions never does). `EfUnitOfWork` and `InMemoryUnitOfWork` implement it.
+
 ## Read side — `IReadRepository<TAggregate>` (core)
 
 ```csharp

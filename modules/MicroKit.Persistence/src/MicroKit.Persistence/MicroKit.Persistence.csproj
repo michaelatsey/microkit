@@ -2,12 +2,20 @@
   <PropertyGroup>
     <AssemblyName>MicroKit.Persistence</AssemblyName>
     <RootNamespace>MicroKit.Persistence</RootNamespace>
-    <Description>Core persistence layer for MicroKit — QueryOptions, ISpecificationEvaluator, full IReadRepository contract, and PagedResult. No EF Core, no DI dependency.</Description>
+    <Description>Core persistence layer for MicroKit — QueryOptions, ISpecificationEvaluator, the IReadRepository contract, PagedResult, and the Result path (IResultUnitOfWork, PersistenceErrors). No EF Core, no DI dependency.</Description>
     <PackageTags>persistence;repository;query-options;specification;microkit;ddd;dotnet</PackageTags>
   </PropertyGroup>
   <!-- Intra-module: sibling packages are built and released together — always an unconditional
        ProjectReference, in every build mode (ADR-GLOBAL-002 D5) -->
   <ItemGroup>
     <ProjectReference Include="..\MicroKit.Persistence.Abstractions\MicroKit.Persistence.Abstractions.csproj" />
+  </ItemGroup>
+  <!-- Cross-module (#197 phase 3: the Result path). DEV: source ProjectReference — CI/Release: published
+       NuGet package. ⚠ Any new cross-module dependency must be added to BOTH ItemGroups -->
+  <ItemGroup Condition="'$(CIReleaseBuild)' != 'true'">
+    <ProjectReference Include="../../../MicroKit.Result/src/MicroKit.Result/MicroKit.Result.csproj" />
+  </ItemGroup>
+  <ItemGroup Condition="'$(CIReleaseBuild)' == 'true'">
+    <PackageReference Include="MicroKit.Result" />
   </ItemGroup>
 </Project>

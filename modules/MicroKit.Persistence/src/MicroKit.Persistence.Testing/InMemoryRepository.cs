@@ -35,7 +35,12 @@ namespace MicroKit.Persistence.Testing;
 /// Versions: a stored aggregate starts at version 1 and does not move on its own — the double
 /// cannot see mutations. <see cref="SetVersion"/> sets another one, and
 /// <see cref="FindAsync(TId, long, CancellationToken)"/> checks the expected version at the find,
-/// where EF Core checks it in the <c>UPDATE</c> of the commit.
+/// where EF Core checks it in the <c>UPDATE</c> of the commit. A stale version throws a
+/// <see cref="PersistenceException"/> whose inner <see cref="AggregateVersionConflictException"/> carries
+/// the default error name of <typeparamref name="TAggregate"/> (<see cref="PersistenceErrors.DefaultErrorName"/>),
+/// which <see cref="InMemoryUnitOfWork.TryExecuteAsync{TState}"/> turns into
+/// <see cref="PersistenceErrors.Concurrency"/>. The double has no model, so a name the application
+/// fixes with <c>HasAggregateErrorName</c> is unknown to it.
 /// </para>
 /// <para>
 /// <see cref="QueryOptions{TAggregate}.Includes"/> and
@@ -49,6 +54,12 @@ public sealed class InMemoryRepository<TAggregate, TId>
     where TAggregate : class, IAggregateRoot
     where TId : IEntityId
 {
+    // The <ROOT> segment of a conflict's code; null when the CLR name cannot be one.
+    private static readonly string? s_errorName =
+        PersistenceErrors.DefaultErrorName(typeof(TAggregate)) is var name && PersistenceErrors.IsValidErrorName(name)
+            ? name
+            : null;
+
     private readonly InMemoryStore<TAggregate> _store;
     private readonly Dictionary<object, long> _versions = [];
 
@@ -131,8 +142,9 @@ public sealed class InMemoryRepository<TAggregate, TId>
 
     /// <inheritdoc/>
     /// <exception cref="PersistenceException">
-    /// The stored aggregate's version is not <paramref name="expectedVersion"/>. The double checks at
-    /// the find; EF Core checks in the <c>UPDATE</c> of the commit.
+    /// The stored aggregate's version is not <paramref name="expectedVersion"/>; its inner exception is an
+    /// <see cref="AggregateVersionConflictException"/>. The double checks at the find; EF Core checks in
+    /// the <c>UPDATE</c> of the commit.
     /// </exception>
     public ValueTask<TAggregate?> FindAsync(TId id, long expectedVersion, CancellationToken ct = default)
     {
@@ -143,8 +155,11 @@ public sealed class InMemoryRepository<TAggregate, TId>
         {
             throw new PersistenceException(
                 "Optimistic concurrency conflict at the find (in-memory double).",
-                new InvalidOperationException(
-                    $"'{typeof(TAggregate).Name}' {id} is at version {VersionOf(aggregate)}, not {expectedVersion}."));
+                new AggregateVersionConflictException(
+                    $"'{typeof(TAggregate).Name}' {id} is at version {VersionOf(aggregate)}, not {expectedVersion}.")
+                {
+                    ErrorName = s_errorName,
+                });
         }
 
         return new ValueTask<TAggregate?>(aggregate);

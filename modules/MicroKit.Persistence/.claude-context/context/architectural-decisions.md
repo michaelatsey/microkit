@@ -507,7 +507,11 @@ choice. All 8 packages share one version — whichever number is chosen, all 8 r
    a transaction the caller opened — `ExecuteAsync` runs the operation directly: no execution
    strategy (a retrying one throws on an existing transaction, `ExecutionStrategy.OnFirstExecution`),
    no begin, commit or rollback, no translation. The transaction's owner commits, rolls back,
-   retries and translates. An ambient `System.Transactions` transaction is not joined.
+   retries and translates. An ambient `System.Transactions` transaction is rejected, as EF Core
+   rejects it (#197 phase 3, pinned by tests): with a retrying strategy, `OnFirstExecution` raises
+   `ExecutionStrategyExistingTransaction`; without one, `BeginTransactionAsync` raises
+   `ConflictingAmbientTransaction`. A distributed transaction is not a consistency mechanism between
+   services: they go through the outbox.
 4. **Failed attempt (D5).** The rollback runs with `CancellationToken.None`; rollback and dispose
    failures are swallowed, so the exception in flight is never replaced. The change tracker is then
    cleared: the database was rolled back, so a retried attempt must start from a clean tracker
@@ -817,10 +821,106 @@ whole ones only.
 - A delete is version-checked: `DeleteAsync` then a commit fails when another command changed the
   aggregate since it was loaded.
 - A conflict stays a `PersistenceException` wrapping `DbUpdateConcurrencyException` (frozen); its
-  typed form is phase 3's `CONCURRENCY` error.
+  typed form is the `CONCURRENCY` error of ADR-011. A conflict a repository detects itself (a staged
+  root found with an expected version other than 0, the in-memory double's check at the find) is a
+  `PersistenceException` wrapping `AggregateVersionConflictException` (phase 3; it derives from the
+  `InvalidOperationException` it was).
 - Other modules that use `UseMicroKitPersistence()` get the column on their roots and adapt during
   their own upgrade.
 - Tests: `AggregateVersionTests` (PostgreSQL and SQL Server), `InMemoryRepositoryVersionTests`.
+
+---
+
+## ADR-011: Persistence Failures as `Result` Errors, Converted After the Rollback (#197 phase 3)
+
+**Status:** Accepted
+**Date:** 2026-11-09
+**Source:** Issue #197, phase 3 (Spec amended 2026-11-09: placement, a failed `Result` rolls back,
+SQL Server 547). Builds on ADR-006 (transactions), ADR-009 (one root per entity type) and ADR-010
+(versions).
+
+### Decision
+
+1. **Three failures, one category.** Unique-constraint violations (`DUPLICATE`), foreign-key
+   violations (`REFERENCE`) and concurrency conflicts (`CONCURRENCY`) map to `MicroKit.Result` errors
+   of category `Conflict`, built with `Error.Conflict(code, message)`. Every other failure keeps
+   throwing `PersistenceException` (sealed, frozen); `IUnitOfWork.CommitAsync` and
+   `ITransactionalContext` are unchanged, and no member is added to them.
+2. **Placement.** The contract (`IResultUnitOfWork`: `TryExecuteAsync` ×2, `TryCommitAsync`), the codes
+   and messages (`PersistenceErrors`) and the version-conflict marker
+   (`AggregateVersionConflictException`) live in `MicroKit.Persistence` (core), which gains the
+   `MicroKit.Result` reference; `MicroKit.Persistence.Abstractions` still does not reference it (#196
+   D17). A handler depends on the contract without referencing EF Core. `EfUnitOfWork` implements it;
+   so does `InMemoryUnitOfWork`, using the same codes and marker — no copy. The names differ from
+   `ExecuteAsync`/`CommitAsync` on purpose: an `ExecuteAsync` overload taking `Task<Result>` would
+   capture existing callers of `ExecuteAsync<TState, TResult>` on their next compile.
+3. **Codes.** `PERSISTENCE.<ROOT>.<REASON>`. `<ROOT>` is the error name of the failing entity's
+   top-most aggregate root, found from the entity type alone through `AggregateBoundaryMap` (ADR-009
+   makes it unique; the tracker is already cleared by the rollback). The default is the simple CLR name
+   in UPPER_SNAKE (`PersistenceErrors.DefaultErrorName`); `HasAggregateErrorName` fixes it (annotation
+   `MicroKit:ErrorName`, resolved by `AggregateErrorNameConvention`). Model building fails on two roots
+   with one name, on the annotation on a type that is not a top-most root, and on an invalid default
+   name. Failing entries spread over several roots, or outside every boundary, or no entries at all,
+   give `PERSISTENCE.<REASON>`: a root is never guessed. The messages are fixed and client-safe — no
+   table, constraint or column name; the provider exception stays in EF Core's log.
+4. **Recognition, never by message.** An internal mapper (EntityFrameworkCore) reads the exception
+   chain: `DbUpdateConcurrencyException` or `AggregateVersionConflictException` → `CONCURRENCY`; a
+   `DbUpdateException` over a `DbException`, or a bare `DbException`, classified by the context's
+   `IDatabaseFailureClassifier` → `DUPLICATE`/`REFERENCE`; a chain holding a
+   `RetryLimitExceededException` → never. The classifiers live in the provider packages
+   (`PostgreSqlFailureClassifier`: SQLSTATE `23505`, `23503`; `SqlServerFailureClassifier`: `2627`,
+   `2601`, `547`), so `MicroKit.Persistence.EntityFrameworkCore` references neither Npgsql nor SqlClient;
+   `UsePostgreSQL`/`UseSqlServer` configure them, and `UseMicroKitPersistence(classifier)` serves any
+   other configuration. The classifier is read from the context's options, not from a service, so it
+   takes no part in the internal service provider's key.
+5. **SQL Server 547** is a foreign-key or a check violation. It is decided from the model only: it maps
+   to `REFERENCE` when no entity type mapped to the failing entries' tables declares a check constraint
+   (`GetCheckConstraints()`, on the design-time model); otherwise, or with no failing entries, it is not
+   converted. A check constraint that exists only in the database is a documented limit. PostgreSQL's
+   `23514` is never converted.
+6. **Convert at the owner, after the rollback.** EF Core rolls a failed `SaveChanges` back to its own
+   savepoint and leaves the transaction usable
+   ([Learn](https://learn.microsoft.com/ef/core/saving/transactions#savepoints)): a failure converted
+   inside the operation would let it return normally, and the owner would commit what the transaction
+   wrote before — an earlier flush, an `ExecuteUpdate`, raw SQL, outbox rows.
+   - `TryExecuteAsync` owning the transaction runs the operation through `ExecuteAsync`'s own core
+     (strategy, transaction per attempt, transient retries, tracker cleared after a failed attempt) and
+     converts a `PersistenceException` only once that core has thrown, i.e. after the rollback and once
+     the strategy gave up. Unconverted failures propagate unchanged.
+   - Joined to an open transaction, it runs the operation inside it and converts nothing: the exception
+     reaches the owner, which rolls back; a failed `Result` returns unchanged and the owner decides.
+   - `TryCommitAsync` is for code with no open transaction (a flush is atomic by itself); inside one it
+     throws `InvalidOperationException`.
+   - No mutable rollback-only flag exists: nothing can be converted while the transaction is alive.
+7. **A failed `Result` the operation returns** is a business failure, not a persistence one: it is
+   returned unchanged, and when `TryExecuteAsync` owns the transaction it rolls it back instead of
+   committing, so a failed command never persists part of its work. The rollback uses an internal
+   non-transient sentinel thrown inside the strategy's delegate and caught after the strategy returns —
+   no flag; provider strategies retry provider exceptions only, so it is not retried (a custom strategy
+   retrying every exception would re-run the operation: documented). The tracker is cleared, as after
+   any failed attempt.
+8. **The in-memory double** mirrors the rules: an operation of `TryExecuteAsync` stands for the
+   transaction; the commits it makes count only on success; `AggregateVersionConflictException` from
+   `InMemoryRepository` becomes `CONCURRENCY` with the default name; a nested call converts nothing;
+   `TryCommitAsync` is refused inside an operation. It cannot roll its store back and has no model
+   (`HasAggregateErrorName` is unknown to it).
+9. **Ambient transactions** stay rejected, as EF Core rejects them (ADR-006 D4, amended).
+
+### Consequences
+
+- Model building fails on a root-name clash: a break for models with two roots of one simple name.
+- `MicroKit.Persistence` (core) depends on `MicroKit.Result`; the root graph already allowed
+  Persistence → Result.
+- A context without a classifier converts concurrency conflicts only.
+- `IResultUnitOfWork` does not extend `IUnitOfWork`: the operation flushes with `CommitAsync`, so a
+  handler injects both contracts (both implementations implement both).
+- MicroKit.MediatR's `TransactionBehavior` owns the transaction (`ExecuteAsync`), so inside its pipeline
+  `TryExecuteAsync` is joined and converts nothing, and `TryCommitAsync` is refused. MicroKit.MediatR
+  adopts the `Result` path during its own upgrade (Spec perimeter: no change, no issue here).
+- The in-memory double converts only its version conflicts, and only inside `TryExecuteAsync` (it checks
+  at the find); it never returns `DUPLICATE` or `REFERENCE`.
+- Tests: `PersistenceResultTests` (PostgreSQL and SQL Server), `InMemoryResultUnitOfWorkTests`,
+  `PersistenceErrorsTests`, `ContractPlacementTests`, `LayerDependencyTests`.
 
 ---
 

@@ -75,6 +75,25 @@ public sealed class ContractPlacementTests
         typeof(MicroKit.Persistence.PagedResult<>).Assembly.ShouldBe(CoreAssembly);
     }
 
+    [Fact]
+    public void TheResultPath_IsInCore_NotAbstractions()
+    {
+        // #197 phase 3: a handler depends on IResultUnitOfWork without referencing EF Core; the codes,
+        // the messages and the version-conflict marker live with it.
+        typeof(MicroKit.Persistence.IResultUnitOfWork).Assembly.ShouldBe(CoreAssembly);
+        typeof(MicroKit.Persistence.PersistenceErrors).Assembly.ShouldBe(CoreAssembly);
+        typeof(MicroKit.Persistence.AggregateVersionConflictException).Assembly.ShouldBe(CoreAssembly);
+    }
+
+    [Fact]
+    public void TheResultPath_IsImplementedByTheEfCoreUnitOfWorkAndTheDouble()
+    {
+        typeof(MicroKit.Persistence.IResultUnitOfWork)
+            .IsAssignableFrom(typeof(MicroKit.Persistence.EntityFrameworkCore.EfUnitOfWork<>).MakeGenericType(typeof(Microsoft.EntityFrameworkCore.DbContext)))
+            .ShouldBeTrue();
+        typeof(MicroKit.Persistence.IResultUnitOfWork).IsAssignableFrom(typeof(MicroKit.Persistence.Testing.InMemoryUnitOfWork)).ShouldBeTrue();
+    }
+
     // --- In EFCore (not Abstractions) ---
 
     [Fact]

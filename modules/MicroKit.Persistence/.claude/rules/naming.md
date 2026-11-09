@@ -23,6 +23,9 @@
 | EF composite | `ITransactionalUnitOfWork : IUnitOfWork, ITransactionalContext` |
 | EF implementation | `EfUnitOfWork<TContext>` |
 | In-memory | `InMemoryUnitOfWork` |
+| `Result` path | `IResultUnitOfWork` (`TryExecuteAsync`, `TryCommitAsync` — never an `ExecuteAsync`/`CommitAsync` overload) |
+| Errors | `PersistenceErrors`, codes `PERSISTENCE.<ROOT>.<REASON>` |
+| Provider classifiers | `{Provider}FailureClassifier` (`PostgreSqlFailureClassifier`, `SqlServerFailureClassifier`) |
 
 ## Query and Pagination
 
@@ -65,6 +68,8 @@ UsePostgreSQL<TContext>(this EfCoreBuilder, string, Action<NpgsqlDbContextOption
 UseSqlServer<TContext>(this EfCoreBuilder, string, Action<SqlServerDbContextOptionsBuilder>?, ProviderOptions?)
 UseMicroKitPersistence(this DbContextOptionsBuilder)              // + the DbContextOptionsBuilder<TContext> overload
 IsOutsideAggregate(this NavigationBuilder)
+UseMicroKitPersistence(this DbContextOptionsBuilder, IDatabaseFailureClassifier)  // + the generic overload
+HasAggregateErrorName(this EntityTypeBuilder, string)                             // + EntityTypeBuilder<T>
 ```
 
 ## Namespaces

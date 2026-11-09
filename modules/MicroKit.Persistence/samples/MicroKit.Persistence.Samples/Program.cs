@@ -16,3 +16,4 @@ await using (var context = new CatalogDbContext(
 }
 
 await TestingSample.RunAsync();
+await ResultTestingSample.RunAsync();

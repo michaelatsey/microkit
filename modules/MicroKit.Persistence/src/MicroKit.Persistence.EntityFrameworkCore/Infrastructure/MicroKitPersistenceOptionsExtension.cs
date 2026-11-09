@@ -21,7 +21,10 @@ namespace MicroKit.Persistence.EntityFrameworkCore;
 ///     <c>SaveChanges</c> entry point, as an EF Core <see cref="IInterceptor"/>.</description></item>
 /// </list>
 /// <para>
-/// The extension has no options. Any option added later must take part in both
+/// Its one option, <see cref="FailureClassifier"/>, is read from the context's own options by
+/// <see cref="EfUnitOfWork{TContext}"/>, never by a service: it takes no part in
+/// <see cref="ExtensionInfo.GetServiceProviderHashCode"/>, and contexts with different classifiers share
+/// one internal service provider. Any option a service reads must take part in both
 /// <see cref="ExtensionInfo.GetServiceProviderHashCode"/> and
 /// <see cref="ExtensionInfo.ShouldUseSameServiceProvider"/>, or two contexts configured
 /// differently would share one internal service provider.
@@ -30,6 +33,17 @@ namespace MicroKit.Persistence.EntityFrameworkCore;
 internal sealed class MicroKitPersistenceOptionsExtension : IDbContextOptionsExtension
 {
     private DbContextOptionsExtensionInfo? _info;
+
+    public MicroKitPersistenceOptionsExtension()
+    {
+    }
+
+    // Options extensions are immutable: a new classifier is a new extension.
+    public MicroKitPersistenceOptionsExtension(IDatabaseFailureClassifier failureClassifier) =>
+        FailureClassifier = failureClassifier;
+
+    /// <summary>The provider's classifier of database errors, or <see langword="null"/> when none was given.</summary>
+    public IDatabaseFailureClassifier? FailureClassifier { get; }
 
     /// <inheritdoc/>
     public DbContextOptionsExtensionInfo Info => _info ??= new ExtensionInfo(this);
@@ -68,5 +82,6 @@ internal sealed class MicroKitPersistenceOptionsExtension : IDbContextOptionsExt
 
         public override void PopulateDebugInfo(IDictionary<string, string> debugInfo) =>
             debugInfo["MicroKit.Persistence:UseMicroKitPersistence"] = "1";
+            // Not a service: contexts with different classifiers share one internal service provider.
     }
 }

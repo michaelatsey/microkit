@@ -655,7 +655,7 @@ public abstract class AggregateVersionScenarios
         await carts.AddAsync(cart);
 
         var thrown = await Should.ThrowAsync<PersistenceException>(async () => await carts.FindAsync(cart.Id, expectedVersion: 5));
-        thrown.InnerException.ShouldBeOfType<InvalidOperationException>().Message.ShouldContain("not inserted yet");
+        thrown.InnerException.ShouldBeOfType<AggregateVersionConflictException>().Message.ShouldContain("not inserted yet");
         (await carts.FindAsync(cart.Id, expectedVersion: 0)).ShouldBeSameAs(cart);
     }
 

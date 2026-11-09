@@ -3,6 +3,8 @@ using System.Runtime.ExceptionServices;
 
 namespace MicroKit.Persistence.EntityFrameworkCore;
 
+using MicroKit.Result;
+
 /// <summary>
 /// EF Core implementation of <see cref="ITransactionalUnitOfWork"/>.
 /// Wraps a <typeparamref name="TContext"/> <see cref="DbContext"/> and translates provider
@@ -12,13 +14,24 @@ namespace MicroKit.Persistence.EntityFrameworkCore;
 /// The application <see cref="DbContext"/> type. Injected as a scoped service.
 /// </typeparam>
 /// <remarks>
+/// <para>
 /// Register via
 /// <see cref="PersistenceServiceCollectionExtensions.AddUnitOfWork{TContext}"/>, which creates
 /// a single scoped instance and binds it to <see cref="IUnitOfWork"/>,
-/// <see cref="ITransactionalContext"/>, and <see cref="ITransactionalUnitOfWork"/>.
+/// <see cref="ITransactionalContext"/>, <see cref="ITransactionalUnitOfWork"/>, and
+/// <see cref="IResultUnitOfWork"/>.
+/// </para>
+/// <para>
+/// The <see cref="IResultUnitOfWork"/> path converts a concurrency conflict always, and a unique or
+/// foreign-key violation when the context has the provider's <see cref="IDatabaseFailureClassifier"/>
+/// (<c>UsePostgreSQL</c>, <c>UseSqlServer</c>, or <c>UseMicroKitPersistence(classifier)</c>). The code's
+/// root comes from the model: the failing entity's aggregate root, named by
+/// <see cref="AggregateErrorNameBuilderExtensions.HasAggregateErrorName(Microsoft.EntityFrameworkCore.Metadata.Builders.EntityTypeBuilder, string)"/>
+/// or by default.
+/// </para>
 /// </remarks>
 public sealed class EfUnitOfWork<TContext>(TContext context)
-    : ITransactionalUnitOfWork
+    : ITransactionalUnitOfWork, IResultUnitOfWork
     where TContext : DbContext
 {
     // The PersistenceException CommitAsync raised and ExecuteAsync unwrapped so the execution
@@ -130,8 +143,10 @@ public sealed class EfUnitOfWork<TContext>(TContext context)
     /// Keep retries off for such operations, or make them idempotent.
     /// </para>
     /// <para>
-    /// An ambient <c>System.Transactions</c> transaction is not joined: only
-    /// <c>Database.CurrentTransaction</c> is.
+    /// An ambient <c>System.Transactions</c> transaction is rejected, as EF Core rejects it: with a
+    /// retrying strategy, the strategy refuses to start (<c>ExecutionStrategyExistingTransaction</c>);
+    /// without one, beginning the transaction fails (<c>ConflictingAmbientTransaction</c>). Both surface as
+    /// an <see cref="InvalidOperationException"/>. Only <c>Database.CurrentTransaction</c> is joined.
     /// </para>
     /// </remarks>
     /// <exception cref="ArgumentNullException"><paramref name="operation"/> is <see langword="null"/>.</exception>
@@ -171,6 +186,119 @@ public sealed class EfUnitOfWork<TContext>(TContext context)
     {
         ArgumentNullException.ThrowIfNull(operation);
         return ExecuteCoreAsync(operation, state, ct);
+    }
+
+    /// <inheritdoc/>
+    /// <remarks>
+    /// It flushes through <see cref="CommitAsync"/> and converts its <see cref="PersistenceException"/>. The
+    /// change tracker is not cleared after a converted failure: the failed <c>Added</c>, <c>Modified</c> and
+    /// <c>Deleted</c> entries stay pending, so call <see cref="DiscardChanges"/> before reusing the scope.
+    /// Unique and foreign-key violations are converted only when the context has the provider's
+    /// <see cref="IDatabaseFailureClassifier"/>.
+    /// </remarks>
+    public async ValueTask<Result> TryCommitAsync(CancellationToken ct = default)
+    {
+        EnsureNoTransactionForFlush();
+        try
+        {
+            await CommitAsync(ct).ConfigureAwait(false);
+            return Result.Success();
+        }
+        catch (PersistenceException ex) when (PersistenceFailureMapper.TryMap(ex, context, out var error))
+        {
+            return Result.Failure(error);
+        }
+    }
+
+    /// <inheritdoc/>
+    /// <remarks>
+    /// <para>
+    /// Owning the transaction, it runs the operation exactly as
+    /// <see cref="ExecuteAsync{TState}"/> does — execution strategy, one transaction per attempt,
+    /// transient failures retried, the tracker cleared after a failed attempt — and converts a conflict
+    /// once the strategy has given up. A failed <see cref="Result"/> the operation returns rolls the
+    /// transaction back, and the tracker is cleared, as after any failed attempt; it is not retried. Joined
+    /// to an open transaction, it runs the operation inside it and converts nothing.
+    /// </para>
+    /// <para>
+    /// A strategy that retries every exception, rather than the provider's transient ones, would also
+    /// re-run an operation that returned a failed <see cref="Result"/>.
+    /// </para>
+    /// </remarks>
+    public async ValueTask<Result> TryExecuteAsync<TState>(
+        Func<TState, CancellationToken, Task<Result>> operation,
+        TState state,
+        CancellationToken ct = default)
+    {
+        ArgumentNullException.ThrowIfNull(operation);
+        if (context.Database.CurrentTransaction is not null)
+            return await operation(state, ct).ConfigureAwait(false);
+
+        try
+        {
+            return await ExecuteCoreAsync(
+                static async (s, token) =>
+                {
+                    var result = await s.Operation(s.State, token).ConfigureAwait(false);
+                    return result.IsFailure ? throw new FailedResultRollback<Result>(result) : result;
+                },
+                (Operation: operation, State: state),
+                ct).ConfigureAwait(false);
+        }
+        catch (FailedResultRollback<Result> rollback)
+        {
+            return rollback.Result;
+        }
+        catch (PersistenceException ex) when (PersistenceFailureMapper.TryMap(ex, context, out var error))
+        {
+            return Result.Failure(error);
+        }
+    }
+
+    /// <inheritdoc/>
+    /// <remarks>
+    /// As <see cref="TryExecuteAsync{TState}(Func{TState, CancellationToken, Task{Result}}, TState, CancellationToken)"/>:
+    /// the same strategy, transaction, rollback of a failed <see cref="Result{TValue}"/> and conversion.
+    /// </remarks>
+    public async ValueTask<Result<TValue>> TryExecuteAsync<TState, TValue>(
+        Func<TState, CancellationToken, Task<Result<TValue>>> operation,
+        TState state,
+        CancellationToken ct = default)
+    {
+        ArgumentNullException.ThrowIfNull(operation);
+        if (context.Database.CurrentTransaction is not null)
+            return await operation(state, ct).ConfigureAwait(false);
+
+        try
+        {
+            return await ExecuteCoreAsync(
+                static async (s, token) =>
+                {
+                    var result = await s.Operation(s.State, token).ConfigureAwait(false);
+                    return result.IsFailure ? throw new FailedResultRollback<Result<TValue>>(result) : result;
+                },
+                (Operation: operation, State: state),
+                ct).ConfigureAwait(false);
+        }
+        catch (FailedResultRollback<Result<TValue>> rollback)
+        {
+            return rollback.Result;
+        }
+        catch (PersistenceException ex) when (PersistenceFailureMapper.TryMap(ex, context, out var error))
+        {
+            return Result<TValue>.Failure(error);
+        }
+    }
+
+    private void EnsureNoTransactionForFlush()
+    {
+        if (context.Database.CurrentTransaction is not null)
+        {
+            throw new InvalidOperationException(
+                "TryCommitAsync is refused inside an open transaction: a flush there is not atomic, and converting its "
+                + "failure would let the transaction's owner commit what was written before it. Commit with "
+                + "CommitAsync, and run the command through TryExecuteAsync on the transaction's owner.");
+        }
     }
 
     private async Task<TResult> ExecuteCoreAsync<TState, TResult>(
