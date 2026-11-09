@@ -72,6 +72,24 @@ public sealed record PaginationLimits
         return requested;
     }
 
+    /// <summary>Returns the page size of a keyset page: <paramref name="requested"/>, or <see cref="DefaultPageSize"/>.</summary>
+    /// <param name="requested">The keyset's <see cref="KeysetPagination{TAggregate}.PageSize"/>, if any.</param>
+    /// <returns>The page size to read.</returns>
+    /// <exception cref="ArgumentOutOfRangeException"><paramref name="requested"/> exceeds <see cref="MaxPageSize"/>.</exception>
+    public int ForKeysetQuery(int? requested)
+    {
+        if (requested is not { } size)
+            return DefaultPageSize;
+        if (size > MaxPageSize)
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(requested), size,
+                $"The page size {size} exceeds the maximum of {MaxPageSize} configured by {nameof(PaginationLimits)}.");
+        }
+
+        return size;
+    }
+
     /// <summary>
     /// Rejects <paramref name="requested"/> when it asks for more than <see cref="MaxPageSize"/> items.
     /// </summary>

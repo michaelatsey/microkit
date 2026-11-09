@@ -131,6 +131,11 @@ var opts = new QueryOptions<Order>(new OpenOrdersSpec())   // WHAT — Specifica
 The read side never tracks; `QueryOptions` has no tracking option (ADR-009). `WithDeleted()` sets
 `IncludeDeleted`: soft-deleted aggregates (ADR-012) are returned too, every other filter still applies.
 
+ADR-013 adds the projections (`ListAsync`/`ListPagedAsync`/`ListKeysetAsync` with a selector, built by the
+database) and keyset pagination: `WithKeyset(KeysetPagination<T>.OrderBy(…))` read by `ListKeysetAsync`, the
+root's key appended, forward only, non-nullable scalar keys of the root, an opaque `KeysetCursor` checked against
+the root type and the ordering. A keyset owns the ordering and the page (`KeysetRules`).
+
 ## CQRS Data-Access Alignment
 
 | Handler | Inject | Forbidden |

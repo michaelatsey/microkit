@@ -66,6 +66,12 @@ composite keys, includes or tracking.
   `IsOutsideAggregate`; every way to track a partial root is refused; the record survives pooling,
   `DiscardChanges` and a failed `ExecuteAsync` attempt.
 - Unit of work: commit translation to `PersistenceException`, `DiscardChanges`, cancellation.
+- Read side (`ReadSideTests`, both servers; ADR-013): projections (spec, ordering, pagination, includes dropped,
+  soft delete); keyset walks with ties at several page sizes; a strongly typed id key; a composite key with a
+  `DateTimeOffset`; includes on a keyset page; a tampered token; a token of another ordering or root type;
+  nullable, non-property and unsupported keys; the keyset rules and bound; the compiled finds with a
+  context-state tenant filter, and over two models. EF Core facts: `ReadSideFoundationTests`. The cursor:
+  `KeysetCursorTests` (every type, malformed, huge declared lengths, oversized); the doubles: `InMemoryReadSideTests`.
 - Soft delete (`SoftDeleteTests`, both servers): the whole boundary marked, no row gone, owned values kept,
   version bumped; a child removed from a live root deleted; removed in the same save, marked; two aggregates
   in one save; `OnSaveChanges` timings; `ClientSetNull`/`ClientNoAction` children; a moved child; an added

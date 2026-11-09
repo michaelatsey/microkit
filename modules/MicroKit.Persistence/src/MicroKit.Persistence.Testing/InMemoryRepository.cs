@@ -1,3 +1,5 @@
+using System.Linq.Expressions;
+
 namespace MicroKit.Persistence.Testing;
 
 /// <summary>
@@ -228,6 +230,55 @@ public sealed class InMemoryRepository<TAggregate, TId>
     {
         ct.ThrowIfCancellationRequested();
         return new ValueTask<IPagedResult<TAggregate>>(_store.ExecuteListPaged(opts));
+    }
+
+    /// <inheritdoc/>
+    /// <remarks>The selector is compiled and run over the in-memory set.</remarks>
+    public ValueTask<IReadOnlyList<TResult>> ListAsync<TResult>(
+        QueryOptions<TAggregate> opts,
+        Expression<Func<TAggregate, TResult>> selector,
+        CancellationToken ct = default)
+    {
+        ct.ThrowIfCancellationRequested();
+        return new ValueTask<IReadOnlyList<TResult>>(_store.ExecuteList(opts, selector));
+    }
+
+    /// <inheritdoc/>
+    /// <remarks>The selector is compiled and run over the in-memory page.</remarks>
+    public ValueTask<IPagedResult<TResult>> ListPagedAsync<TResult>(
+        QueryOptions<TAggregate> opts,
+        Expression<Func<TAggregate, TResult>> selector,
+        CancellationToken ct = default)
+    {
+        ct.ThrowIfCancellationRequested();
+        return new ValueTask<IPagedResult<TResult>>(_store.ExecuteListPaged(opts, selector));
+    }
+
+    /// <inheritdoc/>
+    /// <remarks>
+    /// The double orders in memory — strings ordinally, a key that is not <see cref="IComparable"/> (a record-struct
+    /// id) by its string form — and appends its key selector as the last sort key. It has no value converters, so its
+    /// cursor holds a handle into the double: a cursor is valid only on the double that issued it. A nullable sort key
+    /// is refused through the property's nullability annotations.
+    /// </remarks>
+    public ValueTask<KeysetPage<TAggregate>> ListKeysetAsync(QueryOptions<TAggregate> opts, CancellationToken ct = default)
+    {
+        ct.ThrowIfCancellationRequested();
+        ArgumentNullException.ThrowIfNull(opts);
+        return new ValueTask<KeysetPage<TAggregate>>(_store.ExecuteKeyset(opts, static item => item));
+    }
+
+    /// <inheritdoc/>
+    /// <remarks>As <see cref="ListKeysetAsync(QueryOptions{TAggregate}, CancellationToken)"/>, with the selector compiled.</remarks>
+    public ValueTask<KeysetPage<TResult>> ListKeysetAsync<TResult>(
+        QueryOptions<TAggregate> opts,
+        Expression<Func<TAggregate, TResult>> selector,
+        CancellationToken ct = default)
+    {
+        ct.ThrowIfCancellationRequested();
+        ArgumentNullException.ThrowIfNull(opts);
+        ArgumentNullException.ThrowIfNull(selector);
+        return new ValueTask<KeysetPage<TResult>>(_store.ExecuteKeyset(opts, selector.Compile()));
     }
 
     /// <inheritdoc/>

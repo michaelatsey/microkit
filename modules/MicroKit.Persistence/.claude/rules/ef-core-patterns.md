@@ -124,6 +124,15 @@ return orders.SingleOrDefault();
 - `PaginationLimits` bounds every list: `ListPagedAsync` without pagination returns the first
   page of `DefaultPageSize`; a requested size above `MaxPageSize` throws
   `ArgumentOutOfRangeException`.
+- Projections (ADR-013): the evaluator without includes (the split hint kept), `AsNoTracking()`, then `Select(selector)`.
+- Keyset (`EfKeyset<T>`, ADR-013): keys resolved on the model (scalar, non-nullable, a provider type the cursor
+  carries after the converter, no primitive collection), the primary key appended, the plan cached per root and
+  ordering; `k1 >= v1 AND ((k1 > v1) OR (k1 = v1 AND …))` as binary nodes with a
+  helper method (EF Core translates the operator for any key type), values from a holder; `pageSize + 1` rows
+  projected as `KeysetRow(keys, item)`; the cursor's fingerprint covers the root's model name and the ordering.
+- Compiled finds (`CompiledFinds`, ADR-013): `EfRepository.FindAsync(TId)` and the single-key
+  `EfReadRepository.FindAsync` run `EF.CompileAsyncQuery` delegates cached per `IModel` (a compiled query refuses
+  another model); filters reading context state are evaluated per execution.
 
 ## `EfSpecificationEvaluator` — fixed order
 

@@ -115,7 +115,9 @@ public class EfRepository<TAggregate, TId, TContext>(TContext context)
             return tracked.Entity;
         }
 
-        var loaded = await LoadAsync(record, KeyLookup.Predicate<TAggregate>(key, keyValues), ct).ConfigureAwait(false);
+        // The hot path: the whole-aggregate load runs a query compiled once per model (ADR-013).
+        var load = CompiledAggregateLoad<TAggregate, TId, TContext>.For(Context, set.EntityType);
+        var loaded = await LoadAsync(record, load(Context, id), ct).ConfigureAwait(false);
         return loaded.SingleOrDefault();
     }
 
@@ -226,7 +228,8 @@ public class EfRepository<TAggregate, TId, TContext>(TContext context)
         ArgumentNullException.ThrowIfNull(predicate);
         var record = KeyLookup.LoadRecordOf(Context);
         AggregateSaveInterceptor.DetachAcceptedSoftDeletes(Context);
-        return await LoadAsync(record, predicate, ct).ConfigureAwait(false);
+        var query = IncludeAggregate(Context.Set<TAggregate>().AsTracking()).Where(predicate);
+        return await LoadAsync(record, query.AsAsyncEnumerable(), ct).ConfigureAwait(false);
     }
 
     /// <summary>
@@ -270,16 +273,14 @@ public class EfRepository<TAggregate, TId, TContext>(TContext context)
     // without raising Tracked, so a partial root tracked before the load comes back unrecorded.
     private async ValueTask<List<TAggregate>> LoadAsync(
         AggregateLoadRecord record,
-        Expression<Func<TAggregate, bool>> predicate,
+        IAsyncEnumerable<TAggregate> source,
         CancellationToken ct = default)
     {
-        var set = Context.Set<TAggregate>();
-        List<TAggregate> loaded;
-        using (record.BeginLoad(set.EntityType))
+        var loaded = new List<TAggregate>();
+        using (record.BeginLoad(Context.Set<TAggregate>().EntityType))
         {
-            loaded = await IncludeAggregate(set.AsTracking())
-                .Where(predicate)
-                .ToListAsync(ct).ConfigureAwait(false);
+            await foreach (var aggregate in source.WithCancellation(ct).ConfigureAwait(false))
+                loaded.Add(aggregate);
             record.Complete(loaded);
         }
 

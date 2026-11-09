@@ -27,6 +27,9 @@ var opts = new QueryOptions<Order>(new OpenOrdersSpec())     // WHAT
     .WithPagination(page: 1, pageSize: 20)                   //      pagination (validated: page ≥ 1, size ≥ 1)
     .AsSplitQuery()                                          //      split collections
     .WithDeleted();                                          //      soft-deleted aggregates too (ADR-012)
+
+var feed = new QueryOptions<Order>(new OpenOrdersSpec())   // keyset instead of ordering + pagination (ADR-013)
+    .WithKeyset(KeysetPagination<Order>.OrderByDescending(o => o.CreatedAt) with { PageSize = 20, After = cursor });
 ```
 
 The read side never tracks: there is no tracking option (ADR-009).

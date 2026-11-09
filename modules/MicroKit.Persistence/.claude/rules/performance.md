@@ -47,8 +47,16 @@ aggregate load switches to split by itself.
 
 ## Compiled queries
 
-For a measured hot path, a typed repository may hold an `EF.CompileAsyncQuery` delegate in a
-`static readonly` field.
+The repositories' finds by id run compiled queries already, one per model (ADR-013). For another measured
+hot path, a typed repository may hold an `EF.CompileAsyncQuery` delegate — cached per `IModel`, not in a
+plain `static readonly` field: EF Core refuses to run a compiled query on another model (another provider, a
+model variant).
+
+## Keyset pages
+
+A deep offset page reads and discards every row before it; `ListKeysetAsync` starts after the cursor's row
+and costs the same at any depth. Prefer it for feeds and exports; an index on the sort keys plus the primary
+key serves it.
 
 ## No sync-over-async; ConfigureAwait(false)
 

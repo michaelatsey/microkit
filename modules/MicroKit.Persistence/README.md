@@ -606,6 +606,77 @@ public sealed class ListOpenOrders(IReadRepository<Order> orders)
   is not visible through it. Load what a command modifies through `IRepository<TAggregate, TId>`.
 - Ordering is required for stable pages.
 
+### Projections
+
+A query handler usually returns a DTO, not the aggregate. The projection overloads of `ListAsync` and
+`ListPagedAsync` take a selector and let the database build it: the specification, the ordering and the
+pagination apply, and `AsSplitQuery()` splits the collections the selector projects; the includes do not
+apply, since the selector says what is read.
+
+```csharp
+public sealed record OrderListItem(OrderId Id, string Number, int Lines);
+
+public sealed class ListOpenOrderSummaries(IReadRepository<Order> orders)
+{
+    public ValueTask<IReadOnlyList<OrderListItem>> HandleAsync(CancellationToken ct = default) =>
+        orders.ListAsync(
+            new QueryOptions<Order>(new OpenOrdersSpec()).WithOrderBy(o => o.Number),
+            o => new OrderListItem(o.Id, o.Number, o.Lines.Count), // built by the database
+            ct);
+}
+```
+
+### Keyset pagination
+
+An offset page costs more the deeper it is; a keyset page starts after the last row of the page before,
+by comparing its sort keys in the database, and costs the same at any depth. Set the sort keys with
+`KeysetPagination<T>` and read the page with `ListKeysetAsync` (with or without a projection):
+
+```csharp
+public sealed record OrderListPage(IReadOnlyList<OrderListItem> Items, string? Next);
+
+public sealed class BrowseOpenOrders(IReadRepository<Order> orders)
+{
+    // null: the token is malformed, and the HTTP layer answers 400.
+    public async ValueTask<OrderListPage?> HandleAsync(string? after, CancellationToken ct = default)
+    {
+        KeysetCursor? cursor = null;
+        if (after is not null && !KeysetCursor.TryParse(after, out cursor))
+            return null;
+
+        var opts = new QueryOptions<Order>(new OpenOrdersSpec())
+            .WithKeyset(KeysetPagination<Order>.OrderByDescending(o => o.CreatedAt) with { PageSize = 20, After = cursor });
+        var page = await orders.ListKeysetAsync(opts, o => new OrderListItem(o.Id, o.Number, o.Lines.Count), ct).ConfigureAwait(false);
+        return new OrderListPage(page.Items, page.Next?.ToString());
+    }
+}
+```
+
+- **The ordering is total.** The root's primary key is appended, ascending, as the last sort key: rows
+  that tie on the sort keys are neither skipped nor repeated across pages.
+- **Sort keys** are scalar properties of the root (read directly or through an interface it implements), not
+  nullable and not a primitive collection: a `Nullable<T>` key is refused when the keyset is built, a nullable
+  column when the page is read. An index on the sort keys plus the primary key serves the page: its query
+  starts with a range on the first key. Every key is stored as a type the cursor
+  carries (integers, `Guid`, `string`, `bool`, `decimal`, `double`, `float`, `DateTime`, `DateTimeOffset`,
+  `DateOnly`, `TimeOnly`, `byte[]`), after its value converter: a strongly typed id stored as a `Guid` is
+  fine. Another stored type fails, naming the property.
+- **Forward only.** Each page returns `Next`, the cursor of the next one, `null` on the last page. There is
+  no total count; use `CountAsync` if one is needed.
+- **The cursor is an opaque token.** `ToString()` gives it to a client; `KeysetCursor.TryParse` reads it
+  back and checks its format only (it is untrusted input, bounded by `KeysetCursor.MaxTokenLength`). The
+  page checks the rest: a cursor issued for another aggregate type or another ordering, or whose values do
+  not match the sort keys, throws `ArgumentException`. The token is not encrypted: do not sort by a secret.
+- The keyset owns the ordering and the page: options that also set an ordering or an offset pagination are
+  refused, and `ListAsync`, `ListPagedAsync`, `AnyAsync` and `CountAsync` refuse options with a keyset. `PaginationLimits` bounds the
+  page size, and gives the default.
+
+### Compiled finds
+
+`IRepository.FindAsync(id)` (the whole-aggregate load) and `IReadRepository.FindAsync(keyValues)` for a
+single-property key run queries compiled once per model. A query filter that reads context state — a
+tenant — is still evaluated per context, at each execution.
+
 ## Testing without a database
 
 ```csharp
@@ -620,7 +691,9 @@ await unitOfWork.CommitAsync();
 ```
 
 `InMemoryRepository<TAggregate, TId>` implements both repository contracts on one store and enforces the
-same pagination limits as the EF Core repository. Its versions start at 1 and do not move on their
+same pagination limits as the EF Core repository. Projections compile the selector; keyset pages order in
+memory (strings ordinally) with the store's key appended, and their cursors are valid only on the double
+that issued them. Its versions start at 1 and do not move on their
 own (it cannot see mutations): `SetVersion` sets one, and `FindAsync(id, expectedVersion)` checks it at
 the find, where EF Core checks it at the commit.
 
@@ -646,9 +719,12 @@ the find, where EF Core checks it at the commit.
 | `IResultUnitOfWork` | Core | `TryExecuteAsync`, `TryCommitAsync`: conflicts as `Result` errors, converted after the rollback |
 | `PersistenceErrors` | Core | The `PERSISTENCE.<ROOT>.<REASON>` errors, `DefaultErrorName`, `IsValidErrorName` |
 | `AggregateVersionConflictException` | Core | Inner exception of a version conflict a repository detects itself |
-| `IReadRepository<TAggregate>` | Core | Read side, untracked: find, list, page, any, count |
-| `QueryOptions<TAggregate>` | Core | Specification + includes, split query, ordering, pagination, `IncludeDeleted` |
-| `QueryOptionsExtensions` | Core | `WithIncludes`, `WithPagination`, `AsSplitQuery`, `WithOrdering`, `WithDeleted` |
+| `IReadRepository<TAggregate>` | Core | Read side, untracked: find, list, page, keyset page — of aggregates or projections — any, count |
+| `QueryOptions<TAggregate>` | Core | Specification + includes, split query, ordering, pagination or keyset, `IncludeDeleted` |
+| `QueryOptionsExtensions` | Core | `WithIncludes`, `WithPagination`, `AsSplitQuery`, `WithOrdering`, `WithDeleted`, `WithKeyset` |
+| `KeysetPagination<TAggregate>`, `KeysetKey` | Core | The sort keys, page size and position of a keyset page |
+| `KeysetCursor` | Core | The opaque position token: `ToString`, `TryParse` |
+| `KeysetPage<T>` | Core | A keyset page and the cursor of the next one |
 | `PaginationOptions` | Core | A validated page request |
 | `PaginationLimits` | Core | Default and maximum page sizes |
 | `PagedResult<T>` | Core | `IPagedResult<T>` implementation |

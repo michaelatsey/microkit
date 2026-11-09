@@ -2,6 +2,23 @@
 
 ## [Unreleased]
 
+### #197 phase 5 — read side
+
+The read side projects to DTOs in the database, pages by keyset (cursor) as well as by offset, and runs its
+finds by id as compiled queries. ADR-013 records the decision.
+
+#### Breaking Changes
+
+##### MicroKit.Persistence
+- `IReadRepository<TAggregate>` gains `ListAsync<TResult>(opts, selector)`, `ListPagedAsync<TResult>(opts, selector)`, `ListKeysetAsync(opts)` and `ListKeysetAsync<TResult>(opts, selector)`: an implementation outside the module must implement them (`EfReadRepository`, `InMemoryReadRepository` and `InMemoryRepository` do).
+
+#### Added
+- Projections: `ListAsync` and `ListPagedAsync` overloads that take a selector; the database builds the DTO, the specification, ordering and pagination apply, `AsSplitQuery()` splits the projected collections, the includes do not apply.
+- Keyset pagination: `KeysetPagination<T>` (`OrderBy`, `OrderByDescending`, `ThenBy`, `ThenByDescending`, `PageSize`, `After`), set with `QueryOptions.WithKeyset`, read with `ListKeysetAsync`; `KeysetPage<T>` returns the items and `Next`. The root's primary key is appended as the last sort key; a nullable sort key or a primitive collection is refused; the page's query starts with a range on the first key, which an index can seek; paging is forward only; `PaginationLimits` bounds and defaults the page size. `ListAsync`, `ListPagedAsync`, `AnyAsync` and `CountAsync` refuse options carrying a keyset.
+- `KeysetCursor`: an opaque Base64Url token of the last row's provider values (after each key's value converter) and a fingerprint of the root type and the ordering. `ToString()` and `TryParse` (format only, at most `MaxTokenLength` characters, every declared length checked before allocating); a cursor of another root type or ordering, or whose values do not match the keys, throws `ArgumentException` when the page is read. A key stored as a type outside the cursor's set fails, naming the property.
+- `EfRepository.FindAsync(id)` and `EfReadRepository.FindAsync(keyValues)` (single-property key) run compiled queries, one per model; query filters that read context state are evaluated per context.
+- The in-memory doubles support projections and keyset pages; a double's cursor is valid only on the double that issued it.
+
 ### #197 phase 4 — soft delete
 
 An aggregate opts in to soft delete on its root (`HasSoftDelete()`): deleting the root marks the whole

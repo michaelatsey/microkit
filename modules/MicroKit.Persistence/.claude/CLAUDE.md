@@ -12,7 +12,7 @@ keep the CQRS data-access split honest.
 
 Consumer documentation: `README.md`. Every C# sample in it lives in, and builds from,
 `samples/MicroKit.Persistence.Samples`. Decisions: `.claude-context/context/architectural-decisions.md`
-(ADR-001 to ADR-012, DN-001, DN-002).
+(ADR-001 to ADR-013, DN-001, DN-002).
 
 ---
 
@@ -111,9 +111,12 @@ PersistenceErrors              // PERSISTENCE.<ROOT>.<DUPLICATE|REFERENCE|CONCUR
 AggregateVersionConflictException  // inner of a version conflict a repository detects itself
 
 // Core — read side (the only read contract)
-IReadRepository<TAggregate>    // FindAsync(object[] keyValues) · ListAsync · ListPagedAsync · AnyAsync · CountAsync
+IReadRepository<TAggregate>    // FindAsync(object[] keyValues) · ListAsync · ListPagedAsync · ListKeysetAsync
+                               // (each also with a projection selector) · AnyAsync · CountAsync — ADR-013
 QueryOptions<TAggregate>       // Specification, Includes, Pagination, AsSplitQueryEnabled, OrderBy,
-                               // IncludeDeleted (WithDeleted); no tracking option: the read side never tracks
+                               // IncludeDeleted (WithDeleted), Keyset (WithKeyset); no tracking option
+KeysetPagination<TAggregate>   // OrderBy/ThenBy[Descending] keys, PageSize, After; the root's key appended;
+                               // forward only. KeysetCursor: opaque token, ToString/TryParse; KeysetPage<T>
 PaginationLimits               // DefaultPageSize 50, MaxPageSize 500; ListPagedAsync applies the default
                                // page, ListAsync and ListPagedAsync reject a size above the maximum
 
@@ -203,7 +206,7 @@ strategy (ADR-002). `IUnitOfWork` moved here from MicroKit.Domain (ADR-001).
 
 ```
 .claude-context/
-├── context/architectural-decisions.md   ADR-001…ADR-012, DN-001, DN-002
+├── context/architectural-decisions.md   ADR-001…ADR-013, DN-001, DN-002
 ├── context/dependency-graph.md          project and package graph as declared
 ├── context/ecosystem-overview.md        position among MicroKit modules
 ├── standards/performance-budget.md      targets (no benchmark project yet)

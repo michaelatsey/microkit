@@ -1057,6 +1057,117 @@ record) and ADR-010 (one save pipeline, the version step last).
 
 ---
 
+## ADR-013: Read Side — Projections, Keyset Pagination, Compiled Finds (#197 phase 5)
+
+**Status:** Accepted
+**Date:** 2026-11-09
+**Source:** Issue #197, phase 5. User decisions 2026-11-09:
+- the cursor is an opaque Base64Url token built on provider values, with a fingerprint of the root's model name
+  and the ordering, a `TryParse` that checks the format only, and untrusted-input bounds;
+- **paging is forward only** — the user's decision, not an assumption of this ADR.
+
+Builds on ADR-002 (`QueryOptions`), ADR-009 (the read side never tracks) and ADR-012 (the soft-delete filter).
+
+### Decision
+
+1. **Projections.** `IReadRepository<T>` gains `ListAsync<TResult>(opts, selector)` and
+   `ListPagedAsync<TResult>(opts, selector)`. The database builds the DTO: the specification, the ordering
+   and the pagination apply, then `AsNoTracking().Select(selector)`. The includes are dropped, since the
+   selector says what is read; the split hint is kept: it splits the collections the selector projects, which
+   would otherwise come back as one cartesian product. Step 0 (`IncludeDeleted`) still applies.
+2. **Keyset pagination.** `KeysetPagination<T>` (core) is set on `QueryOptions<T>.Keyset` by `WithKeyset`:
+   - the sort keys (`OrderBy`/`ThenBy[Descending]`), a `PageSize` (the `PaginationLimits` default when
+     absent, the maximum enforced) and `After`, a cursor;
+   - `ListKeysetAsync(opts)` and `ListKeysetAsync<TResult>(opts, selector)` read a page;
+   - the keyset owns the ordering and the page: `OrderBy` or `Pagination` set alongside it is refused, and
+     `ListAsync`, `ListPagedAsync`, `AnyAsync` and `CountAsync` refuse options carrying a keyset, rather than
+     drop its cursor silently (`KeysetRules`, shared by the module's implementations);
+   - **forward only**: a page returns `Next`, `null` on the last page; there is no total count.
+3. **A total ordering.** The root's primary-key properties are appended, ascending, to the sort keys (those
+   not already among them), so ties are broken and no row is skipped or repeated.
+4. **Sort keys.** Each sort key must be:
+   - a scalar property of the root (a member access or `EF.Property` on the root parameter, a `Convert` to an
+     interface the root implements unwrapped, found by `IEntityType.FindProperty`) — anything else is refused,
+     naming the key; a primitive collection is refused too (on SQL Server it is a JSON `string`, which the
+     cursor would otherwise accept);
+   - not nullable: `Nullable<T>` is refused when the key is built, and a nullable column (`IProperty.IsNullable`)
+     when the page is read;
+   - stored as a provider type the cursor carries — after the property's value converter, so a strongly typed
+     id stored as a `Guid` is fine; another provider type fails with `InvalidOperationException` naming the
+     property.
+5. **The page query.** EF Core translates the start of a page as
+   `k1 >= v1 AND ((k1 > v1) OR (k1 = v1 AND ((k2 > v2) OR (k2 = v2 AND …))))`, with `<=` and `<` for a
+   descending key. The leading bound is the range an index on the keys seeks; the `OR` chain alone is not one.
+   - Each comparison is a `BinaryExpression` that carries a generic helper method. EF Core translates the node
+     to the SQL operator whatever the key type's C# operators: a value-converted record-struct id, `Guid`,
+     `string`, `DateTimeOffset` and `bool` were pinned on PostgreSQL and SQL Server (`ReadSideFoundationTests`).
+   - The cursor's values sit in a holder, so the query is parameterised and its cache entry stable.
+   - The plan — the resolved keys, their generic methods, the fingerprint and the root-only row projection — is
+     built once per root entity type and ordering, and cached.
+   - `Take(pageSize + 1)` is a constant, as offset pagination's `Skip`/`Take` are: one query-cache entry per page
+     size, bounded by `PaginationLimits.MaxPageSize`.
+   - The query orders by every key, takes `pageSize + 1` rows to know whether a page follows, and projects each
+     row as `KeysetRow(object[] keys, item)`. The cursor therefore comes from the same rows as the items, a
+     projection included, and an `Includes` delegate still applies to a page of aggregates (pinned).
+6. **The cursor** (`KeysetCursor`, core). Its public surface is `ToString()`, `TryParse(string, out cursor)`
+   and `MaxTokenLength`. The codec and the fingerprint are internal, shared with the EF Core and Testing
+   packages through `InternalsVisibleTo`: they ship with core under one version.
+   - **Format.** Base64Url of version `1`, an 8-byte fingerprint (the first bytes of a SHA-256 over the root's
+     model name and each key's name and direction, each name length-prefixed), a value count, then tagged
+     values from a closed set of provider types: the integers, `bool`, `float`, `double`, `decimal`, `Guid`,
+     `string` (UTF-8), `DateTime` (`ToBinary`), `DateTimeOffset` (ticks and offset), `DateOnly`, `TimeOnly`
+     and `byte[]`.
+   - **Encoding.** No reflection and no serializer: `BinaryPrimitives` and UTF-8 only, so the codec is
+     trim-safe without suppression.
+   - **Untrusted input.** `TryParse` refuses:
+     - a token above `MaxTokenLength` (1024 characters);
+     - an invalid Base64Url string (checked with `Base64Url.IsValid`: `TryDecodeFromChars` throws on an invalid
+       character);
+     - a token that does not re-encode to itself;
+     - an unknown version or tag, trailing bytes, an out-of-range value, or invalid UTF-8.
+
+     Every declared length — a string's, a `byte[]`'s, the value count — is checked against the bytes that
+     remain before anything is allocated for it. A forged token declaring `int.MaxValue` bytes is refused
+     without that allocation (tested by measuring the bytes allocated).
+   - **Checked at query time.** A fingerprint of another root (a token issued for `Order` on an `Invoice` list,
+     even with the same key names and provider types) or of another ordering is refused, and so is a value
+     whose type is not its key's provider type. Both throw `ArgumentException`. Values go provider → model
+     through each key's converter.
+   - The token is not encrypted: a client can read the sort-key values of the last row of its page.
+7. **Compiled finds** (`CompiledFinds`). The hot paths are the two finds by id.
+   - `EfRepository.FindAsync(TId)` runs the whole-aggregate load as `EF.CompileAsyncQuery`. It has the includes
+     of `AggregateIncludePlan`, its split decision, tracking and the key predicate, and it is materialised in the
+     same record scope (ADR-009).
+   - `EfReadRepository.FindAsync(keyValues)` for a single-property key runs an untracked compiled
+     `FirstOrDefault`, made for the key's CLR type. A composite key, a list, a count and an any stay dynamic:
+     their shape changes with each call, and EF Core's query cache serves them.
+   - **One delegate per model.** EF Core 10's `CompiledQueryBase` binds a compiled query to the first model it
+     runs with, and throws `CompiledQueryDifferentModel` on another (pinned): one context type over two
+     providers, or a model cache key with variants. Each delegate is cached per `IModel` in a
+     `ConditionalWeakTable`.
+   - **Query filters.** A compiled query keeps the model's query filters, and evaluates the `DbContext` members a
+     filter reads at each execution: a tenant filter reads the executing context's tenant (pinned without
+     MicroKit, and tested through both finds on both servers).
+8. **The doubles.** `InMemoryReadRepository` and `InMemoryRepository` compile the selector of a projection, and
+   order a keyset page in memory: strings ordinally, a key that is not `IComparable` by its string form, with
+   the store's key appended. They refuse a nullable sort key through the member's nullability annotations.
+   They have no value converters, so a double's cursor carries a handle into the double, in the same format
+   and with the same fingerprint: it is valid only on the double that issued it.
+
+### Consequences
+
+- `IReadRepository<T>` gains four members: a break for an implementation outside the module. Such an
+  implementation cannot issue or read a cursor, whose codec is internal: it forwards keyset pages to one of the
+  module's implementations, or throws `NotSupportedException`. The internals shared by `InternalsVisibleTo` are a
+  contract between the module's assemblies, which ship under one version.
+- `KeysetPagination`, `KeysetKey`, `KeysetCursor` and `KeysetPage` are new public types in core.
+- A keyset ordering by a column whose provider type is outside the set (`TimeSpan`, a JSON column) is not
+  supported; sort by another property or convert it.
+- Tests: `ReadSideTests` (PostgreSQL and SQL Server), `ReadSideFoundationTests` (EF Core facts),
+  `KeysetCursorTests`, `KeysetPaginationTests`, `InMemoryReadSideTests`.
+
+---
+
 ## DN-001: Execution Strategy Coverage Gap in EfUnitOfWork.CommitAsync
 
 **Status:** Superseded by ADR-006 (#196). Its observation was wrong: outside a transaction,

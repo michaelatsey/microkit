@@ -10,6 +10,13 @@
   <ItemGroup>
     <ProjectReference Include="..\MicroKit.Persistence.Abstractions\MicroKit.Persistence.Abstractions.csproj" />
   </ItemGroup>
+  <!-- The keyset cursor's codec and rules are shared with the module's implementations of IReadRepository,
+       which ship with core under one version; the public cursor type exposes ToString and TryParse only (ADR-013) -->
+  <ItemGroup>
+    <InternalsVisibleTo Include="MicroKit.Persistence.EntityFrameworkCore" />
+    <InternalsVisibleTo Include="MicroKit.Persistence.Testing" />
+    <InternalsVisibleTo Include="MicroKit.Persistence.UnitTests" />
+  </ItemGroup>
   <!-- Cross-module (the Result path, #197 phase 3): another MicroKit module is always referenced from
        source, with an unconditional ProjectReference in every build mode (#197 Spec, Perimeter) -->
   <ItemGroup>

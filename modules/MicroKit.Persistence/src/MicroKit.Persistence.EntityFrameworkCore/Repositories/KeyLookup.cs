@@ -124,7 +124,7 @@ internal static class KeyLookup
     // == where the key type supports it (primitives, Guid, records…); otherwise value equality
     // through Equals(object), which EF Core translates to the same SQL comparison — DbSet.Find
     // accepts such keys, so the repositories must too. Probed once per key type.
-    private static Expression KeyEquals(Expression property, Expression value)
+    internal static Expression KeyEquals(Expression property, Expression value)
     {
         var supportsEqualityOperator = s_equalityOperatorSupport.GetOrAdd(property.Type, static type =>
         {

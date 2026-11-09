@@ -129,4 +129,23 @@ public static class QueryOptionsExtensions
         ArgumentNullException.ThrowIfNull(orderBy);
         return opts with { OrderBy = orderBy };
     }
+
+    /// <summary>
+    /// Returns a new <see cref="QueryOptions{TAggregate}"/> with the specified keyset (cursor) pagination,
+    /// replacing any previous one; <see langword="null"/> clears it. Read the page with
+    /// <c>IReadRepository.ListKeysetAsync</c>.
+    /// </summary>
+    /// <typeparam name="TAggregate">The aggregate root type.</typeparam>
+    /// <param name="opts">The source options to derive from.</param>
+    /// <param name="keyset">The sort keys, page size and position, or <see langword="null"/>.</param>
+    /// <returns>A new options instance with <see cref="QueryOptions{TAggregate}.Keyset"/> set.</returns>
+    /// <exception cref="ArgumentNullException"><paramref name="opts"/> is <see langword="null"/>.</exception>
+    public static QueryOptions<TAggregate> WithKeyset<TAggregate>(
+        this QueryOptions<TAggregate> opts,
+        KeysetPagination<TAggregate>? keyset)
+        where TAggregate : class, IAggregateRoot
+    {
+        ArgumentNullException.ThrowIfNull(opts);
+        return opts with { Keyset = keyset };
+    }
 }

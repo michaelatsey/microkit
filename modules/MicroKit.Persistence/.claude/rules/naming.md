@@ -36,8 +36,10 @@
 | Page request | `PaginationOptions` |
 | Page bounds | `PaginationLimits` |
 | Evaluator | `ISpecificationEvaluator` / `EfSpecificationEvaluator` |
+| Keyset | `KeysetPagination<TAggregate>` (keys `KeysetKey`), `KeysetCursor`, `KeysetPage<T>`; read by `ListKeysetAsync` |
+| Projection | an overload of `ListAsync` / `ListPagedAsync` / `ListKeysetAsync` taking a `selector` |
 
-Builder extensions use the `With-` prefix (`WithIncludes`, `WithPagination`, `WithOrdering`, `WithDeleted`,
+Builder extensions use the `With-` prefix (`WithIncludes`, `WithPagination`, `WithOrdering`, `WithDeleted`, `WithKeyset`,
 `WithOrderBy`, `WithThenBy`, `WithSpec`), except `AsSplitQuery()`, named after its EF Core
 counterpart. No extension is named after a `QueryOptions` property: the property would win —
 see `specifications.md`.

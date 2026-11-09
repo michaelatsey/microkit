@@ -41,6 +41,8 @@ MicroKit.Persistence.Analyzers            (netstandard2.0)
 
 Intra-module references are unconditional `ProjectReference` (ADR-GLOBAL-002 D5).
 `PostgreSql`, `SqlServer`, `Specifications` and `Testing` are siblings — none references another.
+Core grants `InternalsVisibleTo` to `EntityFrameworkCore`, `Testing` and `UnitTests` (the keyset cursor's codec and
+rules, ADR-013); it is not a reference, and no other project declares one.
 
 ## Tests and samples
 

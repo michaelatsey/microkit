@@ -1,3 +1,5 @@
+using System.Linq.Expressions;
+
 namespace MicroKit.Persistence;
 
 /// <summary>
@@ -60,12 +62,13 @@ public interface IReadRepository<TAggregate>
     /// </returns>
     /// <remarks>
     /// Without <see cref="QueryOptions{TAggregate}.Pagination"/> every matching aggregate is
-    /// returned; use <see cref="ListPagedAsync"/> for a bounded page.
+    /// returned; use <see cref="ListPagedAsync(QueryOptions{TAggregate}, CancellationToken)"/> for a bounded page.
     /// </remarks>
     /// <exception cref="ArgumentOutOfRangeException">
     /// <see cref="QueryOptions{TAggregate}.Pagination"/> asks for more than the configured
     /// <see cref="PaginationLimits.MaxPageSize"/> items.
     /// </exception>
+    /// <exception cref="ArgumentException"><see cref="QueryOptions{TAggregate}.Keyset"/> is set: use <see cref="ListKeysetAsync(QueryOptions{TAggregate}, CancellationToken)"/>.</exception>
     ValueTask<IReadOnlyList<TAggregate>> ListAsync(
         QueryOptions<TAggregate> opts,
         CancellationToken ct = default);
@@ -88,8 +91,103 @@ public interface IReadRepository<TAggregate>
     /// <see cref="QueryOptions{TAggregate}.Pagination"/> asks for more than the configured
     /// <see cref="PaginationLimits.MaxPageSize"/> items.
     /// </exception>
+    /// <exception cref="ArgumentException"><see cref="QueryOptions{TAggregate}.Keyset"/> is set: use <see cref="ListKeysetAsync(QueryOptions{TAggregate}, CancellationToken)"/>.</exception>
     ValueTask<IPagedResult<TAggregate>> ListPagedAsync(
         QueryOptions<TAggregate> opts,
+        CancellationToken ct = default);
+
+    /// <summary>
+    /// Returns the projection of every aggregate that satisfies the supplied
+    /// <see cref="QueryOptions{TAggregate}"/>: the DTO a query handler returns, built by the database.
+    /// </summary>
+    /// <typeparam name="TResult">The projection type.</typeparam>
+    /// <param name="opts">
+    /// The query options: the specification, the ordering and the pagination apply, and the split hint splits the
+    /// collections <paramref name="selector"/> projects; the includes do not (the projection reads only what
+    /// <paramref name="selector"/> names).
+    /// </param>
+    /// <param name="selector">The projection, an expression the provider translates.</param>
+    /// <param name="ct">Propagates notification that operations should be cancelled.</param>
+    /// <returns>The projections, never <see langword="null"/>.</returns>
+    /// <exception cref="ArgumentOutOfRangeException">
+    /// <see cref="QueryOptions{TAggregate}.Pagination"/> asks for more than <see cref="PaginationLimits.MaxPageSize"/> items.
+    /// </exception>
+    /// <exception cref="ArgumentException"><see cref="QueryOptions{TAggregate}.Keyset"/> is set: use <see cref="ListKeysetAsync{TResult}"/>.</exception>
+    ValueTask<IReadOnlyList<TResult>> ListAsync<TResult>(
+        QueryOptions<TAggregate> opts,
+        Expression<Func<TAggregate, TResult>> selector,
+        CancellationToken ct = default);
+
+    /// <summary>
+    /// Returns a page of the projections of the aggregates that satisfy the supplied
+    /// <see cref="QueryOptions{TAggregate}"/>, with the total count.
+    /// </summary>
+    /// <typeparam name="TResult">The projection type.</typeparam>
+    /// <param name="opts">As for <see cref="ListPagedAsync(QueryOptions{TAggregate}, CancellationToken)"/>; the includes do not apply.</param>
+    /// <param name="selector">The projection, an expression the provider translates.</param>
+    /// <param name="ct">Propagates notification that operations should be cancelled.</param>
+    /// <returns>The page of projections and the total count across all pages.</returns>
+    /// <exception cref="ArgumentOutOfRangeException">
+    /// <see cref="QueryOptions{TAggregate}.Pagination"/> asks for more than <see cref="PaginationLimits.MaxPageSize"/> items.
+    /// </exception>
+    /// <exception cref="ArgumentException"><see cref="QueryOptions{TAggregate}.Keyset"/> is set: use <see cref="ListKeysetAsync{TResult}"/>.</exception>
+    ValueTask<IPagedResult<TResult>> ListPagedAsync<TResult>(
+        QueryOptions<TAggregate> opts,
+        Expression<Func<TAggregate, TResult>> selector,
+        CancellationToken ct = default);
+
+    /// <summary>
+    /// Returns a keyset (cursor) page of the aggregates that satisfy the supplied
+    /// <see cref="QueryOptions{TAggregate}"/>, ordered by <see cref="QueryOptions{TAggregate}.Keyset"/>.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// The page starts after <see cref="KeysetPagination{TAggregate}.After"/>, by comparing the sort keys in the
+    /// database, and costs the same whatever its depth, unlike an offset. The root's primary key is appended,
+    /// ascending, as the last sort key. Paging is forward only; the page's <see cref="KeysetPage{T}.Next"/>
+    /// starts the next one. There is no total count.
+    /// </para>
+    /// <para>
+    /// The cursor is checked here: one issued for another aggregate type or another ordering, or whose values do
+    /// not match the sort keys, throws <see cref="ArgumentException"/>.
+    /// </para>
+    /// <para>
+    /// The cursor's codec is internal to the module (ADR-013): only the module's implementations issue and read
+    /// cursors. Another implementation forwards to one of them, or throws <see cref="NotSupportedException"/>.
+    /// </para>
+    /// </remarks>
+    /// <param name="opts">The query options: the specification, the includes and the split hint apply; the keyset orders and pages.</param>
+    /// <param name="ct">Propagates notification that operations should be cancelled.</param>
+    /// <returns>The page, and the cursor of the next one.</returns>
+    /// <exception cref="ArgumentException">
+    /// No keyset is set; an ordering or an offset pagination is set too; a sort key is not a non-nullable scalar
+    /// property of the root; or the cursor does not belong to this ordering.
+    /// </exception>
+    /// <exception cref="InvalidOperationException">
+    /// A sort key is stored as a type a <see cref="KeysetCursor"/> cannot carry, reads null on a row, or the next
+    /// cursor would exceed <see cref="KeysetCursor.MaxTokenLength"/>.
+    /// </exception>
+    /// <exception cref="ArgumentOutOfRangeException">The keyset's page size exceeds <see cref="PaginationLimits.MaxPageSize"/>.</exception>
+    ValueTask<KeysetPage<TAggregate>> ListKeysetAsync(
+        QueryOptions<TAggregate> opts,
+        CancellationToken ct = default);
+
+    /// <summary>
+    /// Returns a keyset (cursor) page of the projections of the aggregates that satisfy the supplied
+    /// <see cref="QueryOptions{TAggregate}"/>.
+    /// </summary>
+    /// <remarks>As <see cref="ListKeysetAsync(QueryOptions{TAggregate}, CancellationToken)"/>; the cursor is read from the same rows as the projections.</remarks>
+    /// <typeparam name="TResult">The projection type.</typeparam>
+    /// <param name="opts">The query options: the specification and the split hint apply; the keyset orders and pages; the includes do not apply.</param>
+    /// <param name="selector">The projection, an expression the provider translates.</param>
+    /// <param name="ct">Propagates notification that operations should be cancelled.</param>
+    /// <returns>The page of projections, and the cursor of the next one.</returns>
+    /// <exception cref="ArgumentException">As for <see cref="ListKeysetAsync(QueryOptions{TAggregate}, CancellationToken)"/>.</exception>
+    /// <exception cref="InvalidOperationException">As for <see cref="ListKeysetAsync(QueryOptions{TAggregate}, CancellationToken)"/>.</exception>
+    /// <exception cref="ArgumentOutOfRangeException">The keyset's page size exceeds <see cref="PaginationLimits.MaxPageSize"/>.</exception>
+    ValueTask<KeysetPage<TResult>> ListKeysetAsync<TResult>(
+        QueryOptions<TAggregate> opts,
+        Expression<Func<TAggregate, TResult>> selector,
         CancellationToken ct = default);
 
     /// <summary>
@@ -105,6 +203,7 @@ public interface IReadRepository<TAggregate>
     /// Prefer <see cref="AnyAsync"/> over <see cref="CountAsync"/> for existence checks —
     /// the database engine short-circuits after finding the first matching row.
     /// </remarks>
+    /// <exception cref="ArgumentException"><see cref="QueryOptions{TAggregate}.Keyset"/> is set.</exception>
     ValueTask<bool> AnyAsync(QueryOptions<TAggregate> opts, CancellationToken ct = default);
 
     /// <summary>
@@ -114,5 +213,6 @@ public interface IReadRepository<TAggregate>
     /// <param name="opts">The query options specifying the filter.</param>
     /// <param name="ct">Propagates notification that operations should be cancelled.</param>
     /// <returns>The count of matching aggregates.</returns>
+    /// <exception cref="ArgumentException"><see cref="QueryOptions{TAggregate}.Keyset"/> is set.</exception>
     ValueTask<int> CountAsync(QueryOptions<TAggregate> opts, CancellationToken ct = default);
 }

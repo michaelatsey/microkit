@@ -3,7 +3,7 @@ namespace MicroKit.Persistence;
 /// <summary>
 /// Encapsulates the loading strategy for a read query over <typeparamref name="TAggregate"/>
 /// aggregates. Combines the WHAT (a domain <see cref="Specification{T}"/>) with the HOW
-/// (eager includes, split query, ordering, pagination, soft-deleted rows) — ADR-002.
+/// (eager includes, split query, ordering, offset or keyset pagination, soft-deleted rows) — ADR-002.
 /// </summary>
 /// <typeparam name="TAggregate">
 /// The aggregate root type. Must be a reference type implementing <see cref="IAggregateRoot"/>.
@@ -102,4 +102,16 @@ public sealed record QueryOptions<TAggregate>
     /// which delete for real. The write side never loads a soft-deleted aggregate.
     /// </remarks>
     public bool IncludeDeleted { get; init; }
+
+    /// <summary>
+    /// Gets the keyset (cursor) pagination read by
+    /// <see cref="IReadRepository{TAggregate}.ListKeysetAsync(QueryOptions{TAggregate}, CancellationToken)"/>;
+    /// <see langword="null"/> when none is set.
+    /// </summary>
+    /// <remarks>
+    /// The keyset owns the ordering and the page: <c>ListKeysetAsync</c> refuses options that also set
+    /// <see cref="OrderBy"/> or <see cref="Pagination"/>, and <c>ListAsync</c> and <c>ListPagedAsync</c> refuse
+    /// options that set it (ADR-013).
+    /// </remarks>
+    public KeysetPagination<TAggregate>? Keyset { get; init; }
 }

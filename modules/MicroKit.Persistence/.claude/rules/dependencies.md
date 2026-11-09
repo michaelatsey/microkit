@@ -18,6 +18,9 @@ Every version lives in the root `Directory.Packages.props`
 | `Testing` | core | — |
 | `Analyzers` | — | `Microsoft.CodeAnalysis.CSharp` (build-time, `PrivateAssets="all"`) |
 
+Core grants `InternalsVisibleTo` to `EntityFrameworkCore`, `Testing` and `UnitTests` for the keyset cursor's
+codec and rules (ADR-013): they ship with core under one version. No other project has it.
+
 `Specifications`, `Testing`, `PostgreSql` and `SqlServer` are siblings: none references another
 (`LayerDependencyTests`).
 
