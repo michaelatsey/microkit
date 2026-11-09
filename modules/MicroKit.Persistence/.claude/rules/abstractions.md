@@ -31,8 +31,8 @@ PersistenceException
 ## Allowed references
 
 `MicroKit.Domain` only — `IAggregateRoot` and `IEntityId` constrain `IRepository`'s type
-parameters. It is declared with the cross-module two-ItemGroup pattern
-(root `.claude/rules/cross-module-references.md`). No other non-BCL reference.
+parameters. It is an unconditional `ProjectReference`, from source in every build mode (#197 Spec,
+Perimeter; `rules/dependencies.md`). No other non-BCL reference.
 
 ## The minimality test
 

@@ -34,8 +34,8 @@ git push origin persistence-v{version}
 
 ## CI
 
-The tag push runs `.github/workflows/release-persistence.yml`: restore and build with
-`CIReleaseBuild=true` (MicroKit.Domain from NuGet), test, pack, push to NuGet.org.
+The tag push runs `.github/workflows/release-persistence.yml`: restore, build (the other MicroKit
+modules from source, as in every build), test, pack, push to NuGet.org.
 
 ```bash
 gh run list --workflow=release-persistence.yml --limit=5

@@ -12,7 +12,7 @@ once the transaction is rolled back. ADR-011 records the decision. `IUnitOfWork.
 #### Breaking Changes
 
 ##### MicroKit.Persistence
-- `MicroKit.Persistence` now references `MicroKit.Result` (`MicroKit.Persistence.Abstractions` still does not). It needs `Error.Conflict(code, message)` and `CategorizedError` (#194): the published `MicroKit.Result 1.0.0-preview.2`, which the root `Directory.Packages.props` pins for the `CIReleaseBuild` package build, predates them, so `MicroKit.Result` must be released first and its pin raised before this module is.
+- `MicroKit.Persistence` now references `MicroKit.Result` (`MicroKit.Persistence.Abstractions` still does not).
 
 ##### MicroKit.Persistence.EntityFrameworkCore
 - On a context configured with `UseMicroKitPersistence()`, model building fails when two aggregate roots resolve to the same error name — by default their simple CLR name in UPPER_SNAKE, so two `Order` classes in different namespaces — and when `HasAggregateErrorName` is set on a type that is not a top-most root. Fix a name with `HasAggregateErrorName("BILLING_ORDER")`.
@@ -203,7 +203,7 @@ compile in `samples/MicroKit.Persistence.Samples`.
 ## [1.0.0-preview.3] — 2026-06-25
 ### Fixed
 #### MicroKit.Persistence.Abstractions
-- Corrected `MicroKit.Domain` dependency constraint to `>= 1.0.0-preview.5` — previous nuspec declared `>= 1.0.0-preview.2` due to missing `CIReleaseBuild=true` on pack step, causing NuGet to resolve an incompatible Domain version transitively.
+- Corrected `MicroKit.Domain` dependency constraint to `>= 1.0.0-preview.5` — previous nuspec declared `>= 1.0.0-preview.2` due to the pack step missing the release-build flag, causing NuGet to resolve an incompatible Domain version transitively.
 
 ---
 

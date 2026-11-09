@@ -22,12 +22,13 @@ dotnet restore modules/MicroKit.Persistence/MicroKit.Persistence.slnx
 dotnet build modules/MicroKit.Persistence/MicroKit.Persistence.slnx -c Release -v d
 ```
 
-A default build resolves `MicroKit.Domain` from source; `-p:CIReleaseBuild=true` resolves it from
-the published package instead (compatibility check, used by the release workflow).
+Every build resolves the other MicroKit modules — `MicroKit.Domain`, `MicroKit.Result` — from source:
+the module references them with unconditional `ProjectReference`s, whatever the build properties
+(#197 Spec, Perimeter).
 
 ## Build order
 
-1. `MicroKit.Domain` (cross-module, from source)
+1. `MicroKit.Domain`, `MicroKit.Result` (cross-module, from source)
 2. `MicroKit.Persistence.Abstractions`
 3. `MicroKit.Persistence` (core)
 4. `EntityFrameworkCore`, `Specifications`, `Testing`

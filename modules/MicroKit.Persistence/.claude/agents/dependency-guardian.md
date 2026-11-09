@@ -1,6 +1,6 @@
 ---
 name: dependency-guardian
-description: Use this agent on any .csproj or project-reference change in MicroKit.Persistence. Fast PASS/BLOCK verdict. Invoke it after every .csproj or Directory.Packages.props change. Checks CPM compliance, reference patterns (intra-module unconditional, cross-module two-ItemGroup), layer isolation (EF Core out of Abstractions and core), and package confinement (Npgsql/SqlServer only in providers, NSubstitute only in test projects, Analyzers build-only).
+description: Use this agent on any .csproj or project-reference change in MicroKit.Persistence. Fast PASS/BLOCK verdict. Invoke it after every .csproj or Directory.Packages.props change. Checks CPM compliance, reference patterns (intra-module and cross-module unconditional ProjectReference, no MicroKit PackageReference), layer isolation (EF Core out of Abstractions and core), and package confinement (Npgsql/SqlServer only in providers, NSubstitute only in test projects, Analyzers build-only).
 tools: Read, Glob, Grep
 model: haiku
 ---
@@ -18,7 +18,7 @@ model: haiku
 2. **FluentAssertions** — any reference is a BLOCK.
 3. **Abstractions** — references `MicroKit.Domain` only (cross-module); no EF Core, `Npgsql.*`,
    SqlServer, `NSubstitute`, nor any `MicroKit.Persistence.*` project.
-4. **Core** — references Abstractions and, cross-module with the two-ItemGroup pattern, `MicroKit.Result` (ADR-011); no package. Abstractions never references `MicroKit.Result`.
+4. **Core** — references Abstractions and, cross-module with an unconditional `ProjectReference`, `MicroKit.Result` (ADR-011); no package. Abstractions never references `MicroKit.Result`.
 5. **EntityFrameworkCore** — core + `Microsoft.EntityFrameworkCore`,
    `Microsoft.EntityFrameworkCore.Relational`, `Microsoft.Extensions.DependencyInjection.Abstractions`;
    no provider package.
@@ -34,10 +34,11 @@ model: haiku
 ## Reference patterns
 
 - **Intra-module** (between this module's projects): unconditional `ProjectReference`, in every
-  build mode (ADR-GLOBAL-002 D5). A `CIReleaseBuild` condition on one is a BLOCK.
-- **Cross-module from `src/`**: the two-ItemGroup pattern. Today there are two:
-  Abstractions → `MicroKit.Domain` and core → `MicroKit.Result`.
-- **Tests and samples** (`IsPackable=false`): unconditional `ProjectReference` to other modules.
+  build mode (ADR-GLOBAL-002 D5). A build-mode condition on one is a BLOCK.
+- **Cross-module**: unconditional `ProjectReference` in every build mode and every project (#197 Spec,
+  Perimeter; overrides the root two-ItemGroup pattern for this module). A `PackageReference` to a
+  MicroKit package, or a build-mode condition on a cross-module reference, is a BLOCK. The `src/` edges
+  are Abstractions → `MicroKit.Domain` and core → `MicroKit.Result`.
 
 ```bash
 # Condition placed on an item instead of its ItemGroup (violation)
@@ -45,9 +46,7 @@ grep -rn 'Reference.*Condition=' modules/MicroKit.Persistence/src --include='*.c
 ```
 
 Cross-module checklist:
-- [ ] `Condition=` is on the `<ItemGroup>`, never on an item
-- [ ] The comment `<!-- ⚠ Any new cross-module dependency must be added to BOTH ItemGroups -->` is present
-- [ ] Every `ProjectReference` has its `PackageReference` twin, and the reverse
+- [ ] One unconditional `ProjectReference`, no condition, no MicroKit `PackageReference`
 - [ ] Paths are relative
 - [ ] The referenced projects are listed under `/deps/` in `MicroKit.Persistence.slnx`
 - [ ] A new edge is in the root CLAUDE.md graph and `.claude-context/context/dependency-graph.md`

@@ -8,7 +8,6 @@ tag is cut until steps 1–4 of its migration land.
 
 - [ ] On `main`, clean tree, CI green
 - [ ] `CHANGELOG.md` complete for the version
-- [ ] `MicroKit.Domain` published at the version `Directory.Packages.props` declares
 - [ ] ArchitectureTests present and green
 
 ## Steps

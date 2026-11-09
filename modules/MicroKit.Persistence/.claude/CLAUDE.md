@@ -76,9 +76,9 @@ There is no benchmark project and no performance-test project.
 ## Dependency Graph
 
 ```
-MicroKit.Persistence.Abstractions  ← MicroKit.Domain (cross-module, two-ItemGroup pattern)
+MicroKit.Persistence.Abstractions  ← MicroKit.Domain (cross-module, unconditional ProjectReference)
         ↑
-MicroKit.Persistence (core)        ← MicroKit.Result (cross-module, two-ItemGroup pattern)
+MicroKit.Persistence (core)        ← MicroKit.Result (cross-module, unconditional ProjectReference)
         ↑
 MicroKit.Persistence.EntityFrameworkCore  ← Microsoft.EntityFrameworkCore(.Relational),
         ↑                                   Microsoft.Extensions.DependencyInjection.Abstractions

@@ -10,11 +10,11 @@ checks against it. Rules: `.claude/rules/dependencies.md`.
 
 ```
 MicroKit.Persistence.Abstractions
-│   └── cross-module: MicroKit.Domain   (two-ItemGroup: ProjectReference / PackageReference on CIReleaseBuild)
+│   └── cross-module: MicroKit.Domain   (unconditional ProjectReference, from source)
 │
 MicroKit.Persistence (core)
 │   ├── → Abstractions
-│   └── cross-module: MicroKit.Result   (two-ItemGroup; the Result path, #197 phase 3 — ADR-011)
+│   └── cross-module: MicroKit.Result   (unconditional ProjectReference, from source; the Result path — ADR-011)
 │
 MicroKit.Persistence.EntityFrameworkCore
 │   ├── → core
@@ -89,8 +89,6 @@ All versions in the root `Directory.Packages.props`.
 
 | Package | Used by |
 |---------|---------|
-| `MicroKit.Domain` | Abstractions (release build) |
-| `MicroKit.Result` | core (release build) |
 | `Microsoft.EntityFrameworkCore`, `.Relational` | EntityFrameworkCore |
 | `Microsoft.Extensions.DependencyInjection.Abstractions` | EntityFrameworkCore |
 | `Npgsql.EntityFrameworkCore.PostgreSQL` | PostgreSql, IntegrationTests |

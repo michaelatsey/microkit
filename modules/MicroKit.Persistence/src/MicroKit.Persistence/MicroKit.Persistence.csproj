@@ -10,12 +10,9 @@
   <ItemGroup>
     <ProjectReference Include="..\MicroKit.Persistence.Abstractions\MicroKit.Persistence.Abstractions.csproj" />
   </ItemGroup>
-  <!-- Cross-module (#197 phase 3: the Result path). DEV: source ProjectReference — CI/Release: published
-       NuGet package. ⚠ Any new cross-module dependency must be added to BOTH ItemGroups -->
-  <ItemGroup Condition="'$(CIReleaseBuild)' != 'true'">
+  <!-- Cross-module (the Result path, #197 phase 3): another MicroKit module is always referenced from
+       source, with an unconditional ProjectReference in every build mode (#197 Spec, Perimeter) -->
+  <ItemGroup>
     <ProjectReference Include="../../../MicroKit.Result/src/MicroKit.Result/MicroKit.Result.csproj" />
-  </ItemGroup>
-  <ItemGroup Condition="'$(CIReleaseBuild)' == 'true'">
-    <PackageReference Include="MicroKit.Result" />
   </ItemGroup>
 </Project>

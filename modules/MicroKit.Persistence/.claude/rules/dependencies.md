@@ -24,13 +24,12 @@ Every version lives in the root `Directory.Packages.props`
 ## Reference Rules
 
 - **Intra-module** references are unconditional `ProjectReference`, in every build mode
-  (ADR-GLOBAL-002 D5). A `CIReleaseBuild` condition on one is a violation.
-- **Cross-module** references from `src/` use the two-ItemGroup pattern conditioned on
-  `CIReleaseBuild` (root `.claude/rules/cross-module-references.md`). There are two:
-  Abstractions → `MicroKit.Domain`, and core → `MicroKit.Result` (#197 phase 3; Abstractions never
-  references Result, #196 D17).
-- Test projects and the samples project reference other modules with an unconditional
-  `ProjectReference`.
+  (ADR-GLOBAL-002 D5). A build-mode condition on one is a violation.
+- **Cross-module** references are unconditional `ProjectReference` too, in every build mode and in
+  every project — `src/`, tests and samples (#197 Spec, Perimeter). No project of the module references
+  a MicroKit package published on NuGet.org; for this module this overrides the two-ItemGroup pattern of
+  the root `.claude/rules/cross-module-references.md`. The `src/` edges are Abstractions →
+  `MicroKit.Domain` and core → `MicroKit.Result` (Abstractions never references Result, #196 D17).
 
 ## Ecosystem
 

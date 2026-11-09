@@ -28,8 +28,6 @@ MicroKit.Persistence.Analyzers
 ### 1. Pre-flight
 - [ ] On `main`, clean working tree, CI green
 - [ ] `CHANGELOG.md` entry complete for the version
-- [ ] `MicroKit.Domain` published at the version `Directory.Packages.props` declares (the release
-      build swaps the cross-module reference for the package, `CIReleaseBuild=true`)
 
 ### 2. Build and test
 ```bash

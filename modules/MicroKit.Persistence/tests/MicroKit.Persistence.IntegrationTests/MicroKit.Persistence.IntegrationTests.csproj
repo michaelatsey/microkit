@@ -8,14 +8,12 @@
     <NoWarn>CS1591;CA1707;IL2026;IL2091</NoWarn>
   </PropertyGroup>
   <ItemGroup>
-    <!-- Same-module, IsPackable=false — unconditional ProjectReferences (no CIReleaseBuild pattern needed) -->
+    <!-- Same-module — unconditional ProjectReferences -->
     <ProjectReference Include="..\..\src\MicroKit.Persistence.EntityFrameworkCore\MicroKit.Persistence.EntityFrameworkCore.csproj" />
     <ProjectReference Include="..\..\src\MicroKit.Persistence.EntityFrameworkCore.PostgreSql\MicroKit.Persistence.EntityFrameworkCore.PostgreSql.csproj" />
     <ProjectReference Include="..\..\src\MicroKit.Persistence.EntityFrameworkCore.SqlServer\MicroKit.Persistence.EntityFrameworkCore.SqlServer.csproj" />
-    <!-- Cross-module, test-only: the aggregates, events and actors these tests persist come from
-         MicroKit.Domain directly. Unconditional, so a CIReleaseBuild=true build still compiles them
-         against the Domain source instead of the published package that Persistence.Abstractions
-         resolves in that mode. -->
+    <!-- Cross-module: the aggregates, events and actors these tests persist come from MicroKit.Domain
+         directly, referenced from source like every MicroKit module (#197 Spec, Perimeter). -->
     <ProjectReference Include="..\..\..\MicroKit.Domain\src\MicroKit.Domain\MicroKit.Domain.csproj" />
   </ItemGroup>
   <!-- SQLitePCLRaw.lib.e_sqlite3 2.1.11 has a known vulnerability (GHSA-2m69-gcr7-jv3q).
