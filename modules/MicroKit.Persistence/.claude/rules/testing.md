@@ -58,7 +58,9 @@ composite keys, includes or tracking.
   `FindAsync` and `ListAsync` untracked even when the context tracks the root.
 - Version (`AggregateVersionTests`): every kind of write inside a boundary bumps once; moves; roots
   not tracked; entities outside every boundary; two-context conflict; a real retried attempt; a
-  stale and a current expected version; the model checks on the reserved name.
+  stale and a current expected version; the model checks on the reserved name; link entities;
+  cross-aggregate keys `Restrict` (deleting a linked or referenced root fails, an explicit
+  `Cascade`/`SetNull` fails model building, a child still cascades with its root).
 - Boundary and record (`AggregateBoundaryTests`): a child shared by two roots fails model building;
   `IsOutsideAggregate`; every way to track a partial root is refused; the record survives pooling,
   `DiscardChanges` and a failed `ExecuteAsync` attempt.

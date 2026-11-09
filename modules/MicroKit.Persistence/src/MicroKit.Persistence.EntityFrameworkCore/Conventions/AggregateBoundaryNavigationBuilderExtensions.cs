@@ -23,8 +23,11 @@ public static class AggregateBoundaryNavigationBuilderExtensions
     /// </code>
     /// </para>
     /// <para>
-    /// It applies to reference, collection and skip (many-to-many) navigations. It sets the model
-    /// annotation <c>MicroKit:OutsideAggregate</c> to <see langword="true"/>.
+    /// It applies to reference, collection and skip (many-to-many) navigations. A many-to-many
+    /// navigation declared inside a boundary must be marked (either side will do): its join rows
+    /// then lie outside every aggregate, neither loaded nor versioned — for links the aggregate owns,
+    /// use a link entity, a child of the root. It sets the model annotation
+    /// <c>MicroKit:OutsideAggregate</c> to <see langword="true"/>.
     /// </para>
     /// </remarks>
     public static NavigationBuilder IsOutsideAggregate(this NavigationBuilder navigationBuilder)

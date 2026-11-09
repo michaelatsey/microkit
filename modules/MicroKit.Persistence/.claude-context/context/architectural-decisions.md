@@ -665,9 +665,16 @@ Scope is limited to audit instants: other `DateTimeOffset` properties keep their
    **Uniqueness also holds per row** (Spec amended 2026-11-09T14:50Z): a navigation brings a non-root
    entity into the boundary only if each of its rows can belong to one parent row — a collection or a
    reference whose child holds the foreign key, or a reference whose parent holds a **unique** foreign
-   key (one-to-one). A many-to-one reference held by the parent, or a skip navigation (many-to-many),
-   that reaches a non-root entity fails model building, naming the navigation and the fix: make the
-   target an aggregate root, or mark the navigation `IsOutsideAggregate()`.
+   key (one-to-one). A many-to-one reference held by the parent that reaches a non-root entity fails
+   model building, naming the navigation and the fix: make the target an aggregate root, or mark the
+   navigation `IsOutsideAggregate()`. A skip navigation (many-to-many) declared by a type inside a
+   boundary fails model building **whatever its target**, root or not, unless it is marked
+   `IsOutsideAggregate()` (on either side: a unidirectional one has a hidden inverse). The fix it names is
+   an explicit link entity, a child of the root (`HasMany(o => o.TagLinks)`, the foreign key on the
+   link, the link referencing the other root): the links are loaded, versioned and removable like any
+   child, without tracking the other root, which loads whole through its own repository. A skip
+   navigation marked outside is neither loaded nor versioned; its join rows lie outside every
+   boundary.
 4. **Only whole roots are tracked through the write side.** The record holds, by reference, the roots
    `EfRepository` loaded with the whole plan:
    - a root the repository's load **returned**, once that load has **completed**, and only if it was
@@ -776,6 +783,17 @@ whole ones only.
    a fixed order in code, never left to EF Core's interceptor order. The version step is always last:
    #197 phase 4 inserts its soft-delete conversion (a `Deleted` root becomes `Modified`) in front of it,
    so a soft-deleted root is bumped like any modified one.
+8. **The database never changes an aggregate on behalf of something outside it** (Spec Phase 2,
+   amended 2026-11-09). `AggregateReferenceConvention` (after the boundary convention) gives
+   `DeleteBehavior.Restrict` to every foreign key whose dependent lies in an aggregate (a root, or an
+   entity inside a boundary) and that is not one of the boundary's own links (a child's key to its
+   parent, an ownership, a one-to-one): a reference to another root — of any type — or to an entity
+   outside every boundary. It replaces EF Core's `Cascade` default for a required relationship
+   ([Learn](https://learn.microsoft.com/ef/core/saving/cascade-delete#configuring-cascading-behaviors)).
+   An explicit `Cascade` or `SetNull` on such a key fails model building, naming it: deleting a `Tag`
+   would otherwise delete or modify rows of `Order` aggregates without bumping them. Other explicit
+   behaviours are kept; relationships inside one boundary keep theirs. Existing cross-aggregate keys
+   change from `CASCADE` to `RESTRICT` (`NO ACTION` on SQL Server): a migration.
 
 ### Consequences
 
@@ -790,12 +808,10 @@ whole ones only.
   makes during `SavingChanges` is not bumped. MicroKit's own steps keep their fixed order.
 - **No shared rows.** ADR-009's per-row uniqueness (amended 2026-11-09) refuses, at model building, the
   shapes through which one row could sit inside several aggregate instances (a many-to-one reference
-  held by the parent, a many-to-many navigation to a non-root). A principal-side child is therefore
-  a one-to-one with a unique foreign key, and a change to it bumps its single root.
-- **Many-to-many links.** The join row of a many-to-many navigation declared inside a boundary belongs
-  to the declaring aggregate even when the target is outside (reference data, another root): adding
-  or removing a link bumps the declaring root; a link between two roots that both declare the
-  navigation bumps both.
+  held by the parent to a non-root; any many-to-many navigation inside a boundary not marked outside).
+  A principal-side child is therefore a one-to-one with a unique foreign key, and a change to it bumps
+  its single root. Links an aggregate owns are a link entity, a child: adding or removing one bumps the
+  root; a skip navigation marked outside is not versioned.
 - Keys are matched with EF Core's key value comparers (`IProperty.GetKeyValueComparer()`), so a
   `byte[]` key or a key with a custom comparer resolves like the change tracker resolves it.
 - A delete is version-checked: `DeleteAsync` then a commit fails when another command changed the

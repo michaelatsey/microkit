@@ -60,6 +60,16 @@ internal sealed class AggregateIncludePlan
     /// <summary>Gets a value indicating whether the load runs as a split query.</summary>
     internal bool IsSplit => CollectionCount >= 2;
 
+    /// <summary>
+    /// Gets a value indicating whether <paramref name="navigation"/> is marked
+    /// <c>IsOutsideAggregate()</c> — for a many-to-many navigation, on either side: a unidirectional
+    /// one has a hidden inverse the application cannot mark.
+    /// </summary>
+    internal static bool IsOutsideAggregate(IReadOnlyNavigationBase navigation) =>
+        navigation.FindAnnotation(OutsideAggregateAnnotation)?.Value is true
+        || (navigation is IReadOnlySkipNavigation { Inverse: { } inverse }
+            && inverse.FindAnnotation(OutsideAggregateAnnotation)?.Value is true);
+
     internal static AggregateIncludePlan For(IEntityType root) =>
         s_plans.GetValue(root, static r => Build(r));
 
@@ -129,7 +139,7 @@ internal sealed class AggregateIncludePlan
 
         void Add(IReadOnlyNavigationBase navigation)
         {
-            if (navigation.FindAnnotation(OutsideAggregateAnnotation)?.Value is true)
+            if (IsOutsideAggregate(navigation))
                 return;
 
             var name = navigation.Name;

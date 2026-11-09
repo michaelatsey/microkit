@@ -36,8 +36,9 @@ public interface IOrderLineRepository : IRepository<OrderLine, OrderLineId> { }
   in the commit's `UPDATE`. Bulk writes (`ExecuteUpdate`, raw SQL) bypass it.
 - The boundary lives in the model only (ADR-009): reference data leaves it through
   `IsOutsideAggregate()`; no repository overrides the load. Each row has one parent: a many-to-one
-  reference held by the parent, or a many-to-many navigation, never reaches a non-root entity. A
-  typed finder calls `protected LoadAggregatesAsync(predicate, ct)`.
+  reference held by the parent never reaches a non-root entity, and a many-to-many navigation is
+  only allowed marked outside — links are a link entity, a child of the root. A reference out of an
+  aggregate is `Restrict`. A typed finder calls `protected LoadAggregatesAsync(predicate, ct)`.
 
 ## Read side — `IReadRepository<TAggregate>` (core)
 

@@ -129,7 +129,8 @@ public abstract class AggregateVersionScenarios
         OwnedProperty,
         ChildAdded,
         ChildDeleted,
-        ManyToManyLinkAdded,
+        LinkAdded,
+        LinkRemoved,
         PrincipalSideChildProperty,
         PrincipalSideChildReplaced,
     }
@@ -141,7 +142,8 @@ public abstract class AggregateVersionScenarios
     [InlineData(CartChange.OwnedProperty)]
     [InlineData(CartChange.ChildAdded)]
     [InlineData(CartChange.ChildDeleted)]
-    [InlineData(CartChange.ManyToManyLinkAdded)]
+    [InlineData(CartChange.LinkAdded)]
+    [InlineData(CartChange.LinkRemoved)]
     [InlineData(CartChange.PrincipalSideChildProperty)]
     [InlineData(CartChange.PrincipalSideChildReplaced)]
     public async Task AnyWriteInsideTheBoundary_BumpsTheRootOnce(CartChange change)
@@ -327,10 +329,11 @@ public abstract class AggregateVersionScenarios
     }
 
     [DockerRequiredFact]
-    public async Task ALinkThroughAJoinEntityWithAThirdForeignKey_BumpsTheRoot()
+    public async Task ALinkThroughASkipNavigationMarkedOutside_IsNeitherLoadedNorVersioned()
     {
         await using var db = await CreateDatabaseAsync<LabelledBasketDbContext>(o => new LabelledBasketDbContext(o));
         var basket = new Basket { Id = new CartId(Guid.NewGuid()) };
+        basket.Labels.Add(new BasketTag { Text = "seeded" });
         await using (var context = db.Create())
         {
             await new EfRepository<Basket, CartId, LabelledBasketDbContext>(context).AddAsync(basket);
@@ -340,13 +343,14 @@ public abstract class AggregateVersionScenarios
         await using (var context = db.Create())
         {
             var loaded = (await new EfRepository<Basket, CartId, LabelledBasketDbContext>(context).FindAsync(basket.Id)).ShouldNotBeNull();
+            loaded.Labels.ShouldBeEmpty("an outside navigation is not loaded");
             loaded.Labels.Add(new BasketTag { Text = "fragile" });
             await new EfUnitOfWork<LabelledBasketDbContext>(context).CommitAsync();
         }
 
         await using var verify = db.Create();
         (await verify.Set<Basket>().Where(b => b.Id == basket.Id).Select(b => EF.Property<long>(b, AggregateVersion.PropertyName)).SingleAsync())
-            .ShouldBe(2);
+            .ShouldBe(1, "its join rows lie outside every boundary: not versioned");
     }
 
     [DockerRequiredFact]
@@ -362,6 +366,98 @@ public abstract class AggregateVersionScenarios
         await Commit(context);
 
         probe.SeenVersion.ShouldBe(2L, "MicroKit's step, an injected interceptor, runs before the application's own");
+    }
+
+    // ---- References between aggregates ---------------------------------------------------------
+
+    [DockerRequiredFact]
+    public async Task LinksAreLoadedWithTheOrder_AndTheLinkedRootLoadsThroughItsOwnRepository()
+    {
+        await using var db = await CreateDatabaseAsync<TaggedOrderDbContext>(o => new TaggedOrderDbContext(o));
+        var (orderId, labelId, _) = await SeedTaggedOrderAsync(db);
+        await using var context = db.Create();
+
+        var order = (await new EfRepository<TaggedOrder, CartId, TaggedOrderDbContext>(context).FindAsync(orderId)).ShouldNotBeNull();
+        order.TagLinks.ShouldHaveSingleItem().LabelId.ShouldBe(labelId);
+
+        // The link references the other root without tracking it: its own repository loads it whole.
+        var label = await new EfRepository<Label, LabelId, TaggedOrderDbContext>(context).FindAsync(labelId);
+        label.ShouldNotBeNull().Name.ShouldBe("urgent");
+    }
+
+    [DockerRequiredFact]
+    public async Task DeletingARootStillLinkedFromAnotherAggregate_Fails_AndNothingChanges()
+    {
+        await using var db = await CreateDatabaseAsync<TaggedOrderDbContext>(o => new TaggedOrderDbContext(o));
+        var (orderId, labelId, _) = await SeedTaggedOrderAsync(db);
+
+        await using (var context = db.Create())
+        {
+            var labels = new EfRepository<Label, LabelId, TaggedOrderDbContext>(context);
+            await labels.DeleteAsync((await labels.FindAsync(labelId)).ShouldNotBeNull());
+            await Should.ThrowAsync<PersistenceException>(() => new EfUnitOfWork<TaggedOrderDbContext>(context).CommitAsync().AsTask());
+        }
+
+        await using var verify = db.Create();
+        (await verify.Set<Label>().CountAsync()).ShouldBe(1);
+        (await verify.Set<TagLink>().CountAsync()).ShouldBe(1, "the database deleted no link of the order");
+        (await verify.Set<TaggedOrder>().Where(o => o.Id == orderId).Select(o => EF.Property<long>(o, AggregateVersion.PropertyName)).SingleAsync())
+            .ShouldBe(1);
+    }
+
+    [DockerRequiredFact]
+    public async Task DeletingARootStillReferencedByAnotherRoot_Fails_AndNothingChanges()
+    {
+        await using var db = await CreateDatabaseAsync<TaggedOrderDbContext>(o => new TaggedOrderDbContext(o));
+        var (orderId, _, clientId) = await SeedTaggedOrderAsync(db);
+
+        await using (var context = db.Create())
+        {
+            var clients = new EfRepository<Client, ClientId, TaggedOrderDbContext>(context);
+            await clients.DeleteAsync((await clients.FindAsync(clientId)).ShouldNotBeNull());
+            await Should.ThrowAsync<PersistenceException>(() => new EfUnitOfWork<TaggedOrderDbContext>(context).CommitAsync().AsTask());
+        }
+
+        await using var verify = db.Create();
+        (await verify.Set<Client>().CountAsync()).ShouldBe(1);
+        (await verify.Set<TaggedOrder>().CountAsync(o => o.Id == orderId)).ShouldBe(1, "the database deleted no order");
+        (await verify.Set<TaggedOrderLine>().CountAsync()).ShouldBe(1);
+    }
+
+    [DockerRequiredTheory]
+    [InlineData(ReferenceMisuse.ExplicitCascade, "'TagLink.LabelId'", "Cascade")]
+    [InlineData(ReferenceMisuse.ExplicitSetNull, "'TaggedOrder.ReferrerId'", "SetNull")]
+    public void AnExplicitDatabaseCascadeAcrossAggregates_FailsModelBuilding_NamingTheKey(
+        ReferenceMisuse misuse,
+        string key,
+        string behavior)
+    {
+        using var context = new TaggedOrderDbContext(Options<TaggedOrderDbContext>("unused"), misuse);
+
+        var thrown = Should.Throw<InvalidOperationException>(() => _ = context.Model);
+
+        thrown.Message.ShouldContain(key);
+        thrown.Message.ShouldContain(behavior);
+    }
+
+    [DockerRequiredFact]
+    public async Task AChildInsideTheBoundary_StillCascadesWithItsRoot()
+    {
+        await using var db = await CreateDatabaseAsync<TaggedOrderDbContext>(o => new TaggedOrderDbContext(o));
+        var (orderId, _, _) = await SeedTaggedOrderAsync(db);
+
+        await using (var context = db.Create())
+        {
+            context.Model.FindEntityType(typeof(TaggedOrderLine))!.GetForeignKeys().Single().DeleteBehavior.ShouldBe(DeleteBehavior.Cascade);
+            // The root alone, its lines and links not tracked: only the database can cascade.
+            context.Remove(await context.Set<TaggedOrder>().SingleAsync(o => o.Id == orderId));
+            await new EfUnitOfWork<TaggedOrderDbContext>(context).CommitAsync();
+        }
+
+        await using var verify = db.Create();
+        (await verify.Set<TaggedOrderLine>().CountAsync()).ShouldBe(0);
+        (await verify.Set<TagLink>().CountAsync()).ShouldBe(0);
+        (await verify.Set<Label>().CountAsync()).ShouldBe(1, "the label, another aggregate, is untouched");
     }
 
     // ---- Entities outside every boundary -----------------------------------------------------
@@ -576,7 +672,12 @@ public abstract class AggregateVersionScenarios
             case CartChange.OwnedProperty: cart.Shipping!.City = "changed"; break;
             case CartChange.ChildAdded: cart.Lines.Add(new CartLine { Sku = "added" }); break;
             case CartChange.ChildDeleted: cart.Lines.Remove(cart.Lines.Single(l => l.Options.Count == 0)); break;
-            case CartChange.ManyToManyLinkAdded: cart.Coupons.Add(new Coupon { Code = "NEW" }); break;
+            case CartChange.LinkAdded:
+                var coupon = new Coupon { Code = "NEW" }; // another aggregate
+                context.Add(coupon);
+                cart.CouponLinks.Add(new CartCouponLink { CartId = cart.Id, CouponId = coupon.Id });
+                break;
+            case CartChange.LinkRemoved: cart.CouponLinks.Remove(cart.CouponLinks.Single()); break;
             case CartChange.PrincipalSideChildProperty: cart.PrimaryContact!.Name = "changed"; break;
             case CartChange.PrincipalSideChildReplaced:
                 var old = cart.PrimaryContact!;
@@ -603,6 +704,21 @@ public abstract class AggregateVersionScenarios
             .Select(c => EF.Property<long>(c, AggregateVersion.PropertyName)).SingleAsync();
     }
 
+    private static async Task<(CartId Order, LabelId Label, ClientId Client)> SeedTaggedOrderAsync(Database<TaggedOrderDbContext> db)
+    {
+        var client = new Client { Id = new ClientId(Guid.NewGuid()), Name = "ACME" };
+        var label = new Label { Id = new LabelId(Guid.NewGuid()), Name = "urgent" };
+        var order = new TaggedOrder { Id = new CartId(Guid.NewGuid()), ClientId = client.Id };
+        order.Lines.Add(new TaggedOrderLine { Sku = "BOOK" });
+        order.TagLinks.Add(new TagLink { OrderId = order.Id, LabelId = label.Id });
+
+        await using var context = db.Create();
+        context.AddRange(client, label);
+        await new EfRepository<TaggedOrder, CartId, TaggedOrderDbContext>(context).AddAsync(order);
+        await new EfUnitOfWork<TaggedOrderDbContext>(context).CommitAsync();
+        return (order.Id, label.Id, client.Id);
+    }
+
     private static async Task<CartId> SeedCartAsync(Database<CartDbContext> db)
     {
         var book = new CartLine { Sku = "BOOK" };
@@ -616,9 +732,11 @@ public abstract class AggregateVersionScenarios
         };
         cart.Lines.Add(book);
         cart.Lines.Add(new CartLine { Sku = "PEN" });
-        cart.Coupons.Add(new Coupon { Code = "WELCOME" });
+        var welcome = new Coupon { Code = "WELCOME" }; // another aggregate, linked through a child link entity
+        cart.CouponLinks.Add(new CartCouponLink { CartId = cart.Id, CouponId = welcome.Id });
 
         await using var context = db.Create();
+        context.Add(welcome);
         await Carts(context).AddAsync(cart);
         await Commit(context);
         return cart.Id;
@@ -720,7 +838,8 @@ public sealed class Cart : IAggregateRoot
 
     public CartAddress? Shipping { get; set; }
 
-    public List<Coupon> Coupons { get; } = [];
+    /// <summary>The links to coupons — another aggregate — as child entities of the cart.</summary>
+    public List<CartCouponLink> CouponLinks { get; } = [];
 
     public Guid? PrimaryContactId { get; set; }
 
@@ -748,11 +867,20 @@ public sealed class CartAddress
     public string City { get; set; } = string.Empty;
 }
 
-public sealed class Coupon
+/// <summary>Another aggregate root, referenced by the cart through its link entities.</summary>
+public sealed class Coupon : IAggregateRoot
 {
     public Guid Id { get; init; } = Guid.NewGuid();
 
     public string Code { get; set; } = string.Empty;
+}
+
+/// <summary>A link entity: a child of the cart, holding the reference to a coupon.</summary>
+public sealed class CartCouponLink
+{
+    public CartId CartId { get; init; }
+
+    public Guid CouponId { get; init; }
 }
 
 public sealed class CartContact
@@ -782,8 +910,7 @@ public class CartDbContext(DbContextOptions options) : DbContext(options)
             b.Property(c => c.Id).HasConversion(id => id.Value, v => new CartId(v)).ValueGeneratedNever();
             b.HasMany(c => c.Lines).WithOne().HasForeignKey("CartId").OnDelete(DeleteBehavior.Cascade);
             b.OwnsOne(c => c.Shipping);
-            b.HasMany(c => c.Coupons).WithMany();
-            b.Navigation(c => c.Coupons).IsOutsideAggregate(); // many-to-many: coupons are reference data
+            b.HasMany(c => c.CouponLinks).WithOne().HasForeignKey(l => l.CartId);
             b.HasOne(c => c.PrimaryContact).WithOne().HasForeignKey<Cart>(c => c.PrimaryContactId); // one-to-one
         });
         modelBuilder.Entity<CartLine>(b =>
@@ -793,6 +920,12 @@ public class CartDbContext(DbContextOptions options) : DbContext(options)
         });
         modelBuilder.Entity<LineOption>().Property(o => o.Id).ValueGeneratedNever();
         modelBuilder.Entity<Coupon>().Property(c => c.Id).ValueGeneratedNever();
+        modelBuilder.Entity<CartCouponLink>(l =>
+        {
+            l.HasKey(x => new { x.CartId, x.CouponId });
+            l.Property(x => x.CartId).HasConversion(id => id.Value, v => new CartId(v));
+            l.HasOne<Coupon>().WithMany().HasForeignKey(x => x.CouponId);
+        });
         modelBuilder.Entity<CartContact>().Property(c => c.Id).ValueGeneratedNever();
         modelBuilder.Entity<AuditRow>().Property(a => a.Id).ValueGeneratedNever();
     }
@@ -1015,5 +1148,113 @@ public sealed class ArchiveDbContext(DbContextOptions<ArchiveDbContext> options)
             b.HasMany(d => d.Pages).WithOne().HasForeignKey("DocumentCode");
         });
         modelBuilder.Entity<ArchivedPage>().Property(p => p.Id).ValueGeneratedNever();
+    }
+}
+
+public readonly record struct ClientId(Guid Value) : IEntityId;
+
+public readonly record struct LabelId(Guid Value) : IEntityId;
+
+/// <summary>Another aggregate root, which an order references by a required foreign key.</summary>
+public sealed class Client : IAggregateRoot
+{
+    public ClientId Id { get; init; }
+
+    public string Name { get; set; } = string.Empty;
+}
+
+/// <summary>Another aggregate root, which an order links to through <see cref="TagLink"/>.</summary>
+public sealed class Label : IAggregateRoot
+{
+    public LabelId Id { get; init; }
+
+    public string Name { get; set; } = string.Empty;
+}
+
+public sealed class TaggedOrder : IAggregateRoot
+{
+    public CartId Id { get; init; }
+
+    public ClientId ClientId { get; set; }
+
+    public ClientId? ReferrerId { get; set; }
+
+    public List<TaggedOrderLine> Lines { get; } = [];
+
+    public List<TagLink> TagLinks { get; } = [];
+}
+
+public sealed class TaggedOrderLine
+{
+    public Guid Id { get; init; } = Guid.NewGuid();
+
+    public string Sku { get; set; } = string.Empty;
+}
+
+/// <summary>The link entity: a child of the order (composite key), referencing another root.</summary>
+public sealed class TagLink
+{
+    public CartId OrderId { get; init; }
+
+    public LabelId LabelId { get; init; }
+}
+
+public enum ReferenceMisuse
+{
+    None,
+    ExplicitCascade,
+    ExplicitSetNull,
+}
+
+public sealed class TaggedOrderDbContext(DbContextOptions<TaggedOrderDbContext> options, ReferenceMisuse misuse = ReferenceMisuse.None)
+    : DbContext(options)
+{
+    public ReferenceMisuse Misuse { get; } = misuse;
+
+    protected override void OnModelCreating(ModelBuilder modelBuilder)
+    {
+        modelBuilder.Entity<Client>(b =>
+        {
+            b.HasKey(c => c.Id);
+            b.Property(c => c.Id).HasConversion(id => id.Value, v => new ClientId(v)).ValueGeneratedNever();
+        });
+        modelBuilder.Entity<Label>(b =>
+        {
+            b.HasKey(l => l.Id);
+            b.Property(l => l.Id).HasConversion(id => id.Value, v => new LabelId(v)).ValueGeneratedNever();
+        });
+        modelBuilder.Entity<TaggedOrder>(b =>
+        {
+            b.HasKey(o => o.Id);
+            b.Property(o => o.Id).HasConversion(id => id.Value, v => new CartId(v)).ValueGeneratedNever();
+            b.Property(o => o.ClientId).HasConversion(id => id.Value, v => new ClientId(v));
+            b.Property(o => o.ReferrerId).HasConversion(new ValueConverter<ClientId, Guid>(id => id.Value, v => new ClientId(v)));
+            b.HasOne<Client>().WithMany().HasForeignKey(o => o.ClientId); // required: EF Core would cascade
+            var referrer = b.HasOne<Client>().WithMany().HasForeignKey(o => o.ReferrerId);
+            if (Misuse == ReferenceMisuse.ExplicitSetNull)
+                referrer.OnDelete(DeleteBehavior.SetNull);
+            b.HasMany(o => o.Lines).WithOne().HasForeignKey("OrderId").IsRequired(); // inside: cascades
+            b.HasMany(o => o.TagLinks).WithOne().HasForeignKey(l => l.OrderId);
+        });
+        modelBuilder.Entity<TaggedOrderLine>().Property(l => l.Id).ValueGeneratedNever();
+        modelBuilder.Entity<TagLink>(b =>
+        {
+            b.HasKey(l => new { l.OrderId, l.LabelId });
+            b.Property(l => l.OrderId).HasConversion(id => id.Value, v => new CartId(v));
+            b.Property(l => l.LabelId).HasConversion(id => id.Value, v => new LabelId(v));
+            var label = b.HasOne<Label>().WithMany().HasForeignKey(l => l.LabelId); // required: EF Core would cascade
+            if (Misuse == ReferenceMisuse.ExplicitCascade)
+                label.OnDelete(DeleteBehavior.Cascade);
+        });
+    }
+
+    // One model per misuse: the model cache key includes it.
+    protected override void OnConfiguring(DbContextOptionsBuilder optionsBuilder) =>
+        optionsBuilder.ReplaceService<Microsoft.EntityFrameworkCore.Infrastructure.IModelCacheKeyFactory, MisuseCacheKeyFactory>();
+
+    private sealed class MisuseCacheKeyFactory : Microsoft.EntityFrameworkCore.Infrastructure.IModelCacheKeyFactory
+    {
+        public object Create(DbContext context, bool designTime) =>
+            (context.GetType(), ((TaggedOrderDbContext)context).Misuse, designTime);
     }
 }

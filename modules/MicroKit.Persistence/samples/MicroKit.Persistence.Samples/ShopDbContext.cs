@@ -14,7 +14,16 @@ public sealed class ShopDbContext(DbContextOptions<ShopDbContext> options) : DbC
         {
             order.Ignore(o => o.DomainEvents);
             order.HasMany(o => o.Lines).WithOne().HasForeignKey("OrderId");
+            order.HasMany(o => o.TagLinks).WithOne().HasForeignKey(l => l.OrderId);
         });
+
+        modelBuilder.Entity<TagLink>(link =>
+        {
+            link.HasKey(l => new { l.OrderId, l.TagId });
+            link.HasOne<Tag>().WithMany().HasForeignKey(l => l.TagId); // another aggregate: Restrict by convention
+        });
+
+        modelBuilder.Entity<Tag>().Ignore(t => t.DomainEvents);
 
         // The domain assigns the line's Guid key: without this, EF Core treats a Guid key as
         // generated and tracks a new line with a key already set as Modified, not Added.

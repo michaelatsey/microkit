@@ -84,6 +84,7 @@ public sealed record OrderId : EntityId<OrderId>
 public sealed class Order : AuditableAggregateRoot<OrderId>
 {
     private readonly List<OrderLine> _lines = [];
+    private readonly List<TagLink> _tagLinks = [];
 
     // Used by EF Core: the audit fields are written through their backing fields.
     private Order(OrderId id, string number) : base(id, DateTimeOffset.UnixEpoch, Actor.Migration) => Number = number;
@@ -96,6 +97,9 @@ public sealed class Order : AuditableAggregateRoot<OrderId>
 
     public IReadOnlyList<OrderLine> Lines => _lines;
 
+    // Links to Tag, another aggregate: child entities of the order, loaded and versioned with it.
+    public IReadOnlyList<TagLink> TagLinks => _tagLinks;
+
     public static Order Place(string number, Actor placedBy, TimeProvider clock) =>
         new(OrderId.New(), number, placedBy, clock);
 
@@ -103,6 +107,12 @@ public sealed class Order : AuditableAggregateRoot<OrderId>
         Mutate(clock.GetUtcNow(), by, () => _lines.Add(new OrderLine(Guid.CreateVersion7(), sku, quantity)));
 
     public void Close(Actor by, TimeProvider clock) => Mutate(clock.GetUtcNow(), by, () => IsClosed = true);
+
+    public void Tag(TagId tag, Actor by, TimeProvider clock) =>
+        Mutate(clock.GetUtcNow(), by, () => _tagLinks.Add(new TagLink(Id, tag)));
+
+    public void Untag(TagId tag, Actor by, TimeProvider clock) =>
+        Mutate(clock.GetUtcNow(), by, () => _tagLinks.RemoveAll(l => l.TagId == tag));
 }
 
 public sealed class OrderLine(Guid id, string sku, int quantity)
@@ -112,6 +122,23 @@ public sealed class OrderLine(Guid id, string sku, int quantity)
     public string Sku { get; private set; } = sku;
 
     public int Quantity { get; private set; } = quantity;
+}
+
+public sealed class TagLink(OrderId orderId, TagId tagId)
+{
+    public OrderId OrderId { get; private set; } = orderId;
+
+    public TagId TagId { get; private set; } = tagId;
+}
+
+public sealed record TagId : EntityId<TagId>
+{
+    public TagId(Guid value) : base(value) { }
+}
+
+public sealed class Tag(TagId id, string name) : AggregateRoot<TagId>(id)
+{
+    public string Name { get; private set; } = name;
 }
 ```
 
@@ -133,7 +160,16 @@ public sealed class ShopDbContext(DbContextOptions<ShopDbContext> options) : DbC
         {
             order.Ignore(o => o.DomainEvents);
             order.HasMany(o => o.Lines).WithOne().HasForeignKey("OrderId");
+            order.HasMany(o => o.TagLinks).WithOne().HasForeignKey(l => l.OrderId);
         });
+
+        modelBuilder.Entity<TagLink>(link =>
+        {
+            link.HasKey(l => new { l.OrderId, l.TagId });
+            link.HasOne<Tag>().WithMany().HasForeignKey(l => l.TagId); // another aggregate: Restrict by convention
+        });
+
+        modelBuilder.Entity<Tag>().Ignore(t => t.DomainEvents);
 
         // The domain assigns the line's Guid key: without this, EF Core treats a Guid key as
         // generated and tracks a new line with a key already set as Modified, not Added.
@@ -201,8 +237,8 @@ public sealed class EfOrderRepository(ShopDbContext context)
 ### The aggregate boundary
 
 The boundary lives in the model, and only there. By default it is every navigation to an entity that
-does not implement `IAggregateRoot`, recursively — derived types and many-to-many included; another
-aggregate root is never part of it. Mark a navigation to reference data `IsOutsideAggregate()`: it is
+does not implement `IAggregateRoot`, recursively — derived types included; another aggregate root is
+never part of it. Mark a navigation to reference data `IsOutsideAggregate()`: it is
 neither loaded with the aggregate nor counted as part of it.
 
 ```csharp
@@ -220,9 +256,34 @@ of an owned type is its own entity type, so the same owned type under two roots 
 
 Uniqueness holds per row too: a navigation brings an entity into the boundary only if each of its rows
 has one parent row — a collection or a reference whose child holds the foreign key, or a one-to-one
-whose parent holds a unique foreign key. A many-to-one reference held by the parent, or a many-to-many
-navigation, that reaches a non-root entity fails model building, naming the navigation: make the
-target an aggregate root, or mark the navigation `IsOutsideAggregate()`.
+whose parent holds a unique foreign key. A many-to-one reference held by the parent that reaches a
+non-root entity fails model building, naming the navigation: make the target an aggregate root, or mark
+the navigation `IsOutsideAggregate()`.
+
+A many-to-many (skip) navigation declared inside a boundary fails model building whatever its target,
+unless it is marked `IsOutsideAggregate()` — then it is neither loaded nor versioned, and its join rows
+lie outside every aggregate. Links an aggregate owns are an explicit link entity, a child of the root
+that references the other root — the `TagLinks` of the `Order` above, keyed by `(OrderId, TagId)`:
+
+```csharp
+modelBuilder.Entity<TagLink>(link =>
+{
+    link.HasKey(l => new { l.OrderId, l.TagId });
+    link.HasOne<Tag>().WithMany().HasForeignKey(l => l.TagId); // another aggregate: Restrict by convention
+});
+```
+
+The links are loaded, versioned and removable like any child, and the `Tag` itself is not tracked:
+it loads whole through its own repository, in the same context if needed.
+
+The database never changes an aggregate on behalf of something outside it. A foreign key from inside
+an aggregate to another root, or to an entity outside every aggregate — `TagLink.TagId` above, an
+`Order.CustomerId` — gets `DeleteBehavior.Restrict`, instead of EF Core's `Cascade` default for a
+required relationship ([cascade
+delete](https://learn.microsoft.com/ef/core/saving/cascade-delete#configuring-cascading-behaviors)):
+deleting a `Tag` that is still linked fails, and nothing changes. An explicit `Cascade` or `SetNull`
+on such a key fails model building, naming it. Relationships inside one boundary keep their
+behaviour: a child still cascades with its root.
 
 The boundary validation and the record of the roots a repository loaded whole come with
 `UseMicroKitPersistence()`. `AddDbContext`, `UsePostgreSQL` and `UseSqlServer` call it; a context
@@ -246,7 +307,7 @@ it, and a pooled context resets it when it returns to the pool. An owned navigat
 Every aggregate root carries a version: a shadow `long` concurrency token named
 `AggregateVersion` (`AggregateVersion.PropertyName`), added by `UseMicroKitPersistence()`. Every
 save that writes any entity of an aggregate — the root, a child, a grand-child, an owned type, a
-many-to-many link — bumps its root's version by one, so two commands that change different
+link entity — bumps its root's version by one, so two commands that change different
 children of the same aggregate conflict: the second save fails with a `PersistenceException`
 wrapping `DbUpdateConcurrencyException`, and nothing of it is written. The check runs in the root's
 `UPDATE` (`WHERE AggregateVersion = @original`).
@@ -299,8 +360,8 @@ Known limits:
 - MicroKit bumps the versions in a `SaveChanges` interceptor that runs before the interceptors the
   application adds with `AddInterceptors`: a change those make to an aggregate during `SavingChanges`
   is written without a bump.
-- Adding or removing a many-to-many link bumps the aggregate that declares the navigation, even when
-  its target is reference data or another aggregate.
+- A many-to-many navigation marked `IsOutsideAggregate()` is not versioned: its join rows lie outside
+  every aggregate. Use a link entity for links the aggregate owns.
 
 ## Transactions
 

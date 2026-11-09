@@ -56,12 +56,17 @@ public abstract class AggregateBoundaryScenarios
     }
 
     [DockerRequiredTheory]
-    [InlineData(RowSharing.ManyToOneReference, "'RowSharingRoot.Contact'", "many-to-one reference")]
-    [InlineData(RowSharing.ManyToMany, "'RowSharingRoot.Tags'", "many-to-many navigation")]
+    [InlineData(RowSharing.ManyToOneReference, "'RowSharingRoot.Contact'", "many-to-one reference",
+        "make the target an aggregate root, or mark the navigation IsOutsideAggregate()")]
+    [InlineData(RowSharing.ManyToMany, "'RowSharingRoot.Tags'", "many-to-many navigation",
+        "an explicit link entity, a child of the root")]
+    [InlineData(RowSharing.ManyToManyToARoot, "'RowSharingRoot.Owners'", "many-to-many navigation",
+        "an explicit link entity, a child of the root")]
     public void ANavigationThroughWhichARowCouldBelongToSeveralAggregates_FailsModelBuilding(
         RowSharing shape,
         string navigation,
-        string kind)
+        string kind,
+        string fix)
     {
         using var context = new RowSharingDbContext(Options<RowSharingDbContext>("unused"), shape);
 
@@ -69,7 +74,7 @@ public abstract class AggregateBoundaryScenarios
 
         thrown.Message.ShouldContain(navigation);
         thrown.Message.ShouldContain(kind);
-        thrown.Message.ShouldContain("make the target an aggregate root, or mark the navigation IsOutsideAggregate()");
+        thrown.Message.ShouldContain(fix);
     }
 
     [DockerRequiredFact]
@@ -85,6 +90,7 @@ public abstract class AggregateBoundaryScenarios
     [InlineData(RowSharing.ManyToOneOutside)]
     [InlineData(RowSharing.ManyToManyOutside)]
     [InlineData(RowSharing.ManyToOneToARoot)]
+    [InlineData(RowSharing.ManyToManyToARootOutside)]
     public void ASharedShapeMarkedOutsideOrReachingARoot_Builds(RowSharing shape)
     {
         using var context = new RowSharingDbContext(Options<RowSharingDbContext>("unused"), shape);
@@ -929,6 +935,8 @@ public enum RowSharing
     ManyToOneOutside,
     ManyToManyOutside,
     ManyToOneToARoot,
+    ManyToManyToARoot,
+    ManyToManyToARootOutside,
 }
 
 public sealed class RowSharingRoot : IAggregateRoot
@@ -944,6 +952,8 @@ public sealed class RowSharingRoot : IAggregateRoot
     public RowSharingOwner? Owner { get; set; }
 
     public List<RowSharingTag> Tags { get; } = [];
+
+    public List<RowSharingOwner> Owners { get; } = [];
 }
 
 public sealed class RowSharingContact
@@ -971,6 +981,7 @@ public sealed class RowSharingDbContext(DbContextOptions<RowSharingDbContext> op
         var root = modelBuilder.Entity<RowSharingRoot>();
         root.Ignore(r => r.Owner);
         root.Ignore(r => r.Tags);
+        root.Ignore(r => r.Owners);
         switch (Shape)
         {
             case RowSharing.ManyToOneReference:
@@ -991,6 +1002,15 @@ public sealed class RowSharingDbContext(DbContextOptions<RowSharingDbContext> op
                 root.Ignore(r => r.Contact);
                 modelBuilder.Entity<RowSharingRoot>().HasMany(r => r.Tags).WithMany();
                 modelBuilder.Entity<RowSharingRoot>().Navigation(r => r.Tags).IsOutsideAggregate();
+                break;
+            case RowSharing.ManyToManyToARoot:
+                root.Ignore(r => r.Contact);
+                modelBuilder.Entity<RowSharingRoot>().HasMany(r => r.Owners).WithMany();
+                break;
+            case RowSharing.ManyToManyToARootOutside:
+                root.Ignore(r => r.Contact);
+                modelBuilder.Entity<RowSharingRoot>().HasMany(r => r.Owners).WithMany();
+                modelBuilder.Entity<RowSharingRoot>().Navigation(r => r.Owners).IsOutsideAggregate(); // its hidden inverse too
                 break;
             case RowSharing.ManyToOneToARoot:
                 root.Ignore(r => r.Contact);

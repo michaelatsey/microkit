@@ -4,8 +4,8 @@ using Microsoft.EntityFrameworkCore.Metadata.Conventions.Infrastructure;
 namespace MicroKit.Persistence.EntityFrameworkCore;
 
 /// <summary>
-/// Adds <see cref="AggregateVersionConvention"/> and <see cref="AggregateBoundaryConvention"/> to the
-/// context's conventions.
+/// Adds <see cref="AggregateVersionConvention"/>, <see cref="AggregateBoundaryConvention"/> and
+/// <see cref="AggregateReferenceConvention"/> to the context's conventions.
 /// </summary>
 internal sealed class AggregateConventionSetPlugin : IConventionSetPlugin
 {
@@ -16,6 +16,7 @@ internal sealed class AggregateConventionSetPlugin : IConventionSetPlugin
         // First: EF Core's table-sharing concurrency convention must see the version token.
         conventionSet.ModelFinalizingConventions.Insert(0, new AggregateVersionConvention());
         conventionSet.ModelFinalizingConventions.Add(new AggregateBoundaryConvention());
+        conventionSet.ModelFinalizingConventions.Add(new AggregateReferenceConvention());
         return conventionSet;
     }
 }
