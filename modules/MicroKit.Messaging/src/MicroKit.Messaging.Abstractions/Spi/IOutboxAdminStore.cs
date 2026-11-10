@@ -6,7 +6,9 @@ namespace MicroKit.Messaging.Spi;
 /// <remarks>
 /// <para>
 /// Part of the <b>storage SPI</b> (<c>MicroKit.Messaging.Spi</c>): implemented by a persistence
-/// provider, resolved by the engine, and never called by application code.
+/// provider. Unlike the other store contracts, the engine never resolves it: its only consumer is
+/// operator tooling a host builds — a dead-letter console or a requeue endpoint — and that tooling
+/// imports this namespace to call it.
 /// </para>
 /// Split out of <see cref="IOutboxProcessorStore"/> to enforce ISP: one class may implement both,
 /// but a DLQ console has no business seeing <see cref="IOutboxProcessorStore.ClaimBatchAsync"/>.

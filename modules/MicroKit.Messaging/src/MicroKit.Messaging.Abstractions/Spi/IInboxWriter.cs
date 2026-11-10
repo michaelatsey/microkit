@@ -1,7 +1,8 @@
 namespace MicroKit.Messaging.Spi;
 
 /// <summary>
-/// Inbox ingestion. Consumed by publishers and broker adapters, never by the processor.
+/// Inbox ingestion. Consumed by the engine's receiving seam, <see cref="IEnvelopeReceiver"/> — the
+/// only writer of inbox rows — never by the processor.
 /// </summary>
 /// <remarks>
 /// <para>
@@ -9,7 +10,7 @@ namespace MicroKit.Messaging.Spi;
 /// provider, resolved by the engine, and never called by application code.
 /// </para>
 /// Split out under ISP: the processor has no business seeing <see cref="AddAsync"/>, and a
-/// publisher has no business seeing <see cref="IInboxProcessorStore.ClaimBatchAsync"/>.
+/// receiving seam has no business seeing <see cref="IInboxProcessorStore.ClaimBatchAsync"/>.
 /// </remarks>
 public interface IInboxWriter
 {

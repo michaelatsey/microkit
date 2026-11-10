@@ -3,6 +3,10 @@ namespace MicroKit.Messaging.Spi;
 /// <summary>The outcome of recording one <see cref="MessageEnvelope"/> into the inbox.</summary>
 /// <remarks>
 /// <para>
+/// Part of the <b>transport SPI</b> (<c>MicroKit.Messaging.Spi</c>): built by the engine's receiving
+/// seam and read by the broker provider that drives it. Application code never touches it.
+/// </para>
+/// <para>
 /// One envelope produces one row per registered consumer, and those rows do not share a fate: a
 /// redelivery may be absorbed for one consumer while another gets its first row. A bare count of
 /// writes would report that as a partial failure, and a <see langword="bool"/> could not report it
@@ -54,12 +58,6 @@ public sealed record EnvelopeReceiveResult
     /// Gets the number of inbox rows this call inserted — first delivery of this message to that
     /// consumer.
     /// </summary>
-    /// <remarks>
-    /// <para>
-    /// Part of the <b>transport SPI</b> (<c>MicroKit.Messaging.Spi</c>): a broker provider implements
-    /// or drives this, and application code never touches it.
-    /// </para>
-    /// </remarks>
     public int RowsAdded { get; }
 
     /// <summary>

@@ -8,8 +8,10 @@ namespace MicroKit.Messaging.Spi;
 /// <remarks>
 /// <para>
 /// Part of the SPI (<c>MicroKit.Messaging.Spi</c>): raised across the store, transport or
-/// dispatcher seam and classified by the engine. Application code does not handle it — a provider
-/// raises it to tell the engine how permanent a failure is.
+/// dispatcher seam and classified by the engine, which is its primary raiser. Application code
+/// never catches it. The one application-side source is a message handler that throws it to claim
+/// the dead-letter verdict for a payload that violates the event contract — documented on
+/// <see cref="IMessageHandler{T}.HandleAsync"/> — and such a handler needs this namespace.
 /// </para>
 /// <para>
 /// The verdict is <b>permanent</b>: the failure is settled at the first attempt and no number of

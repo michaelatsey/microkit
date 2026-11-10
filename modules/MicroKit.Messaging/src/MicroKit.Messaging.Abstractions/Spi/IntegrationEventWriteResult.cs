@@ -3,6 +3,11 @@ namespace MicroKit.Messaging.Spi;
 /// <summary>The outcome of staging one integration event into the outbox.</summary>
 /// <remarks>
 /// <para>
+/// Part of the <b>storage SPI</b> (<c>MicroKit.Messaging.Spi</c>): returned by the staging seam a
+/// persistence provider implements. Application code publishes through
+/// <c>IIntegrationEventPublisher</c> instead.
+/// </para>
+/// <para>
 /// Like <see cref="InboxWriteResult"/>, this exists because the most important outcome —
 /// "already published, nothing written" — is <b>not a failure</b>. A redelivered dispatch re-runs
 /// its notification handlers, which publish the same contract from the same origin row; the second
@@ -37,11 +42,6 @@ public sealed record IntegrationEventWriteResult
     /// this call, or the one already there.
     /// </summary>
     /// <remarks>
-    /// <para>
-    /// Part of the <b>storage SPI</b> (<c>MicroKit.Messaging.Spi</c>): the staging seam a persistence
-    /// provider implements. Application code publishes through <c>IIntegrationEventPublisher</c>
-    /// instead.
-    /// </para>
     /// Either way this is the value stamped into <see cref="MessageEnvelope.MessageId"/> when the
     /// row is dispatched, and therefore the key a consumer's inbox deduplicates on.
     /// </remarks>

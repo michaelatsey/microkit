@@ -8,7 +8,7 @@ namespace MicroKit.Messaging.ArchitectureTests;
 /// <para>
 /// Before #185 <c>MicroKit.Messaging.Abstractions</c> published 54 types in one flat namespace, so
 /// an application developer met the engine's internals — coordinators, processors, nine store
-/// contracts, the mutable EF rows and the batch plumbing — instead of the seven types it uses, and
+/// contracts, the mutable EF rows and the batch plumbing — instead of the eight types it uses, and
 /// every internal change was a public break. The split is only worth anything if widening it again
 /// costs a deliberate edit here, which is what these tests are for.
 /// </para>

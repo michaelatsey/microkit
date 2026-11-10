@@ -541,8 +541,10 @@ calls it again on replay: database effects happen effectively once, external eff
 A handler that commits no unit of work at all is **detected and reported**, not degraded silently.
 
 `LeaseDuration` is the setting that matters: it must comfortably exceed your worst-case handler
-duration. The processor's lost-lease tally is the signal that it does not — without it, a
-lease set too short is invisible, and the system stays correct while quietly doing less work than it
+duration. The processor logs every lease it loses at `Warning` — event 2007 when the lease was
+already gone before the handler ran, 2008 when it expired while the handler was running — and a
+recurring rate of either is the signal that it does not. Without them, a lease set too short is
+invisible, and the system stays correct while quietly doing less work than it
 appears to.
 
 **Inbox retention is not housekeeping.** `RetentionDays` defaults to 30, deliberately unlike the

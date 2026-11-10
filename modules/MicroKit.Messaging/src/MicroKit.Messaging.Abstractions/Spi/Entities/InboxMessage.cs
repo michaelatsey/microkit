@@ -7,7 +7,8 @@ namespace MicroKit.Messaging.Spi;
 /// <remarks>
 /// <para>
 /// An engine <b>row or claim type</b>, part of the SPI (<c>MicroKit.Messaging.Spi</c>). A store
-/// exchanges these with the engine; application code neither constructs nor reads one.
+/// exchanges these with the engine. Application code never constructs one, and reads one only from
+/// operator tooling, through <see cref="IInboxAdminStore.GetDeadLetteredAsync"/>.
 /// </para>
 /// <para>
 /// The compound key <c>(MessageId, ConsumerType)</c> is the authoritative deduplication

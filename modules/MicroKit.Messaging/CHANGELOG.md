@@ -6,7 +6,7 @@
 
 `MicroKit.Messaging.Abstractions` published 54 types in one flat namespace, mixing the application
 surface with the engine's internals. An application developer met the coordinators, the processors,
-nine store contracts, the mutable EF rows and the batch plumbing instead of the seven types it
+nine store contracts, the mutable EF rows and the batch plumbing instead of the eight types it
 uses, and every internal change was a public break. The package now has two layers, and **no
 behaviour changes**.
 

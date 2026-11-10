@@ -254,12 +254,12 @@ terminal after `MaxRetries`.
 | Package | Status | Role |
 |---------|--------|------|
 | `MicroKit.Execution.Abstractions` | new (v1) | `IExecutionScopeFactory`, `IExecutionContext` (Level 0, dep DI.Abstractions only) |
-| `MicroKit.Messaging.Abstractions` | shipped | `IOutboxDispatcher`, the coordinator/processor seams, the claim + settlement stores, `IInboxSettlementStore` |
+| `MicroKit.Messaging.Abstractions` | shipped | Application surface (`MicroKit.Messaging`) and SPI (`MicroKit.Messaging.Spi`, #185): `IOutboxDispatcher`, the claim + settlement stores, `IInboxSettlementStore`. The coordinator/processor seams are no longer here — `internal` to Core since #185 |
 | `MicroKit.Messaging` (Core) | shipped | Worker + SharedDb coordinator + Processor engine + in-process dispatch + pass-through scope factory + retention workers |
 | `MicroKit.Messaging.EntityFrameworkCore` | shipped | `EfOutboxStore`/`EfInboxStore` (atomic claim, token-fenced settlement, inbox dedup); entity configuration without tenant filter |
 | `MicroKit.Messaging.MediatR` (glue) | shipped | `OutboxDomainEventSink` (an `IDomainEventsSink`, **not** a rival dispatcher — ADR-MEDIATR-014), `MediatROutboxDispatcher`, `DomainEventsCascadeNotificationPublisher`. `TransactionBehavior` lives in `MicroKit.MediatR.Behaviors`, not here |
 | `MicroKit.Multitenancy(.Abstractions/.EFCore)` | deferred | `ITenantSource`, tenant-aware `IExecutionScopeFactory` impl |
-| `MicroKit.Messaging.Multitenancy` | deferred | PerTenant coordinators (integration, reuses Core `IOutboxProcessor`/`IInboxProcessor`) |
+| `MicroKit.Messaging.Multitenancy` | superseded (#185) | Was: PerTenant coordinators reusing a public `IOutboxProcessor`/`IInboxProcessor`. Those seams are `internal` since #185; the database-per-tenant engine is tracked by #191 as a multi-store engine inside Core |
 
 ---
 
