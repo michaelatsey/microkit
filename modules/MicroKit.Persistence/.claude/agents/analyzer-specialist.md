@@ -1,6 +1,6 @@
 ---
 name: analyzer-specialist
-description: Use this agent when implementing, reviewing, or extending Roslyn analyzers in MicroKit.Persistence.Analyzers. Triggered automatically for any task touching MKP001–MKP005, PersistenceSymbolHelper, or the Analyzers.Tests project. Do NOT use for EF Core concerns (use ef-core-specialist) or public API surface (use api-reviewer).
+description: Use this agent when implementing, reviewing, or extending Roslyn analyzers in MicroKit.Persistence.Analyzers. Triggered automatically for any task touching MKP001–MKP009, PersistenceSymbolHelper, or the Analyzers.Tests project. Do NOT use for EF Core concerns (use ef-core-specialist) or public API surface (use api-reviewer).
 tools: Read, Glob, Grep
 model: opus
 ---
@@ -37,6 +37,16 @@ context.RegisterSymbolAction(AnalyzeType, SymbolKind.NamedType);
 
 // For method signature checks (MKP002 declaration axis, MKP005)
 context.RegisterSymbolAction(AnalyzeMethod, SymbolKind.Method);
+
+// For the query-shape rules (MKP006–MKP009): symbols resolved once per compilation, gated per group
+context.RegisterCompilationStartAction(start =>
+{
+    var symbols = PersistenceSymbolHelper.ResolveQuerySymbols(start.Compilation);   // QuerySymbols
+    if (!symbols.HasEntityFrameworkCore) return;
+    start.RegisterOperationAction(Analyze, OperationKind.Invocation);
+});
+// Walk fluent chains with Helpers/QueryChain (receiver by Parameter.Ordinal == 0, implicit conversions
+// stripped, await/ConfigureAwait unwrapped); classify executing calls with Helpers/QueryExecution.
 ```
 
 ### ContainingType from OperationAnalysisContext

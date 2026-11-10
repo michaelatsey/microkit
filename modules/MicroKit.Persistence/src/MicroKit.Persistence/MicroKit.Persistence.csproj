@@ -2,12 +2,24 @@
   <PropertyGroup>
     <AssemblyName>MicroKit.Persistence</AssemblyName>
     <RootNamespace>MicroKit.Persistence</RootNamespace>
-    <Description>Core persistence layer for MicroKit — QueryOptions, ISpecificationEvaluator, full IReadRepository contract, and PagedResult. No EF Core, no DI dependency.</Description>
+    <Description>Core persistence layer for MicroKit — QueryOptions, ISpecificationEvaluator, the IReadRepository contract, PagedResult, and the Result path (IResultUnitOfWork, PersistenceErrors). No EF Core, no DI dependency.</Description>
     <PackageTags>persistence;repository;query-options;specification;microkit;ddd;dotnet</PackageTags>
   </PropertyGroup>
   <!-- Intra-module: sibling packages are built and released together — always an unconditional
        ProjectReference, in every build mode (ADR-GLOBAL-002 D5) -->
   <ItemGroup>
     <ProjectReference Include="..\MicroKit.Persistence.Abstractions\MicroKit.Persistence.Abstractions.csproj" />
+  </ItemGroup>
+  <!-- The keyset cursor's codec and rules are shared with the module's implementations of IReadRepository,
+       which ship with core under one version; the public cursor type exposes ToString and TryParse only (ADR-013) -->
+  <ItemGroup>
+    <InternalsVisibleTo Include="MicroKit.Persistence.EntityFrameworkCore" />
+    <InternalsVisibleTo Include="MicroKit.Persistence.Testing" />
+    <InternalsVisibleTo Include="MicroKit.Persistence.UnitTests" />
+  </ItemGroup>
+  <!-- Cross-module (the Result path, #197 phase 3): another MicroKit module is always referenced from
+       source, with an unconditional ProjectReference in every build mode (#197 Spec, Perimeter) -->
+  <ItemGroup>
+    <ProjectReference Include="../../../MicroKit.Result/src/MicroKit.Result/MicroKit.Result.csproj" />
   </ItemGroup>
 </Project>

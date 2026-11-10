@@ -5,15 +5,15 @@ multiplies by request rate.
 
 ## Read paths do not track
 
-`EfReadRepository` starts every list, any and count query from `AsNoTracking()` unless the
-options say `WithTracking()`, and `FindAsync` loads untracked (a tracked instance is returned as
-is). A typed read repository keeps that: its own queries start from `AsNoTracking()`.
+`EfReadRepository` runs every query `AsNoTracking()` — there is no opt-out — and `FindAsync`
+never consults the tracker. A typed read repository keeps that: its own queries start from
+`AsNoTracking()`.
 
 ## Write-side loads are whole aggregates
 
 `EfRepository.FindAsync` loads the full aggregate in one tracked query, or 1 + C queries when it
 has C ≥ 2 collections (split). It is not a primary-key lookup; it costs what the aggregate
-weighs. Keep aggregates small, or override `IncludeAggregate` for a narrower load.
+weighs. Keep aggregates small, and mark navigations to reference data `IsOutsideAggregate()`.
 
 ## ValueTask
 
@@ -47,12 +47,26 @@ aggregate load switches to split by itself.
 
 ## Compiled queries
 
-For a measured hot path, a typed repository may hold an `EF.CompileAsyncQuery` delegate in a
-`static readonly` field.
+The repositories' finds by id run compiled queries already, one per model (ADR-013). For another measured
+hot path, a typed repository may hold an `EF.CompileAsyncQuery` delegate — cached per `IModel`, not in a
+plain `static readonly` field: EF Core refuses to run a compiled query on another model (another provider, a
+model variant).
+
+## Keyset pages
+
+A deep offset page reads and discards every row before it; `ListKeysetAsync` starts after the cursor's row
+and costs the same at any depth. Prefer it for feeds and exports; an index on the sort keys plus the primary
+key serves it.
 
 ## No sync-over-async; ConfigureAwait(false)
 
 Never `.Result`/`.Wait()`. Every `await` in library code has `.ConfigureAwait(false)`.
+
+One recorded exception: `DockerProbe.IsAvailable` (MicroKit.Persistence.Testing, ADR-015). It is a cached,
+once-per-process check whose public API must be synchronous — a test framework's skip condition reads it in an
+attribute constructor — and only the asynchronous socket and pipe calls bound every wait (a named pipe has no read
+timeout). It runs the probe through `Task.Run(…).GetAwaiter().GetResult()`, so no captured context can deadlock it.
+Nothing else blocks on asynchronous work.
 
 ## Budget
 

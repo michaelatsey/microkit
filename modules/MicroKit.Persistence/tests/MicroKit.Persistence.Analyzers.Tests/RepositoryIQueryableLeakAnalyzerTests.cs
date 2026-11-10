@@ -134,8 +134,8 @@ public sealed class RepositoryIQueryableLeakAnalyzerTests
     [Fact]
     public async Task ProtectedIncludeSeam_ReturningIQueryable_OnWriteRepoImpl_NoDiagnostic()
     {
-        // EfRepository.IncludeAggregate is a protected IQueryable seam for subclasses (#196 D10):
-        // MKP005 targets the public surface only.
+        // A protected IQueryable seam for subclasses (EfRepository.IncludeAggregate was one until
+        // #197 phase 1 made it private): MKP005 targets the public surface only.
         var source = PersistenceStubs.All + """
             class MyAggregate : IAggregateRoot { }
             class MyId : IEntityId { }

@@ -33,15 +33,16 @@ Expert in DDD, the Repository and Unit of Work patterns, CQRS data access and EF
 
 1. **Where does the type live?** Abstractions: `IRepository<TAggregate, TId>`, `IUnitOfWork`,
    `ITransactionalContext`, `IPagedResult<T>`, `PersistenceException` — nothing else. Core:
-   `IReadRepository<T>`, `QueryOptions<T>`, pagination, `ISpecificationEvaluator`.
+   `IReadRepository<T>`, `QueryOptions<T>`, pagination, `ISpecificationEvaluator`, and the `Result`
+   path (`IResultUnitOfWork`, `PersistenceErrors`, `AggregateVersionConflictException` — ADR-011).
    EntityFrameworkCore: implementations, `ITransactionalUnitOfWork`, DI, conventions, `ProviderOptions`.
 2. **Is the UoW used correctly?** Command handlers inject `IUnitOfWork`; one `CommitAsync` per
    command; query handlers never inject it; repositories never commit.
 3. **Does the write side load whole aggregates?** `FindAsync(TId)` returns the tracked aggregate
-   with everything inside its boundary; a narrower load is an `IncludeAggregate` override, not a
-   new contract.
+   with everything inside its boundary, which the model alone defines (`IsOutsideAggregate()`
+   for reference data; a child belongs to one root) — ADR-009. There is no narrower load.
 4. **Is the read side read-only and untracked?** `IReadRepository` has no mutation (MKP001/MKP002);
-   `EfReadRepository` queries untracked unless `WithTracking()`.
+   `EfReadRepository` never tracks and never consults the change tracker.
 5. **Are transaction semantics preserved?** `ExecuteAsync` joins an open transaction, retries under
    the execution strategy, never masks the original exception, clears the tracker after a failed
    attempt (ADR-006). Retries are at-least-once.

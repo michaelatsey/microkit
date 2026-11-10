@@ -1,3 +1,5 @@
+using System.Linq.Expressions;
+
 namespace MicroKit.Persistence.Testing;
 
 /// <summary>
@@ -26,9 +28,28 @@ namespace MicroKit.Persistence.Testing;
 /// unit of work commits.
 /// </para>
 /// <para>
-/// <see cref="QueryOptions{TAggregate}.Includes"/>, <see cref="QueryOptions{TAggregate}.AsNoTrackingEnabled"/>
-/// and <see cref="QueryOptions{TAggregate}.AsSplitQueryEnabled"/> are accepted but ignored — they are
-/// EF Core execution concerns with no in-memory equivalent.
+/// A second difference: the read methods return the stored instances too, the very ones
+/// <see cref="FindAsync(TId, CancellationToken)"/> hands to a command, so a pending mutation is
+/// visible through them at once. <c>EfReadRepository</c> never tracks and returns new instances
+/// loaded from the database: a query handler must not rely on seeing a command's uncommitted change.
+/// </para>
+/// <para>
+/// Versions: a stored aggregate starts at version 1 and does not move on its own — the double
+/// cannot see mutations. The double applies writes at once, so a staged aggregate is already at version 1 after
+/// <see cref="AddAsync"/>, where EF Core reads 0 until the commit. <see cref="SetVersion"/> sets another one, and
+/// <see cref="FindAsync(TId, long, CancellationToken)"/> checks the expected version at the find,
+/// where EF Core checks it in the <c>UPDATE</c> of the commit. A stale version throws a
+/// <see cref="PersistenceException"/> whose inner <see cref="AggregateVersionConflictException"/> carries
+/// the default error name of <typeparamref name="TAggregate"/> (<see cref="PersistenceErrors.DefaultErrorName"/>),
+/// which <see cref="InMemoryUnitOfWork.TryExecuteAsync{TState}"/> turns into
+/// <see cref="PersistenceErrors.Concurrency"/>. The double has no model, so a name the application
+/// fixes with <c>HasAggregateErrorName</c> is unknown to it.
+/// </para>
+/// <para>
+/// <see cref="QueryOptions{TAggregate}.Includes"/>,
+/// <see cref="QueryOptions{TAggregate}.AsSplitQueryEnabled"/> and
+/// <see cref="QueryOptions{TAggregate}.IncludeDeleted"/> are accepted but ignored — EF Core execution
+/// concerns with no in-memory equivalent; the double deletes for real, so nothing is soft-deleted.
 /// </para>
 /// </remarks>
 public sealed class InMemoryRepository<TAggregate, TId>
@@ -37,7 +58,14 @@ public sealed class InMemoryRepository<TAggregate, TId>
     where TAggregate : class, IAggregateRoot
     where TId : IEntityId
 {
+    // The <ROOT> segment of a conflict's code; null when the CLR name cannot be one.
+    private static readonly string? s_errorName =
+        PersistenceErrors.DefaultErrorName(typeof(TAggregate)) is var name && PersistenceErrors.IsValidErrorName(name)
+            ? name
+            : null;
+
     private readonly InMemoryStore<TAggregate> _store;
+    private readonly Dictionary<object, long> _versions = [];
 
     /// <summary>
     /// Initializes an empty repository. The aggregate's identity is read from its conventional
@@ -112,7 +140,68 @@ public sealed class InMemoryRepository<TAggregate, TId>
         ArgumentNullException.ThrowIfNull(aggregate);
         ct.ThrowIfCancellationRequested();
         _store.Remove(aggregate);
+        _versions.Remove(_store.KeyOf(aggregate));
         return ValueTask.CompletedTask;
+    }
+
+    /// <inheritdoc/>
+    /// <exception cref="PersistenceException">
+    /// The stored aggregate's version is not <paramref name="expectedVersion"/>; its inner exception is an
+    /// <see cref="AggregateVersionConflictException"/>. The double checks at the find; EF Core checks in
+    /// the <c>UPDATE</c> of the commit.
+    /// </exception>
+    public ValueTask<TAggregate?> FindAsync(TId id, long expectedVersion, CancellationToken ct = default)
+    {
+        ArgumentNullException.ThrowIfNull(id);
+        ct.ThrowIfCancellationRequested();
+        var aggregate = _store.Find(id);
+        if (aggregate is not null && VersionOf(aggregate) != expectedVersion)
+        {
+            throw new PersistenceException(
+                "Optimistic concurrency conflict at the find (in-memory double).",
+                new AggregateVersionConflictException(
+                    $"'{typeof(TAggregate).Name}' {id} is at version {VersionOf(aggregate)}, not {expectedVersion}.")
+                {
+                    ErrorName = s_errorName,
+                });
+        }
+
+        return new ValueTask<TAggregate?>(aggregate);
+    }
+
+    /// <summary>Gets the stored version of an aggregate.</summary>
+    /// <param name="aggregate">A stored aggregate.</param>
+    /// <returns>
+    /// 1 from <see cref="AddAsync"/> — at once, where EF Core reads 0 until the commit — or the value of the last
+    /// <see cref="SetVersion"/>.
+    /// </returns>
+    /// <exception cref="InvalidOperationException">The aggregate is not stored.</exception>
+    public long GetVersion(TAggregate aggregate)
+    {
+        ArgumentNullException.ThrowIfNull(aggregate);
+        return VersionOf(aggregate);
+    }
+
+    /// <summary>
+    /// Sets the version of a stored aggregate, so a test can exercise a stale
+    /// <see cref="FindAsync(TId, long, CancellationToken)"/>.
+    /// </summary>
+    /// <param name="aggregate">A stored aggregate.</param>
+    /// <param name="version">Its new version.</param>
+    /// <exception cref="InvalidOperationException">The aggregate is not stored.</exception>
+    public void SetVersion(TAggregate aggregate, long version)
+    {
+        ArgumentNullException.ThrowIfNull(aggregate);
+        _ = VersionOf(aggregate);
+        _versions[_store.KeyOf(aggregate)] = version;
+    }
+
+    private long VersionOf(TAggregate aggregate)
+    {
+        var key = _store.KeyOf(aggregate);
+        if (!ReferenceEquals(_store.Find(key), aggregate))
+            throw new InvalidOperationException($"This '{typeof(TAggregate).Name}' is not stored in the repository.");
+        return _versions.TryGetValue(key, out var version) ? version : 1;
     }
 
     // ---- Read side (Core.IReadRepository<TAggregate>) ----
@@ -121,6 +210,7 @@ public sealed class InMemoryRepository<TAggregate, TId>
     /// <remarks>
     /// The in-memory double supports single-element key arrays only.
     /// Composite PKs (arrays with length &gt; 1) throw <see cref="NotSupportedException"/>.
+    /// Unlike <c>EfReadRepository</c>, it returns the stored instance, the one a command mutates.
     /// </remarks>
     public ValueTask<TAggregate?> FindAsync(object[] keyValues, CancellationToken ct = default)
     {
@@ -144,6 +234,55 @@ public sealed class InMemoryRepository<TAggregate, TId>
     {
         ct.ThrowIfCancellationRequested();
         return new ValueTask<IPagedResult<TAggregate>>(_store.ExecuteListPaged(opts));
+    }
+
+    /// <inheritdoc/>
+    /// <remarks>The selector is compiled and run over the in-memory set.</remarks>
+    public ValueTask<IReadOnlyList<TResult>> ListAsync<TResult>(
+        QueryOptions<TAggregate> opts,
+        Expression<Func<TAggregate, TResult>> selector,
+        CancellationToken ct = default)
+    {
+        ct.ThrowIfCancellationRequested();
+        return new ValueTask<IReadOnlyList<TResult>>(_store.ExecuteList(opts, selector));
+    }
+
+    /// <inheritdoc/>
+    /// <remarks>The selector is compiled and run over the in-memory page.</remarks>
+    public ValueTask<IPagedResult<TResult>> ListPagedAsync<TResult>(
+        QueryOptions<TAggregate> opts,
+        Expression<Func<TAggregate, TResult>> selector,
+        CancellationToken ct = default)
+    {
+        ct.ThrowIfCancellationRequested();
+        return new ValueTask<IPagedResult<TResult>>(_store.ExecuteListPaged(opts, selector));
+    }
+
+    /// <inheritdoc/>
+    /// <remarks>
+    /// The double orders in memory — strings ordinally, a key that is not <see cref="IComparable"/> (a record-struct
+    /// id) by its string form — and appends its key selector as the last sort key. It has no value converters, so its
+    /// cursor holds a handle into the double: a cursor is valid only on the double that issued it. A nullable sort key
+    /// is refused through the property's nullability annotations.
+    /// </remarks>
+    public ValueTask<KeysetPage<TAggregate>> ListKeysetAsync(QueryOptions<TAggregate> opts, CancellationToken ct = default)
+    {
+        ct.ThrowIfCancellationRequested();
+        ArgumentNullException.ThrowIfNull(opts);
+        return new ValueTask<KeysetPage<TAggregate>>(_store.ExecuteKeyset(opts, static item => item));
+    }
+
+    /// <inheritdoc/>
+    /// <remarks>As <see cref="ListKeysetAsync(QueryOptions{TAggregate}, CancellationToken)"/>, with the selector compiled.</remarks>
+    public ValueTask<KeysetPage<TResult>> ListKeysetAsync<TResult>(
+        QueryOptions<TAggregate> opts,
+        Expression<Func<TAggregate, TResult>> selector,
+        CancellationToken ct = default)
+    {
+        ct.ThrowIfCancellationRequested();
+        ArgumentNullException.ThrowIfNull(opts);
+        ArgumentNullException.ThrowIfNull(selector);
+        return new ValueTask<KeysetPage<TResult>>(_store.ExecuteKeyset(opts, selector.Compile()));
     }
 
     /// <inheritdoc/>

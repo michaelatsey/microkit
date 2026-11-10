@@ -1,6 +1,6 @@
 ---
 name: release-manager
-description: Use this agent to orchestrate the MicroKit.Persistence release lifecycle — validating the 8-package set and its declared dependencies, the CHANGELOG, the local pack-and-consume smoke test, and the tag that triggers release-persistence.yml. Invoked through the root /release command.
+description: Use this agent to orchestrate the MicroKit.Persistence release lifecycle — validating the 10-package set and its declared dependencies, the CHANGELOG, the local pack-and-consume smoke test, and the tag that triggers release-persistence.yml. Invoked through the root /release command.
 tools: Read, Glob, Grep, Bash
 model: sonnet
 ---
@@ -28,8 +28,6 @@ MicroKit.Persistence.Analyzers
 ### 1. Pre-flight
 - [ ] On `main`, clean working tree, CI green
 - [ ] `CHANGELOG.md` entry complete for the version
-- [ ] `MicroKit.Domain` published at the version `Directory.Packages.props` declares (the release
-      build swaps the cross-module reference for the package, `CIReleaseBuild=true`)
 
 ### 2. Build and test
 ```bash
@@ -42,7 +40,7 @@ PostgreSQL tests skip without Docker: run them with Docker available before a re
 ```bash
 dotnet pack modules/MicroKit.Persistence/MicroKit.Persistence.slnx -c Release \
   -p:PackageVersion={version} -o artifacts/persistence/
-ls artifacts/persistence/*.nupkg   # 8 packages
+ls artifacts/persistence/*.nupkg   # 10 packages
 ```
 Consume them from a local folder feed in a real consumer before any publish.
 

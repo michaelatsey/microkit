@@ -23,7 +23,7 @@ public sealed class RepositoryIQueryableLeakAnalyzer : DiagnosticAnalyzer
                    + "Callers can append arbitrary Where/Include clauses, bypassing specification enforcement and query auditing. "
                    + "Note: IAsyncEnumerable<T> is allowed — the concern is the IQueryable<T> signature specifically. "
                    + "Return IReadOnlyList<T>, IPagedResult<T>, or a concrete projection DTO instead.",
-        helpLinkUri: $"https://github.com/michaelatsey/microkit/docs/analyzers/{DiagnosticId}");
+        helpLinkUri: HelpLinks.For(DiagnosticId));
 
     /// <inheritdoc />
     public override ImmutableArray<DiagnosticDescriptor> SupportedDiagnostics =>

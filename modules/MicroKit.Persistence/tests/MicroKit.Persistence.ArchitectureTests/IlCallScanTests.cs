@@ -20,12 +20,16 @@ public sealed class IlCallScanTests
         typeof(MicroKit.Persistence.EntityFrameworkCore.SqlServer.SqlServerEfCoreBuilderExtensions).Assembly,
         typeof(MicroKit.Persistence.Specifications.QueryOptionsOrderingExtensions).Assembly,
         typeof(MicroKit.Persistence.Testing.InMemoryRepository<,>).Assembly,
+        typeof(MicroKit.Persistence.Testing.PostgreSql.PostgreSqlFixture).Assembly,
+        typeof(MicroKit.Persistence.Testing.SqlServer.SqlServerFixture).Assembly,
     ];
 
     /// <summary>
     /// The parameterless <c>IgnoreQueryFilters()</c> disables every query filter of the model,
     /// including a tenant filter the library does not own (#196 D1). Only the named overload,
-    /// <c>IgnoreQueryFilters(IReadOnlyCollection&lt;string&gt;)</c>, may ever be used.
+    /// <c>IgnoreQueryFilters(IReadOnlyCollection&lt;string&gt;)</c>, may ever be used — as
+    /// <c>EfSpecificationEvaluator</c> does for <c>QueryOptions.IncludeDeleted</c>, with
+    /// <c>SoftDelete.FilterName</c> only (#197 phase 4).
     /// </summary>
     [Fact]
     public void LibraryAssemblies_NeverCallParameterlessIgnoreQueryFilters()
@@ -54,7 +58,31 @@ public sealed class IlCallScanTests
         hits.ShouldNotContain(h => h.Contains(nameof(ScannerFixture.NamedOverloadCall), StringComparison.Ordinal));
     }
 
-    private static IEnumerable<string> FindParameterlessIgnoreQueryFilters(string assemblyPath)
+    /// <summary>
+    /// #197 phase 7 (ADR-015): the fixtures never consult the Docker probe — Testcontainers reaches endpoints the
+    /// probe does not, so gating a start on it would refuse a working setup. Only the caller asks the probe.
+    /// </summary>
+    [Fact]
+    public void TheFixtures_AndTheirLifecycle_NeverConsultTheDockerProbe()
+    {
+        var probe = typeof(MicroKit.Persistence.Testing.DockerProbe).FullName;
+        var hits = new[]
+            {
+                typeof(MicroKit.Persistence.Testing.PostgreSql.PostgreSqlFixture).Assembly,
+                typeof(MicroKit.Persistence.Testing.SqlServer.SqlServerFixture).Assembly,
+                typeof(MicroKit.Persistence.Testing.DockerProbe).Assembly,
+            }
+            .SelectMany(a => FindCalls(a.Location, target => target.DeclaringType.FullName == probe))
+            .Where(hit => !hit.StartsWith(probe + "::", StringComparison.Ordinal) && !hit.StartsWith(probe + "/", StringComparison.Ordinal))
+            .ToList();
+
+        hits.ShouldBeEmpty("a fixture that consulted the probe could refuse a Docker setup Testcontainers reaches: " + string.Join("; ", hits));
+    }
+
+    private static IEnumerable<string> FindParameterlessIgnoreQueryFilters(string assemblyPath) =>
+        FindCalls(assemblyPath, IsParameterlessIgnoreQueryFilters);
+
+    private static IEnumerable<string> FindCalls(string assemblyPath, Func<MethodReference, bool> matches)
     {
         using var module = ModuleDefinition.ReadModule(assemblyPath);
 
@@ -72,7 +100,7 @@ public sealed class IlCallScanTests
                         continue;
                     }
 
-                    if (instruction.Operand is MethodReference target && IsParameterlessIgnoreQueryFilters(target))
+                    if (instruction.Operand is MethodReference target && matches(target))
                         yield return $"{type.FullName}::{method.Name}";
                 }
             }

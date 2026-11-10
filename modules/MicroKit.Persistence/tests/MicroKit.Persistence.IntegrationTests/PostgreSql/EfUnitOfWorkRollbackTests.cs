@@ -9,7 +9,7 @@ namespace MicroKit.Persistence.IntegrationTests.PostgreSql;
 /// never replaces the exception in flight — the caller always observes the original failure.
 /// </summary>
 [Collection(PostgreSqlSuite.Name)]
-public sealed class EfUnitOfWorkRollbackTests(PostgreSqlFixture fixture)
+public sealed class EfUnitOfWorkRollbackTests(PostgreSqlSuiteFixture fixture)
 {
     [DockerRequiredFact]
     public async Task ExecuteAsync_WhenTheTokenIsCancelledAndTheOperationThrows_SurfacesTheOriginalException()

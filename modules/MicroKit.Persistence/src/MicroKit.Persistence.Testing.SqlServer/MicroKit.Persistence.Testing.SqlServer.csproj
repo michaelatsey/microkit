@@ -1,0 +1,19 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <AssemblyName>MicroKit.Persistence.Testing.SqlServer</AssemblyName>
+    <RootNamespace>MicroKit.Persistence.Testing.SqlServer</RootNamespace>
+    <Description>A SQL Server test fixture for MicroKit.Persistence — one Testcontainers SQL Server per fixture, an IAsyncDisposable lifecycle, a connection string per test database; no test framework required.</Description>
+    <PackageTags>persistence;testing;sqlserver;mssql;testcontainers;docker;integration-tests;microkit;dotnet</PackageTags>
+    <!-- Test helper over Testcontainers; not intended for AOT/trimmed deployments -->
+    <IsTrimmable>false</IsTrimmable>
+  </PropertyGroup>
+  <!-- Intra-module: built and released with MicroKit.Persistence.Testing — always an unconditional
+       ProjectReference, in every build mode (ADR-GLOBAL-002 D5) -->
+  <ItemGroup>
+    <ProjectReference Include="..\MicroKit.Persistence.Testing\MicroKit.Persistence.Testing.csproj" />
+  </ItemGroup>
+  <!-- No test framework, no EF Core: the fixture is the container only (ADR-015). -->
+  <ItemGroup>
+    <PackageReference Include="Testcontainers.MsSql" />
+  </ItemGroup>
+</Project>

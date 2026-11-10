@@ -29,6 +29,8 @@ breaks every consumer; on `preview.*` a known break ships outright, never behind
 - [ ] No `DbContext`, `DbSet`, `IQueryable`, `ModelBuilder`, `EntityEntry` in Abstractions signatures
 - [ ] `IReadRepository<T>`, `QueryOptions<T>`, `ISpecificationEvaluator` stay in core
 - [ ] `ITransactionalUnitOfWork` stays in EntityFrameworkCore (ADR-004)
+- [ ] `IResultUnitOfWork`, `PersistenceErrors`, `AggregateVersionConflictException` stay in core; Abstractions
+      never references `MicroKit.Result` (ADR-011, #196 D17)
 
 ### Write side — `IRepository<TAggregate, TId>`
 - [ ] `TAggregate : class, IAggregateRoot`, `TId : IEntityId`

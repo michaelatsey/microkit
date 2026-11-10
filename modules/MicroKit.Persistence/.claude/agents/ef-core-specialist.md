@@ -21,21 +21,24 @@ strategies and transactions, model conventions, split queries, owned types, prov
 - `.claude/CLAUDE.md`
 - `.claude/rules/ef-core-patterns.md`
 - `.claude/rules/performance.md`
-- `.claude-context/context/architectural-decisions.md` (ADR-005, ADR-006)
+- `.claude-context/context/architectural-decisions.md` (ADR-005, ADR-006, ADR-009)
 - `src/MicroKit.Persistence.EntityFrameworkCore/` — the files involved
 
 ## Checklist
 
 ### Write side — `EfRepository<TAggregate, TId, TContext>`
-- [ ] `FindAsync` returns a tracked instance as is, else one tracked load of the whole aggregate
-      (`AggregateIncludePlan`): stops at other aggregate roots and cycles, splits at ≥ 2 collections
-- [ ] Overrides of `IncludeAggregate` keep the load tracked (tracking is re-applied after it)
-- [ ] Custom finders reuse `IncludeAggregate`; key lookups go through `KeyLookup` (no row-limited
-      query on an unordered split)
+- [ ] `FindAsync` returns a recorded or `Added` root as is, refuses any other tracked root, else
+      one tracked load of the whole aggregate (`AggregateIncludePlan`): stops at other aggregate
+      roots, `IsOutsideAggregate()` navigations and cycles, splits at ≥ 2 collections (ADR-009)
+- [ ] Custom finders call `LoadAggregatesAsync(predicate)` — never a hand-built include chain; key
+      lookups go through `KeyLookup` (no row-limited query on an unordered split)
+- [ ] The context is configured with `UseMicroKitPersistence()`; anything that clears the change
+      tracker on MicroKit's behalf also resets the `AggregateLoadRecord`
 - [ ] `AddAsync` / `DeleteAsync` stage only; nothing calls `SaveChanges` outside `EfUnitOfWork`
 
 ### Read side — `EfReadRepository<TAggregate, TContext>`
-- [ ] Untracked unless `WithTracking()`; `FindAsync` returns a tracked instance as is
+- [ ] Always untracked (`AsNoTracking()`, re-applied after the evaluator); the change tracker is
+      never consulted
 - [ ] `PaginationLimits` applied: default page for `ListPagedAsync`, maximum size enforced
 - [ ] Count/any drop includes, ordering and pagination
 - [ ] DTO reads project on the server (`.Select(Dto.Projection)`)

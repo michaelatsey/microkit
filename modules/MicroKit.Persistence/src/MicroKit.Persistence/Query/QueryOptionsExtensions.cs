@@ -69,39 +69,6 @@ public static class QueryOptionsExtensions
     }
 
     /// <summary>
-    /// Returns a new <see cref="QueryOptions{TAggregate}"/> with change tracking explicitly
-    /// disabled. This is the default behaviour; this method exists for call-site clarity on
-    /// write-side read paths where the intent should be explicit.
-    /// </summary>
-    /// <typeparam name="TAggregate">The aggregate root type.</typeparam>
-    /// <param name="opts">The source options to derive from.</param>
-    /// <returns>A new options instance with <see cref="QueryOptions{TAggregate}.AsNoTrackingEnabled"/> set to <see langword="true"/>.</returns>
-    public static QueryOptions<TAggregate> AsNoTracking<TAggregate>(
-        this QueryOptions<TAggregate> opts)
-        where TAggregate : class, IAggregateRoot
-    {
-        ArgumentNullException.ThrowIfNull(opts);
-        return opts with { AsNoTrackingEnabled = true };
-    }
-
-    /// <summary>
-    /// Returns a new <see cref="QueryOptions{TAggregate}"/> with EF Core change tracking
-    /// enabled. Use only when the loaded aggregate will be mutated and committed by the
-    /// <c>IUnitOfWork</c> within the same command; the usual way to load an aggregate for
-    /// modification is <c>IRepository&lt;TAggregate, TId&gt;.FindAsync</c>.
-    /// </summary>
-    /// <typeparam name="TAggregate">The aggregate root type.</typeparam>
-    /// <param name="opts">The source options to derive from.</param>
-    /// <returns>A new options instance with <see cref="QueryOptions{TAggregate}.AsNoTrackingEnabled"/> set to <see langword="false"/>.</returns>
-    public static QueryOptions<TAggregate> WithTracking<TAggregate>(
-        this QueryOptions<TAggregate> opts)
-        where TAggregate : class, IAggregateRoot
-    {
-        ArgumentNullException.ThrowIfNull(opts);
-        return opts with { AsNoTrackingEnabled = false };
-    }
-
-    /// <summary>
     /// Returns a new <see cref="QueryOptions{TAggregate}"/> with EF Core split-query mode
     /// enabled. Recommended when <see cref="QueryOptions{TAggregate}.Includes"/> chains two
     /// or more collection navigation properties to prevent Cartesian product row explosion.
@@ -115,6 +82,23 @@ public static class QueryOptionsExtensions
     {
         ArgumentNullException.ThrowIfNull(opts);
         return opts with { AsSplitQueryEnabled = true };
+    }
+
+    /// <summary>
+    /// Returns a new <see cref="QueryOptions{TAggregate}"/> that also returns soft-deleted aggregates
+    /// (<see cref="QueryOptions{TAggregate}.IncludeDeleted"/>): only the soft-delete filter is ignored,
+    /// every other query filter still applies.
+    /// </summary>
+    /// <typeparam name="TAggregate">The aggregate root type.</typeparam>
+    /// <param name="opts">The source options to derive from.</param>
+    /// <returns>A new options instance with <see cref="QueryOptions{TAggregate}.IncludeDeleted"/> set to <see langword="true"/>.</returns>
+    /// <exception cref="ArgumentNullException"><paramref name="opts"/> is <see langword="null"/>.</exception>
+    public static QueryOptions<TAggregate> WithDeleted<TAggregate>(
+        this QueryOptions<TAggregate> opts)
+        where TAggregate : class, IAggregateRoot
+    {
+        ArgumentNullException.ThrowIfNull(opts);
+        return opts with { IncludeDeleted = true };
     }
 
     /// <summary>
@@ -144,5 +128,24 @@ public static class QueryOptionsExtensions
         ArgumentNullException.ThrowIfNull(opts);
         ArgumentNullException.ThrowIfNull(orderBy);
         return opts with { OrderBy = orderBy };
+    }
+
+    /// <summary>
+    /// Returns a new <see cref="QueryOptions{TAggregate}"/> with the specified keyset (cursor) pagination,
+    /// replacing any previous one; <see langword="null"/> clears it. Read the page with
+    /// <c>IReadRepository.ListKeysetAsync</c>.
+    /// </summary>
+    /// <typeparam name="TAggregate">The aggregate root type.</typeparam>
+    /// <param name="opts">The source options to derive from.</param>
+    /// <param name="keyset">The sort keys, page size and position, or <see langword="null"/>.</param>
+    /// <returns>A new options instance with <see cref="QueryOptions{TAggregate}.Keyset"/> set.</returns>
+    /// <exception cref="ArgumentNullException"><paramref name="opts"/> is <see langword="null"/>.</exception>
+    public static QueryOptions<TAggregate> WithKeyset<TAggregate>(
+        this QueryOptions<TAggregate> opts,
+        KeysetPagination<TAggregate>? keyset)
+        where TAggregate : class, IAggregateRoot
+    {
+        ArgumentNullException.ThrowIfNull(opts);
+        return opts with { Keyset = keyset };
     }
 }

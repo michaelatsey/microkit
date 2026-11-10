@@ -1,4 +1,5 @@
 using System.Data.Common;
+using MicroKit.Persistence.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Diagnostics;
 using Microsoft.EntityFrameworkCore.Storage;
@@ -171,13 +172,9 @@ public sealed class ExecutionDatabase : IAsyncDisposable
 
     public string ConnectionString { get; }
 
-    public static async Task<ExecutionDatabase> CreateAsync(PostgreSqlFixture fixture)
+    public static async Task<ExecutionDatabase> CreateAsync(PostgreSqlSuiteFixture fixture)
     {
-        var builder = new NpgsqlConnectionStringBuilder(fixture.ConnectionString)
-        {
-            Database = "exec_" + Guid.NewGuid().ToString("N"),
-        };
-        var database = new ExecutionDatabase(builder.ConnectionString);
+        var database = new ExecutionDatabase(fixture.GetConnectionString("exec_" + Guid.NewGuid().ToString("N")));
         await using var context = database.CreateContext();
         await context.Database.EnsureCreatedAsync();
         return database;
@@ -193,6 +190,7 @@ public sealed class ExecutionDatabase : IAsyncDisposable
                     npgsql.ExecutionStrategy(d => new MarkerRetryingExecutionStrategy(d, retries));
             })
             .AddInterceptors(interceptors)
+            .UseMicroKitPersistence()
             .Options;
 
         return new ExecutionDbContext(options);

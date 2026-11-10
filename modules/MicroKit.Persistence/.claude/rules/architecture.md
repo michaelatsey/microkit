@@ -10,6 +10,8 @@ public interface IRepository<TAggregate, TId>
     where TId : IEntityId
 {
     ValueTask<TAggregate?> FindAsync(TId id, CancellationToken ct = default); // whole aggregate, tracked
+    ValueTask<TAggregate?> FindAsync(TId id, long expectedVersion, CancellationToken ct = default); // If-Match
+    long GetVersion(TAggregate aggregate);                                     // ETag
     ValueTask AddAsync(TAggregate aggregate, CancellationToken ct = default);
     ValueTask DeleteAsync(TAggregate aggregate, CancellationToken ct = default);
 }
@@ -26,10 +28,39 @@ public interface IOrderLineRepository : IRepository<OrderLine, OrderLineId> { }
 
 - No `CommitAsync`: committing belongs to `IUnitOfWork` only.
 - No `UpdateAsync`: an aggregate loaded through `FindAsync` is tracked; mutate it and commit.
-- `EfRepository.FindAsync` returns an instance already tracked as is; otherwise it loads the whole
-  aggregate (every navigation inside the boundary, never another aggregate root), split into
-  separate queries when it has two or more collections. A typed repository narrows or extends
-  the load by overriding `protected virtual IncludeAggregate`.
+- `EfRepository.FindAsync` returns a root it loaded whole, or an `Added` one, as is, and refuses any
+  other tracked root; otherwise it loads the whole aggregate (every navigation inside the boundary,
+  never another aggregate root), split into separate queries when it has two or more collections.
+- Every root carries a version (`AggregateVersion`, ADR-010), bumped by every save that writes its
+  boundary; `FindAsync(id, expectedVersion)` makes the expected value the token's original, checked
+  in the commit's `UPDATE`. Bulk writes (`ExecuteUpdate`, raw SQL) bypass it.
+- The boundary lives in the model only (ADR-009): reference data leaves it through
+  `IsOutsideAggregate()`; no repository overrides the load. Each row has one parent: a many-to-one
+  reference held by the parent never reaches a non-root entity, and a many-to-many navigation is
+  only allowed marked outside — links are a link entity, a child of the root. A reference out of an
+  aggregate is `Restrict`. A typed finder calls `protected LoadAggregatesAsync(predicate, ct)`.
+- An aggregate whose root has `HasSoftDelete()` (ADR-012) is never deleted: `DeleteAsync` then a commit
+  marks the root and every entity of its boundary; the named filter hides them; the write side never
+  loads them again.
+
+## The `Result` path — `IResultUnitOfWork` (core, ADR-011)
+
+```csharp
+public interface IResultUnitOfWork
+{
+    ValueTask<Result> TryCommitAsync(CancellationToken ct = default);                    // flush, no open transaction
+    ValueTask<Result> TryExecuteAsync<TState>(Func<TState, CancellationToken, Task<Result>> operation, TState state, CancellationToken ct = default);
+    ValueTask<Result<TValue>> TryExecuteAsync<TState, TValue>(Func<TState, CancellationToken, Task<Result<TValue>>> operation, TState state, CancellationToken ct = default);
+}
+```
+
+- Unique, foreign-key and concurrency failures become `PersistenceErrors` (`PERSISTENCE.<ROOT>.<REASON>`,
+  category `Conflict`); everything else still throws `PersistenceException`.
+- It converts only at the owner of the transaction, after the rollback and once the strategy gave up;
+  joined, it converts nothing. A failed `Result` the operation returns rolls the owned transaction back.
+  `TryCommitAsync` is refused inside an open transaction.
+- The contract, codes, messages and `AggregateVersionConflictException` live in core (which references
+  `MicroKit.Result`; Abstractions never does). `EfUnitOfWork` and `InMemoryUnitOfWork` implement it.
 
 ## Read side — `IReadRepository<TAggregate>` (core)
 
@@ -45,8 +76,9 @@ public interface IReadRepository<TAggregate> where TAggregate : class, IAggregat
 ```
 
 It is the only read contract (it lives in core because it takes `QueryOptions<T>`). It never
-mutates or commits (MKP001/MKP002). `EfReadRepository<TAggregate, TContext>(context, evaluator,
-paginationLimits)` implements it; a typed read repository derives from it.
+mutates or commits (MKP001/MKP002), never tracks and never consults the change tracker.
+`EfReadRepository<TAggregate, TContext>(context, evaluator, paginationLimits)` implements it; a
+typed read repository derives from it.
 
 ## Unit of Work — `IUnitOfWork` (Abstractions)
 
@@ -96,7 +128,14 @@ var opts = new QueryOptions<Order>(new OpenOrdersSpec())   // WHAT — Specifica
     .WithPagination(page: 1, pageSize: 20);
 ```
 
-Untracked by default (`AsNoTrackingEnabled = true`); `WithTracking()` opts out.
+The read side never tracks; `QueryOptions` has no tracking option (ADR-009). `WithDeleted()` sets
+`IncludeDeleted`: soft-deleted aggregates (ADR-012) are returned too, every other filter still applies.
+
+ADR-013 adds the projections (`ListAsync`/`ListPagedAsync`/`ListKeysetAsync` with a selector, built by the
+database) and keyset pagination: `WithKeyset(KeysetPagination<T>.OrderBy(…))` read by `ListKeysetAsync`, the
+root's key appended, forward only, non-nullable scalar keys of the root whose worst-case cursor fits
+`KeysetCursor.MaxTokenLength` (a `string`/`byte[]` key needs a maximum length), an opaque `KeysetCursor` checked
+against the root type and the ordering. A keyset owns the ordering and the page (`KeysetRules`).
 
 ## CQRS Data-Access Alignment
 

@@ -3,12 +3,16 @@ namespace MicroKit.Persistence.EntityFrameworkCore;
 /// <summary>
 /// EF Core implementation of <see cref="ISpecificationEvaluator"/>.
 /// Applies a <see cref="QueryOptions{T}"/> to an <c>IQueryable&lt;T&gt;</c> in the canonical
-/// 5-step evaluation order.
+/// evaluation order (steps 0 to 5).
 /// </summary>
 /// <remarks>
 /// <para>
 /// The canonical evaluation order is:
 /// <list type="number">
+///   <item><description><b>Soft-deleted rows</b> (step 0) — when <see cref="QueryOptions{T}.IncludeDeleted"/> is
+///     set, <c>IgnoreQueryFilters([SoftDelete.FilterName])</c>: the soft-delete filter only, for the whole
+///     query (included navigations too); every other query filter of the model, named or anonymous, still
+///     applies</description></item>
 ///   <item><description><b>Specification criteria</b> — applies <c>.Where(spec.Criteria)</c></description></item>
 ///   <item><description><b>Includes</b> — applies the <c>Includes</c> delegate
 ///     (e.g., <c>.Include(...).ThenInclude(...)</c>)</description></item>
@@ -20,23 +24,23 @@ namespace MicroKit.Persistence.EntityFrameworkCore;
 /// </list>
 /// </para>
 /// <para>
-/// <b>AsNoTracking responsibility:</b> this evaluator does not apply <c>AsNoTracking()</c>.
-/// The repository calling <see cref="GetQuery{T}"/> is responsible for passing a queryable
-/// that already has the correct tracking behaviour applied. This keeps the evaluator
-/// stateless and provider-agnostic.
+/// <b>Tracking:</b> this evaluator does not apply a tracking behaviour. The repository calling
+/// <see cref="GetQuery{T}"/> does: <see cref="EfReadRepository{TAggregate, TContext}"/> runs every
+/// query with <c>AsNoTracking()</c>, applied again to the result because an <c>Includes</c> or
+/// <c>OrderBy</c> delegate may call <c>AsTracking()</c>. This keeps the evaluator stateless and
+/// provider-agnostic.
 /// </para>
 /// </remarks>
 public sealed class EfSpecificationEvaluator : ISpecificationEvaluator
 {
     /// <summary>
     /// Transforms <paramref name="inputQuery"/> by applying all active properties of
-    /// <paramref name="opts"/> in the canonical 5-step evaluation order.
+    /// <paramref name="opts"/> in the canonical evaluation order.
     /// </summary>
     /// <typeparam name="T">The aggregate root type.</typeparam>
     /// <param name="inputQuery">
-    /// The base <c>IQueryable&lt;T&gt;</c> to transform. The calling repository must have
-    /// already applied <c>AsNoTracking()</c> when
-    /// <see cref="QueryOptions{T}.AsNoTrackingEnabled"/> is <see langword="true"/>.
+    /// The base <c>IQueryable&lt;T&gt;</c> to transform, with the tracking behaviour the calling
+    /// repository chose already applied.
     /// </param>
     /// <param name="opts">The query options to apply.</param>
     /// <returns>
@@ -48,6 +52,9 @@ public sealed class EfSpecificationEvaluator : ISpecificationEvaluator
         where T : class, IAggregateRoot
     {
         var query = inputQuery;
+
+        if (opts.IncludeDeleted)
+            query = query.IgnoreQueryFilters([SoftDelete.FilterName]); // step 0: the soft-delete filter only
 
         if (opts.Specification is { } spec)
             query = query.Where(spec.ToExpression());                  // step 1: criteria

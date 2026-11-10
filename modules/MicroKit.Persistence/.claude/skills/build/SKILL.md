@@ -1,6 +1,6 @@
 ---
 name: build
-description: How to build MicroKit.Persistence reliably. Use whenever you need to compile the module, troubleshoot a build error (CS1591, CPM violation, MKP analyzer diagnostic, trimming warning), restore packages, or understand the build order of the 8 src projects, the tests and the samples.
+description: How to build MicroKit.Persistence reliably. Use whenever you need to compile the module, troubleshoot a build error (CS1591, CPM violation, MKP analyzer diagnostic, trimming warning), restore packages, or understand the build order of the 10 src projects, the tests and the samples.
 ---
 
 # Skill: Build
@@ -22,16 +22,17 @@ dotnet restore modules/MicroKit.Persistence/MicroKit.Persistence.slnx
 dotnet build modules/MicroKit.Persistence/MicroKit.Persistence.slnx -c Release -v d
 ```
 
-A default build resolves `MicroKit.Domain` from source; `-p:CIReleaseBuild=true` resolves it from
-the published package instead (compatibility check, used by the release workflow).
+Every build resolves the other MicroKit modules — `MicroKit.Domain`, `MicroKit.Result` — from source:
+the module references them with unconditional `ProjectReference`s, whatever the build properties
+(#197 Spec, Perimeter).
 
 ## Build order
 
-1. `MicroKit.Domain` (cross-module, from source)
+1. `MicroKit.Domain`, `MicroKit.Result` (cross-module, from source)
 2. `MicroKit.Persistence.Abstractions`
 3. `MicroKit.Persistence` (core)
 4. `EntityFrameworkCore`, `Specifications`, `Testing`
-5. `EntityFrameworkCore.PostgreSql`, `EntityFrameworkCore.SqlServer`
+5. `EntityFrameworkCore.PostgreSql`, `EntityFrameworkCore.SqlServer`, `Testing.PostgreSql`, `Testing.SqlServer`
 6. `MicroKit.Persistence.Analyzers` — standalone, `netstandard2.0`
 
 MSBuild derives the order from the project references.

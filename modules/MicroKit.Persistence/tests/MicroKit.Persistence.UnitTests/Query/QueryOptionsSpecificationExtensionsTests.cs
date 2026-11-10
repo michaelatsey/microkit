@@ -51,7 +51,6 @@ public sealed class QueryOptionsSpecificationExtensionsTests
             Includes           = includes,
             OrderBy            = orderBy,
             Pagination         = pagination,
-            AsNoTrackingEnabled = false,
             AsSplitQueryEnabled = true,
         };
 
@@ -60,7 +59,6 @@ public sealed class QueryOptionsSpecificationExtensionsTests
         updated.Includes.ShouldBeSameAs(includes);
         updated.OrderBy.ShouldBeSameAs(orderBy);
         updated.Pagination.ShouldBe(pagination);
-        updated.AsNoTrackingEnabled.ShouldBeFalse();
         updated.AsSplitQueryEnabled.ShouldBeTrue();
     }
 

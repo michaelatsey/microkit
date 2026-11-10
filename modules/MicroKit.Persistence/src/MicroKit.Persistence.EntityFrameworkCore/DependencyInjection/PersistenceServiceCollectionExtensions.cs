@@ -65,7 +65,8 @@ public static class PersistenceServiceCollectionExtensions
 
     /// <summary>
     /// Registers a <typeparamref name="TContext"/> <see cref="DbContext"/> in the service
-    /// collection. Delegates to <see cref="EntityFrameworkServiceCollectionExtensions.AddDbContext{TContext}(IServiceCollection, Action{DbContextOptionsBuilder}?, ServiceLifetime, ServiceLifetime)"/>.
+    /// collection, with <see cref="MicroKitPersistenceDbContextOptionsExtensions.UseMicroKitPersistence(DbContextOptionsBuilder)"/>.
+    /// Delegates to <see cref="EntityFrameworkServiceCollectionExtensions.AddDbContext{TContext}(IServiceCollection, Action{DbContextOptionsBuilder}?, ServiceLifetime, ServiceLifetime)"/>.
     /// </summary>
     /// <typeparam name="TContext">The application <see cref="DbContext"/> type.</typeparam>
     /// <param name="builder">The EF Core builder.</param>
@@ -77,14 +78,19 @@ public static class PersistenceServiceCollectionExtensions
         where TContext : DbContext
     {
         ArgumentNullException.ThrowIfNull(builder);
-        builder.Services.AddDbContext<TContext>(configure);
+        builder.Services.AddDbContext<TContext>(options =>
+        {
+            configure?.Invoke(options);
+            options.UseMicroKitPersistence();
+        });
         return builder;
     }
 
     /// <summary>
     /// Registers <see cref="EfUnitOfWork{TContext}"/> as a scoped service and binds it to
-    /// <see cref="IUnitOfWork"/>, <see cref="ITransactionalContext"/>, and
-    /// <see cref="ITransactionalUnitOfWork"/> — one instance, three interface pointers.
+    /// <see cref="IUnitOfWork"/>, <see cref="ITransactionalContext"/>,
+    /// <see cref="ITransactionalUnitOfWork"/>, and <see cref="IResultUnitOfWork"/> — one instance, four
+    /// interface pointers.
     /// Additionally registers <see cref="EfDomainEventsProvider{TContext}"/> as the scoped
     /// <see cref="IDomainEventsProvider"/> — a separate instance sharing the same
     /// <typeparamref name="TContext"/>.
@@ -125,6 +131,8 @@ public static class PersistenceServiceCollectionExtensions
         builder.Services.AddScoped<ITransactionalContext>(
             sp => sp.GetRequiredService<EfUnitOfWork<TContext>>());
         builder.Services.AddScoped<ITransactionalUnitOfWork>(
+            sp => sp.GetRequiredService<EfUnitOfWork<TContext>>());
+        builder.Services.AddScoped<IResultUnitOfWork>(
             sp => sp.GetRequiredService<EfUnitOfWork<TContext>>());
         builder.Services.AddScoped<IDomainEventsProvider, EfDomainEventsProvider<TContext>>();
         return builder;

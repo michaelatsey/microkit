@@ -69,15 +69,12 @@ public sealed class AuditInstantNormalisationTests
 /// non-UTC instant runs, because the parameter goes through the same normalisation.
 /// </summary>
 [Collection(MicroKit.Persistence.IntegrationTests.PostgreSql.PostgreSqlSuite.Name)]
-public sealed class AuditInstantNormalisationPostgreSqlTests(MicroKit.Persistence.IntegrationTests.PostgreSql.PostgreSqlFixture fixture)
+public sealed class AuditInstantNormalisationPostgreSqlTests(MicroKit.Persistence.IntegrationTests.PostgreSql.PostgreSqlSuiteFixture fixture)
 {
-    [MicroKit.Persistence.IntegrationTests.PostgreSql.DockerRequiredFact]
+    [DockerRequiredFact]
     public async Task ARangeFilterWithANonUtcInstant_IsNormalisedAndMatches()
     {
-        var connectionString = new Npgsql.NpgsqlConnectionStringBuilder(fixture.ConnectionString)
-        {
-            Database = "instants_" + Guid.NewGuid().ToString("N"),
-        }.ConnectionString;
+        var connectionString = fixture.GetConnectionString("instants_" + Guid.NewGuid().ToString("N"));
         var options = new DbContextOptionsBuilder<LedgerDbContext>().UseNpgsql(connectionString).Options;
         var createdAt = new DateTimeOffset(2026, 10, 24, 9, 0, 0, TimeSpan.Zero);
 

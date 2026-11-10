@@ -24,17 +24,25 @@ internal static class PersistenceStubs
         using System.Linq;
         using System.Threading;
         using System.Threading.Tasks;
+        using MicroKit.Domain.Aggregates;
+        using MicroKit.Domain.Identifiers;
         using MicroKit.Persistence;
         using MicroKit.Persistence.Abstractions;
         using MicroKit.Persistence.EntityFrameworkCore;
         using Microsoft.EntityFrameworkCore;
 
-        namespace MicroKit.Persistence.Abstractions
+        namespace MicroKit.Domain.Aggregates
         {
             public interface IAggregateRoot { }
+        }
 
+        namespace MicroKit.Domain.Identifiers
+        {
             public interface IEntityId { }
+        }
 
+        namespace MicroKit.Persistence.Abstractions
+        {
             public interface IRepository<TAggregate, TId>
                 where TAggregate : IAggregateRoot
                 where TId : IEntityId

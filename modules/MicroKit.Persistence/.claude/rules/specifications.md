@@ -25,10 +25,14 @@ var opts = new QueryOptions<Order>(new OpenOrdersSpec())     // WHAT
     .WithIncludes(q => q.Include(o => o.Lines))              // HOW: eager loading
     .WithOrderByDescending(o => o.CreatedAt)                 //      ordering (Specifications package)
     .WithPagination(page: 1, pageSize: 20)                   //      pagination (validated: page ≥ 1, size ≥ 1)
-    .AsSplitQuery();                                         //      split collections
+    .AsSplitQuery()                                          //      split collections
+    .WithDeleted();                                          //      soft-deleted aggregates too (ADR-012)
+
+var feed = new QueryOptions<Order>(new OpenOrdersSpec())   // keyset instead of ordering + pagination (ADR-013)
+    .WithKeyset(KeysetPagination<Order>.OrderByDescending(o => o.CreatedAt) with { PageSize = 20, After = cursor });
 ```
 
-Untracked by default; `WithTracking()` opts out, `AsNoTracking()` restates the default.
+The read side never tracks: there is no tracking option (ADR-009).
 
 ## `ISpecificationEvaluator` lives in core
 
@@ -64,7 +68,7 @@ That is why core's delegate-based extension is `WithOrdering(Func<IQueryable<T>,
 
 ```
 ✅ Specification<T>: ToExpression() only
-✅ QueryOptions<T> for includes, ordering, pagination, tracking, split queries
+✅ QueryOptions<T> for includes, ordering, pagination, split queries (never tracking)
 ✅ ISpecificationEvaluator in core, EfSpecificationEvaluator in EntityFrameworkCore
 ❌ Include / OrderBy / Skip / Take inside a specification
 ❌ A specification that depends on EF Core or DbContext

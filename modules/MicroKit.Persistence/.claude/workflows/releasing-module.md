@@ -1,6 +1,6 @@
 # Workflow: Releasing the Module
 
-End-to-end release of the 8 MicroKit.Persistence packages. The root `/release Persistence`
+End-to-end release of the 10 MicroKit.Persistence packages. The root `/release Persistence`
 command runs the `release-manager` agent through these steps. ADR-GLOBAL-002 (root) governs; no
 tag is cut until steps 1–4 of its migration land.
 
@@ -8,7 +8,6 @@ tag is cut until steps 1–4 of its migration land.
 
 - [ ] On `main`, clean tree, CI green
 - [ ] `CHANGELOG.md` complete for the version
-- [ ] `MicroKit.Domain` published at the version `Directory.Packages.props` declares
 - [ ] ArchitectureTests present and green
 
 ## Steps
@@ -29,7 +28,7 @@ dotnet pack modules/MicroKit.Persistence/MicroKit.Persistence.slnx -c Release \
   -p:PackageVersion={version} -o artifacts/persistence/
 ```
 
-- 8 packages present
+- 10 packages present
 - Declared dependencies match `.claude/rules/packaging.md`; Analyzers has no `lib/`
 - Consumed from a local folder feed by a real consumer before any NuGet.org publish
 

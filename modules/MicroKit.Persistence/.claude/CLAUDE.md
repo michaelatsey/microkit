@@ -4,7 +4,7 @@
 
 An opinionated persistence layer for .NET 10: repository and Unit of Work contracts, an EF Core
 implementation, `QueryOptions` over `MicroKit.Domain` specifications, and Roslyn analyzers that
-keep the CQRS data-access split honest.
+keep the CQRS data-access split honest and flag costly query shapes.
 
 > The domain defines what is persisted; this module defines how. Command handlers load and stage
 > aggregates through `IRepository<TAggregate, TId>` and commit through `IUnitOfWork`; query
@@ -12,7 +12,7 @@ keep the CQRS data-access split honest.
 
 Consumer documentation: `README.md`. Every C# sample in it lives in, and builds from,
 `samples/MicroKit.Persistence.Samples`. Decisions: `.claude-context/context/architectural-decisions.md`
-(ADR-001 to ADR-008, DN-001, DN-002).
+(ADR-001 to ADR-015, DN-001, DN-002).
 
 ---
 
@@ -26,7 +26,7 @@ Consumer documentation: `README.md`. Every C# sample in it lives in, and builds 
 | Adding a provider | `workflows/adding-provider.md` | `implementer` → `ef-core-specialist` |
 | Adding a specification | `workflows/adding-specification.md` + `rules/specifications.md` | `implementer` |
 | EF Core concern (mapping, query, transaction) | `rules/ef-core-patterns.md` | `ef-core-specialist` |
-| Analyzer (MKP001–MKP005) | `rules/analyzers.md` | `analyzer-specialist` |
+| Analyzer (MKP001–MKP009) | `rules/analyzers.md` + ADR-014 | `analyzer-specialist` |
 | Performance concern | `rules/performance.md` + `.claude-context/standards/performance-budget.md` | `performance-reviewer` |
 | Public API change | `rules/abstractions.md` + `rules/naming.md` | `api-reviewer` |
 | `.csproj` / reference change | `rules/dependencies.md` + `.claude-context/context/dependency-graph.md` | `dependency-guardian` |
@@ -48,20 +48,25 @@ MicroKit.Persistence/
 │   │                                              ITransactionalContext, IPagedResult<T>, PersistenceException
 │   ├── MicroKit.Persistence/                      IReadRepository<T>, QueryOptions<T> + extensions,
 │   │                                              PaginationOptions, PaginationLimits, PagedResult<T>,
-│   │                                              ISpecificationEvaluator
+│   │                                              ISpecificationEvaluator; the Result path:
+│   │                                              IResultUnitOfWork, PersistenceErrors,
+│   │                                              AggregateVersionConflictException
 │   ├── MicroKit.Persistence.EntityFrameworkCore/  EfRepository, EfReadRepository, EfUnitOfWork,
 │   │                                              ITransactionalUnitOfWork, EfSpecificationEvaluator,
 │   │                                              EfDomainEventsProvider, DI builders, ProviderOptions,
 │   │                                              domain conventions (ids, Actor, audit instants)
-│   ├── MicroKit.Persistence.EntityFrameworkCore.PostgreSql/  UsePostgreSQL<TContext>
-│   ├── MicroKit.Persistence.EntityFrameworkCore.SqlServer/   UseSqlServer<TContext>
+│   ├── MicroKit.Persistence.EntityFrameworkCore.PostgreSql/  UsePostgreSQL<TContext>, PostgreSqlFailureClassifier
+│   ├── MicroKit.Persistence.EntityFrameworkCore.SqlServer/   UseSqlServer<TContext>, SqlServerFailureClassifier
 │   ├── MicroKit.Persistence.Specifications/       WithOrderBy/WithThenBy…, WithSpec
 │   ├── MicroKit.Persistence.Testing/              InMemoryRepository<TAggregate, TId>,
-│   │                                              InMemoryReadRepository<T>, InMemoryUnitOfWork
-│   └── MicroKit.Persistence.Analyzers/            MKP001–MKP005 (netstandard2.0, build-time only)
+│   │                                              InMemoryReadRepository<T>, InMemoryUnitOfWork, DockerProbe
+│   ├── MicroKit.Persistence.Testing.PostgreSql/   PostgreSqlFixture (Testcontainers, IAsyncDisposable)
+│   ├── MicroKit.Persistence.Testing.SqlServer/    SqlServerFixture (Testcontainers, IAsyncDisposable)
+│   └── MicroKit.Persistence.Analyzers/            MKP001–MKP009 (netstandard2.0, build-time only)
 ├── tests/
-│   ├── MicroKit.Persistence.UnitTests/            QueryOptions, pagination, in-memory doubles
-│   ├── MicroKit.Persistence.IntegrationTests/     SQLite + PostgreSQL (Testcontainers)
+│   ├── MicroKit.Persistence.UnitTests/            QueryOptions, pagination, PersistenceErrors, in-memory doubles,
+│   │                                              the container lifecycle and the Docker probe
+│   ├── MicroKit.Persistence.IntegrationTests/     SQLite + PostgreSQL + SQL Server (the Testing.* fixtures)
 │   ├── MicroKit.Persistence.ArchitectureTests/    NetArchTest layering + IL call scan (Mono.Cecil)
 │   └── MicroKit.Persistence.Analyzers.Tests/
 └── samples/MicroKit.Persistence.Samples/          README code, built in Release with the analyzers
@@ -74,16 +79,19 @@ There is no benchmark project and no performance-test project.
 ## Dependency Graph
 
 ```
-MicroKit.Persistence.Abstractions  ← MicroKit.Domain (cross-module, two-ItemGroup pattern)
+MicroKit.Persistence.Abstractions  ← MicroKit.Domain (cross-module, unconditional ProjectReference)
         ↑
-MicroKit.Persistence (core)        ← no package
+MicroKit.Persistence (core)        ← MicroKit.Result (cross-module, unconditional ProjectReference)
         ↑
 MicroKit.Persistence.EntityFrameworkCore  ← Microsoft.EntityFrameworkCore(.Relational),
         ↑                                   Microsoft.Extensions.DependencyInjection.Abstractions
 MicroKit.Persistence.EntityFrameworkCore.PostgreSql  ← Npgsql.EntityFrameworkCore.PostgreSQL
 MicroKit.Persistence.EntityFrameworkCore.SqlServer   ← Microsoft.EntityFrameworkCore.SqlServer
 MicroKit.Persistence.Specifications  ← core
-MicroKit.Persistence.Testing         ← core (no package)
+MicroKit.Persistence.Testing         ← core (no package; MicroKit.Result through core)
+        ↑
+MicroKit.Persistence.Testing.PostgreSql  ← Testcontainers.PostgreSql (no test framework, no EF Core)
+MicroKit.Persistence.Testing.SqlServer   ← Testcontainers.MsSql
 MicroKit.Persistence.Analyzers       ← Microsoft.CodeAnalysis.CSharp, PrivateAssets="all" (no project reference)
 ```
 
@@ -98,21 +106,46 @@ Abstractions + EntityFrameworkCore. Details: `.claude-context/context/dependency
 // Abstractions — write side
 IRepository<TAggregate, TId>   // TAggregate : class, IAggregateRoot; TId : IEntityId
     FindAsync(TId id, ct)      // whole aggregate, tracked
-    AddAsync(aggregate, ct) · DeleteAsync(aggregate, ct)   // stage only — no commit, no update
+    FindAsync(TId id, long expectedVersion, ct) · GetVersion(aggregate)   // ETag / If-Match (ADR-010)
+    AddAsync(aggregate, ct) · DeleteAsync(aggregate, ct)   // stage only — no commit, no update; DeleteAsync refuses a
+                               // root the repository neither loaded whole nor staged
 IUnitOfWork                    // CommitAsync(ct) · DiscardChanges()
 ITransactionalContext          // ExecuteAsync<TState>(op, state, ct) · ExecuteAsync<TState, TResult>(…)
 
+// Core — the Result path (ADR-011): conflicts as Result errors, converted after the rollback
+IResultUnitOfWork              // TryExecuteAsync(op, state, ct) ×2 · TryCommitAsync(ct) — EfUnitOfWork, InMemoryUnitOfWork
+PersistenceErrors              // PERSISTENCE.<ROOT>.<DUPLICATE|REFERENCE|CONCURRENCY>, category Conflict
+AggregateVersionConflictException  // inner of a version conflict a repository detects itself
+
 // Core — read side (the only read contract)
-IReadRepository<TAggregate>    // FindAsync(object[] keyValues) · ListAsync · ListPagedAsync · AnyAsync · CountAsync
-QueryOptions<TAggregate>       // Specification, Includes, Pagination, AsNoTrackingEnabled (default true),
-                               // AsSplitQueryEnabled, OrderBy
+IReadRepository<TAggregate>    // FindAsync(object[] keyValues) · ListAsync · ListPagedAsync · ListKeysetAsync
+                               // (each also with a projection selector) · AnyAsync · CountAsync — ADR-013
+QueryOptions<TAggregate>       // Specification, Includes, Pagination, AsSplitQueryEnabled, OrderBy,
+                               // IncludeDeleted (WithDeleted), Keyset (WithKeyset); no tracking option
+KeysetPagination<TAggregate>   // OrderBy/ThenBy[Descending] keys, PageSize, After; the root's key appended;
+                               // forward only. KeysetCursor: opaque token, ToString/TryParse; KeysetPage<T>
 PaginationLimits               // DefaultPageSize 50, MaxPageSize 500; ListPagedAsync applies the default
                                // page, ListAsync and ListPagedAsync reject a size above the maximum
 
 // EntityFrameworkCore
-EfRepository<TAggregate, TId, TContext>     // unsealed; protected virtual IncludeAggregate
+EfRepository<TAggregate, TId, TContext>     // unsealed; protected LoadAggregatesAsync(predicate, ct);
+                                            // refuses a tracked root it did not load whole (ADR-009)
 EfReadRepository<TAggregate, TContext>(context, evaluator, paginationLimits)  // unsealed
-EfUnitOfWork<TContext> : ITransactionalUnitOfWork   // = IUnitOfWork + ITransactionalContext
+EfUnitOfWork<TContext> : ITransactionalUnitOfWork, IResultUnitOfWork   // = IUnitOfWork + ITransactionalContext
+UseMicroKitPersistence()       // on DbContextOptionsBuilder: boundary convention + AggregateLoadRecord
+IsOutsideAggregate()           // on NavigationBuilder: reference data, outside the boundary
+AggregateVersion.PropertyName  // shadow long concurrency token on every root, bumped by every save
+                               // that writes its boundary (AggregateSaveInterceptor, ADR-010)
+HasAggregateErrorName(name)    // on EntityTypeBuilder: the <ROOT> of the PERSISTENCE codes (ADR-011)
+IDatabaseFailureClassifier     // provider error codes; PostgreSqlFailureClassifier, SqlServerFailureClassifier
+UseMicroKitPersistence(classifier)  // UsePostgreSQL / UseSqlServer pass theirs
+HasSoftDelete()                // on the root's EntityTypeBuilder: deleting the root marks the whole aggregate
+                               // (SoftDelete.PropertyName AggregateDeletedAt, FilterName MicroKit.SoftDelete — ADR-012)
+
+// Testing (ADR-015) — no test framework
+DockerProbe.IsAvailable        // Testing: GET /_ping answered 200; cached, never throws; BCL only
+PostgreSqlFixture, SqlServerFixture  // Testing.PostgreSql / .SqlServer: one container; StartAsync(ct) once, a caller's
+                               // token cancels only its wait · ConnectionString · GetConnectionString(database) · DisposeAsync
 ```
 
 Composition:
@@ -144,13 +177,14 @@ strategy (ADR-002). `IUnitOfWork` moved here from MicroKit.Domain (ADR-001).
 1. Commit through `IUnitOfWork.CommitAsync` only; no repository commits, and no public
    `SaveChangesAsync`.
 2. `IReadRepository` never commits or mutates (MKP001/MKP002).
-3. Read paths do not track: `EfReadRepository.FindAsync` returns an instance the context already
-   tracks as is and loads anything else untracked; list, any and count queries run untracked unless
-   `QueryOptions.WithTracking()`. The write-side `FindAsync` loads a tracked whole aggregate.
+3. Read paths never track and never consult the change tracker: every `EfReadRepository` method
+   runs `AsNoTracking()` and returns new instances. Only the write side tracks roots, and only
+   whole ones: `EfRepository` refuses a tracked root it did not load whole and that is not `Added`.
+   The boundary lives in the model only (`IsOutsideAggregate()`, no override) — ADR-009.
 4. `Specification<T>` stays in Domain; `ISpecificationEvaluator` and `QueryOptions` stay in core.
 5. No EF Core in Abstractions or core: no `DbContext`, `DbSet`, `IQueryable` in Abstractions.
 6. Library code never calls the parameterless `IgnoreQueryFilters()` (`IlCallScanTests`).
-7. `sealed` for UoW, evaluator, events provider and in-memory doubles; `EfRepository` and
+7. `sealed` for UoW, evaluator, events provider, in-memory doubles and the relational fixtures; `EfRepository` and
    `EfReadRepository` are unsealed base classes for typed repositories (`SealedClassTests`).
    `sealed record` for `QueryOptions`, `PagedResult`, `PaginationOptions`, `PaginationLimits`,
    `ProviderOptions`.
@@ -173,7 +207,7 @@ strategy (ADR-002). `IUnitOfWork` moved here from MicroKit.Domain (ADR-001).
 | `api-reviewer` | Opus | Public surface of Abstractions or core |
 | `performance-reviewer` | Sonnet | Query path, round trips, tracking, allocations |
 | `dependency-guardian` | Haiku | Any `.csproj` change — PASS/BLOCK |
-| `release-manager` | Sonnet | Release of the 8 packages |
+| `release-manager` | Sonnet | Release of the 10 packages |
 | `test-generator` | Sonnet | Shouldly + NSubstitute suites over the in-memory doubles |
 
 ---
@@ -184,7 +218,7 @@ strategy (ADR-002). `IUnitOfWork` moved here from MicroKit.Domain (ADR-001).
 
 ```
 .claude-context/
-├── context/architectural-decisions.md   ADR-001…ADR-008, DN-001, DN-002
+├── context/architectural-decisions.md   ADR-001…ADR-014, DN-001, DN-002
 ├── context/dependency-graph.md          project and package graph as declared
 ├── context/ecosystem-overview.md        position among MicroKit modules
 ├── standards/performance-budget.md      targets (no benchmark project yet)
@@ -196,6 +230,6 @@ strategy (ADR-002). `IUnitOfWork` moved here from MicroKit.Domain (ADR-001).
 ## Versioning
 
 A `persistence-v<semver>` tag triggers `.github/workflows/release-persistence.yml`, which stamps
-all 8 packages with the tag's version (`-p:PackageVersion`) and publishes them. `version.json`
+all 10 packages with the tag's version (`-p:PackageVersion`) and publishes them. `version.json`
 (`1.0.0-preview.3`) is not read by any build: Nerdbank.GitVersioning is not referenced.
 ADR-GLOBAL-002 (root) replaces this model; no tag is cut until steps 1–4 of its migration land.

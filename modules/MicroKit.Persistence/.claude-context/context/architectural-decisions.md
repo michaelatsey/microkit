@@ -121,6 +121,13 @@ pagination, split queries). The two types are separate and never merged.
   `ConfigurePagination`) makes `ListPagedAsync` without pagination return the default page instead
   of the whole result set, and rejects — never clamps — a larger page. This supersedes DN-002.
 
+### Amendment — #197 phase 1 (2026-11-09)
+
+Tracking leaves `QueryOptions<T>`: `AsNoTrackingEnabled`, `WithTracking()` and `AsNoTracking()` are
+removed, and `QueryOptions` is the loading strategy of the read side only (includes, split query,
+ordering, pagination). The read side never tracks (ADR-009); read "whether to track" out of the
+rationale above.
+
 ---
 
 ## ADR-003: Abstractions Minimality Rule
@@ -161,6 +168,11 @@ NOT in Abstractions:
 - Consumers that want `QueryOptions<T>` depend on Core, not just Abstractions — this is expected
   and acceptable (most consumers will want both).
 - The `dependency-guardian` agent checks this on every `.csproj` change.
+
+### Amendment — #197 phase 4 (2026-11-09)
+
+The evaluation order gains a step 0: `QueryOptions.IncludeDeleted` ignores the soft-delete filter only
+(`IgnoreQueryFilters([SoftDelete.FilterName])`), before the criteria — ADR-012 §8.
 
 ### Amendment — #196 D8, D9, D10, D12, D17 (2026-11-08)
 
@@ -500,7 +512,11 @@ choice. All 8 packages share one version — whichever number is chosen, all 8 r
    a transaction the caller opened — `ExecuteAsync` runs the operation directly: no execution
    strategy (a retrying one throws on an existing transaction, `ExecutionStrategy.OnFirstExecution`),
    no begin, commit or rollback, no translation. The transaction's owner commits, rolls back,
-   retries and translates. An ambient `System.Transactions` transaction is not joined.
+   retries and translates. An ambient `System.Transactions` transaction is rejected, as EF Core
+   rejects it (#197 phase 3, pinned by tests): with a retrying strategy, `OnFirstExecution` raises
+   `ExecutionStrategyExistingTransaction`; without one, `BeginTransactionAsync` raises
+   `ConflictingAmbientTransaction`. A distributed transaction is not a consistency mechanism between
+   services: they go through the outbox.
 4. **Failed attempt (D5).** The rollback runs with `CancellationToken.None`; rollback and dispose
    failures are swallowed, so the exception in flight is never replaced. The change tracker is then
    cleared: the database was rolled back, so a retried attempt must start from a clean tracker
@@ -576,6 +592,15 @@ choice. All 8 packages share one version — whichever number is chosen, all 8 r
   fast where EF Core fails (an `Id` of another type, a duplicate `AddAsync`).
 - Tests: `EfRepositoryAggregateLoadTests` (SQLite and PostgreSQL).
 
+### Amendment — #197 phase 1 (2026-11-09)
+
+`IncludeAggregate` is no longer `protected virtual`: it is private, and the boundary is read from the
+model only. Reference data leaves the boundary through `IsOutsideAggregate()` on its navigation, not
+through an override; a typed finder loads through `protected LoadAggregatesAsync(predicate)`.
+`FindAsync` returns a tracked root as is only when the repository loaded it whole or it is `Added`
+(ADR-009). The consequence "`IncludeAggregate` overrides both" no longer holds: a self-referencing
+child is still followed one level only, and there is no per-repository override.
+
 ---
 
 ## ADR-008: MicroKit.Domain Mapping Conventions (#196 D13, D14)
@@ -618,6 +643,785 @@ Scope is limited to audit instants: other `DateTimeOffset` properties keep their
   can be done later.
 - `IEntityId` record structs other than `GuidId` still need a hand-written converter.
 - Tests: `DomainConventionTests`, `DomainConventionModelTests`, `AuditInstantNormalisationTests`.
+
+---
+
+## ADR-009: The Aggregate Boundary Lives in the Model; Only Whole Roots Are Tracked (#197 phase 1)
+
+**Status:** Accepted
+**Date:** 2026-11-09
+**Source:** Issue #197, phase 1. Amends ADR-002 and ADR-007; reverses #196 D2.
+
+### Decision
+
+1. **Activation.** `DbContextOptionsBuilder.UseMicroKitPersistence()` adds an internal
+   `IDbContextOptionsExtension` that registers MicroKit's services in the context's internal service
+   provider: a convention-set plugin (an EF Core `IConventionSetPlugin`, through `TryAdd`) and a
+   scoped `AggregateLoadRecord` (through `TryAddProviderSpecificServices`, as it is not an EF Core
+   service), also registered as EF Core's `IResettableService` (through `TryAdd`) so a pooled context
+   resets it. `AddDbContext`, `UsePostgreSQL` and `UseSqlServer` call it. Repository constructors are
+   unchanged. The extension has no options: its `ExtensionInfo` returns hash 0 and shares the service
+   provider with any other instance of itself; an option added later must take part in both.
+2. **The boundary lives in the model, and only there.** Default: #196 D10's derivation (every
+   navigation to a non-`IAggregateRoot` type, recursively). `IsOutsideAggregate()` on a
+   `NavigationBuilder` sets the annotation `MicroKit:OutsideAggregate` (`bool`, code-generatable) and
+   excludes the navigation. `IncludeAggregate` is private: no repository redefines the boundary.
+3. **A child has one root.** A model-finalizing convention walks every top-most root's boundary and
+   fails model building, naming the type and the roots, when a non-root, non-owned entity type — or a
+   derived type of one — is reached from two roots. Each ownership of an owned type is its own entity
+   type and is never shared. The convention writes no annotation; the include plan stays computed from
+   the runtime model and cached per `IEntityType`.
+   **Uniqueness also holds per row** (Spec amended 2026-11-09T14:50Z): a navigation brings a non-root
+   entity into the boundary only if each of its rows can belong to one parent row — a collection or a
+   reference whose child holds the foreign key, or a reference whose parent holds a **unique** foreign
+   key (one-to-one). A many-to-one reference held by the parent that reaches a non-root entity fails
+   model building, naming the navigation and the fix: make the target an aggregate root, or mark the
+   navigation `IsOutsideAggregate()`. A skip navigation (many-to-many) declared by a type inside a
+   boundary fails model building **whatever its target**, root or not, unless it is marked
+   `IsOutsideAggregate()` (on either side: a unidirectional one has a hidden inverse). The fix it names is
+   an explicit link entity, a child of the root (`HasMany(o => o.TagLinks)`, the foreign key on the
+   link, the link referencing the other root): the links are loaded, versioned and removable like any
+   child, without tracking the other root, which loads whole through its own repository. A skip
+   navigation marked outside is neither loaded nor versioned; its join rows lie outside every
+   boundary.
+4. **Only whole roots are tracked through the write side.** The record holds, by reference, the roots
+   `EfRepository` loaded with the whole plan:
+   - a root the repository's load **returned**, once that load has **completed**, and only if it was
+     tracked `FromQuery` during that load, enters it — a load that fails midway records nothing, and a
+     root the model auto-includes without its own aggregate (same hierarchy included) is never
+     recorded;
+   - a root staged by `EfRepository.AddAsync` enters it: the application built it whole, and it stays
+     returnable once the commit makes it `Unchanged`. A root added directly on the context
+     (`DbContext.Add`, `DbSet.Add`) is not recorded: it is returned while `Added`, refused once
+     committed. The Spec's first text admitted only roots tracked `FromQuery` during the repository's
+     own load, which refused an aggregate added, committed and found again in the same context (code
+     review of phase 1); that deviation is closed by the 2026-11-09 amendment;
+   - any other `ChangeTracker.Tracked` event of a root, and a change to `Detached`, removes it;
+   - `DiscardChanges` and a failed `ExecuteAsync` attempt reset it (`ChangeTracker.Clear` raises no
+     event), and so does the pool. Roots are held weakly (`ConditionalWeakTable`, by reference): after
+     a `Clear()` the application calls itself, nothing recorded keeps a graph alive;
+   - every load subscribes again, idempotently, because returning a context to its pool drops every
+     change-tracker handler.
+   `FindAsync` and `LoadAggregatesAsync` refuse, with an `InvalidOperationException` naming the root
+   type, a tracked root that is neither recorded nor `Added`. `LoadAggregatesAsync` checks the roots
+   **after** its query: identity resolution returns an already-tracked partial root without a
+   `Tracked` event. `IsLoaded` is not used: a filtered `Include` marks a navigation loaded.
+5. **The read side never tracks** and never consults the change tracker. `EfReadRepository`'s five
+   methods run `AsNoTracking()` — re-applied after the evaluator, so a delegate cannot opt back in —
+   and return new instances. This reverses #196 D2 ("a tracked instance is returned as is"). It also
+   departs from the Spec's first text, which had `EfReadRepository.FindAsync` and `ListAsync` refuse
+   an unrecorded tracked root; the Spec was amended on 2026-11-09 to match: a read that never returns
+   a tracked instance cannot hand out a partial one, so a refusal there would only make reads fail.
+   The refusal applies to the write side only, identity resolution included.
+6. **An owned navigation is never outside the aggregate.** `IsOutsideAggregate()` on an ownership
+   navigation fails model building: EF Core loads an owned entity with its owner anyway, and skipping
+   it would only drop its own navigations from the load and from the one-root check.
+
+### Rationale
+
+A partial aggregate reaching a command breaks every later guarantee built on the boundary
+(concurrency per aggregate, soft delete of the whole boundary — #197 phases 2 and 4). A typed finder
+taking a predicate, not a query, cannot narrow the load. The read side returning the tracked
+instance was a way for a query to observe — and for a command to depend on — a partial aggregate;
+with the read side untracked, only the write side can hand out a tracked root, and it hands out
+whole ones only.
+
+### Consequences
+
+- A context not configured with `UseMicroKitPersistence()` cannot use `EfRepository`; the error says
+  so. `EfReadRepository` and `EfUnitOfWork` work without it.
+- Known limit: between a pool reset and the next load, an attach is not observed; the record is
+  empty then, so nothing recorded can be attached unseen.
+- `ITransactionalUnitOfWork`, `EfUnitOfWork`'s public surface, `IUnitOfWork`, `ITransactionalContext`,
+  `PersistenceException`, `AddMicroKitPersistence` and `AddUnitOfWork` are unchanged.
+- Tests: `AggregateBoundaryTests` (PostgreSQL and SQL Server), `EfReadRepositoryFindTests`,
+  `EfReadRepositoryTrackingTests`, `EfRepositoryAggregateLoadTests`.
+- **`DeleteAsync` (Spec phase 1, amended after the PR #200 review).** It refuses, with an
+  `InvalidOperationException` naming the root type and before any SQL, a root that is neither recorded nor `Added`:
+  an instance the repository did not load would reach the database with an unknown version (the token's original
+  value is whatever the instance carries, 0 for one built by hand) and surface as a false concurrency conflict.
+  Pinned with and without `HasSoftDelete()` (`SoftDeleteTests`).
+
+---
+
+## ADR-010: Application-Managed Aggregate Version (#197 phase 2)
+
+**Status:** Accepted
+**Date:** 2026-11-09
+**Source:** Issue #197, phase 2. Builds on ADR-009 (one root per child, the loaded-root record).
+
+### Decision
+
+1. **The token.** A model-finalizing convention, first among the finalizing conventions (EF Core's
+   table-sharing concurrency convention must see it), adds a shadow `long` property
+   `AggregateVersion` with `IsConcurrencyToken()` to every top-most aggregate root. Only the name is
+   reserved: no column name is set, so a naming convention or the application's `HasColumnName` /
+   `HasColumnType` applies. Model building fails, naming the root, when the property is mapped to a
+   CLR member, is not `long`, is no longer a concurrency token, is given a default value (or SQL), a
+   computed column, value generation, a value converter or a provider type (the save step alone writes
+   it; added in the #197 phase 4 review, as for the soft-delete mark), or shares its column with another
+   property of a table that stores it — the root's, or each concrete type's under TPC, whose abstract base
+   has no table; only the entity types mapped to that table count, and two roots under one mapped TPH base
+   that is no root share their version column. No change to `MicroKit.Domain`.
+2. **The bump.** A `SaveChanges` step sets the token of every root whose boundary has an `Added`,
+   `Modified` or `Deleted` entity, the root included: 1 on insertion; original + 1 otherwise,
+   computed from the original value so a repeated save never adds twice; a `Deleted` root keeps its
+   original, which its `DELETE` checks. A root whose only change is a child is written for its token
+   alone (`UPDATE … SET AggregateVersion WHERE AggregateVersion = @original`), so a change confined to
+   a child conflicts — which a native `xmin`/`rowversion` would not.
+3. **Attaching a child to its root** goes through the boundary of ADR-009 (`AggregateBoundaryMap`,
+   built from the phase-1 walk): a dependent child by its original foreign key when deleted or moving
+   out, by its current one otherwise; a child the parent references (the parent holds the FK) by the
+   parents' original **or** current foreign key, so a child replaced or deleted in the same save still
+   finds its root; a skip navigation through its join entity. Lookups use the public change-tracker
+   API only (an index over `ChangeTracker.Entries()` per save).
+4. **Refusals.** A child moving between two aggregates bumps both and requires both to be recorded
+   (ADR-009); otherwise the save fails naming the roots. A changed child inside a boundary whose root
+   is not tracked fails the save — including a move to or from an aggregate whose root is not
+   tracked (a foreign key pointing to an untracked parent leaves that side unresolved). An entity outside every boundary (outbox and inbox rows, reference
+   data, an `IsOutsideAggregate()` target no root reaches otherwise) is ignored.
+5. **Across requests.** `IRepository.GetVersion(aggregate)` reads the token; `FindAsync(id,
+   expectedVersion)` loads as `FindAsync(id)` and makes `expectedVersion` the token's original value,
+   so the check runs in the commit's `UPDATE`, never as a read-then-compare. A command stating the
+   current version and changing nothing writes nothing; a stale version conflicts even then (EF Core
+   sees original ≠ loaded and writes the token). `AggregateVersion.PropertyName` serves projections.
+   The in-memory double checks the expected version at the find. A staged root not inserted yet has
+   version 0 and its `INSERT` checks nothing, so for it the expectation is checked at the find.
+   A save that fails or is canceled undoes its bumps (`SaveChangesFailed`, `SaveChangesCanceled`), so
+   `GetVersion` never reports a version that was not committed.
+7. **The version API is on `IRepository` (Abstractions).** Chosen over an EF-only
+   `EfRepository.GetVersion`/`ExpectVersion` and over a separate `IAggregateVersions` service: a
+   command handler injects only its repository, typed or not, and the ETag flow needs no EF Core
+   type. Cost: every implementation of the contract must support versions; the in-memory double
+   cannot see mutations, so it never bumps on its own (`SetVersion` for tests) and checks the
+   expectation at the find, which the contract allows.
+6. **One save pipeline.** `AggregateSaveInterceptor` (registered by `UseMicroKitPersistence()` as an
+   EF Core `IInterceptor`) is MicroKit's single `SaveChanges` entry point. It detects changes first —
+   `SavingChanges` runs before EF Core's own `DetectChanges` (step-0 spike) — then runs its steps in
+   a fixed order in code, never left to EF Core's interceptor order. The version step is always last:
+   #197 phase 4 inserts its soft-delete conversion (a `Deleted` root becomes `Modified`) in front of it,
+   so a soft-deleted root is bumped like any modified one — done: `AggregateSoftDeleteStep`, ADR-012.
+8. **The database never changes an aggregate on behalf of something outside it** (Spec Phase 2,
+   amended 2026-11-09). `AggregateReferenceConvention` (after the boundary convention) gives
+   `DeleteBehavior.Restrict` to every foreign key whose dependent lies in an aggregate (a root, or an
+   entity inside a boundary) and that is not one of the boundary's own links (a child's key to its
+   parent, an ownership, a one-to-one): a reference to another root — of any type — or to an entity
+   outside every boundary. It replaces EF Core's `Cascade` default for a required relationship
+   ([Learn](https://learn.microsoft.com/ef/core/saving/cascade-delete#configuring-cascading-behaviors)).
+   An explicit `Cascade` or `SetNull` on such a key fails model building, naming it: deleting a `Tag`
+   would otherwise delete or modify rows of `Order` aggregates without bumping them. Other explicit
+   behaviours are kept; relationships inside one boundary keep theirs. Existing cross-aggregate keys
+   change from `CASCADE` to `RESTRICT` (`NO ACTION` on SQL Server): a migration.
+
+### Consequences
+
+- Every root's table needs a migration: a `NOT NULL` column, scaffolded with `defaultValue: 0L`;
+  existing rows start at 0 and their first change takes them to 1.
+- **A failed save writes no version.** The bumps of a save are undone when it fails, is canceled, or conflicts:
+  EF Core raises `ThrowingConcurrencyException` (not `SaveChangesFailed`) before it throws a
+  `DbUpdateConcurrencyException`, and the interceptor undoes there too, returning the result unchanged (PR #200
+  review). After a `CONCURRENCY` result `GetVersion` reads the loaded version, so a retry that states it commits
+  exactly that version + 1 (`PersistenceResultTests`).
+- **Known limit — bulk writes bypass the version.** `ExecuteUpdate`, `ExecuteDelete` and raw SQL do
+  not go through the change tracker: they write an aggregate's rows without bumping its version and
+  without conflicting with a concurrent command.
+- **Known limit — application interceptors.** EF Core runs interceptors registered in the internal
+  service provider (MicroKit's) before those added with `AddInterceptors` (pinned by
+  `AnInterceptorAddedByTheApplication_RunsAfterTheVersionStep`): a change an application interceptor
+  makes during `SavingChanges` is not bumped. MicroKit's own steps keep their fixed order.
+- **No shared rows.** ADR-009's per-row uniqueness (amended 2026-11-09) refuses, at model building, the
+  shapes through which one row could sit inside several aggregate instances (a many-to-one reference
+  held by the parent to a non-root; any many-to-many navigation inside a boundary not marked outside).
+  A principal-side child is therefore a one-to-one with a unique foreign key, and a change to it bumps
+  its single root. Links an aggregate owns are a link entity, a child: adding or removing one bumps the
+  root; a skip navigation marked outside is not versioned.
+- Keys are matched with EF Core's key value comparers (`IProperty.GetKeyValueComparer()`), so a
+  `byte[]` key or a key with a custom comparer resolves like the change tracker resolves it.
+- A delete is version-checked: `DeleteAsync` then a commit fails when another command changed the
+  aggregate since it was loaded.
+- A conflict stays a `PersistenceException` wrapping `DbUpdateConcurrencyException` (frozen); its
+  typed form is the `CONCURRENCY` error of ADR-011. A conflict a repository detects itself (a staged
+  root found with an expected version other than 0, the in-memory double's check at the find) is a
+  `PersistenceException` wrapping `AggregateVersionConflictException` (phase 3; it derives from the
+  `InvalidOperationException` it was).
+- Other modules that use `UseMicroKitPersistence()` get the column on their roots and adapt during
+  their own upgrade.
+- Tests: `AggregateVersionTests` (PostgreSQL and SQL Server), `InMemoryRepositoryVersionTests`.
+
+---
+
+## ADR-011: Persistence Failures as `Result` Errors, Converted After the Rollback (#197 phase 3)
+
+**Status:** Accepted
+**Date:** 2026-11-09
+**Source:** Issue #197, phase 3 (Spec amended 2026-11-09: placement, a failed `Result` rolls back,
+SQL Server 547). Builds on ADR-006 (transactions), ADR-009 (one root per entity type) and ADR-010
+(versions).
+
+### Decision
+
+1. **Three failures, one category.** Unique-constraint violations (`DUPLICATE`), foreign-key
+   violations (`REFERENCE`) and concurrency conflicts (`CONCURRENCY`) map to `MicroKit.Result` errors
+   of category `Conflict`, built with `Error.Conflict(code, message)`. Every other failure keeps
+   throwing `PersistenceException` (sealed, frozen); `IUnitOfWork.CommitAsync` and
+   `ITransactionalContext` are unchanged, and no member is added to them.
+2. **Placement.** The contract (`IResultUnitOfWork`: `TryExecuteAsync` ×2, `TryCommitAsync`), the codes
+   and messages (`PersistenceErrors`) and the version-conflict marker
+   (`AggregateVersionConflictException`) live in `MicroKit.Persistence` (core), which gains the
+   `MicroKit.Result` reference; `MicroKit.Persistence.Abstractions` still does not reference it (#196
+   D17). A handler depends on the contract without referencing EF Core. `EfUnitOfWork` implements it;
+   so does `InMemoryUnitOfWork`, using the same codes and marker — no copy. The names differ from
+   `ExecuteAsync`/`CommitAsync` on purpose: an `ExecuteAsync` overload taking `Task<Result>` would
+   capture existing callers of `ExecuteAsync<TState, TResult>` on their next compile.
+3. **Codes.** `PERSISTENCE.<ROOT>.<REASON>`. `<ROOT>` is the error name of the failing entity's
+   top-most aggregate root, found from the entity type alone through `AggregateBoundaryMap` (ADR-009
+   makes it unique; the tracker is already cleared by the rollback). The default is the simple CLR name
+   in UPPER_SNAKE (`PersistenceErrors.DefaultErrorName`); `HasAggregateErrorName` fixes it (annotation
+   `MicroKit:ErrorName`, resolved by `AggregateErrorNameConvention`). Model building fails on two roots
+   with one name, on the annotation on a type that is not a top-most root, and on an invalid default
+   name. Failing entries spread over several roots, or outside every boundary, or no entries at all,
+   give `PERSISTENCE.<REASON>`: a root is never guessed. The messages are fixed and client-safe — no
+   table, constraint or column name; the provider exception stays in EF Core's log.
+4. **Recognition, never by message.** An internal mapper (EntityFrameworkCore) reads the exception
+   chain: `DbUpdateConcurrencyException` or `AggregateVersionConflictException` → `CONCURRENCY`; a
+   `DbUpdateException` over a `DbException`, or a bare `DbException`, classified by the context's
+   `IDatabaseFailureClassifier` → `DUPLICATE`/`REFERENCE`; a chain holding a
+   `RetryLimitExceededException` → never. The classifiers live in the provider packages
+   (`PostgreSqlFailureClassifier`: SQLSTATE `23505`, `23503`; `SqlServerFailureClassifier`: `2627`,
+   `2601`, `547`), so `MicroKit.Persistence.EntityFrameworkCore` references neither Npgsql nor SqlClient;
+   `UsePostgreSQL`/`UseSqlServer` configure them, and `UseMicroKitPersistence(classifier)` serves any
+   other configuration. The classifier is read from the context's options, not from a service, so it
+   takes no part in the internal service provider's key.
+5. **SQL Server 547** is a foreign-key or a check violation. It is decided from the model only: it maps
+   to `REFERENCE` when no entity type mapped to the failing entries' tables declares a check constraint
+   (`GetCheckConstraints()`, on the design-time model); otherwise, or with no failing entries, it is not
+   converted. A check constraint that exists only in the database is a documented limit. PostgreSQL's
+   `23514` is never converted.
+6. **Convert at the owner, after the rollback.** EF Core rolls a failed `SaveChanges` back to its own
+   savepoint and leaves the transaction usable
+   ([Learn](https://learn.microsoft.com/ef/core/saving/transactions#savepoints)): a failure converted
+   inside the operation would let it return normally, and the owner would commit what the transaction
+   wrote before — an earlier flush, an `ExecuteUpdate`, raw SQL, outbox rows.
+   - `TryExecuteAsync` owning the transaction runs the operation through `ExecuteAsync`'s own core
+     (strategy, transaction per attempt, transient retries, tracker cleared after a failed attempt) and
+     converts a `PersistenceException` only once that core has thrown, i.e. after the rollback and once
+     the strategy gave up. Unconverted failures propagate unchanged.
+   - Joined to an open transaction, it runs the operation inside it and converts nothing: the exception
+     reaches the owner, which rolls back; a failed `Result` returns unchanged and the owner decides.
+   - `TryCommitAsync` is for code with no open transaction (a flush is atomic by itself); inside one it
+     throws `InvalidOperationException`.
+   - No mutable rollback-only flag exists: nothing can be converted while the transaction is alive.
+7. **A failed `Result` the operation returns** is a business failure, not a persistence one: it is
+   returned unchanged, and when `TryExecuteAsync` owns the transaction it rolls it back instead of
+   committing, so a failed command never persists part of its work. The rollback uses an internal
+   non-transient sentinel thrown inside the strategy's delegate and caught after the strategy returns —
+   no flag; provider strategies retry provider exceptions only, so it is not retried (a custom strategy
+   retrying every exception would re-run the operation: documented). The tracker is cleared, as after
+   any failed attempt.
+8. **The in-memory double** mirrors the rules: an operation of `TryExecuteAsync` stands for the
+   transaction; the commits it makes count only on success; `AggregateVersionConflictException` from
+   `InMemoryRepository` becomes `CONCURRENCY` with the default name; a nested call converts nothing;
+   `TryCommitAsync` is refused inside an operation. It cannot roll its store back and has no model
+   (`HasAggregateErrorName` is unknown to it).
+9. **Ambient transactions** stay rejected, as EF Core rejects them (ADR-006 D4, amended).
+
+### Consequences
+
+- Model building fails on a root-name clash: a break for models with two roots of one simple name.
+- `MicroKit.Persistence` (core) depends on `MicroKit.Result`; the root graph already allowed
+  Persistence → Result.
+- A context without a classifier converts concurrency conflicts only.
+- `IResultUnitOfWork` does not extend `IUnitOfWork`: the operation flushes with `CommitAsync`, so a
+  handler injects both contracts (both implementations implement both).
+- MicroKit.MediatR's `TransactionBehavior` owns the transaction (`ExecuteAsync`), so inside its pipeline
+  `TryExecuteAsync` is joined and converts nothing, and `TryCommitAsync` is refused. MicroKit.MediatR
+  adopts the `Result` path during its own upgrade (Spec perimeter: no change, no issue here).
+- The in-memory double converts only its version conflicts, and only inside `TryExecuteAsync` (it checks
+  at the find); it never returns `DUPLICATE` or `REFERENCE`.
+- Tests: `PersistenceResultTests` (PostgreSQL and SQL Server), `InMemoryResultUnitOfWorkTests`,
+  `PersistenceErrorsTests`, `ContractPlacementTests`, `LayerDependencyTests`.
+
+---
+
+## ADR-012: Soft Delete of Whole Aggregates (#197 phase 4)
+
+**Status:** Accepted
+**Date:** 2026-11-09
+**Source:** Issue #197, phase 4. User decisions 2026-11-09: the mark is `DateTimeOffset? AggregateDeletedAt`;
+the opt-in is `HasSoftDelete()`; every tracked entry of the boundary is marked, whatever its state; owned
+entries are restored without a mark; the mark is `TimeProvider.GetUtcNow()`; a required relationship that
+does not cascade is refused at model building; a key into the aggregate from outside it is
+`ClientNoAction`. Builds on ADR-009 (one root per entity type, the loaded-root
+record) and ADR-010 (one save pipeline, the version step last).
+
+### Decision
+
+1. **Opt-in per aggregate, in the model.** `HasSoftDelete()` sets the annotation `MicroKit:SoftDelete` on a
+   top-most root; anywhere else model building fails. `MicroKit.Domain` is unchanged.
+2. **The mark and the filter.** `SoftDeleteConvention` (a finalizing convention, second after the version
+   convention so naming conventions apply) gives the root type of every hierarchy of the aggregate — the
+   root's and those the boundary walk reaches; an owned type follows its owner — the shadow
+   `DateTimeOffset? AggregateDeletedAt` and the named filter `MicroKit.SoftDelete`
+   (`EF.Property<DateTimeOffset?>(e, "AggregateDeletedAt") == null`). A hierarchy root is the only place EF
+   Core accepts a filter — a mapped base type that is no aggregate root included. Named filters already
+   there are kept. The name is reserved like the version's (CLR member, type, a column shared with another
+   property of a table that stores the mark — each concrete type's under TPC — except the mark of another
+   type of the same aggregate split onto the same table), and only
+   its column may be configured: a required mark, a default or computed value, value generation or a
+   converter fails model building (a default would make every new row deleted).
+3. **Model refusals.** An anonymous filter on an entity of the aggregate fails model building, naming the
+   entity and the fix (name the other filter): EF Core 10 rejects an anonymous filter combined with a named
+   one. A required foreign key between two entity types of the aggregate (ownership keys aside) configured
+   `Restrict`, `NoAction`, `ClientSetNull` or `SetNull` fails model building, naming the key and the fix
+   (`Cascade`, or `ClientCascade`), whether or not a navigation of the boundary walk reaches it: under EF
+   Core's default `Immediate` cascade timing, `Remove(root)` throws for such a key at once ("the
+   association … has been severed", pinned by `SoftDeleteFoundationTests`), inside `DeleteAsync`, before
+   any save step can run. Keys count through inheritance: one a member inherits from a mapped base type, and
+   one whose principal is a mapped base type of a member (a base of the root holding its collection). A key
+   declared on a mapped base type of a child that is not itself in the boundary is a key from outside (below):
+   an explicit behaviour on it fails there. `Cascade`, `ClientCascade` and `ClientNoAction` are accepted; `ClientNoAction`
+   leaves the child untouched, so the step marks it (a required `ClientNoAction` child is tested on both
+   servers).
+   - **A key into the aggregate from outside it** — its principal is the root or an entity of its boundary,
+     its dependent another aggregate or an entity outside every boundary, join rows of a many-to-many marked
+     `IsOutsideAggregate()` included — is `DeleteBehavior.ClientNoAction` by convention
+     (`AggregateReferenceConvention`), replacing ADR-010's `Restrict` for those keys; an explicit other
+     behaviour fails model building, naming the key. Reason: a soft-deleted principal is never deleted, and
+     with any other behaviour EF Core reacts to `Remove(root)` on a *tracked* dependent only — nulls an
+     optional key and writes `NULL`, throws for a required one, deletes a cascading one. The database
+     constraint stays a no-action one (`NO ACTION`; on PostgreSQL `RESTRICT` becomes `NO ACTION`: a
+     migration); a real delete of a referenced child still fails in the database, and the `Result` path
+     returns `REFERENCE`.
+4. **When the step runs** (EF Core 10 source, `release/10.0`). `DbContext.SaveChangesAsync` runs the
+   `SaveChangesStartingAsync` interceptors, then `TryDetectChanges`, then `StateManager.SaveChangesAsync`;
+   only there does `GetEntriesToSave(cascadeChanges: true)` call `CascadeChanges`, which first handles
+   conceptual nulls (`HandleConceptualNulls`, which throws for a required key that is not cascading) and
+   then runs `CascadeDelete` for every entry still `Deleted`. So when the step runs, a boundary child may
+   still be `Unchanged` (`ClientNoAction`; `CascadeDeleteTiming` or `DeleteOrphansTiming`
+   `OnSaveChanges`), already `Deleted` (`Immediate` cascade), `Modified` with a nulled foreign key
+   (`ClientSetNull`), or carry a conceptual null. Pinned by `SoftDeleteFoundationTests` (SQLite, without
+   MicroKit): a `SavingChanges` interceptor sees `Unchanged`, `Modified` or `Deleted` per configuration.
+5. **The step.** `AggregateSoftDeleteStep`, before the version step:
+   - the soft-deleted roots are the `Deleted` top-most roots of opted-in aggregates; one the record does not
+     hold (ADR-009) fails the save — its untracked entities could not be marked;
+   - **every tracked entry** of their boundaries is marked, whatever its state. An entry's root is resolved
+     through the boundary map by its **current** keys first — even for a `Deleted` entry (a child moved
+     into the deleted root and cascaded with it is marked; one moved out to a live root and removed there is
+     a real delete) — and by its original keys only when its current keys name no tracked root (a key EF
+     Core nulled, a child let go). For a principal-side child, only the parent whose current (or, in the
+     fallback, original) key names it counts: a contact the deleted root let go and a live root took is not
+     marked. A conceptual null still reads the original value, so the current key finds the root.
+     Everything is computed before anything is changed;
+   - for each marked entry: a nulled foreign key gets its original value back, and writing the value also
+     clears a conceptual null (`PropertyEntry.CurrentValue = original`, pinned); a `Deleted` entry becomes
+     `Unchanged`, and every property whose value differs from its original is flagged modified again, so a
+     change made before the delete is written; then the mark is set. An `Added` entry is inserted marked;
+   - an **owned** entry of a marked entity (its owner chain) has no mark column: it is restored the same way
+     without a mark, while its owner still holds it — otherwise a table-split `OwnsOne` would be written as
+     an `UPDATE` that nulls its columns, and an `OwnsMany` in its own table would be deleted. An owned value
+     the command replaced or removed stays deleted; one it added, which `Immediate` cascade timing detached
+     on `Remove(root)`, is tracked again as `Added` with its owner's key, so the replacement is written;
+   - complex properties are re-flagged too, so a value-object change made before the delete is written
+     even with automatic change detection off;
+   - **the mark** is `TimeProvider.GetUtcNow()` — offset zero, which Npgsql requires for `timestamptz` —
+     one instant per save shared by every entry, from the context's application services
+     (`CoreOptionsExtension.ApplicationServiceProvider`), else `TimeProvider.System`;
+   - no entry of the boundary is left `Deleted`, so `CascadeChanges` finds nothing to cascade or reject for
+     it; the version step then bumps the root, now `Modified`, and checks it (`WHERE AggregateVersion = @original`).
+6. **After the commit** the marked and restored entities still tracked are detached and the root leaves the
+   record, as a hard delete detaches — **once the save accepted its changes**. EF Core 10 runs
+   `AcceptAllChanges` inside `StateManager.SaveChangesAsync`, before `SaveChangesCompleted` (the
+   `SavedChanges` interceptors), and only when `acceptAllChangesOnSuccess` is `true` (`DbContext.cs`,
+   `StateManager.cs`, `release/10.0`). After `SaveChanges(acceptAllChangesOnSuccess: false)` — the pattern of
+   a save retried by hand in a transaction (Learn: connection resiliency, execution strategies and
+   transactions) — the marked entries are still `Added` or `Modified`: they stay tracked and the root stays
+   recorded, so the save retried after a rollback writes the mark (tested on both servers). Acceptance covers
+   a whole save, so the decision is all or none: while any of them is still changed, none is detached; the
+   time they are all `Unchanged` — after a save that accepts, or after `AcceptAllChanges()` (EF Core's
+   resilient pattern: `SaveChanges(false)`, commit, `AcceptAllChanges()`, which raises no `SavedChanges`) — they
+   are detached: after every successful save, and before `EfRepository.FindAsync` and `LoadAggregatesAsync`
+   look for a root, so the write side never returns the soft-deleted root (tested on both servers). The list lives on the scoped `AggregateLoadRecord` and is cleared with
+   it (`DiscardChanges`, a failed `ExecuteAsync` attempt, a pooled lease's reset), so nothing of a cleared
+   tracker is ever detached later. A failed save leaves the entries marked and `Modified`: a later save in
+   the same scope writes those marks as they are (the step does not run again, and an entity attached to
+   the aggregate in between is not marked).
+7. **What stays a real delete:** a child removed from an aggregate that stays alive, an aggregate without
+   `HasSoftDelete()`, bulk `ExecuteDelete` and raw SQL.
+8. **Reads.** `QueryOptions<T>.IncludeDeleted` (`WithDeleted()`, core) makes `EfSpecificationEvaluator`
+   apply `IgnoreQueryFilters([SoftDelete.FilterName])` first: the named overload, so every other filter —
+   a tenant's — still applies; the parameterless overload stays banned (`IlCallScanTests`). The write side
+   and `FindAsync(keyValues)` never see a soft-deleted aggregate; there is no undelete.
+
+### Consequences
+
+- A migration per opted-in aggregate: a nullable column on each of its tables.
+- A unique index still sees soft-deleted rows. The README shows the recipe — a filtered unique index,
+  `HasFilter("\"AggregateDeletedAt\" IS NULL")`, valid on PostgreSQL and on SQL Server (filtered indexes
+  run with `QUOTED_IDENTIFIER ON`) — and no convention rewrites the application's indexes.
+- A required navigation from another aggregate to a soft-deleted root is hidden by the filter (EF Core's
+  `PossibleIncorrectRequiredNavigationWithQueryFilterInteractionWarning`).
+- `MicroKit.Tenancy`'s anonymous tenant filter must be named before a tenant entity can be soft-deletable;
+  Tenancy names it during its own upgrade (Spec: no issue).
+- The in-memory doubles delete for real.
+- Tests: `SoftDeleteTests` (PostgreSQL and SQL Server), `SoftDeleteFoundationTests` (EF Core facts).
+
+---
+
+## ADR-013: Read Side — Projections, Keyset Pagination, Compiled Finds (#197 phase 5)
+
+**Status:** Accepted
+**Date:** 2026-11-09
+**Source:** Issue #197, phase 5. User decisions 2026-11-09:
+- the cursor is an opaque Base64Url token built on provider values, with a fingerprint of the root's model name
+  and the ordering, a `TryParse` that checks the format only, and untrusted-input bounds;
+- **paging is forward only** — the user's decision, not an assumption of this ADR.
+
+Builds on ADR-002 (`QueryOptions`), ADR-009 (the read side never tracks) and ADR-012 (the soft-delete filter).
+
+### Decision
+
+1. **Projections.** `IReadRepository<T>` gains `ListAsync<TResult>(opts, selector)` and
+   `ListPagedAsync<TResult>(opts, selector)`. The database builds the DTO: the specification, the ordering
+   and the pagination apply, then `AsNoTracking().Select(selector)`. The includes are dropped, since the
+   selector says what is read; the split hint is kept: it splits the collections the selector projects, which
+   would otherwise come back as one cartesian product. Step 0 (`IncludeDeleted`) still applies.
+2. **Keyset pagination.** `KeysetPagination<T>` (core) is set on `QueryOptions<T>.Keyset` by `WithKeyset`:
+   - the sort keys (`OrderBy`/`ThenBy[Descending]`), a `PageSize` (the `PaginationLimits` default when
+     absent, the maximum enforced) and `After`, a cursor;
+   - `ListKeysetAsync(opts)` and `ListKeysetAsync<TResult>(opts, selector)` read a page;
+   - the keyset owns the ordering and the page: `OrderBy` or `Pagination` set alongside it is refused, and
+     `ListAsync`, `ListPagedAsync`, `AnyAsync` and `CountAsync` refuse options carrying a keyset, rather than
+     drop its cursor silently (`KeysetRules`, shared by the module's implementations);
+   - **forward only**: a page returns `Next`, `null` on the last page; there is no total count.
+3. **A total ordering.** The root's primary-key properties are appended, ascending, to the sort keys (those
+   not already among them), so ties are broken and no row is skipped or repeated.
+4. **Sort keys.** Each sort key must be:
+   - a scalar property of the root (a member access or `EF.Property` on the root parameter, a `Convert` to an
+     interface the root implements unwrapped, found by `IEntityType.FindProperty`) — anything else is refused,
+     naming the key; a primitive collection is refused too (on SQL Server it is a JSON `string`, which the
+     cursor would otherwise accept);
+   - not nullable: `Nullable<T>` is refused when the key is built, and a nullable column (`IProperty.IsNullable`)
+     when the page is read;
+   - stored as a provider type the cursor carries — after the property's value converter, so a strongly typed
+     id stored as a `Guid` is fine; another provider type fails with `InvalidOperationException` naming the
+     property.
+5. **The page query.** EF Core translates the start of a page as
+   `k1 >= v1 AND ((k1 > v1) OR (k1 = v1 AND ((k2 > v2) OR (k2 = v2 AND …))))`, with `<=` and `<` for a
+   descending key. The leading bound is the range an index on the keys seeks; the `OR` chain alone is not one.
+   - Each comparison is a `BinaryExpression` that carries a generic helper method. EF Core translates the node
+     to the SQL operator whatever the key type's C# operators: a value-converted record-struct id, `Guid`,
+     `string`, `DateTimeOffset` and `bool` were pinned on PostgreSQL and SQL Server (`ReadSideFoundationTests`).
+   - The cursor's values sit in a holder, so the query is parameterised and its cache entry stable.
+   - The plan — the resolved keys, their generic methods, the fingerprint and the root-only row projection — is
+     built once per root entity type and ordering, and cached.
+   - `Take(pageSize + 1)` is a constant, as offset pagination's `Skip`/`Take` are: one query-cache entry per page
+     size, bounded by `PaginationLimits.MaxPageSize`.
+   - The query orders by every key, takes `pageSize + 1` rows to know whether a page follows, and projects each
+     row as `KeysetRow(object[] keys, item)`. The cursor therefore comes from the same rows as the items, a
+     projection included, and an `Includes` delegate still applies to a page of aggregates (pinned).
+6. **The cursor** (`KeysetCursor`, core). Its public surface is `ToString()`, `TryParse(string, out cursor)`
+   and `MaxTokenLength`. The codec and the fingerprint are internal, shared with the EF Core and Testing
+   packages through `InternalsVisibleTo`: they ship with core under one version.
+   - **Format.** Base64Url of version `1`, an 8-byte fingerprint (the first bytes of a SHA-256 over the root's
+     model name and each key's name and direction, each name length-prefixed), a value count, then tagged
+     values from a closed set of provider types: the integers, `bool`, `float`, `double`, `decimal`, `Guid`,
+     `string` (UTF-8), `DateTime` (`ToBinary`), `DateTimeOffset` (ticks and offset), `DateOnly`, `TimeOnly`
+     and `byte[]`.
+   - **Encoding.** No reflection and no serializer: `BinaryPrimitives` and UTF-8 only, so the codec is
+     trim-safe without suppression.
+   - **Untrusted input.** `TryParse` refuses:
+     - a token above `MaxTokenLength` (1024 characters);
+     - an invalid Base64Url string (checked with `Base64Url.IsValid`: `TryDecodeFromChars` throws on an invalid
+       character);
+     - a token that does not re-encode to itself;
+     - an unknown version or tag, trailing bytes, an out-of-range value, or invalid UTF-8.
+
+     Every declared length — a string's, a `byte[]`'s, the value count — is checked against the bytes that
+     remain before anything is allocated for it. A forged token declaring `int.MaxValue` bytes is refused
+     without that allocation (tested by measuring the bytes allocated).
+   - **Checked at query time.** A fingerprint of another root (a token issued for `Order` on an `Invoice` list,
+     even with the same key names and provider types) or of another ordering is refused, and so is a value
+     whose type is not its key's provider type. Both throw `ArgumentException`. Values go provider → model
+     through each key's converter.
+   - The token is not encrypted: a client can read the sort-key values of the last row of its page.
+7. **Compiled finds** (`CompiledFinds`). The hot paths are the two finds by id.
+   - `EfRepository.FindAsync(TId)` runs the whole-aggregate load as `EF.CompileAsyncQuery`. It has the includes
+     of `AggregateIncludePlan`, its split decision, tracking and the key predicate, and it is materialised in the
+     same record scope (ADR-009).
+   - `EfReadRepository.FindAsync(keyValues)` for a single-property key runs an untracked compiled
+     `FirstOrDefault`, made for the key's CLR type. A composite key, a list, a count and an any stay dynamic:
+     their shape changes with each call, and EF Core's query cache serves them.
+   - **One delegate per model.** EF Core 10's `CompiledQueryBase` binds a compiled query to the first model it
+     runs with, and throws `CompiledQueryDifferentModel` on another (pinned): one context type over two
+     providers, or a model cache key with variants. Each delegate is cached per `IModel` in a
+     `ConditionalWeakTable`.
+   - **Query filters.** A compiled query keeps the model's query filters, and evaluates the `DbContext` members a
+     filter reads at each execution: a tenant filter reads the executing context's tenant (pinned without
+     MicroKit, and tested through both finds on both servers).
+8. **The doubles.** `InMemoryReadRepository` and `InMemoryRepository` compile the selector of a projection, and
+   order a keyset page in memory: strings ordinally, a key that is not `IComparable` by its string form, with
+   the store's key appended. They refuse a nullable sort key through the member's nullability annotations.
+   They have no value converters, so a double's cursor carries a handle into the double, in the same format
+   and with the same fingerprint: it is valid only on the double that issued it.
+
+### Consequences
+
+- `IReadRepository<T>` gains four members: a break for an implementation outside the module. Such an
+  implementation cannot issue or read a cursor, whose codec is internal: it forwards keyset pages to one of the
+  module's implementations, or throws `NotSupportedException`. The internals shared by `InternalsVisibleTo` are a
+  contract between the module's assemblies, which ship under one version.
+- `KeysetPagination`, `KeysetKey`, `KeysetCursor` and `KeysetPage` are new public types in core.
+- A keyset ordering by a column whose provider type is outside the set (`TimeSpan`, a JSON column) is not
+  supported; sort by another property or convert it.
+- **The cursor's size is bounded when the query is built** (Spec phase 5, amended after the PR #200 review). Every
+  key has a worst-case encoded size (`KeysetCursor.MaxEncodedLength`: fixed for the scalar types; a `string` counts
+  4 UTF-8 bytes per character of its maximum length — the worst case whether the column counts UTF-16 units or code
+  points — and a `byte[]` its maximum length), and their sum must fit in `MaxTokenLength`. A `string` or `byte[]`
+  key without a maximum length (`GetMaxLength()`, provider-neutral: SQL Server's default `nvarchar(450)` for a key
+  column does not count), or with one too large, is refused naming the key, never on the page that happens to carry
+  a long value. The doubles have no model: they do not check it, and their cursor carries a handle, reused per row.
+- Tests: `ReadSideTests` (PostgreSQL and SQL Server), `ReadSideFoundationTests` (EF Core facts),
+  `KeysetCursorTests`, `KeysetPaginationTests`, `InMemoryReadSideTests`.
+
+---
+
+## ADR-014: Query-Shape Analyzers MKP006–MKP009, Without Code Fixes (#197 phase 6)
+
+**Status:** Accepted
+**Date:** 2026-11-09
+**Source:** Issue #197, phase 6. Its Spec:
+- names the four shapes;
+- sets the collection `Include` analyzer at two or more collection includes in one query, as a suggestion
+  (`Info`) with no code fix ("one collection is a single `LEFT JOIN`, with no cartesian product; EF Core's
+  `MultipleCollectionIncludeWarning` and the module's own split also start at two");
+- ships a code fix only where it preserves semantics, and records the reason for each analyzer without one.
+
+User decision 2026-11-09: a third diagnostic category, `MicroKit.Persistence.Performance`, for MKP006–MKP008.
+
+Builds on ADR-009 (the aggregate load's split), ADR-012 (named soft-delete filter) and ADR-013 (keyset pages).
+
+### Decision
+
+1. **Four diagnostics** in `MicroKit.Persistence.Analyzers`:
+
+   | ID | Analyzer | Category | Severity |
+   |---|---|---|---|
+   | MKP006 | `CollectionIncludeAnalyzer` | Performance | Info |
+   | MKP007 | `QueryInLoopAnalyzer` | Performance | Warning |
+   | MKP008 | `MaterializeBeforeFilterAnalyzer` | Performance | Warning |
+   | MKP009 | `IgnoreAllQueryFiltersAnalyzer` | Usage | Warning |
+
+2. **Precision over recall.** What an analyzer cannot see, it does not guess: it stays silent. A missed report
+   costs one review; a false one teaches teams to suppress the rule.
+   - **MKP006 and MKP008** judge a whole query chain in one expression, from its root (a `DbSet`, `Set<T>()`, or
+     for MKP006 the lambda handed to `QueryOptions.WithIncludes`/`Includes`) to its execution. A query composed
+     over several statements is not seen.
+   - **MKP007** judges each executing call where it stands, on any query or repository.
+   - **None of them sees** the model, the global `UseQuerySplittingBehavior`, or a typed finder declared outside
+     a repository type.
+3. **Symbols** are resolved once per compilation, by metadata name, through `PersistenceSymbolHelper`. Each rule
+   group is gated on its own symbols (EF Core, relational, the MicroKit contracts). So MKP007's repository rule runs
+   in an application project that references MicroKit core without EF Core, and MKP006 is silent on a provider
+   without `AsSplitQuery` (Cosmos).
+4. **MKP006 — two or more collections in one query.**
+   - **What it counts.** The `Include`/`ThenInclude` lambda overloads whose navigation type is a collection
+     (`string` excepted; a filtered include counts), deduplicated by navigation path. `Include(string)` names no
+     navigation the analyzer can see.
+   - **Where it reports.** On the include of the second collection, when neither `AsSplitQuery()` nor
+     `AsSingleQuery()` is in the chain.
+   - **Ignored includes.** EF Core ignores the includes of a query that returns no entity, so the analyzer is
+     silent after a projection (`Select`, `SelectMany`, `GroupBy`, a join) or before a scalar executor (`Count`,
+     `Any`, `All`, `Sum`, `Min`, `Max`, `Average`, `Contains`, their async forms).
+   - **QueryOptions.** The options' `AsSplitQuery()` or `AsSplitQueryEnabled = true` settles it, in the same
+     expression, before or after `WithIncludes`. Options passed inline to `CountAsync`, `AnyAsync` or a projection
+     drop the includes, so they are silent too.
+   - **Options built over several statements.** Unlike a raw EF query, options are reported without being seen
+     executed: they exist to be read. Options split in a later statement are reported, which an `Info` diagnostic
+     tolerates.
+   - **One collection is not reported.** It is a single `LEFT JOIN`, and the module's own load keeps it as one query
+     (`AggregateIncludePlan` splits from two collections) — the Spec's threshold.
+5. **MKP007 — a query on each iteration of a `foreach`, `await foreach` or `for` loop.**
+   - **What counts as a query:**
+     - a LINQ operator that executes a query: `Queryable` returning no query; `Enumerable` materializers and scalars
+       over one;
+     - EF Core's async executors and `Load`;
+     - `Find`/`FindAsync`;
+     - explicit loading (`NavigationEntry.Load*`);
+     - a nested `foreach` over a query;
+     - the awaitable methods of a MicroKit repository, typed finders included.
+   - **Not reported:**
+     - composition (a loop that only builds the query: `query = query.Include(path)`);
+     - the staging verbs (`Add*`, `Delete*`, `Remove*`);
+     - `ListKeysetAsync`/`ListPagedAsync`, called once per page by design;
+     - LINQ to objects through `AsQueryable()`;
+     - EF Core's `Execute*` bulk writes.
+   - **Where in the loop:**
+     - the body, a `for` condition and its incrementors run on each iteration;
+     - a `foreach` collection and a `for` initializer run once, for that loop only (the search goes on outward);
+     - a lambda or local function stops the search: when it runs is unknown;
+     - `while` and `do` loops, and a `for` loop without a condition, are the batching, polling and retry idioms, and
+       do not count.
+6. **MKP008 — materialized, then filtered.** It reports `ToList()`/`ToArray()` on a query, or an awaited
+   `ToListAsync()`/`ToArrayAsync()`, that is immediately the receiver of a filter with an expression-bodied predicate.
+   The filter is `Where` (not its index overload), or the predicate overloads of `First*`, `Single*`, `Any`, `All`,
+   `Count`, `LongCount`, and `Last*` only after an `OrderBy`, which EF Core requires. It reports only when the filter
+   can follow the materialization into the query:
+   - **The query commutes with a filter.** It is rooted at a `DbSet`, and only operators a filter moves past lie
+     between root and materializer (`Where`, the orderings, the includes, the tracking and split hints,
+     `IgnoreQueryFilters`, `TagWith`). A `Take`, `Skip`, `Distinct`, projection, grouping or join changes what a
+     filter after it means.
+   - **The predicate plainly translates.**
+     - Every part reading the element is one of:
+       - a single hop to a property with a public getter, a setter, no `[NotMapped]` and a scalar type;
+       - a literal;
+       - a built-in or scalar-type operator;
+       - a built-in conversion, `??` or `?:`;
+       - `string.Contains`/`StartsWith`/`EndsWith(string)`;
+       - a `Contains` over a captured collection.
+     - Every other part is captured: EF Core evaluates it and sends it as a parameter. A captured part is limited
+       to locals, parameters, fields, properties, calls with explicit arguments, literals, operators, conversions
+       and arrays; anything else there (`?:`, `??`, `new`, an interpolated string) makes the rule silent.
+     - A deeper hop (`o.Id.Value` reads inside a value-converted `GuidId`) is silent, and so is any call on the
+       element, a user-defined operator, a pattern, `?.`, or a block body.
+   - **Not reported.** `AsEnumerable()` before the filter is the explicit in-memory idiom.
+7. **MKP009 — the parameterless `IgnoreQueryFilters()`.** It reports the invocation and the method group, an
+   expression tree included. It is silent on the named overload (the evaluator's
+   `IgnoreQueryFilters([SoftDelete.FilterName])`), `WithDeleted()` and `nameof`. It is a Warning, not an Error,
+   because an anonymous query filter has no name: the parameterless overload is the only way to ignore one.
+   `IlCallScanTests` stays the module's own guard, over its assemblies' IL.
+8. **No code fix ships.** No rewrite of these shapes provably preserves semantics:
+   - **MKP006**:
+     - `AsSplitQuery()` turns one snapshot into 1 + C reads, which disagree under concurrent writes, and with
+       `Skip`/`Take` page differently unless the ordering is unique;
+     - `AsSingleQuery()` only silences the rule, and overrides a global split behaviour the analyzer cannot see.
+   - **MKP007**. Batching the loop into one `Contains` query changes:
+     - the order and the duplicates of the results;
+     - missing keys (`null` per iteration, against an absent row);
+     - the state each iteration observes when the loop writes;
+     - when side effects run relative to the reads.
+   - **MKP008**. Moving the filter into SQL changes its result:
+     - a tracking query's in-memory filter sees the unsaved values of instances the context already tracks, where
+       SQL sees the stored rows;
+     - SQL Server's default collation compares strings case-insensitively, and PostgreSQL uses the column's
+       collation;
+     - `StartsWith(string)` is culture-sensitive in memory, unlike `LIKE`;
+     - a captured call runs once per element in memory, once in SQL;
+     - precision is the column's;
+     - a translation EF Core lacks fails at run time.
+
+     The analyzer cannot check any of these; the developer must.
+   - **MKP009**. The analyzer cannot see which filters the model has, so it cannot name them; inserting
+     `[SoftDelete.FilterName]` or `WithDeleted()` changes which rows return, and that choice is the developer's.
+
+   The package therefore stays diagnostic-only: no `Microsoft.CodeAnalysis.CSharp.Workspaces`, no code-fix project.
+
+### Consequences
+
+- MKP007–MKP009 are warnings: a build with `TreatWarningsAsErrors` reports them as errors. Where a loop means its
+  queries, or a model configures splitting globally, `.editorconfig` sets the severity
+  (`dotnet_diagnostic.MKP006.severity = none`) or a `#pragma` suppresses one site.
+- **Blind spots, by the precision rule.**
+  - **What the analyzers cannot see:**
+    - queries composed over several statements (MKP006, MKP008);
+    - a global split behaviour;
+    - `Task.WhenAll(ids.Select(…))`;
+    - `while`, `do` and condition-less `for` loops;
+    - a finder outside a repository type;
+    - the model's mappings beyond the setter and `[NotMapped]` rules.
+  - **Not reported on purpose:**
+    - a single collection include, and includes EF Core ignores;
+    - a materialization filtered in a later statement.
+- The analyzers do not run on the module's own code (its src projects do not load them). Tests reproduce the
+  module's internal shapes and assert they are silent:
+  - `EfRepository.IncludeAggregate`: string includes in a loop, then the split decision;
+  - `EfRepository.LoadAsync`: `await foreach` over the query;
+  - `EfSpecificationEvaluator`: the named `IgnoreQueryFilters`;
+  - `AggregateSave`: `ChangeTracker.Entries().ToList()`.
+- Tests: `CollectionIncludeAnalyzerTests`, `QueryInLoopAnalyzerTests`, `MaterializeBeforeFilterAnalyzerTests`,
+  `IgnoreAllQueryFiltersAnalyzerTests` (stubs in `Stubs/QueryStubs.cs`, .NET 9 reference assemblies).
+- **Help links (#197 phase 7).** Every MKP descriptor's `helpLinkUri` is
+  `https://github.com/michaelatsey/microkit/blob/main/modules/MicroKit.Persistence/README.md#mkpnnn`
+  (`HelpLinks.For(id)`): one `### MKPnnn` heading per ID in the README's Analyzers section. `HelpLinkTests` checks
+  that the analyzers declare exactly MKP001–MKP009 and that each anchor is the GitHub slug of exactly one heading.
+
+---
+
+## ADR-015: Relational Test Fixtures in Their Own Packages, a Framework-Neutral Docker Probe (#197 phase 7)
+
+**Status:** Accepted
+**Date:** 2026-11-10
+**Source:** Issue #197, phase 7: "The relational fixtures ship in their own packages,
+`MicroKit.Persistence.Testing.PostgreSql` and `MicroKit.Persistence.Testing.SqlServer`, with the Docker probe of
+phase 1. `MicroKit.Persistence.Testing` keeps the in-memory doubles and takes no Testcontainers dependency. The
+fixtures expose an `IAsyncDisposable` lifecycle and force no test framework."
+
+User decisions 2026-11-10: option A for the probe (phase 1's probe, BCL only, in `MicroKit.Persistence.Testing`,
+with a test of its agreement with Testcontainers and its limit documented); the shared start runs under no caller's
+token, each caller's token cancels only its own wait, and only a failure of the start itself, or a dispose during it,
+is cached.
+
+### Decision
+
+1. **The probe.** `DockerProbe.IsAvailable` (public static, in `MicroKit.Persistence.Testing`) is phase 1's probe:
+   `GET /_ping`, an HTTP 200 only, a 2-second connect and a 2-second deadline on the whole ping exchange, no process,
+   no exception. One defect of phase 1 is fixed: a named pipe has no read timeout, so a pipe that accepted and never
+   answered hung the probe; each operation of the ping is now abandoned at the deadline; sources
+   `DOCKER_HOST` (with the `DOCKER_TLS_VERIFY` fallback: an accepted connection counts), else
+   `/var/run/docker.sock`, `$XDG_RUNTIME_DIR/docker.sock`, the `docker_engine` pipe; cached per process. It is the
+   only public member: the per-endpoint seams stay internal, tested from `UnitTests`. It is a property because
+   xUnit attribute constructors need a synchronous answer.
+2. **Its limit.** Testcontainers for .NET finds a daemon through more sources (`~/.testcontainers.properties`, TLS,
+   Docker contexts, Docker Desktop's and the rootless sockets — `TestcontainersSettings`). Copying that discovery
+   would drift silently with each Testcontainers release, so the probe does not; where only those sources reach the
+   daemon it answers `false`. `DockerProbeAgreementTests` asserts that it agrees with Testcontainers' public
+   `TestcontainersSettings.OS.DockerEndpointAuthConfig` (non-null only when a daemon it found answered) on the
+   machine running the suite.
+3. **The fixtures.** `PostgreSqlFixture` and `SqlServerFixture` (sealed, `IAsyncDisposable`), one container each:
+   `StartAsync(ct)`, `ConnectionString` (the default database), `GetConnectionString(database)` (the `Database` key
+   replaced through the BCL's `DbConnectionStringBuilder`, `Initial Catalog` removed), `DisposeAsync`; a
+   parameterless constructor on `DefaultImage` (a static property, read at run time — a `const` or an optional
+   parameter would be compiled into the caller) and one taking the image. No Testcontainers type is in their
+   public API, so they expose no builder customisation: a Testcontainers major version cannot break a consumer
+   through them. No test framework, no EF Core: the fixture is the container.
+4. **The lifecycle** (`ContainerLifecycle<TContainer>`, internal to `Testing`, shared by both fixtures through
+   `InternalsVisibleTo`; the packages ship together, as core and EntityFrameworkCore do):
+   - one start, run under the lifecycle's own token only; every caller, the first included, waits through
+     `WaitAsync(ct)`, so a caller's token cancels its own wait and nothing else; an already-cancelled token throws
+     before anything starts;
+   - a start that fails is cached: every later `StartAsync` rethrows it; once disposed, every call throws
+     `ObjectDisposedException`, and a call already waiting when a dispose interrupts the start receives the start's
+     `OperationCanceledException`; a caller's cancelled wait is not cached; faults come through the returned task,
+     never at the call site;
+   - the start runs with `ExecutionContext` flow suppressed: it carries no caller's ambient state (AsyncLocals);
+   - `DisposeAsync` cancels a running start, waits for it, ignores its outcome and disposes the container if one was
+     built (a start can fail after the container exists), even when a cancellation callback throws; idempotent, every
+     call returning the one disposal, so a concurrent second call completes only once the container is removed;
+     afterwards every other member throws
+     `ObjectDisposedException`; before a successful start, `ConnectionString` throws `InvalidOperationException`
+     naming `StartAsync` and `DockerProbe.IsAvailable`.
+5. **The fixtures do not consult the probe.** Testcontainers reaches endpoints the probe does not (`ssh://`, a host
+   override): gating `StartAsync` would refuse a working setup. The caller asks the probe and skips in its own
+   framework's way, so a probe that disagrees can skip a test, never fail one — and the module's "0 skipped" gate
+   shows a skip.
+   The probe's public API is synchronous (an xUnit attribute constructor reads it) while only the asynchronous
+   socket and pipe calls bound every wait: it runs through `Task.Run(…).GetAwaiter().GetResult()`, the one exception
+   to "no sync-over-async" recorded in `rules/performance.md`; no caller's context can deadlock it.
+6. **No framework adapter ships.** An adapter would force a framework. The module's own suites run on the fixtures
+   through `PostgreSqlSuiteFixture` / `SqlServerSuiteFixture`, xUnit `IAsyncLifetime` adapters that start the fixture
+   when the probe answers; `DockerRequiredFact` / `DockerRequiredTheory` stay xUnit attributes in the tests.
+
+### Consequences
+
+- Two new packages; `Testing` gains `DockerProbe`, and `InternalsVisibleTo` to the two fixture packages and
+  `UnitTests`. `Testcontainers.PostgreSql` / `.MsSql` move from a test-only dependency to a shipped dependency of
+  their fixture package.
+- Using `SqlServerFixture` accepts the SQL Server licence: Testcontainers' builder sets `ACCEPT_EULA=Y`. Its default
+  image is amd64, emulated on ARM.
+- A machine whose daemon only Testcontainers' extra sources find skips the database tests; set `DOCKER_HOST`.
+- Tests: `ContainerLifecycleTests` and `DockerProbeTests` (UnitTests, no Docker); `RelationalFixtureTests` (the
+  agreement pin, the fixtures before a start and after a dispose, against real servers, a removed container, a failed
+  start); `PackageClosureTests` (the resolved dependency graph: no Testcontainers in `Testing`, no test framework or EF
+  Core in the fixture packages) and `LayerDependencyTests`.
 
 ---
 

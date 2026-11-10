@@ -11,10 +11,7 @@ public sealed class EfOrderRepository(ShopDbContext context)
 {
     public async ValueTask<Order?> FindByNumberAsync(string number, CancellationToken ct = default)
     {
-        var orders = await IncludeAggregate(Context.Orders.AsTracking())
-            .Where(o => o.Number == number)
-            .ToListAsync(ct)
-            .ConfigureAwait(false);
+        var orders = await LoadAggregatesAsync(o => o.Number == number, ct).ConfigureAwait(false);
         return orders.SingleOrDefault();
     }
 }

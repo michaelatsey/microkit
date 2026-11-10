@@ -174,7 +174,7 @@ public sealed class DomainConventionSqliteTests
 }
 
 [Collection(PostgreSqlSuite.Name)]
-public sealed class DomainConventionPostgreSqlTests(PostgreSqlFixture fixture)
+public sealed class DomainConventionPostgreSqlTests(PostgreSqlSuiteFixture fixture)
 {
     [DockerRequiredFact]
     public Task EntityIds_GuidIds_AndActors_RoundTrip_ThroughTheConventions() => DomainConventionScenarios.EntityIds_GuidIds_AndActors_RoundTrip_ThroughTheConventions(CreateStoreAsync);
@@ -190,10 +190,7 @@ public sealed class DomainConventionPostgreSqlTests(PostgreSqlFixture fixture)
 
     private async Task<ShipmentStore> CreateStoreAsync()
     {
-        var connectionString = new NpgsqlConnectionStringBuilder(fixture.ConnectionString)
-        {
-            Database = "conventions_" + Guid.NewGuid().ToString("N"),
-        }.ConnectionString;
+        var connectionString = fixture.GetConnectionString("conventions_" + Guid.NewGuid().ToString("N"));
 
         ShipmentStore? store = null;
         store = await ShipmentStore.CreateAsync(o => o.UseNpgsql(connectionString), async () =>
@@ -228,6 +225,7 @@ public sealed class ShipmentStore : IAsyncDisposable
     {
         var builder = new DbContextOptionsBuilder<ShipmentDbContext>();
         _configure(builder);
+        builder.UseMicroKitPersistence();
         return new ShipmentDbContext(builder.Options);
     }
 

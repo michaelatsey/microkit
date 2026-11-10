@@ -17,8 +17,8 @@ MicroKit.MediatR.Behaviors            TransactionBehavior over ITransactionalCon
 MicroKit.Tenancy.EntityFrameworkCore  tenant-aware EF Core integration
 ```
 
-Persistence depends on MicroKit.Domain only. It does not depend on MicroKit.Result, Logging,
-MediatR, Messaging or Tenancy.
+Persistence depends on MicroKit.Domain (Abstractions) and MicroKit.Result (core, for the `Result`
+path of ADR-011). It does not depend on Logging, MediatR, Messaging or Tenancy.
 
 ---
 

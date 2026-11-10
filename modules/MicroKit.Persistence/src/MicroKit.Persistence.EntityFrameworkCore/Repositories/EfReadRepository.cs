@@ -1,11 +1,12 @@
+using System.Linq.Expressions;
+
 namespace MicroKit.Persistence.EntityFrameworkCore;
 
 /// <summary>
 /// Generic EF Core read-side repository base implementing <see cref="IReadRepository{TAggregate}"/>.
-/// List, any and count queries run with <c>AsNoTracking()</c>, or with <c>AsTracking()</c> after
-/// <c>WithTracking()</c>, whatever the context's default <see cref="QueryTrackingBehavior"/>; uses
-/// <see cref="ISpecificationEvaluator"/> for all <see cref="QueryOptions{TAggregate}"/>-based
-/// transformations.
+/// Every query runs with <c>AsNoTracking()</c>, whatever the context's default
+/// <see cref="QueryTrackingBehavior"/>; uses <see cref="ISpecificationEvaluator"/> for all
+/// <see cref="QueryOptions{TAggregate}"/>-based transformations.
 /// </summary>
 /// <typeparam name="TAggregate">
 /// The aggregate root type. Must be a reference type implementing <see cref="IAggregateRoot"/>.
@@ -32,8 +33,10 @@ namespace MicroKit.Persistence.EntityFrameworkCore;
 /// </code>
 /// </para>
 /// <para>
-/// <see cref="FindAsync"/> returns an aggregate the unit of work already tracks untouched, and
-/// loads any other one without tracking.
+/// The read side never tracks and never consults the change tracker: every method returns new,
+/// untracked instances, even for an aggregate the command tracks in the same context. Only the
+/// write side (<see cref="EfRepository{TAggregate, TId, TContext}"/>) tracks roots. A typed read
+/// repository keeps that: its own queries start from <c>AsNoTracking()</c>.
 /// </para>
 /// </remarks>
 /// <param name="context">The scoped application <see cref="DbContext"/>.</param>
@@ -71,25 +74,15 @@ public class EfReadRepository<TAggregate, TContext>(
     /// <returns>The matching aggregate, or <see langword="null"/> if not found.</returns>
     /// <exception cref="ArgumentException">
     /// The number of <paramref name="keyValues"/> does not match the primary key of
-    /// <typeparamref name="TAggregate"/>.
+    /// <typeparamref name="TAggregate"/>, or a key value is not of its key property's CLR type (a
+    /// converted key takes its model type, never the column's).
     /// </exception>
     /// <remarks>
-    /// <para>
-    /// The read and write repositories share the scoped <see cref="DbContext"/>. An aggregate the
-    /// current unit of work already tracks is therefore returned <b>as is</b> — same instance, same
-    /// state, <c>Added</c>, <c>Modified</c> or <c>Deleted</c> — so its pending change still reaches
-    /// the next commit.
-    /// </para>
-    /// <para>
-    /// Any other aggregate is loaded <b>without tracking</b> by a query on the primary key. It is
-    /// never attached to the change tracker, so it is never wired into the navigations of entities
-    /// the command tracks, and a later commit cannot try to write it.
-    /// </para>
-    /// <para>
-    /// The tracked lookup runs with <see cref="ChangeTracker.AutoDetectChangesEnabled"/> turned
-    /// off: reading <see cref="DbSet{TEntity}.Local"/> otherwise runs a full <c>DetectChanges</c>
-    /// over every tracked entity. The caller's setting is restored afterwards.
-    /// </para>
+    /// The aggregate is loaded <b>without tracking</b> by a query on the primary key, even when the
+    /// context already tracks it: the result is a new instance, never attached to the change
+    /// tracker, never wired into the navigations of entities the command tracks, and a later commit
+    /// cannot write it. A pending change of the command is therefore not visible through it. The model's
+    /// query filters apply: a soft-deleted aggregate is not found (use <c>WithDeleted()</c> on a list).
     /// </remarks>
     public async ValueTask<TAggregate?> FindAsync(object[] keyValues, CancellationToken ct = default)
     {
@@ -107,9 +100,11 @@ public class EfReadRepository<TAggregate, TContext>(
         if (Array.Exists(keyValues, v => v is null))
             return null;
 
-        var tracked = KeyLookup.FindTracked(Context, set, keyValues);
-        if (tracked is not null)
-            return tracked.Entity;
+        KeyLookup.EnsureKeyValueTypes(set.EntityType, keyProperties, keyValues);
+
+        // The hot path: a single-property key runs a query compiled once per model (ADR-013).
+        if (keyProperties.Count == 1)
+            return await CompiledReadFind<TAggregate, TContext>.For(Context, set.EntityType).FindAsync(Context, keyValues[0], ct).ConfigureAwait(false);
 
         return await set.AsNoTracking()
             .FirstOrDefaultAsync(KeyLookup.Predicate<TAggregate>(keyProperties, keyValues), ct)
@@ -121,7 +116,7 @@ public class EfReadRepository<TAggregate, TContext>(
     /// Returns all aggregates that satisfy the supplied <see cref="QueryOptions{TAggregate}"/>.
     /// </summary>
     /// <param name="opts">
-    /// The query options specifying the filter, includes, ordering, and tracking hint.
+    /// The query options specifying the filter, includes and ordering.
     /// </param>
     /// <param name="ct">Propagates notification that operations should be cancelled.</param>
     /// <returns>
@@ -130,18 +125,20 @@ public class EfReadRepository<TAggregate, TContext>(
     /// </returns>
     /// <remarks>
     /// Without <see cref="QueryOptions{TAggregate}.Pagination"/> every matching aggregate is
-    /// returned; use <see cref="ListPagedAsync"/> for a bounded page.
+    /// returned; use <see cref="ListPagedAsync(QueryOptions{TAggregate}, CancellationToken)"/> for a bounded page.
     /// </remarks>
     /// <exception cref="ArgumentOutOfRangeException">
     /// The requested page size exceeds <see cref="PaginationLimits.MaxPageSize"/>.
     /// </exception>
+    /// <exception cref="ArgumentException"><see cref="QueryOptions{TAggregate}.Keyset"/> is set.</exception>
     public async ValueTask<IReadOnlyList<TAggregate>> ListAsync(
         QueryOptions<TAggregate> opts,
         CancellationToken ct = default)
     {
         ArgumentNullException.ThrowIfNull(opts);
+        KeysetRules.EnsureNone(opts, nameof(ListAsync));
         _paginationLimits.EnsureWithinMaximum(opts.Pagination);
-        var query = evaluator.GetQuery(GetBaseQuery(opts), opts);
+        var query = evaluator.GetQuery(GetBaseQuery(), opts).AsNoTracking(); // again: a delegate may have called AsTracking
         return await query.ToListAsync(ct).ConfigureAwait(false);
     }
 
@@ -171,8 +168,9 @@ public class EfReadRepository<TAggregate, TContext>(
         CancellationToken ct = default)
     {
         ArgumentNullException.ThrowIfNull(opts);
+        KeysetRules.EnsureNone(opts, nameof(ListPagedAsync));
         var pagination = _paginationLimits.ForPagedQuery(opts.Pagination);
-        var baseQuery = GetBaseQuery(opts);
+        var baseQuery = GetBaseQuery();
 
         var totalCount = await evaluator
             .GetQuery(baseQuery, AsCountQuery(opts))
@@ -180,9 +178,83 @@ public class EfReadRepository<TAggregate, TContext>(
 
         var items = await evaluator
             .GetQuery(baseQuery, opts with { Pagination = pagination })
+            .AsNoTracking() // again: a delegate may have called AsTracking
             .ToListAsync(ct).ConfigureAwait(false);
 
         return new PagedResult<TAggregate>(items, totalCount, pagination.Page, pagination.PageSize);
+    }
+
+    /// <inheritdoc/>
+    /// <remarks>
+    /// One query: the specification, the ordering and the pagination, untracked, then
+    /// <c>Select(<paramref name="selector"/>)</c>; the includes are dropped, the split hint splits the projected collections.
+    /// </remarks>
+    public async ValueTask<IReadOnlyList<TResult>> ListAsync<TResult>(
+        QueryOptions<TAggregate> opts,
+        Expression<Func<TAggregate, TResult>> selector,
+        CancellationToken ct = default)
+    {
+        ArgumentNullException.ThrowIfNull(opts);
+        ArgumentNullException.ThrowIfNull(selector);
+        KeysetRules.EnsureNone(opts, nameof(ListAsync));
+        _paginationLimits.EnsureWithinMaximum(opts.Pagination);
+        return await evaluator.GetQuery(GetBaseQuery(), AsProjectionQuery(opts))
+            .AsNoTracking()
+            .Select(selector)
+            .ToListAsync(ct).ConfigureAwait(false);
+    }
+
+    /// <inheritdoc/>
+    /// <remarks>A count and a page query, as for the aggregates; the page is projected by the database.</remarks>
+    public async ValueTask<IPagedResult<TResult>> ListPagedAsync<TResult>(
+        QueryOptions<TAggregate> opts,
+        Expression<Func<TAggregate, TResult>> selector,
+        CancellationToken ct = default)
+    {
+        ArgumentNullException.ThrowIfNull(opts);
+        ArgumentNullException.ThrowIfNull(selector);
+        KeysetRules.EnsureNone(opts, nameof(ListPagedAsync));
+        var pagination = _paginationLimits.ForPagedQuery(opts.Pagination);
+        var baseQuery = GetBaseQuery();
+
+        var totalCount = await evaluator
+            .GetQuery(baseQuery, AsCountQuery(opts))
+            .CountAsync(ct).ConfigureAwait(false);
+
+        var items = await evaluator
+            .GetQuery(baseQuery, AsProjectionQuery(opts) with { Pagination = pagination })
+            .AsNoTracking()
+            .Select(selector)
+            .ToListAsync(ct).ConfigureAwait(false);
+
+        return new PagedResult<TResult>(items, totalCount, pagination.Page, pagination.PageSize);
+    }
+
+    /// <inheritdoc/>
+    /// <remarks>
+    /// One query: the specification, the includes and the split hint, then the keyset predicate after the cursor,
+    /// the ordering by the sort keys and the primary key, and <c>pageSize + 1</c> rows, untracked. The cursor is
+    /// read from the same rows, through each key's value converter.
+    /// </remarks>
+    public ValueTask<KeysetPage<TAggregate>> ListKeysetAsync(QueryOptions<TAggregate> opts, CancellationToken ct = default)
+    {
+        ArgumentNullException.ThrowIfNull(opts);
+        return KeysetAsync<TAggregate>(opts, selector: null, ct);
+    }
+
+    /// <inheritdoc/>
+    /// <remarks>
+    /// One query, as for the aggregates; the projection and the keys come from the same rows, the includes are
+    /// dropped, and the split hint splits the projected collections.
+    /// </remarks>
+    public ValueTask<KeysetPage<TResult>> ListKeysetAsync<TResult>(
+        QueryOptions<TAggregate> opts,
+        Expression<Func<TAggregate, TResult>> selector,
+        CancellationToken ct = default)
+    {
+        ArgumentNullException.ThrowIfNull(opts);
+        ArgumentNullException.ThrowIfNull(selector);
+        return KeysetAsync(AsProjectionQuery(opts), selector, ct);
     }
 
     /// <summary>
@@ -202,8 +274,9 @@ public class EfReadRepository<TAggregate, TContext>(
     public async ValueTask<bool> AnyAsync(QueryOptions<TAggregate> opts, CancellationToken ct = default)
     {
         ArgumentNullException.ThrowIfNull(opts);
+        KeysetRules.EnsureNone(opts, nameof(AnyAsync));
         return await evaluator
-            .GetQuery(GetBaseQuery(opts), AsCountQuery(opts))
+            .GetQuery(GetBaseQuery(), AsCountQuery(opts))
             .AnyAsync(ct).ConfigureAwait(false);
     }
 
@@ -220,15 +293,42 @@ public class EfReadRepository<TAggregate, TContext>(
     public async ValueTask<int> CountAsync(QueryOptions<TAggregate> opts, CancellationToken ct = default)
     {
         ArgumentNullException.ThrowIfNull(opts);
+        KeysetRules.EnsureNone(opts, nameof(CountAsync));
         return await evaluator
-            .GetQuery(GetBaseQuery(opts), AsCountQuery(opts))
+            .GetQuery(GetBaseQuery(), AsCountQuery(opts))
             .CountAsync(ct).ConfigureAwait(false);
     }
 
-    private IQueryable<TAggregate> GetBaseQuery(QueryOptions<TAggregate> opts)
-        => opts.AsNoTrackingEnabled
-            ? Context.Set<TAggregate>().AsNoTracking()
-            : Context.Set<TAggregate>().AsTracking(); // overrides a context configured as NoTracking
+    // Overrides a context configured as TrackAll: the read side never tracks.
+    private IQueryable<TAggregate> GetBaseQuery() => Context.Set<TAggregate>().AsNoTracking();
+
+    private async ValueTask<KeysetPage<TResult>> KeysetAsync<TResult>(
+        QueryOptions<TAggregate> opts,
+        Expression<Func<TAggregate, TResult>>? selector,
+        CancellationToken ct)
+    {
+        var keysetPagination = KeysetRules.Require(opts);
+        var pageSize = _paginationLimits.ForKeysetQuery(keysetPagination.PageSize);
+        var keyset = EfKeyset<TAggregate>.For(Context.Set<TAggregate>().EntityType, keysetPagination, nameof(opts));
+
+        var query = evaluator.GetQuery(GetBaseQuery(), opts with { Keyset = null });
+        var rows = await keyset.Apply(query, keysetPagination.After, nameof(opts))
+            .Select(keyset.Row(selector))
+            .Take(pageSize + 1)
+            .AsNoTracking() // again: a delegate may have called AsTracking
+            .ToListAsync(ct).ConfigureAwait(false);
+
+        var hasNext = rows.Count > pageSize;
+        if (hasNext)
+            rows.RemoveAt(rows.Count - 1);
+        var next = hasNext ? keyset.CursorOf(rows[^1].Keys) : null;
+        return new KeysetPage<TResult>([.. rows.Select(r => r.Item)], pageSize, next);
+    }
+
+    // A projection reads what its selector names: the includes are dropped, the split hint is kept — it splits the
+    // collections the selector projects.
+    private static QueryOptions<TAggregate> AsProjectionQuery(QueryOptions<TAggregate> opts)
+        => opts with { Includes = null };
 
     private static QueryOptions<TAggregate> AsCountQuery(QueryOptions<TAggregate> opts)
         => opts with { Includes = null, OrderBy = null, Pagination = null, AsSplitQueryEnabled = false };

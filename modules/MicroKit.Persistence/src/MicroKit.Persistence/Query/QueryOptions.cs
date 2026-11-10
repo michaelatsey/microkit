@@ -3,7 +3,7 @@ namespace MicroKit.Persistence;
 /// <summary>
 /// Encapsulates the loading strategy for a read query over <typeparamref name="TAggregate"/>
 /// aggregates. Combines the WHAT (a domain <see cref="Specification{T}"/>) with the HOW
-/// (eager includes, change-tracking hint, ordering, pagination) — ADR-002.
+/// (eager includes, split query, ordering, offset or keyset pagination, soft-deleted rows) — ADR-002.
 /// </summary>
 /// <typeparam name="TAggregate">
 /// The aggregate root type. Must be a reference type implementing <see cref="IAggregateRoot"/>.
@@ -16,9 +16,8 @@ namespace MicroKit.Persistence;
 /// extension methods in <see cref="QueryOptionsExtensions"/> to derive modified options.
 /// </para>
 /// <para>
-/// <see cref="AsNoTrackingEnabled"/> defaults to <see langword="true"/> — read paths must not
-/// track entities. Set <see langword="false"/> only when the aggregate will be mutated inside a
-/// command handler after loading it via a read path.
+/// There is no tracking option: the read side never tracks. An aggregate a command modifies is
+/// loaded whole through <c>IRepository&lt;TAggregate, TId&gt;</c>, never through a read query.
 /// </para>
 /// <example>
 /// <code>
@@ -72,16 +71,6 @@ public sealed record QueryOptions<TAggregate>
     public PaginationOptions? Pagination { get; init; }
 
     /// <summary>
-    /// Gets a value indicating whether queries execute without EF Core change tracking.
-    /// </summary>
-    /// <value>
-    /// <see langword="true"/> by default. Set to <see langword="false"/> only when the loaded
-    /// aggregate will be mutated and committed by the <c>IUnitOfWork</c>; the usual way to load an
-    /// aggregate for modification is <c>IRepository&lt;TAggregate, TId&gt;.FindAsync</c>.
-    /// </value>
-    public bool AsNoTrackingEnabled { get; init; } = true;
-
-    /// <summary>
     /// Gets a value indicating whether EF Core split-query mode is active.
     /// When <see langword="true"/>, collection <c>Include()</c> navigations are fetched
     /// in separate SQL statements to avoid Cartesian product row explosion.
@@ -101,4 +90,28 @@ public sealed record QueryOptions<TAggregate>
     /// null), to ensure deterministic page boundaries across requests.
     /// </remarks>
     public Func<IQueryable<TAggregate>, IOrderedQueryable<TAggregate>>? OrderBy { get; init; }
+
+    /// <summary>
+    /// Gets a value indicating whether soft-deleted aggregates are returned too.
+    /// </summary>
+    /// <remarks>
+    /// The EF Core read side then ignores the soft-delete filter only (its named filter,
+    /// <c>SoftDelete.FilterName</c>), for the whole query: an included navigation that reaches another
+    /// soft-deletable aggregate returns its soft-deleted rows too. Every other query filter of the model,
+    /// named or anonymous (a tenant filter), still applies. It has no effect on the in-memory doubles,
+    /// which delete for real. The write side never loads a soft-deleted aggregate.
+    /// </remarks>
+    public bool IncludeDeleted { get; init; }
+
+    /// <summary>
+    /// Gets the keyset (cursor) pagination read by
+    /// <see cref="IReadRepository{TAggregate}.ListKeysetAsync(QueryOptions{TAggregate}, CancellationToken)"/>;
+    /// <see langword="null"/> when none is set.
+    /// </summary>
+    /// <remarks>
+    /// The keyset owns the ordering and the page: <c>ListKeysetAsync</c> refuses options that also set
+    /// <see cref="OrderBy"/> or <see cref="Pagination"/>, and <c>ListAsync</c> and <c>ListPagedAsync</c> refuse
+    /// options that set it (ADR-013).
+    /// </remarks>
+    public KeysetPagination<TAggregate>? Keyset { get; init; }
 }

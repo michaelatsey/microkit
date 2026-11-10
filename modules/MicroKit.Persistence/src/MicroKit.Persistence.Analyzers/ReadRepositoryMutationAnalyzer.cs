@@ -25,7 +25,7 @@ public sealed class ReadRepositoryMutationAnalyzer : DiagnosticAnalyzer
         isEnabledByDefault: true,
         description: "IReadRepository<T> implementations must never commit or save changes. "
                    + "Use IRepository<TAggregate, TId> and IUnitOfWork.CommitAsync() for write operations.",
-        helpLinkUri: $"https://github.com/michaelatsey/microkit/docs/analyzers/{MKP001Id}");
+        helpLinkUri: HelpLinks.For(MKP001Id));
 
     private static readonly DiagnosticDescriptor MKP002Rule = new(
         id: MKP002Id,
@@ -36,7 +36,7 @@ public sealed class ReadRepositoryMutationAnalyzer : DiagnosticAnalyzer
         isEnabledByDefault: true,
         description: "IReadRepository<T> implementations must never expose or call AddAsync, UpdateAsync, or DeleteAsync. "
                    + "Use IRepository<TAggregate, TId> for write operations.",
-        helpLinkUri: $"https://github.com/michaelatsey/microkit/docs/analyzers/{MKP002Id}");
+        helpLinkUri: HelpLinks.For(MKP002Id));
 
     /// <inheritdoc />
     public override ImmutableArray<DiagnosticDescriptor> SupportedDiagnostics =>

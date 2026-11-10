@@ -30,5 +30,7 @@
     <ProjectReference Include="..\..\src\MicroKit.Persistence.EntityFrameworkCore.SqlServer\MicroKit.Persistence.EntityFrameworkCore.SqlServer.csproj" />
     <ProjectReference Include="..\..\src\MicroKit.Persistence.Specifications\MicroKit.Persistence.Specifications.csproj" />
     <ProjectReference Include="..\..\src\MicroKit.Persistence.Testing\MicroKit.Persistence.Testing.csproj" />
+    <ProjectReference Include="..\..\src\MicroKit.Persistence.Testing.PostgreSql\MicroKit.Persistence.Testing.PostgreSql.csproj" />
+    <ProjectReference Include="..\..\src\MicroKit.Persistence.Testing.SqlServer\MicroKit.Persistence.Testing.SqlServer.csproj" />
   </ItemGroup>
 </Project>

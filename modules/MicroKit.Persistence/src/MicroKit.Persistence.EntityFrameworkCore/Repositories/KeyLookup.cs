@@ -3,12 +3,14 @@ using System.Diagnostics.CodeAnalysis;
 using System.Linq.Expressions;
 using System.Reflection;
 using Microsoft.EntityFrameworkCore.ChangeTracking;
+using Microsoft.EntityFrameworkCore.Infrastructure;
 using Microsoft.EntityFrameworkCore.Metadata;
 
 namespace MicroKit.Persistence.EntityFrameworkCore;
 
 /// <summary>
-/// Builds primary-key lookups from the EF Core model, shared by the read and write repositories.
+/// Builds primary-key lookups from the EF Core model, shared by the read and write repositories,
+/// and resolves the services <c>UseMicroKitPersistence()</c> adds to a context.
 /// </summary>
 internal static class KeyLookup
 {
@@ -42,6 +44,44 @@ internal static class KeyLookup
         finally
         {
             tracker.AutoDetectChangesEnabled = autoDetectChanges;
+        }
+    }
+
+    /// <summary>
+    /// The context's <see cref="AggregateLoadRecord"/>, or <see langword="null"/> when the context was
+    /// not configured with <c>UseMicroKitPersistence()</c>.
+    /// </summary>
+    internal static AggregateLoadRecord? FindLoadRecord(DbContext context) =>
+        ((IInfrastructure<IServiceProvider>)context).Instance.GetService<AggregateLoadRecord>();
+
+    /// <summary>The context's <see cref="AggregateLoadRecord"/>.</summary>
+    /// <exception cref="InvalidOperationException">
+    /// The context was not configured with <c>UseMicroKitPersistence()</c>.
+    /// </exception>
+    internal static AggregateLoadRecord LoadRecordOf(DbContext context) =>
+        FindLoadRecord(context)
+        ?? throw new InvalidOperationException(
+            $"'{context.GetType().Name}' is not configured for MicroKit.Persistence: the write-side repository cannot " +
+            "tell a whole aggregate from a partial one. Call UseMicroKitPersistence() on its DbContextOptionsBuilder, " +
+            "or register it through AddDbContext, UsePostgreSQL or UseSqlServer on the EfCoreBuilder.");
+
+    /// <summary>
+    /// Checks that every non-null value of <paramref name="keyValues"/> is of its key property's CLR
+    /// type, as <c>DbSet.Find</c> does: a converted key takes its model type, never the column's.
+    /// </summary>
+    /// <exception cref="ArgumentException">A key value is of another type.</exception>
+    internal static void EnsureKeyValueTypes(IEntityType entityType, IReadOnlyList<IProperty> keyProperties, object?[] keyValues)
+    {
+        for (var i = 0; i < keyProperties.Count; i++)
+        {
+            var expected = Nullable.GetUnderlyingType(keyProperties[i].ClrType) ?? keyProperties[i].ClrType;
+            if (keyValues[i] is { } value && !expected.IsInstanceOfType(value))
+            {
+                throw new ArgumentException(
+                    $"Key value {i} of '{entityType.ClrType.Name}' must be a '{expected.Name}' ({keyProperties[i].Name}); " +
+                    $"a '{value.GetType().Name}' was given.",
+                    nameof(keyValues));
+            }
         }
     }
 
@@ -84,7 +124,7 @@ internal static class KeyLookup
     // == where the key type supports it (primitives, Guid, records…); otherwise value equality
     // through Equals(object), which EF Core translates to the same SQL comparison — DbSet.Find
     // accepts such keys, so the repositories must too. Probed once per key type.
-    private static Expression KeyEquals(Expression property, Expression value)
+    internal static Expression KeyEquals(Expression property, Expression value)
     {
         var supportsEqualityOperator = s_equalityOperatorSupport.GetOrAdd(property.Type, static type =>
         {

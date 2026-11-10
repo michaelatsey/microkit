@@ -23,6 +23,9 @@
 | EF composite | `ITransactionalUnitOfWork : IUnitOfWork, ITransactionalContext` |
 | EF implementation | `EfUnitOfWork<TContext>` |
 | In-memory | `InMemoryUnitOfWork` |
+| `Result` path | `IResultUnitOfWork` (`TryExecuteAsync`, `TryCommitAsync` — never an `ExecuteAsync`/`CommitAsync` overload) |
+| Errors | `PersistenceErrors`, codes `PERSISTENCE.<ROOT>.<REASON>` |
+| Provider classifiers | `{Provider}FailureClassifier` (`PostgreSqlFailureClassifier`, `SqlServerFailureClassifier`) |
 
 ## Query and Pagination
 
@@ -33,11 +36,13 @@
 | Page request | `PaginationOptions` |
 | Page bounds | `PaginationLimits` |
 | Evaluator | `ISpecificationEvaluator` / `EfSpecificationEvaluator` |
+| Keyset | `KeysetPagination<TAggregate>` (keys `KeysetKey`), `KeysetCursor`, `KeysetPage<T>`; read by `ListKeysetAsync` |
+| Projection | an overload of `ListAsync` / `ListPagedAsync` / `ListKeysetAsync` taking a `selector` |
 
-Builder extensions use the `With-` prefix (`WithIncludes`, `WithPagination`, `WithTracking`,
-`WithOrdering`, `WithOrderBy`, `WithThenBy`, `WithSpec`), except `AsNoTracking()` and
-`AsSplitQuery()`, named after their EF Core counterparts. No extension is named after a
-`QueryOptions` property: the property would win — see `specifications.md`.
+Builder extensions use the `With-` prefix (`WithIncludes`, `WithPagination`, `WithOrdering`, `WithDeleted`, `WithKeyset`,
+`WithOrderBy`, `WithThenBy`, `WithSpec`), except `AsSplitQuery()`, named after its EF Core
+counterpart. No extension is named after a `QueryOptions` property: the property would win —
+see `specifications.md`.
 
 ## Specifications (in MicroKit.Domain)
 
@@ -63,7 +68,20 @@ AddDbContext<TContext>(this EfCoreBuilder, Action<DbContextOptionsBuilder>?)
 AddUnitOfWork<TContext>(this EfCoreBuilder)
 UsePostgreSQL<TContext>(this EfCoreBuilder, string, Action<NpgsqlDbContextOptionsBuilder>?, ProviderOptions?)
 UseSqlServer<TContext>(this EfCoreBuilder, string, Action<SqlServerDbContextOptionsBuilder>?, ProviderOptions?)
+UseMicroKitPersistence(this DbContextOptionsBuilder)              // + the DbContextOptionsBuilder<TContext> overload
+IsOutsideAggregate(this NavigationBuilder)
+UseMicroKitPersistence(this DbContextOptionsBuilder, IDatabaseFailureClassifier)  // + the generic overload
+HasAggregateErrorName(this EntityTypeBuilder, string)                             // + EntityTypeBuilder<T>
+HasSoftDelete(this EntityTypeBuilder)                                             // + EntityTypeBuilder<T>
 ```
+
+## Test fixtures
+
+| Type | Convention | Example |
+|---|---|---|
+| Relational fixture (package) | `{Server}Fixture`, sealed, `IAsyncDisposable` | `PostgreSqlFixture`, `SqlServerFixture` |
+| Framework adapter (tests only) | `{Server}SuiteFixture` | `PostgreSqlSuiteFixture` (xUnit `IAsyncLifetime`) |
+| Docker check | `DockerProbe.IsAvailable` | |
 
 ## Namespaces
 
@@ -71,4 +89,5 @@ One namespace per project, equal to the assembly name (`NamespaceConventionTests
 `MicroKit.Persistence.Abstractions`, `MicroKit.Persistence`, `MicroKit.Persistence.EntityFrameworkCore`
 (DI, conventions and `ProviderOptions` included), `….EntityFrameworkCore.PostgreSql`,
 `….EntityFrameworkCore.SqlServer`, `MicroKit.Persistence.Specifications`,
-`MicroKit.Persistence.Testing`, `MicroKit.Persistence.Analyzers`.
+`MicroKit.Persistence.Testing`, `….Testing.PostgreSql`, `….Testing.SqlServer` (each checked exactly, not by prefix),
+`MicroKit.Persistence.Analyzers`.
