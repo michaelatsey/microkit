@@ -69,4 +69,12 @@ internal static partial class BusLogs
                   "counting an attempt.")]
     public static partial void EndpointPaused(
         ILogger logger, string messageId, string type, TimeSpan backoff);
+
+    [LoggerMessage(
+        EventId = 3013,
+        Level = LogLevel.Error,
+        Message = "An unexpected fault escaped the delivery of message {MessageId} ('{Type}'). The " +
+                  "message is dead-lettered, and the in-memory consume loop continues.")]
+    public static partial void UnexpectedDeliveryFault(
+        ILogger logger, Exception exception, string? messageId, string? type);
 }

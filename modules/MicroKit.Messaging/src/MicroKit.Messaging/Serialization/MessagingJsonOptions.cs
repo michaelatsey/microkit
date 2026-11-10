@@ -11,7 +11,7 @@ using System.Text.Json;
 /// <c>JsonSerializerOptions</c> option would be shared with anything else in the host that
 /// configures one, and its default instance is not the Web defaults this module starts from.
 /// </remarks>
-internal sealed class MessagingJsonOptions
+internal sealed record MessagingJsonOptions
 {
     /// <summary>Gets the options, starting from <see cref="JsonSerializerDefaults.Web"/>.</summary>
     public JsonSerializerOptions SerializerOptions { get; } = new(JsonSerializerDefaults.Web);

@@ -144,10 +144,14 @@ internal sealed class TransportOutboxDispatcher(
         // the default serializer's JSON text, so it goes out as UTF-8 application/json. The
         // reserved headers come from the row's own columns, captured at staging — traceparent
         // included, which is the trace of the publication rather than of this relay.
-        var headers = new Dictionary<string, string>(StringComparer.Ordinal)
+        var headers = new Dictionary<string, string>(StringComparer.Ordinal);
+
+        // Non-nullable and required on a stored row, but a row built by hand can still carry null;
+        // the dispatcher sends it without a correlation rather than failing it until dead-letter.
+        if (message.CorrelationId is not null)
         {
-            [MessageHeaders.CorrelationId] = message.CorrelationId.Value.ToString(),
-        };
+            headers[MessageHeaders.CorrelationId] = message.CorrelationId.Value.ToString();
+        }
 
         if (message.TenantId is not null)
         {

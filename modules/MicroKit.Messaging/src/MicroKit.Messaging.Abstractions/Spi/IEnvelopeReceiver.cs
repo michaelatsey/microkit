@@ -77,8 +77,9 @@ namespace MicroKit.Messaging.Spi;
 /// <b>The direction is the opposite of <see cref="IMessageTransport"/>, and that is the point.</b>
 /// A provider implements <c>IMessageTransport</c> and <c>MicroKit.Messaging</c> calls it; here
 /// <c>MicroKit.Messaging</c> implements the receiver and the provider's consume loop calls it. So
-/// unlike the transport — of which <b>no</b> implementation ships in any MicroKit package — an
-/// implementation of this interface does ship, and a provider resolves it rather than writing one.
+/// unlike the transport — of which the only implementation shipped is Core's in-memory one, and a
+/// broker provider writes its own — an implementation of this interface does ship, and a provider
+/// resolves it rather than writing one.
 /// </para>
 /// <para>
 /// <b>Registered by <c>AddIntegrationEventConsumption()</c> or

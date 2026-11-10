@@ -48,13 +48,13 @@ namespace MicroKit.Messaging.Spi;
 /// provider, not after an incident.
 /// </para>
 /// <para>
-/// <b>No implementation of this interface ships in any MicroKit package.</b> That is deliberate.
-/// An in-process transport is meaningless until the receiving seam exists, and one that returned
-/// successfully with nothing to deliver to would be the silent-success failure this module treats
-/// as blocking. A broker provider supplies the implementation from its own
-/// <c>Add{Provider}Transport()</c> extension; until one is registered, a
+/// <b>One implementation ships: Core's in-memory transport</b> (#186), registered by
+/// <c>MessagingBuilder.UseInMemoryTransport()</c> together with the consume loop that runs every
+/// envelope through the receive pipeline — so a send that returns is a message that will be handled
+/// or dead-lettered, never a silent success. A broker provider supplies its own implementation from
+/// its <c>Add{Provider}Transport()</c> extension. With no transport registered at all, a
 /// <see cref="MessageKind.Contract"/> row fails loudly and reversibly — see
-/// <c>MessagingBuilder.AddTransportDispatcher</c>.
+/// <c>MessagingBuilder.AddTransportDispatcher</c> — and a bus publication throws.
 /// </para>
 /// <para>
 /// Registered as <b>scoped</b>, alongside the dispatcher that consumes it: both are resolved from

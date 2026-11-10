@@ -54,40 +54,33 @@ internal sealed class MessageReceivePipeline(
     {
         ArgumentNullException.ThrowIfNull(envelope);
 
-        if (!contracts.TryResolveLocalType(envelope.Type, out var eventType))
-        {
-            return DeliveryOutcome.Permanent(
-                $"Wire type '{envelope.Type}' resolves to no local type in this process. Register " +
-                "a type carrying the matching [MessageContract].");
-        }
-
-        if (!Guid.TryParse(envelope.Id, out var id))
-        {
-            return DeliveryOutcome.Permanent($"Message id '{envelope.Id}' is not a GUID.");
-        }
-
-        IIntegrationEvent message;
+        // Everything before the per-handler stage runs once, and a failure here is never a
+        // handler's: shutdown leaves the message unsettled (decision 8), anything else makes it
+        // permanently undeliverable (decision 7) — a malformed envelope is dead-lettered, never
+        // allowed to escape and take the consume loop with it.
+        Prepared prepared;
         try
         {
-            message = serializer.Deserialize(envelope.Body, eventType) as IIntegrationEvent
-                ?? throw new InboxPayloadException(
-                    $"The body deserialized to null or to a type that is not '{eventType.FullName}'.");
+            var result = Prepare(envelope, ct);
+            if (result.Outcome is { } early)
+            {
+                return early;
+            }
+
+            prepared = result.Prepared!.Value;
         }
-        catch (Exception ex) when (ex is not OperationCanceledException)
+        catch (Exception ex) when (IsShutdown(ex, ct))
+        {
+            return new DeliveryOutcome(DeliveryVerdict.Unsettled, ex);
+        }
+        catch (Exception ex)
         {
             return DeliveryOutcome.Permanent(
-                $"The body of '{envelope.Type}' cannot be deserialized into '{eventType.FullName}'.",
+                $"Message '{envelope.Id}' ('{envelope.Type}') failed before any handler: {ex.Message}",
                 ex);
         }
 
-        var entries = handlers.GetHandlers(eventType);
-        if (entries.Count == 0)
-        {
-            BusLogs.NoHandler(logger, envelope.Id, envelope.Type, envelope.Source, eventType.FullName!);
-            return DeliveryOutcome.Success;
-        }
-
-        var context = BuildContext(envelope, eventType, MessageId.From(id));
+        var (message, context, entries) = prepared;
         var outcome = DeliveryOutcome.Success;
 
         foreach (var entry in entries)
@@ -105,6 +98,62 @@ internal sealed class MessageReceivePipeline(
 
         return outcome;
     }
+
+    /// <summary>
+    /// Resolves the contract, the identifier, the body, the handlers and the context — once, before
+    /// any scope. Returns either an early outcome (permanent, or success when no handler is
+    /// registered) or what the per-handler stage needs.
+    /// </summary>
+    /// <remarks>
+    /// May throw; the caller classifies anything thrown here as shutdown or permanent.
+    /// </remarks>
+    private (DeliveryOutcome? Outcome, Prepared? Prepared) Prepare(
+        MessageEnvelope envelope, CancellationToken ct)
+    {
+        if (!contracts.TryResolveLocalType(envelope.Type, out var eventType))
+        {
+            return (DeliveryOutcome.Permanent(
+                $"Wire type '{envelope.Type}' resolves to no local type in this process. Register " +
+                "a type carrying the matching [MessageContract]."), null);
+        }
+
+        if (!Guid.TryParse(envelope.Id, out var id))
+        {
+            return (DeliveryOutcome.Permanent($"Message id '{envelope.Id}' is not a GUID."), null);
+        }
+
+        IIntegrationEvent message;
+        try
+        {
+            message = serializer.Deserialize(envelope.Body, eventType) as IIntegrationEvent
+                ?? throw new InboxPayloadException(
+                    $"The body deserialized to null or to a type that is not '{eventType.FullName}'.");
+        }
+        catch (Exception ex) when (!IsShutdown(ex, ct))
+        {
+            // Any exception a serializer raises outside shutdown — an OperationCanceledException
+            // included — is a body this process can never read.
+            return (DeliveryOutcome.Permanent(
+                $"The body of '{envelope.Type}' cannot be deserialized into '{eventType.FullName}'.",
+                ex), null);
+        }
+
+        var entries = handlers.GetHandlers(eventType);
+        if (entries.Count == 0)
+        {
+            BusLogs.NoHandler(logger, envelope.Id, envelope.Type, envelope.Source, eventType.FullName!);
+            return (DeliveryOutcome.Success, null);
+        }
+
+        var context = BuildContext(envelope, eventType, MessageId.From(id));
+        return (null, new Prepared(message, context, entries));
+    }
+
+    /// <summary>What the per-handler stage needs, resolved once per delivery.</summary>
+    private readonly record struct Prepared(
+        IIntegrationEvent Message,
+        MessageContext Context,
+        IReadOnlyList<MessageHandlerRegistry.HandlerEntry> Entries);
 
     private async ValueTask<DeliveryOutcome> DeliverToHandlerAsync(
         MessageHandlerRegistry.HandlerEntry entry,
@@ -184,6 +233,7 @@ internal sealed class MessageReceivePipeline(
 
     /// <summary>
     /// Whether <paramref name="exception"/> is the host shutting down rather than a failure.
+    /// Shared with the in-memory consume loop's safety net.
     /// </summary>
     /// <remarks>
     /// An <see cref="ObjectDisposedException"/> is shutdown when the host token is cancelled, or
@@ -192,7 +242,7 @@ internal sealed class MessageReceivePipeline(
     /// dispose) while the host keeps running is an ordinary failure: classifying it as shutdown
     /// would leave the message unsettled and stop the consume loop of a live host.
     /// </remarks>
-    private static bool IsShutdown(Exception exception, CancellationToken ct) => exception switch
+    internal static bool IsShutdown(Exception exception, CancellationToken ct) => exception switch
     {
         OperationCanceledException => ct.IsCancellationRequested,
         ObjectDisposedException disposed => ct.IsCancellationRequested

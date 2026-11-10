@@ -40,12 +40,55 @@ internal sealed class InMemoryTransportWorker(
                 return;
             }
 
-            var outcome = await pipeline.DeliverAsync(envelope, stoppingToken).ConfigureAwait(false);
-
-            if (!await SettleAsync(envelope, outcome, stoppingToken).ConfigureAwait(false))
+            if (!await ProcessOneAsync(envelope, stoppingToken).ConfigureAwait(false))
             {
                 return;
             }
+        }
+    }
+
+    /// <summary>Delivers and settles one envelope. Never throws.</summary>
+    /// <returns><see langword="false"/> when the loop must stop, which only shutdown causes.</returns>
+    /// <remarks>
+    /// The safety net (#186): no exception from one message may end the consume loop. The
+    /// pipeline already turns every failure into a verdict; anything that still escapes it, or the
+    /// settlement, is logged at <c>Error</c> and the message is dead-lettered — never dropped,
+    /// since it is already off the queue.
+    /// </remarks>
+    private async ValueTask<bool> ProcessOneAsync(
+        MessageEnvelope envelope, CancellationToken stoppingToken)
+    {
+        DeliveryOutcome outcome;
+        try
+        {
+            outcome = await pipeline.DeliverAsync(envelope, stoppingToken).ConfigureAwait(false);
+        }
+        catch (Exception ex) when (MessageReceivePipeline.IsShutdown(ex, stoppingToken))
+        {
+            outcome = new DeliveryOutcome(DeliveryVerdict.Unsettled, ex);
+        }
+        catch (Exception ex)
+        {
+            BusLogs.UnexpectedDeliveryFault(logger, ex, envelope.Id, envelope.Type);
+            outcome = DeliveryOutcome.Permanent("An unexpected fault escaped the receive pipeline.", ex);
+        }
+
+        try
+        {
+            return await SettleAsync(envelope, outcome, stoppingToken).ConfigureAwait(false);
+        }
+        catch (Exception ex) when (outcome.Verdict is not DeliveryVerdict.Permanent)
+        {
+            BusLogs.UnexpectedDeliveryFault(logger, ex, envelope.Id, envelope.Type);
+            broker.DeadLetter(envelope);
+            return !stoppingToken.IsCancellationRequested;
+        }
+        catch (Exception ex)
+        {
+            // The permanent settlement itself failed after the envelope was dead-lettered, or
+            // before: DeadLetter is the first thing it does, so the message is not lost.
+            BusLogs.UnexpectedDeliveryFault(logger, ex, envelope.Id, envelope.Type);
+            return !stoppingToken.IsCancellationRequested;
         }
     }
 
@@ -65,7 +108,7 @@ internal sealed class InMemoryTransportWorker(
                     outcome.Error,
                     envelope.Id,
                     envelope.Type,
-                    broker.GetFailedAttempts(envelope.Id),
+                    envelope.Id is null ? 0 : broker.GetFailedAttempts(envelope.Id),
                     outcome.Reason);
                 return true;
 

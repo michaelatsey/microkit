@@ -140,6 +140,19 @@ public sealed class TransportOutboxDispatcherTests
     }
 
     [Fact]
+    public async Task DispatchAsync_WhenAHandBuiltRowHasNoCorrelation_SendsItWithoutACorrelationHeader()
+    {
+        // The column is required, so a stored row always has one; a row built by hand may not,
+        // and must be sent rather than fail with a NullReferenceException until dead-lettered.
+        var message = OutboxFixtures.ContractMessage();
+        message.CorrelationId = null!;
+
+        await Build().DispatchAsync(message);
+
+        _transport.Sent.ShouldHaveSingleItem().Header(MessageHeaders.CorrelationId).ShouldBeNull();
+    }
+
+    [Fact]
     public async Task DispatchAsync_WhenTheRowHasNoCausation_SendsNoCausationHeader()
     {
         var message = OutboxFixtures.ContractMessage();
