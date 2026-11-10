@@ -15,17 +15,17 @@ public sealed class DbContextInjectionAnalyzer : DiagnosticAnalyzer
     private static readonly DiagnosticDescriptor Rule = new(
         id: DiagnosticId,
         title: "DbContext injected outside infrastructure layer",
-        messageFormat: "'{0}' derives from DbContext and is injected outside the infrastructure layer — inject IRepository<T> or IReadRepository<T> instead",
+        messageFormat: "'{0}' derives from DbContext and is injected outside the infrastructure layer — inject IRepository<TAggregate, TId> or IReadRepository<TAggregate> instead",
         category: DiagnosticCategories.Design,
         defaultSeverity: DiagnosticSeverity.Warning,
         isEnabledByDefault: true,
         description: "Injecting DbContext directly outside the infrastructure layer couples application code to EF Core. "
-                   + "Inject a typed repository (IRepository<T> or IReadRepository<T>) instead. "
+                   + "Inject a typed repository (IRepository<TAggregate, TId> or IReadRepository<TAggregate>) instead. "
                    + "Infrastructure layer is identified by namespace keywords: Infrastructure, Persistence, "
                    + "EntityFrameworkCore, Repository, Data. "
                    + "This is a best-effort heuristic — suppress with #pragma warning disable MKP004 "
                    + "for legitimate infrastructure classes that do not use conventional namespace naming.",
-        helpLinkUri: $"https://github.com/michaelatsey/microkit/docs/analyzers/{DiagnosticId}");
+        helpLinkUri: HelpLinks.For(DiagnosticId));
 
     // Namespace keywords that identify the infrastructure/persistence layer
     private static readonly string[] InfrastructureKeywords =

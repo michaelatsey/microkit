@@ -3,7 +3,7 @@ using MicroKit.Persistence.Analyzers.Helpers;
 namespace MicroKit.Persistence.Analyzers;
 
 /// <summary>
-/// MKP005: A method on an <c>IRepository&lt;T&gt;</c> or <c>IReadRepository&lt;T&gt;</c>
+/// MKP005: A method on an <c>IRepository&lt;TAggregate, TId&gt;</c> or <c>IReadRepository&lt;T&gt;</c>
 /// implementation declares <c>IQueryable&lt;T&gt;</c> as its return type.
 /// </summary>
 [DiagnosticAnalyzer(LanguageNames.CSharp)]
@@ -23,7 +23,7 @@ public sealed class RepositoryIQueryableLeakAnalyzer : DiagnosticAnalyzer
                    + "Callers can append arbitrary Where/Include clauses, bypassing specification enforcement and query auditing. "
                    + "Note: IAsyncEnumerable<T> is allowed — the concern is the IQueryable<T> signature specifically. "
                    + "Return IReadOnlyList<T>, IPagedResult<T>, or a concrete projection DTO instead.",
-        helpLinkUri: $"https://github.com/michaelatsey/microkit/docs/analyzers/{DiagnosticId}");
+        helpLinkUri: HelpLinks.For(DiagnosticId));
 
     /// <inheritdoc />
     public override ImmutableArray<DiagnosticDescriptor> SupportedDiagnostics =>

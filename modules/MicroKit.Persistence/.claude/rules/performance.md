@@ -1,106 +1,74 @@
 # Rule: Performance — MicroKit.Persistence
 
-Every query in a consuming application flows through these repositories. Overhead multiplies
-by database request rate — it must be invisible.
+Every query of a consuming application flows through these repositories; their overhead
+multiplies by request rate.
 
-## Mandatory Rules
+## Read paths do not track
 
-### AsNoTracking on All Read Paths
-```csharp
-// ✅ Every IReadRepository implementation starts with AsNoTracking
-var query = _context.Set<User>().AsNoTracking();
+`EfReadRepository` runs every query `AsNoTracking()` — there is no opt-out — and `FindAsync`
+never consults the tracker. A typed read repository keeps that: its own queries start from
+`AsNoTracking()`.
 
-// ❌ Missing AsNoTracking in a read repository — change-tracker overhead + memory leak risk
-var query = _context.Set<User>(); // Analyzer PRDANA003 flags this
-```
+## Write-side loads are whole aggregates
 
-### ValueTask over Task
-Repository methods return `ValueTask<T>` — a synchronous cache-hit or in-memory path allocates
-no state-machine box.
+`EfRepository.FindAsync` loads the full aggregate in one tracked query, or 1 + C queries when it
+has C ≥ 2 collections (split). It is not a primary-key lookup; it costs what the aggregate
+weighs. Keep aggregates small, and mark navigations to reference data `IsOutsideAggregate()`.
 
-```csharp
-// ✅
-public async ValueTask<User?> FindAsync(UserId id, CancellationToken ct = default)
+## ValueTask
 
-// ❌
-public async Task<User?> FindAsync(UserId id, CancellationToken ct = default)
-```
+Repository and unit-of-work methods return `ValueTask`/`ValueTask<T>`: a tracked hit or an
+in-memory double completes synchronously without allocating a task.
 
-### Single Commit per Command
-One `CommitAsync()` at the end of a command handler. Multiple commits within a single command
-handler indicate a design flaw — the work should be atomic.
+## One commit per command
 
-```csharp
-// ✅
-user.UpdateEmail(cmd.NewEmail);
-user.AddRole(role);
-await _uow.CommitAsync(ct);  // single SaveChanges call under the hood
+One `IUnitOfWork.CommitAsync` per command, at the end (`TransactionBehavior` issues it when the
+MicroKit.MediatR pipeline is used); never a commit mid-handler.
 
-// ❌ Multiple commits
-await _uow.CommitAsync(ct); // mid-handler
-// ... more work ...
-await _uow.CommitAsync(ct); // second commit — not atomic
-```
+## Existence checks
 
-### AnyAsync over CountAsync for Existence Checks
-```csharp
-// ✅
-var exists = await _context.Users.AnyAsync(u => u.Email == email, ct);
+`AnyAsync` over `CountAsync(...) > 0`. Both drop includes, ordering and pagination.
 
-// ❌ Materializes count for a boolean result
-var exists = await _context.Users.CountAsync(u => u.Email == email, ct) > 0;
-```
+## Project on the server
 
-### Server-Side Projection
-```csharp
-// ✅ Project on the database — never load full entities for DTO reads
-var dtos = await _context.Users
-    .AsNoTracking()
-    .Where(spec.Criteria)
-    .Select(UserDto.Projection) // Expression<Func<User, UserDto>>
-    .ToListAsync(ct);
+A read that returns DTOs projects in the query (`.Select(Dto.Projection)`) inside a typed read
+repository, rather than loading entities and mapping in memory.
 
-// ❌ Load entities then map in memory
-var users = await _context.Users.Where(...).ToListAsync(ct);
-var dtos = users.Select(u => new UserDto(u)); // wasteful — loads columns not needed
-```
+## Paginate in the database
 
-### Pagination at DB Level
-```csharp
-// ✅ Skip/Take before ToListAsync
-query = query.Skip((page - 1) * pageSize).Take(pageSize);
+`QueryOptions.WithPagination` becomes `Skip/Take` in SQL. `PaginationLimits` bounds every list
+(default 50, max 500); `ListPagedAsync` issues a count and a page query. Always order a paginated
+query (`WithOrderBy…`) so page boundaries are deterministic.
 
-// ❌ In-memory pagination — loads entire table
-var all = await _context.Users.ToListAsync(ct);
-var page = all.Skip(offset).Take(pageSize);
-```
+## Split queries
 
-### Compiled Queries for Hot Paths
-```csharp
-// ✅ Compile once, reuse across requests
-private static readonly Func<AppDbContext, Guid, CancellationToken, Task<User?>> _findById =
-    EF.CompileAsyncQuery((AppDbContext ctx, Guid id, CancellationToken ct) =>
-        ctx.Users.AsNoTracking().FirstOrDefault(u => u.Id == id));
-```
+Two or more collection includes in `QueryOptions` call for `AsSplitQuery()`; the write-side
+aggregate load switches to split by itself.
 
-### No Sync-over-Async
-```csharp
-// ❌ Thread-pool starvation
-var user = _context.Users.FindAsync(id).Result;
+## Compiled queries
 
-// ✅
-var user = await _context.Users.FindAsync([id], ct).ConfigureAwait(false);
-```
+The repositories' finds by id run compiled queries already, one per model (ADR-013). For another measured
+hot path, a typed repository may hold an `EF.CompileAsyncQuery` delegate — cached per `IModel`, not in a
+plain `static readonly` field: EF Core refuses to run a compiled query on another model (another provider, a
+model variant).
 
-### ConfigureAwait(false)
-Every `await` in library code uses `.ConfigureAwait(false)`.
+## Keyset pages
 
-## Performance Budget
-See `.claude-context/standards/performance-budget.md` for concrete targets.
+A deep offset page reads and discards every row before it; `ListKeysetAsync` starts after the cursor's row
+and costs the same at any depth. Prefer it for feeds and exports; an index on the sort keys plus the primary
+key serves it.
 
-A PR that regresses FindAsync or ListAsync overhead by > 10% requires `performance-reviewer` approval.
+## No sync-over-async; ConfigureAwait(false)
 
-## Verification
-```bash
-dotnet run --project benchmarks/MicroKit.Persistence.Benchmarks/ -c Release --filter *
-```
+Never `.Result`/`.Wait()`. Every `await` in library code has `.ConfigureAwait(false)`.
+
+One recorded exception: `DockerProbe.IsAvailable` (MicroKit.Persistence.Testing, ADR-015). It is a cached,
+once-per-process check whose public API must be synchronous — a test framework's skip condition reads it in an
+attribute constructor — and only the asynchronous socket and pipe calls bound every wait (a named pipe has no read
+timeout). It runs the probe through `Task.Run(…).GetAwaiter().GetResult()`, so no captured context can deadlock it.
+Nothing else blocks on asynchronous work.
+
+## Budget
+
+Targets: `.claude-context/standards/performance-budget.md`. There is no benchmark project yet, so
+the budget is a review reference, not a gate.

@@ -6,13 +6,10 @@
     <PackageTags>persistence;ef-core;sqlserver;microkit;ddd;dotnet</PackageTags>
     <NoWarn>$(NoWarn);IL2091</NoWarn>
   </PropertyGroup>
-  <!-- DEV: source ProjectReferences — CI/Release: published NuGet packages -->
-  <!-- ⚠ Any new cross-module dependency must be added to BOTH ItemGroups -->
-  <ItemGroup Condition="'$(CIReleaseBuild)' != 'true'">
+  <!-- Intra-module: sibling packages are built and released together — always an unconditional
+       ProjectReference, in every build mode (ADR-GLOBAL-002 D5) -->
+  <ItemGroup>
     <ProjectReference Include="..\MicroKit.Persistence.EntityFrameworkCore\MicroKit.Persistence.EntityFrameworkCore.csproj" />
-  </ItemGroup>
-  <ItemGroup Condition="'$(CIReleaseBuild)' == 'true'">
-    <PackageReference Include="MicroKit.Persistence.EntityFrameworkCore" />
   </ItemGroup>
   <ItemGroup>
     <PackageReference Include="Microsoft.EntityFrameworkCore.SqlServer" />

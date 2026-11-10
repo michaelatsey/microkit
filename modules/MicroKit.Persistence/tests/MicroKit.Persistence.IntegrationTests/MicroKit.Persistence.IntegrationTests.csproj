@@ -8,12 +8,16 @@
     <NoWarn>CS1591;CA1707;IL2026;IL2091</NoWarn>
   </PropertyGroup>
   <ItemGroup>
-    <!-- Same-module, IsPackable=false — unconditional ProjectReferences (no CIReleaseBuild pattern needed) -->
+    <!-- Same-module — unconditional ProjectReferences -->
     <ProjectReference Include="..\..\src\MicroKit.Persistence.EntityFrameworkCore\MicroKit.Persistence.EntityFrameworkCore.csproj" />
-    <!-- Cross-module, test-only: the aggregates, events and actors these tests persist come from
-         MicroKit.Domain directly. Unconditional, so a CIReleaseBuild=true build still compiles them
-         against the Domain source instead of the published package that Persistence.Abstractions
-         resolves in that mode. -->
+    <ProjectReference Include="..\..\src\MicroKit.Persistence.EntityFrameworkCore.PostgreSql\MicroKit.Persistence.EntityFrameworkCore.PostgreSql.csproj" />
+    <ProjectReference Include="..\..\src\MicroKit.Persistence.EntityFrameworkCore.SqlServer\MicroKit.Persistence.EntityFrameworkCore.SqlServer.csproj" />
+    <!-- The published relational fixtures (#197 phase 7): every PostgreSQL and SQL Server test runs on them,
+         and they bring Testcontainers.PostgreSql / .MsSql. -->
+    <ProjectReference Include="..\..\src\MicroKit.Persistence.Testing.PostgreSql\MicroKit.Persistence.Testing.PostgreSql.csproj" />
+    <ProjectReference Include="..\..\src\MicroKit.Persistence.Testing.SqlServer\MicroKit.Persistence.Testing.SqlServer.csproj" />
+    <!-- Cross-module: the aggregates, events and actors these tests persist come from MicroKit.Domain
+         directly, referenced from source like every MicroKit module (#197 Spec, Perimeter). -->
     <ProjectReference Include="..\..\..\MicroKit.Domain\src\MicroKit.Domain\MicroKit.Domain.csproj" />
   </ItemGroup>
   <!-- SQLitePCLRaw.lib.e_sqlite3 2.1.11 has a known vulnerability (GHSA-2m69-gcr7-jv3q).
@@ -34,7 +38,9 @@
     <PackageReference Include="Microsoft.EntityFrameworkCore" />
     <PackageReference Include="Microsoft.EntityFrameworkCore.Sqlite" />
     <PackageReference Include="Npgsql.EntityFrameworkCore.PostgreSQL" />
-    <PackageReference Include="Testcontainers.PostgreSql" />
+    <!-- Compiles a deliberately invalid EntityId type in memory, so the scan that must reject it
+         never sees it in this assembly (#196 D13). -->
+    <PackageReference Include="Microsoft.CodeAnalysis.CSharp" />
     <PackageReference Include="coverlet.collector">
       <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
       <PrivateAssets>all</PrivateAssets>

@@ -1,118 +1,120 @@
 # Context: Dependency Graph
 
-**Current state of all project dependencies within MicroKit.Persistence.**
-
-Updated whenever a `<ProjectReference>` or significant `<PackageReference>` is added.
-The `dependency-guardian` agent and `dependency-check` hook validate against this graph.
+Project and package references of MicroKit.Persistence as the `.csproj` files declare them.
+Update it with every `<ProjectReference>` or `<PackageReference>` change; `dependency-guardian`
+checks against it. Rules: `.claude/rules/dependencies.md`.
 
 ---
 
-## Project Reference Graph (8 projects)
+## Projects (10 src)
 
 ```
 MicroKit.Persistence.Abstractions
-│   └── [no project references — package refs only]
-│   └── NuGet: MicroKit.Result, MicroKit.Domain.Abstractions
+│   └── cross-module: MicroKit.Domain   (unconditional ProjectReference, from source)
 │
 MicroKit.Persistence (core)
-│   ├── → MicroKit.Persistence.Abstractions
-│   └── NuGet: MicroKit.Logging.Abstractions
+│   ├── → Abstractions
+│   └── cross-module: MicroKit.Result   (unconditional ProjectReference, from source; the Result path — ADR-011)
 │
 MicroKit.Persistence.EntityFrameworkCore
-│   ├── → MicroKit.Persistence (core)
-│   └── NuGet: Microsoft.EntityFrameworkCore,
+│   ├── → core
+│   └── NuGet: Microsoft.EntityFrameworkCore, Microsoft.EntityFrameworkCore.Relational,
 │              Microsoft.Extensions.DependencyInjection.Abstractions
 │
 MicroKit.Persistence.EntityFrameworkCore.PostgreSql
-│   ├── → MicroKit.Persistence.EntityFrameworkCore
+│   ├── → EntityFrameworkCore
 │   └── NuGet: Npgsql.EntityFrameworkCore.PostgreSQL
 │
 MicroKit.Persistence.EntityFrameworkCore.SqlServer
-│   ├── → MicroKit.Persistence.EntityFrameworkCore
+│   ├── → EntityFrameworkCore
 │   └── NuGet: Microsoft.EntityFrameworkCore.SqlServer
 │
 MicroKit.Persistence.Specifications
-│   ├── → MicroKit.Persistence (core)
-│   └── NuGet: (none beyond core transitive deps)
+│   └── → core
 │
 MicroKit.Persistence.Testing
-│   ├── → MicroKit.Persistence (core)
-│   └── NuGet: NSubstitute
+│   └── → core   (in-memory doubles, DockerProbe; BCL only, no Testcontainers)
 │
-MicroKit.Persistence.Analyzers
-│   └── [no project references]
-│   └── NuGet: Microsoft.CodeAnalysis.CSharp (build-time only)
+MicroKit.Persistence.Testing.PostgreSql
+│   ├── → Testing
+│   └── NuGet: Testcontainers.PostgreSql
+│
+MicroKit.Persistence.Testing.SqlServer
+│   ├── → Testing
+│   └── NuGet: Testcontainers.MsSql
+│
+MicroKit.Persistence.Analyzers            (netstandard2.0)
+    └── NuGet: Microsoft.CodeAnalysis.CSharp (PrivateAssets="all": not a package dependency)
 ```
 
-> `PostgreSql`, `SqlServer`, `Specifications`, and `Testing` are **siblings** — none references another.
+Intra-module references are unconditional `ProjectReference` (ADR-GLOBAL-002 D5).
+`PostgreSql`, `SqlServer`, `Specifications` and `Testing` are siblings — none references another.
+`Testing.PostgreSql` and `Testing.SqlServer` sit above `Testing`, not beside it; they reference no EF Core, no provider
+package, not `Specifications` and not each other, and bring no test framework (ADR-015; `LayerDependencyTests`,
+`PackageClosureTests`).
+Two projects grant `InternalsVisibleTo`; it is not a reference:
+- core → `EntityFrameworkCore`, `Testing`, `UnitTests` (the keyset cursor's codec and rules, ADR-013);
+- `Testing` → `Testing.PostgreSql`, `Testing.SqlServer` (the shared container lifecycle, ADR-015) and `UnitTests`, a
+  test assembly that is never packed (the lifecycle and the Docker probe's seams).
+
+## Tests and samples
+
+| Project | References |
+|---------|-----------|
+| `UnitTests` | Specifications, Testing (internals: the container lifecycle, the probe) |
+| `IntegrationTests` | EntityFrameworkCore, PostgreSql, SqlServer, Testing.PostgreSql, Testing.SqlServer (+ MicroKit.Domain); SQLite, Npgsql (Testcontainers through the fixture packages) |
+| `ArchitectureTests` | every src project except Analyzers (the two fixture packages included); NetArchTest.Rules, Mono.Cecil |
+| `Analyzers.Tests` | Analyzers; Microsoft.CodeAnalysis.CSharp.Analyzer.Testing |
+| `samples/MicroKit.Persistence.Samples` | EntityFrameworkCore, PostgreSql, Specifications, Testing, Testing.PostgreSql, Analyzers (as analyzer) (+ MicroKit.Domain) |
+
+All test projects use xUnit, Shouldly; UnitTests and IntegrationTests also NSubstitute.
 
 ---
 
-## Package Confinement
+## Cross-module
 
-| Package | Confined to | Forbidden elsewhere |
-|---------|-------------|---------------------|
-| `Microsoft.EntityFrameworkCore` | EntityFrameworkCore | Abstractions, Core |
-| `Npgsql.EntityFrameworkCore.PostgreSQL` | PostgreSql | All others |
-| `Microsoft.EntityFrameworkCore.SqlServer` | SqlServer | All others |
-| `NSubstitute` | Testing | All runtime packages |
-| `Microsoft.CodeAnalysis.CSharp` | Analyzers | All runtime packages |
-| `FluentAssertions` | **banned everywhere** | Commercial license (Xceed EULA) |
+Outgoing (allowed by the root graph: Result, Domain — both are used):
+
+```
+MicroKit.Persistence.Abstractions → MicroKit.Domain   (IAggregateRoot, IEntityId; Domain types used by
+                                                       core and EntityFrameworkCore come through it)
+MicroKit.Persistence (core)       → MicroKit.Result   (IResultUnitOfWork, PersistenceErrors; EntityFrameworkCore,
+                                                       Testing and the providers get it through core)
+```
+
+Abstractions never references `MicroKit.Result` (#196 D17; `LayerDependencyTests`).
+
+Incoming:
+
+```
+MicroKit.MediatR.Behaviors          → Persistence.Abstractions                 (TransactionBehavior)
+MicroKit.Tenancy.EntityFrameworkCore → Persistence.Abstractions + .EntityFrameworkCore
+MicroKit.MediatR.IntegrationTests   → Persistence.EntityFrameworkCore           (test only)
+```
+
+Forbidden: any reference from this module to MediatR (Core and EntityFrameworkCore are checked
+against MediatR.Contracts by `LayerDependencyTests`), Messaging, Tenancy or Http; EF Core in
+Abstractions or core (ADR-003).
 
 ---
 
-## Cross-Module Dependencies (Ecosystem)
+## Package versions
 
-MicroKit.Persistence is a **Level 2** module:
+All versions in the root `Directory.Packages.props`.
 
-```
-Level 0: Domain · Result
-Level 1: Logging → Result(opt) | Caching → Result | Auth → Result+Domain
-Level 2: MediatR → Result+Domain+Logging.Abs | Persistence → Result+Domain+Logging.Abs
-```
+| Package | Used by |
+|---------|---------|
+| `Microsoft.EntityFrameworkCore`, `.Relational` | EntityFrameworkCore |
+| `Microsoft.Extensions.DependencyInjection.Abstractions` | EntityFrameworkCore |
+| `Npgsql.EntityFrameworkCore.PostgreSQL` | PostgreSql, IntegrationTests |
+| `Microsoft.EntityFrameworkCore.SqlServer` | SqlServer |
+| `NSubstitute` | UnitTests, IntegrationTests |
+| `Microsoft.CodeAnalysis.CSharp` | Analyzers, IntegrationTests |
+| `Microsoft.EntityFrameworkCore.Sqlite` | IntegrationTests |
+| `Testcontainers.PostgreSql` | Testing.PostgreSql (IntegrationTests, ArchitectureTests and the samples through it) |
+| `Testcontainers.MsSql` | Testing.SqlServer (IntegrationTests and ArchitectureTests through it) |
 
-Allowed cross-module references (via PackageReference, never ProjectReference):
-
-```
-MicroKit.Persistence.Abstractions → MicroKit.Result               (production — IRepository returns Result<T>)
-MicroKit.Persistence.Abstractions → MicroKit.Domain.Abstractions  (IAggregateRoot generic constraint)
-MicroKit.Persistence (core)       → MicroKit.Logging.Abstractions (structured log property names in evaluator)
-```
-
-**Incoming cross-module reference:**
-```
-MicroKit.MediatR.Behaviors → MicroKit.Persistence.Abstractions (ITransactionalContext for TransactionBehavior)
-```
-This is the intended direction — MediatR.Behaviors is Level 2, it may depend on another Level 2
-module's Abstractions. Full cross-module integration: `.claude-context/context/transaction-behavior-integration.md`.
-
-**Forbidden:**
-- Dependency on Level 3 modules (Messaging, Http, Multitenancy)
-- `ProjectReference` crossing module boundaries — use `PackageReference`
-- `Microsoft.EntityFrameworkCore` in Abstractions or Core (ADR-003)
-
----
-
-## MicroKit.Result Dependency
-
-`MicroKit.Result` is referenced from Abstractions because repository methods in consuming
-handlers commonly return `Result<T>`. This mirrors the same decision in `MicroKit.MediatR.Abstractions`
-(ADR-001 in that module). It is a permanent, justified production dependency.
-
----
-
-## NuGet Package Versions
-
-> Canonical versions in `build/Directory.Packages.props`.
-
-| Package | Used By | Notes |
-|---------|---------|-------|
-| `MicroKit.Result` | Abstractions | `IRepository` method return types |
-| `MicroKit.Domain.Abstractions` | Abstractions | `IAggregateRoot` constraint |
-| `MicroKit.Logging.Abstractions` | Core | Structured log property names in evaluator |
-| `Microsoft.EntityFrameworkCore` | EntityFrameworkCore | ORM |
-| `Npgsql.EntityFrameworkCore.PostgreSQL` | PostgreSql | Provider |
-| `Microsoft.EntityFrameworkCore.SqlServer` | SqlServer | Provider |
-| `Microsoft.Extensions.DependencyInjection.Abstractions` | EntityFrameworkCore | DI registration |
-| `NSubstitute` | Testing | Test mocks |
-| `Microsoft.CodeAnalysis.CSharp` | Analyzers | Roslyn API |
+The provider classifiers use the ADO.NET exception types through their EF Core provider package, with
+no direct reference: `Npgsql.PostgresException` (PostgreSql, from `Npgsql.EntityFrameworkCore.PostgreSQL`)
+and `Microsoft.Data.SqlClient.SqlException` (SqlServer, from `Microsoft.EntityFrameworkCore.SqlServer`).
+Intentional: the ADO.NET provider's version is the one the EF Core provider was built against.

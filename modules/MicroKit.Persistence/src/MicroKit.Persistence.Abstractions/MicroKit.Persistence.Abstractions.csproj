@@ -5,14 +5,9 @@
     <Description>Repository, Unit of Work, and transaction contracts for MicroKit.Persistence. Zero implementation — no EF Core, no infrastructure dependency.</Description>
     <PackageTags>persistence;repository;unit-of-work;transactions;microkit;ddd;dotnet;abstractions</PackageTags>
   </PropertyGroup>
-  <!-- DEV: source ProjectReferences — CI/Release: published NuGet packages -->
-  <!-- ⚠ Any new cross-module dependency must be added to BOTH ItemGroups -->
-  <ItemGroup Condition="'$(CIReleaseBuild)' != 'true'">
-    <ProjectReference Include="../../../MicroKit.Result/src/MicroKit.Result/MicroKit.Result.csproj" />
+  <!-- Cross-module: another MicroKit module is always referenced from source, with an unconditional
+       ProjectReference in every build mode (#197 Spec, Perimeter) -->
+  <ItemGroup>
     <ProjectReference Include="../../../MicroKit.Domain/src/MicroKit.Domain/MicroKit.Domain.csproj" />
-  </ItemGroup>
-  <ItemGroup Condition="'$(CIReleaseBuild)' == 'true'">
-    <PackageReference Include="MicroKit.Result" />
-    <PackageReference Include="MicroKit.Domain" />
   </ItemGroup>
 </Project>

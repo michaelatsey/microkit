@@ -212,6 +212,7 @@ public sealed class EfUnitOfWorkDiscardChangesTests
     {
         var options = new DbContextOptionsBuilder<TestDbContext>()
             .UseSqlite(InMemoryConnectionString)
+            .UseMicroKitPersistence()
             .Options;
 
         return new TestDbContext(options);
@@ -229,6 +230,7 @@ public sealed class EfUnitOfWorkDiscardChangesTests
     {
         var options = new DbContextOptionsBuilder<TestDbContext>()
             .UseSqlite(connection)
+            .UseMicroKitPersistence()
             .Options;
 
         return new TestDbContext(options);

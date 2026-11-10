@@ -13,6 +13,8 @@ namespace MicroKit.Persistence;
 /// <para>
 /// The canonical evaluation order applied by all conforming implementations is:
 /// <list type="number">
+///   <item><description><b>Soft-deleted rows</b> (step 0) — when <see cref="QueryOptions{T}.IncludeDeleted"/> is
+///     set, ignores the provider's soft-delete filter, and only that one: never every query filter</description></item>
 ///   <item><description><b>Specification criteria</b> — applies <c>.Where(spec.ToExpression())</c></description></item>
 ///   <item><description><b>Includes</b> — applies the <c>Includes</c> delegate (e.g., <c>.Include(...).ThenInclude(...)</c>)</description></item>
 ///   <item><description><b>Split-query hint</b> — applies <c>.AsSplitQuery()</c> when <see cref="QueryOptions{T}.AsSplitQueryEnabled"/> is <see langword="true"/></description></item>
@@ -22,10 +24,10 @@ namespace MicroKit.Persistence;
 /// The order is fixed to prevent invalid EF Core query states (e.g., <c>Skip</c> before <c>OrderBy</c>).
 /// </para>
 /// <para>
-/// <b>AsNoTracking responsibility:</b> the evaluator does not apply <c>AsNoTracking()</c>.
-/// The repository calling <see cref="GetQuery{T}"/> is responsible for passing a queryable
-/// that already has the correct tracking behaviour applied. This separation keeps the
-/// evaluator stateless and provider-agnostic.
+/// <b>Tracking responsibility:</b> the evaluator does not apply a tracking behaviour. The
+/// repository calling <see cref="GetQuery{T}"/> passes a queryable with its tracking behaviour
+/// applied, and applies it again to the result: an <c>Includes</c> or <c>OrderBy</c> delegate may
+/// call <c>AsTracking()</c>. This separation keeps the evaluator stateless and provider-agnostic.
 /// </para>
 /// </remarks>
 public interface ISpecificationEvaluator
@@ -36,9 +38,8 @@ public interface ISpecificationEvaluator
     /// </summary>
     /// <typeparam name="T">The aggregate root type.</typeparam>
     /// <param name="inputQuery">
-    /// The base <c>IQueryable&lt;T&gt;</c> to transform. The caller (repository) must
-    /// have already applied <c>AsNoTracking()</c> when
-    /// <see cref="QueryOptions{T}.AsNoTrackingEnabled"/> is <see langword="true"/>.
+    /// The base <c>IQueryable&lt;T&gt;</c> to transform, with the tracking behaviour the caller
+    /// (repository) chose already applied — <c>AsNoTracking()</c> on the read side.
     /// </param>
     /// <param name="opts">The query options to apply.</param>
     /// <returns>

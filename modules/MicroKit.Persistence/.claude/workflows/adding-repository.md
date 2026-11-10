@@ -1,96 +1,92 @@
 # Workflow: Adding a Repository
 
-Step-by-step guide for adding a new repository pair to MicroKit.Persistence.
+How a consuming application adds persistence for an aggregate, and how to review it. The
+repositories live in the application, not in this module. Reference:
+`samples/MicroKit.Persistence.Samples` (`Repositories.cs`, `Queries.cs`, `Composition.cs`).
 
-## When to Use
+## 1. Confirm the aggregate root
 
-When a new aggregate root needs persistence. A repository pair consists of:
-1. `IXxxRepository` (write) in `MicroKit.Persistence.Abstractions`
-2. `IXxxReadRepository` (read) in `MicroKit.Persistence.Abstractions`
-3. `EfXxxRepository` (write impl) in `MicroKit.Persistence.EntityFrameworkCore`
-4. `EfXxxReadRepository` (read impl) in `MicroKit.Persistence.EntityFrameworkCore`
+Only an `IAggregateRoot` with a strongly-typed `IEntityId` key gets a repository. Child entities
+are loaded and saved with their root.
 
-## Steps
+## 2. Write side
 
-### 1. Confirm the Aggregate Is an IAggregateRoot
-
-Only aggregate roots get their own repository. If the type is a value object or child entity,
-it is persisted via its owning aggregate's repository.
-
-### 2. Define the Contracts
-
-```
-/new-repository <AggregateName>
-```
-
-Or scaffold manually in `MicroKit.Persistence.Abstractions`:
+Often the generic contract is enough: inject `IRepository<Order, OrderId>` and register
+`EfRepository<Order, OrderId, ShopDbContext>`. A typed repository adds finders:
 
 ```csharp
-// ✅ Write contract
-public interface IUserRepository : IRepository<User>
+public interface IOrderRepository : IRepository<Order, OrderId>
 {
-    ValueTask<User?> FindByEmailAsync(Email email, CancellationToken ct = default);
+    ValueTask<Order?> FindByNumberAsync(string number, CancellationToken ct = default);
 }
 
-// ✅ Read contract
-public interface IUserReadRepository : IReadRepository<User>
+public sealed class EfOrderRepository(ShopDbContext context)
+    : EfRepository<Order, OrderId, ShopDbContext>(context), IOrderRepository
 {
-    ValueTask<UserSummaryDto?> GetSummaryAsync(UserId id, CancellationToken ct = default);
-}
-```
-
-### 3. Add EF Core Implementations
-
-In `MicroKit.Persistence.EntityFrameworkCore`:
-
-```csharp
-public sealed class EfUserRepository(AppDbContext ctx) : IUserRepository
-{
-    public async ValueTask<User?> FindAsync(UserId id, CancellationToken ct = default)
-        => await ctx.Users.FindAsync([id.Value], ct).ConfigureAwait(false);
-
-    public async ValueTask AddAsync(User user, CancellationToken ct = default)
-        => await ctx.Users.AddAsync(user, ct).ConfigureAwait(false);
-
-    // ... UpdateAsync, DeleteAsync, CommitAsync delegate to IUnitOfWork
-    public async ValueTask CommitAsync(CancellationToken ct = default)
-        => await ctx.SaveChangesAsync(ct).ConfigureAwait(false);
-}
-
-public sealed class EfUserReadRepository(AppDbContext ctx) : IUserReadRepository
-{
-    public async ValueTask<IReadOnlyList<User>> ListAsync(QueryOptions<User> opts, CancellationToken ct = default)
+    public async ValueTask<Order?> FindByNumberAsync(string number, CancellationToken ct = default)
     {
-        var query = ctx.Users.AsNoTracking(); // ← mandatory first
-        query = _evaluator.GetQuery(query, opts);
-        return await query.ToListAsync(ct).ConfigureAwait(false);
+        var orders = await LoadAggregatesAsync(o => o.Number == number, ct).ConfigureAwait(false);
+        return orders.SingleOrDefault();
     }
 }
 ```
 
-### 4. Add Entity Configuration
+- No `CommitAsync`, no `UpdateAsync`: load, mutate the tracked aggregate, and let `IUnitOfWork`
+  commit.
+- A finder calls `LoadAggregatesAsync` so it returns the same whole aggregate as `FindAsync`, recorded
+  and checked; it states which roots, never what is loaded with them.
+- The boundary is the model's: mark reference data `IsOutsideAggregate()` in `OnModelCreating`.
+  The context needs `UseMicroKitPersistence()` (the `EfCoreBuilder` registrations call it).
 
-Create `Configurations/{AggregateName}Configuration.cs` in the EFCore project.
+## 3. Read side
 
-### 5. Register in DI
+Inject `IReadRepository<Order>` and register `EfReadRepository<Order, ShopDbContext>`. For
+projections, derive a typed read repository:
 
 ```csharp
-services.AddScoped<IUserRepository, EfUserRepository>();
-services.AddScoped<IUserReadRepository, EfUserReadRepository>();
+public interface IOrderReadRepository : IReadRepository<Order>
+{
+    ValueTask<IReadOnlyList<OrderSummary>> ListSummariesAsync(CancellationToken ct = default);
+}
+
+public sealed class EfOrderReadRepository(ShopDbContext context, ISpecificationEvaluator evaluator, PaginationLimits limits)
+    : EfReadRepository<Order, ShopDbContext>(context, evaluator, limits), IOrderReadRepository
+{
+    public async ValueTask<IReadOnlyList<OrderSummary>> ListSummariesAsync(CancellationToken ct = default) =>
+        await Context.Orders.AsNoTracking()
+            .Select(o => new OrderSummary(o.Id, o.Number))
+            .ToListAsync(ct)
+            .ConfigureAwait(false);
+}
 ```
 
-### 6. Add Tests
+No mutation (MKP001/MKP002), no `IQueryable<T>` return (MKP005).
 
+## 4. Mapping
+
+An `IEntityTypeConfiguration<Order>`; identifiers, `Actor` and audit instants come from
+`AddDomainConventions` in `ConfigureConventions`.
+
+## 5. Registration
+
+```csharp
+services.AddMicroKitPersistence(p => p.AddEntityFrameworkCore(ef => ef
+    .UsePostgreSQL<ShopDbContext>(connectionString)
+    .AddUnitOfWork<ShopDbContext>()));
+
+services.AddScoped<IOrderRepository, EfOrderRepository>();
+services.AddScoped<IReadRepository<Order>, EfReadRepository<Order, ShopDbContext>>();
 ```
-/new-repository-tests UserRepository
-```
 
-The `test-generator` agent produces the mandatory test matrix using `InMemoryRepository<User>`.
+## 6. Tests
 
-### 7. Run checks
+Handlers: `InMemoryRepository<Order, OrderId>` + `InMemoryUnitOfWork`. EF behaviour (aggregate
+load, finders): SQLite integration tests. `test-generator` produces the matrix of
+`.claude/rules/testing.md`.
+
+## 7. Checks
 
 ```bash
-dotnet build && dotnet test modules/MicroKit.Persistence/MicroKit.Persistence.slnx
+dotnet build modules/MicroKit.Persistence/MicroKit.Persistence.slnx -c Release
+dotnet test  modules/MicroKit.Persistence/MicroKit.Persistence.slnx -c Release
 ```
-
-Invoke `dependency-guardian` on any `.csproj` changes.

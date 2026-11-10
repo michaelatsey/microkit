@@ -1,169 +1,190 @@
 # Rule: EF Core Patterns — MicroKit.Persistence
 
-## Always active for files in EntityFrameworkCore, PostgreSql, and SqlServer projects.
+Applies to the EntityFrameworkCore, PostgreSql and SqlServer projects.
 
-## Entity Configuration
+## Model configuration (consumer side)
 
-```csharp
-// ✅ Always IEntityTypeConfiguration<T> — never OnModelCreating sprawl
-public sealed class UserConfiguration : IEntityTypeConfiguration<User>
-{
-    public void Configure(EntityTypeBuilder<User> builder)
-    {
-        builder.ToTable("Users");
-        builder.HasKey(u => u.Id);
-
-        // Value object owned entity
-        builder.OwnsOne(u => u.Email, eb =>
-        {
-            eb.Property(e => e.Value)
-              .HasColumnName("Email")
-              .IsRequired()
-              .HasMaxLength(320);
-        });
-
-        // Value converter for strongly-typed IDs
-        builder.Property(u => u.Id)
-               .HasConversion(id => id.Value, value => new UserId(value));
-    }
-}
-
-// ❌ Inline configuration in OnModelCreating
-protected override void OnModelCreating(ModelBuilder builder)
-{
-    builder.Entity<User>().ToTable("Users"); // ❌ — move to IEntityTypeConfiguration
-}
-```
-
-## AsNoTracking — Enforcement
+- One `IEntityTypeConfiguration<T>` per aggregate, applied with `ApplyConfigurationsFromAssembly`;
+  no configuration sprawl in `OnModelCreating`.
+- MicroKit.Domain types are mapped by conventions, from `ConfigureConventions`:
 
 ```csharp
-// ✅ REQUIRED on every IReadRepository implementation
-public async ValueTask<IReadOnlyList<T>> ListAsync(QueryOptions<T> opts, CancellationToken ct = default)
-{
-    var query = _context.Set<T>()
-        .AsNoTracking()                    // ← line 1, mandatory
-        .Where(opts.Specification.Criteria);
-    // ...
-}
-
-// ✅ Global query tracking behavior for read DbContexts (optional pattern)
-optionsBuilder.UseQueryTrackingBehavior(QueryTrackingBehavior.NoTrackingWithIdentityResolution);
+protected override void ConfigureConventions(ModelConfigurationBuilder builder)
+    => builder.AddDomainConventions(typeof(OrderId).Assembly);
+// = AddEntityIdConventions(assemblies)  EntityId<T> and GuidId → Guid column, read back through the (Guid) ctor
+//   AddActorConvention()                Actor → string(Actor.MaxLength)
+//   AddAuditInstantConvention()         IAuditableEntity CreatedAt/UpdatedAt → UTC instants
 ```
 
-## EfSpecificationEvaluator
+An explicit `HasConversion` in `OnModelCreating` wins over each convention. Compiled models and
+NativeAOT precompiled queries are not supported by them (their converters are internal).
+
+## Write side — `EfRepository<TAggregate, TId, TContext>`
+
+- `FindAsync(TId)` requires a single-property primary key of CLR type `TId`, else
+  `InvalidOperationException`.
+- Requires `UseMicroKitPersistence()` on the context (`AddDbContext`, `UsePostgreSQL`,
+  `UseSqlServer` call it); otherwise `InvalidOperationException`.
+- A root the repository loaded whole (recorded in the scoped `AggregateLoadRecord`), or one that
+  is `Added`, is returned as is; any other tracked root is refused (`InvalidOperationException`
+  naming the type) — ADR-009. Otherwise one tracked query loads the whole aggregate: every
+  navigation reachable from the root (owned types come with their owner), stopping at another
+  `IAggregateRoot`, at a navigation marked `IsOutsideAggregate()` and at cycles. Two or more
+  collections (an owned collection mapped to JSON does not count) switch the load to
+  `AsSplitQuery()`: 1 + C round trips for C collections.
+- The plan is computed once per model entity type (`AggregateIncludePlan`, private
+  `IncludeAggregate`); the boundary is the model's only — no override. A model-finalizing
+  convention fails model building when a non-root entity is inside two roots' boundaries, when a
+  many-to-one reference held by the parent reaches a non-root entity, or when a many-to-many
+  navigation is declared inside a boundary without `IsOutsideAggregate()` (per-row uniqueness; a
+  one-to-one with a unique FK is fine; links are a link entity, a child of the root).
+- `AggregateReferenceConvention`: a foreign key from inside an aggregate to another root or to an
+  entity outside every aggregate is `Restrict`; an explicit `Cascade`/`SetNull` on it fails model
+  building. Keys inside one boundary keep their behaviour. A key into a soft-deletable aggregate from
+  outside it is `ClientNoAction` instead (ADR-012).
+- Custom finders call `protected LoadAggregatesAsync(predicate, ct)`, which loads, tracks,
+  records and checks the returned roots after the query (identity resolution):
 
 ```csharp
-// ✅ All query transformations flow through the evaluator — never inline
-public sealed class EfSpecificationEvaluator : ISpecificationEvaluator
-{
-    public IQueryable<T> GetQuery<T>(IQueryable<T> inputQuery, QueryOptions<T> opts)
-        where T : class, IAggregateRoot
-    {
-        var query = inputQuery;
-
-        if (opts.Specification is { } spec)
-            query = query.Where(spec.Criteria);
-
-        if (opts.Includes is not null)
-            query = opts.Includes(query);
-
-        if (opts.AsSplitQueryEnabled)
-            query = query.AsSplitQuery();
-
-        if (opts.Pagination is { } p)
-            query = query.Skip(p.Skip).Take(p.PageSize);  // p.Skip = (p.Page - 1) * p.PageSize
-
-        return query;
-    }
-}
+var orders = await LoadAggregatesAsync(o => o.Number == number, ct).ConfigureAwait(false);
+return orders.SingleOrDefault();
 ```
 
-## Split Query vs Single Query
+- `AddAsync` and `DeleteAsync` only stage changes; the unit of work commits. `DeleteAsync` refuses, before any SQL, a
+  root neither recorded nor `Added` (`InvalidOperationException` naming the type): its version would be unknown.
 
-```csharp
-// ❌ Cartesian explosion — 2 levels of collections in one query
-var users = context.Users
-    .Include(u => u.Orders)
-    .ThenInclude(o => o.Lines)
-    .ToList(); // potentially millions of rows
+## Aggregate version — ADR-010
 
-// ✅ AsSplitQuery for multi-collection includes
-var opts = new QueryOptions<User>(spec)
-    .WithIncludes(q => q.Include(u => u.Orders).ThenInclude(o => o.Lines))
-    .AsSplitQuery(); // 3 SELECT statements, no Cartesian product
-```
+- `AggregateVersionConvention` (first finalizing convention) adds the shadow `long`
+  `AggregateVersion` concurrency token to every top-most root; only its column may be configured (a default or
+  computed value, value generation, a converter or provider type fails, like a column shared in any table that
+  stores it — each concrete type's under TPC).
+- `AggregateSaveInterceptor` is MicroKit's single `SaveChanges` entry point: it detects changes
+  (`SavingChanges` runs before EF Core's `DetectChanges`), then runs its steps in a fixed order; the
+  version step (`AggregateVersionStep`) is last — phase 4's soft-delete conversion goes before it.
+- Roots are resolved through `AggregateBoundaryMap` with an index over `ChangeTracker.Entries()`:
+  dependent children by original FK (deleted, moved out) or current FK; principal-side children by
+  the parents' original or current FK; keys compared with EF Core's key value comparers. Entities
+  outside every boundary are ignored; a changed child without a tracked root, or a move between aggregates
+  not both recorded, fails the save.
+- Bump: `Added` → 1, otherwise original + 1, `Deleted` untouched; undone when the save fails, is canceled or conflicts
+  (`SaveChangesFailed`, `SaveChangesCanceled`, `ThrowingConcurrencyException`). Do not bump by hand, and do not
+  write aggregate rows with `ExecuteUpdate`/raw SQL when the version must hold.
 
-## ITransactionalUnitOfWork
+## Persistence failures as `Result` — ADR-011
 
-```csharp
-// ✅ Composite interface — EF-specific, not in Abstractions
-public interface ITransactionalUnitOfWork : IUnitOfWork, ITransactionalContext { }
+- `EfUnitOfWork` implements `IResultUnitOfWork`. `TryExecuteAsync` runs `ExecuteAsync`'s core and maps a
+  `PersistenceException` only after it has thrown (rolled back, strategy gave up); joined
+  (`CurrentTransaction` set) it converts nothing. A failed `Result` from the operation is carried out of
+  the strategy by an internal non-transient sentinel (`FailedResultRollback<TResult>`) so the attempt
+  rolls back — no flag. `TryCommitAsync` refuses an open transaction.
+- `PersistenceFailureMapper` (internal) reads the exception chain, never a message:
+  `DbUpdateConcurrencyException` / `AggregateVersionConflictException` → CONCURRENCY; a classified
+  `DbException` (under a `DbUpdateException` or bare) → DUPLICATE / REFERENCE; `RetryLimitExceededException`
+  → never. `<ROOT>` comes from the failing entries' entity types (`AggregateBoundaryMap`), one root or
+  none.
+- Provider codes: `IDatabaseFailureClassifier` from the context's options
+  (`UseMicroKitPersistence(classifier)`, passed by `UsePostgreSQL`/`UseSqlServer`). SQL Server `547`
+  (`ForeignKeyOrCheckViolation`) maps to REFERENCE only when no entity type of the failing entries'
+  tables declares a check constraint (design-time model).
+- `AggregateErrorNameConvention` (last finalizing convention) annotates each top-most root with
+  `MicroKit:ErrorName` (`HasAggregateErrorName` or UPPER_SNAKE of the CLR name) and fails on a clash, on
+  the annotation on a non-root, on an invalid default name.
+- An ambient `System.Transactions` transaction is rejected (EF Core's own refusals, pinned by tests).
 
-public sealed class EfUnitOfWork(AppDbContext ctx) : ITransactionalUnitOfWork
-{
-    private IDbContextTransaction? _currentTransaction;
+## Soft delete — ADR-012
 
-    public async ValueTask CommitAsync(CancellationToken ct = default)
-    {
-        try
-        {
-            await ctx.SaveChangesAsync(ct).ConfigureAwait(false);
-        }
-        catch (DbUpdateConcurrencyException ex)
-        {
-            throw new PersistenceException("Concurrency conflict during commit.", ex);
-        }
-        catch (DbUpdateException ex)
-        {
-            throw new PersistenceException("Database error during commit.", ex);
-        }
-    }
+- `HasSoftDelete()` on a top-most root. `SoftDeleteConvention` (second finalizing convention) gives the root
+  type of each hierarchy of the aggregate (owned types follow their owner) the shadow
+  `DateTimeOffset? AggregateDeletedAt` and the named filter `MicroKit.SoftDelete`, keeping other named
+  filters. It fails on: an anonymous filter; a required key between two types of the aggregate, navigation
+  or not, inherited or to a mapped base of a member, with `Restrict`/`NoAction`/`ClientSetNull`/`SetNull` (EF Core throws at `Remove` under `Immediate`
+  timing; `ClientNoAction` is accepted and marked); the annotation on a non-root; the reserved name misused.
+- `AggregateSoftDeleteStep` runs before the version step (and before EF Core's `CascadeChanges`): for each
+  `Deleted` soft-deletable root (recorded, or the save fails), every tracked entry of its boundary — any
+  state, resolved by current keys first (strict for principal-side children), original keys only when the
+  current ones name no tracked root; a child moved to a live root is not marked — gets its nulled FK back
+  (which clears a conceptual null), `Deleted` → `Unchanged` with changed properties (complex ones too)
+  re-flagged, and the mark `TimeProvider.GetUtcNow()` (one per save). Owned entries of a marked entity are
+  restored without a mark while their owner holds them; an added replacement that `Immediate` cascade
+  detached is tracked again. Once their changes are accepted the still-tracked entities are detached (after each save, and before
+  `FindAsync`/`LoadAggregatesAsync`, for `AcceptAllChanges()`); after `SaveChanges(false)` they stay tracked, so
+  a retried save writes the mark (the list lives on
+  `AggregateLoadRecord`, cleared with it).
+- A key into a soft-deletable aggregate from outside it is `ClientNoAction` (`AggregateReferenceConvention`,
+  replacing `Restrict`); an explicit other behaviour fails model building.
+- `EfSpecificationEvaluator` step 0: `IncludeDeleted` → `IgnoreQueryFilters([SoftDelete.FilterName])`.
 
-    public async ValueTask<ITransaction> BeginTransactionAsync(CancellationToken ct = default)
-    {
-        _currentTransaction = await ctx.Database.BeginTransactionAsync(ct).ConfigureAwait(false);
-        return new EfTransaction(_currentTransaction);
-    }
+## Read side — `EfReadRepository<TAggregate, TContext>`
 
-    public async ValueTask CommitTransactionAsync(CancellationToken ct = default)
-    {
-        await ctx.SaveChangesAsync(ct).ConfigureAwait(false);
-        await _currentTransaction!.CommitAsync(ct).ConfigureAwait(false);
-    }
+- `FindAsync(object[] keyValues)`: key count must match the primary key; a null value matches
+  nothing; a value of another CLR type than its key property throws `ArgumentException`; the
+  aggregate is always loaded `AsNoTracking`, the change tracker is never consulted.
+- List, paged list, any and count start from `AsNoTracking()` (re-applied after the evaluator, so an
+  `Includes` delegate cannot opt back in), then go through `ISpecificationEvaluator`. Count and
+  any drop includes, ordering and pagination.
+- `PaginationLimits` bounds every list: `ListPagedAsync` without pagination returns the first
+  page of `DefaultPageSize`; a requested size above `MaxPageSize` throws
+  `ArgumentOutOfRangeException`.
+- Projections (ADR-013): the evaluator without includes (the split hint kept), `AsNoTracking()`, then `Select(selector)`.
+- Keyset (`EfKeyset<T>`, ADR-013): keys resolved on the model (scalar, non-nullable, a provider type the cursor
+  carries after the converter, no primitive collection, a worst-case cursor within `KeysetCursor.MaxTokenLength` —
+  a `string`/`byte[]` key needs `HasMaxLength`, a string counted at 4 UTF-8 bytes per character), the primary key
+  appended, the plan cached per root and ordering; `k1 >= v1 AND ((k1 > v1) OR (k1 = v1 AND …))` as binary nodes with a
+  helper method (EF Core translates the operator for any key type), values from a holder; `pageSize + 1` rows
+  projected as `KeysetRow(keys, item)`; the cursor's fingerprint covers the root's model name and the ordering.
+- Compiled finds (`CompiledFinds`, ADR-013): `EfRepository.FindAsync(TId)` and the single-key
+  `EfReadRepository.FindAsync` run `EF.CompileAsyncQuery` delegates cached per `IModel` (a compiled query refuses
+  another model); filters reading context state are evaluated per execution.
 
-    public async ValueTask RollbackTransactionAsync(CancellationToken ct = default)
-    {
-        if (_currentTransaction is not null)
-            await _currentTransaction.RollbackAsync(ct).ConfigureAwait(false);
-    }
+## `EfSpecificationEvaluator` — fixed order
 
-    public async ValueTask DisposeAsync()
-    {
-        if (_currentTransaction is not null)
-            await _currentTransaction.DisposeAsync().ConfigureAwait(false);
-    }
-}
-```
+1. `Where(spec.ToExpression())` 2. `Includes` 3. `AsSplitQuery()` 4. `OrderBy` 5. `Skip/Take`.
+Every query transformation goes through it; no inline composition in repositories.
+
+## Query filters
+
+Library code never calls the parameterless `IgnoreQueryFilters()`: it disables every filter,
+a tenant filter the module does not own included. `IncludeDeleted` uses the named overload with
+`SoftDelete.FilterName` only. `IlCallScanTests` scans the IL of every library
+assembly for it. Only the named overload may be used.
+
+## Unit of Work — `EfUnitOfWork<TContext>`
+
+- `CommitAsync` = `SaveChangesAsync`, translated to `PersistenceException`
+  (concurrency conflict, update failure, a provider's transient wrapper).
+- `DiscardChanges` = `ChangeTracker.Clear()`, plus a reset of the `AggregateLoadRecord`.
+- `ExecuteAsync`: execution strategy + transaction per attempt, retry by unwrapping the
+  `DbUpdateException`, join of an open transaction, rollback that never masks, tracker cleared
+  after a failed attempt — ADR-006. Do not re-implement any of this in a consumer.
+- `AddUnitOfWork<TContext>` registers it scoped as `EfUnitOfWork<TContext>`, `IUnitOfWork`,
+  `ITransactionalContext`, `ITransactionalUnitOfWork`, `IResultUnitOfWork`, plus
+  `EfDomainEventsProvider<TContext>` as `IDomainEventsProvider`.
+
+## Providers
+
+`UsePostgreSQL<TContext>(connectionString, npgsqlOptions, options)` /
+`UseSqlServer<TContext>(connectionString, sqlServerOptions, options)`: the action configures the
+Npgsql / SQL Server builder and runs after `options`; `ProviderOptions.Retry`
+(`RetryOnFailureOptions`, default 6 retries, 30 s max delay) enables the provider's retrying
+strategy; `ProviderOptions.PoolSize` registers a `DbContext` pool instead of a plain context.
+
+With `PoolSize` set, registration throws `ArgumentException` unless the context's only public
+constructor takes just `DbContextOptions` or `DbContextOptions<TContext>` (each provider's private `EnsurePoolable`): a
+pooled context's constructor-injected scoped services are resolved once from the root provider and
+shared by every lease, so a tenant-aware context such as `MultitenantDbContext` must not be pooled.
+With `Retry` set, a transaction opened with `BeginTransaction` outside the strategy is rejected.
 
 ## Anti-Patterns
 
 ```csharp
-// ❌ PRDANA001: DbContext in query handler
-public sealed class GetUsersHandler(AppDbContext ctx) { }
-
-// ❌ PRDANA002: SaveChanges in read repository
-await _context.SaveChangesAsync(); // inside IReadRepository
-
-// ❌ PRDANA003: Missing AsNoTracking
-_context.Users.Where(u => u.IsActive).ToListAsync(); // no AsNoTracking
-
-// ❌ IQueryable<T> on public interface
-ValueTask<IQueryable<User>> GetQueryableAsync(); // leaks EF into app layer
-
-// ❌ Raw string SQL without parameterization
-.FromSqlRaw($"WHERE Email = '{email}'"); // SQL injection
-
-// ❌ Lazy loading in a read path
-// Any navigation property accessed outside Include() in a read repo is a lazy load
+public sealed class GetUsersHandler(AppDbContext ctx) { }            // ❌ DbContext in a handler — MKP004
+await _context.SaveChangesAsync();                                   // ❌ in a repository — MKP001/MKP003
+ValueTask<IQueryable<User>> QueryAsync();                            // ❌ IQueryable leak — MKP005
+_context.Users.Where(u => u.IsActive).ToListAsync();                 // ❌ raw tracked read — use IReadRepository
+.FromSqlRaw($"… WHERE Email = '{email}'");                           // ❌ injection — use FromSqlInterpolated
+.IgnoreQueryFilters();                                               // ❌ in library code — IlCallScanTests
 ```
+
+The module does not rely on lazy loading: what a read needs is loaded by the aggregate load or
+`Includes`.

@@ -1,89 +1,85 @@
 ---
 name: test-generator
-description: Use this agent to generate test suites for MicroKit.Persistence repositories, specifications, and UoW patterns. Produces Shouldly + NSubstitute test files using InMemoryRepository from MicroKit.Persistence.Testing. Invoked by /new-repository-tests.
+description: Use this agent to generate test suites for MicroKit.Persistence repositories, specifications, QueryOptions, and Unit of Work behaviour. Produces xUnit + Shouldly + NSubstitute tests — unit tests over the MicroKit.Persistence.Testing in-memory doubles, integration tests over SQLite, PostgreSQL or SQL Server (the Testing.PostgreSql / .SqlServer fixtures, Testcontainers).
 tools: Read, Glob, Grep
 model: sonnet
 ---
 
 # Agent: Persistence Test Generator
 
-## Stack (non-negotiable)
-- **xUnit** — test framework
-- **Shouldly** — all assertions (`result.ShouldBe(...)`, `result.ShouldNotBeNull()`)
-- **FluentAssertions is banned** — any `.Should()` triggers a build error
-- **NSubstitute** — mocks for external dependencies
-- **MicroKit.Persistence.Testing** — `InMemoryRepository<T>` for repository isolation
+## Stack
+- **xUnit**, **Shouldly**, **NSubstitute**; FluentAssertions is forbidden (commercial licence)
+- `InMemoryRepository<TAggregate, TId>` (write + read), `InMemoryReadRepository<T>`,
+  `InMemoryUnitOfWork` (`CommitCount`, `DiscardCount`) from `MicroKit.Persistence.Testing`
+- SQLite in-memory for EF Core behaviour; PostgreSQL and SQL Server via `PostgreSqlSuiteFixture` /
+  `SqlServerSuiteFixture` (xUnit adapters over the published `PostgreSqlFixture` / `SqlServerFixture`; a per-test
+  database is `fixture.GetConnectionString(database)`) + `[DockerRequiredFact]`/`[DockerRequiredTheory]` for transactions, uniqueness,
+  concurrency and every new feature (one abstract scenario class, one sealed subclass per server)
 
 ## Context to load
 - `.claude/rules/testing.md`
-- `.claude-context/templates/test-repository-template.md`
-- `.claude-context/standards/repository-contracts.md`
+- `.claude/rules/architecture.md`
+- Existing tests in the target project (fixtures, naming, helpers)
 
-## Mandatory Test Matrix
+## Test matrix
 
-### Per Repository
-- [ ] `FindAsync_WhenExists_ReturnsAggregate`
-- [ ] `FindAsync_WhenNotFound_ReturnsNull`
+### Write repository
+- [ ] `FindAsync_WhenExists_ReturnsAggregate` / `FindAsync_WhenMissing_ReturnsNull`
 - [ ] `AddAsync_ThenCommit_PersistsAggregate`
-- [ ] `UpdateAsync_ThenCommit_UpdatesAggregate`
+- [ ] `FindAsync_ThenMutate_ThenCommit_PersistsChange` (there is no `UpdateAsync`)
 - [ ] `DeleteAsync_ThenCommit_RemovesAggregate`
-- [ ] `CommitAsync_WhenCancelled_ThrowsOperationCancelled`
+- [ ] EF: `FindAsync_LoadsWholeAggregate` (children loaded, other aggregates not)
 
-### Per ReadRepository
-- [ ] `ListAsync_WithSpec_FiltersCorrectly`
-- [ ] `ListAsync_WithPagination_ReturnsCorrectPage`
-- [ ] `AnyAsync_WhenMatches_ReturnsTrue`
-- [ ] `CountAsync_ReturnsCorrectCount`
-- [ ] `ListAsync_UsesAsNoTracking` (verify no tracking on InMemoryRepository)
+### Read repository
+- [ ] `ListAsync_WithSpec_Filters`
+- [ ] `ListPagedAsync_WithOrderingAndPagination_ReturnsPage`
+- [ ] `ListPagedAsync_WithoutPagination_ReturnsDefaultPage`
+- [ ] `ListAsync_AboveMaxPageSize_Throws`
+- [ ] `AnyAsync_*`, `CountAsync_*`
+- [ ] EF: `FindAsync_ReturnsTrackedInstanceAsIs` / `FindAsync_LoadsUntracked`
 
-### Per UnitOfWork / Transaction
-- [ ] `CommitAsync_CommitsAllPendingChanges`
-- [ ] `BeginTransactionAsync_ThenRollback_RevertsPendingChanges`
-- [ ] `NestedCommit_IdempotentWithinTransaction`
+### Unit of Work
+- [ ] `CommitAsync_WhenCancelled_ThrowsOperationCanceled`
+- [ ] EF: `CommitAsync_OnUpdateFailure_ThrowsPersistenceException`
+- [ ] EF: `DiscardChanges_ClearsPendingChanges`
+- [ ] PostgreSQL: retry, join of an open transaction, rollback that keeps the original exception
 
-## Test Pattern
+## Pattern
 
 ```csharp
-public sealed class UserRepositoryTests
+public sealed class OrderHandlerTests
 {
-    private readonly InMemoryRepository<User> _repo = new();
-    private readonly InMemoryUnitOfWork _uow = new();
+    private readonly InMemoryRepository<Order, OrderId> _orders = new();
+    private readonly InMemoryUnitOfWork _unitOfWork = new();
 
     [Fact]
-    public async Task FindAsync_WhenExists_ReturnsUser()
+    public async Task FindAsync_WhenExists_ReturnsAggregate()
     {
-        var user = User.Create(UserId.New(), Email.From("test@example.com"));
-        await _repo.AddAsync(user);
-        await _uow.CommitAsync();
+        var order = Order.Place("SO-1", new Actor("user-1"), TimeProvider.System);
+        await _orders.AddAsync(order);
+        await _unitOfWork.CommitAsync();
 
-        var found = await _repo.FindAsync(user.Id);
+        var found = await _orders.FindAsync(order.Id);
 
         found.ShouldNotBeNull();
-        found!.Id.ShouldBe(user.Id);
+        found.Id.ShouldBe(order.Id);
     }
 
     [Fact]
-    public async Task FindAsync_WhenNotFound_ReturnsNull()
-    {
-        var found = await _repo.FindAsync(UserId.New());
-
-        found.ShouldBeNull();
-    }
-
-    [Fact]
-    public async Task CommitAsync_WhenCancelled_Throws()
+    public async Task CommitAsync_WhenCancelled_ThrowsOperationCanceled()
     {
         using var cts = new CancellationTokenSource();
-        cts.Cancel();
+        await cts.CancelAsync();
 
         await Should.ThrowAsync<OperationCanceledException>(
-            async () => await _uow.CommitAsync(cts.Token));
+            async () => await _unitOfWork.CommitAsync(cts.Token));
     }
 }
 ```
 
-## Test Project Configuration
-```xml
-<GenerateDocumentationFile>false</GenerateDocumentationFile>
-<NoWarn>CS1591;CA1707</NoWarn>
-```
+`InMemoryRepository` resolves the key from a public `Id` property of type `TId`, or from the
+`idSelector` passed to its constructor; composite keys are not supported.
+
+## Conventions
+`sealed` test classes, `Method_Scenario_ExpectedResult`; test `.csproj` with
+`GenerateDocumentationFile=false` and `NoWarn` `CS1591;CA1707`.

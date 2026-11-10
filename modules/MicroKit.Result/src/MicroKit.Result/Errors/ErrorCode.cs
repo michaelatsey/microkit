@@ -14,6 +14,8 @@ namespace MicroKit.Result;
 public readonly record struct ErrorCode(string Value) : IComparable<ErrorCode>
 {
     // ── Predefined codes ─────────────────────────────────────────────────
+    // Convenience codes for an error without a domain code; not a second taxonomy: Category, not Code, drives
+    // behavior (ADR-RESULT-001 D2).
     /// <summary>Generic failure code.</summary>
     public static readonly ErrorCode Failure = From("FAILURE");
 

@@ -1,69 +1,93 @@
 # Workflow: Adding a Provider
 
-Step-by-step guide for adding a new EF Core provider to MicroKit.Persistence.
+Adding a database provider (MySQL, Oracle, …) next to PostgreSql and SqlServer.
 
-## When to Use
+## 1. Plan
 
-When a new database provider needs to be supported (e.g., MySQL, SQLite for tests, Oracle).
+Run `implementer` first. The issue is the spec.
 
-## Steps
+## 2. Create the project
 
-### 1. Create the Provider Project
-
-```
-/new-provider <ProviderName>
-```
-
-Name: `MicroKit.Persistence.EntityFrameworkCore.<ProviderName>`
-
-### 2. Set Up Project Dependencies
+`src/MicroKit.Persistence.EntityFrameworkCore.<Provider>/`, namespace = project name, added to
+`MicroKit.Persistence.slnx`:
 
 ```xml
-<!-- In the provider .csproj -->
-<ProjectReference Include="../MicroKit.Persistence.EntityFrameworkCore/MicroKit.Persistence.EntityFrameworkCore.csproj" />
-<PackageReference Include="<Provider.EFCore.Package>" />
+<ItemGroup>
+  <ProjectReference Include="..\MicroKit.Persistence.EntityFrameworkCore\MicroKit.Persistence.EntityFrameworkCore.csproj" />
+</ItemGroup>
+<ItemGroup>
+  <PackageReference Include="<Provider.EFCore.Package>" />
+</ItemGroup>
 ```
 
-Add the provider package version to `Directory.Packages.props`.
+The version goes in the root `Directory.Packages.props`. Copy `Description`, `PackageTags` and the
+`IL2091` suppression from an existing provider `.csproj`.
 
-### 3. Implement Provider-Specific DbContext Options
+## 3. The registration extension
+
+Mirror `UsePostgreSQL<TContext>` / `UseSqlServer<TContext>`: same parameter order, same
+`ProviderOptions` handling.
 
 ```csharp
-public static class EfCoreBuilderExtensions
+public static EfCoreBuilder UseMyProvider<TContext>(
+    this EfCoreBuilder builder,
+    string connectionString,
+    Action<MyProviderDbContextOptionsBuilder>? providerOptions = null,
+    ProviderOptions? options = null)
+    where TContext : DbContext
 {
-    public static EfCoreBuilder UseMyProvider(
-        this EfCoreBuilder builder,
-        string connectionString,
-        Action<DbContextOptionsBuilder>? configure = null)
-    {
-        builder.Services.AddDbContext<AppDbContext>(opts =>
+    ArgumentNullException.ThrowIfNull(builder);
+    ArgumentException.ThrowIfNullOrWhiteSpace(connectionString);
+
+    var retry = options?.Retry;
+    void Configure(DbContextOptionsBuilder opts) =>
+        opts.UseMyProvider(connectionString, provider =>
         {
-            opts.UseMyProvider(connectionString);
-            configure?.Invoke(opts);
+            if (retry is not null)
+                provider.EnableRetryOnFailure(retry.MaxRetryCount, retry.MaxRetryDelay, /* extra codes */ null);
+            providerOptions?.Invoke(provider);
         });
-        return builder;
+
+    if (options?.PoolSize is { } poolSize)
+    {
+        EnsurePoolable<TContext>(nameof(options)); // private copy, as in the PostgreSQL provider
+        builder.Services.AddDbContextPool<TContext>(Configure, poolSize);
     }
+    else
+    {
+        builder.Services.AddDbContext<TContext>(Configure);
+    }
+
+    return builder;
 }
 ```
 
-### 4. Add Provider-Specific Conventions (if needed)
+`ProviderOptions` (in EntityFrameworkCore) is provider-neutral: `Retry` (`RetryOnFailureOptions`)
+turns on the provider's retrying execution strategy, `PoolSize` switches to a context pool after
+`EnsurePoolable` has rejected a context whose constructor takes more than its options. Copy that
+private method from the PostgreSQL provider: provider packages do not share internals, because they
+version separately from the EntityFrameworkCore package. A
+provider without a retrying strategy documents that `Retry` is not supported rather than ignoring it.
+Provider-specific options go through the provider builder action, not new `ProviderOptions` members.
 
-```csharp
-// PostgreSQL snake_case naming
-protected override void ConfigureConventions(ModelConfigurationBuilder cfg)
-    => cfg.Properties<string>().HaveMaxLength(500);
-```
+## 4. Check the transaction semantics
 
-### 5. Invoke Dependency Guardian
+`EfUnitOfWork` relies on the provider's execution strategy (ADR-006). Verify that the provider's
+non-retrying strategy wraps transient failures the way `EfUnitOfWork` expects
+(`InvalidOperationException` with an inner `DbUpdateException`/`DbException`), or extend the
+translation with a test.
 
-Invoke `dependency-guardian` to verify the provider package is correctly confined to the
-new project only and does not leak into Core or Abstractions.
+## 5. Tests
 
-### 6. Add Integration Tests
+- `tests/MicroKit.Persistence.IntegrationTests/Providers/`: registration (plain vs pool, retry on
+  or off, a non-poolable context rejected), as `ProviderOptionsTests` does.
+- Behaviour against a real server with Testcontainers, skipped without Docker
+  (`DockerRequiredFact`), in the existing IntegrationTests project.
+- Add the assembly to `IlCallScanTests.LibraryAssemblies` and a namespace test in
+  `NamespaceConventionTests`; add a `LayerDependencyTests` case confining the provider package.
 
-Create a test project `MicroKit.Persistence.IntegrationTests.<ProviderName>` using
-Testcontainers for the provider.
+## 6. Reviews
 
-### 7. Add CI Workflow
-
-Copy `.github/workflows/ci-persistence.yml` and add a matrix entry for the new provider.
+`dependency-guardian` (new `.csproj`), `api-reviewer` (new public extension), `ef-core-specialist`.
+Update `README.md`, `.claude/CLAUDE.md`, `.claude/rules/dependencies.md`,
+`.claude/rules/packaging.md` (package count) and `.claude-context/context/dependency-graph.md`.

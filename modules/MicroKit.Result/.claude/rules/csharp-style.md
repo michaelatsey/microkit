@@ -6,24 +6,38 @@ Toujours actif pour tout fichier `.cs` dans ce projet.
 ## Namespaces
 ```csharp
 // ✅ File-scoped namespace obligatoire
-namespace MicroKit.Result.Core;
+namespace MicroKit.Result;
 
 // ❌ Block-scoped namespace interdit
-namespace MicroKit.Result.Core
+namespace MicroKit.Result
 {
 }
 ```
+Les dossiers ne créent pas de namespace : tous les types du cœur sont dans `MicroKit.Result`, sauf les convertisseurs JSON (`MicroKit.Result.Serialization`) ; le package ASP.NET Core est dans `MicroKit.Result.AspNetCore`.
 
 ## Types
 
 ### Record structs (value objects immuables)
 ```csharp
-// ✅ Pour les types valeur sans héritage polymorphique
-public readonly record struct ErrorCode(string Value)
+// ✅ Pour les types valeur sans héritage polymorphique ; membres dans l'ordre de la fin de ce fichier
+public readonly record struct ErrorCode(string Value) : IComparable<ErrorCode>
 {
-    public static ErrorCode From(string value) => new(value);
-    public static implicit operator string(ErrorCode code) => code.Value;
+    public static ErrorCode From(string value)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(value);
+        return new(value);
+    }
+
+    public int CompareTo(ErrorCode other) => StringComparer.Ordinal.Compare(Value, other.Value);
     public override string ToString() => Value;
+
+    // IComparable<T> sans opérateurs de comparaison : CA1036, une erreur en Release
+    public static bool operator <(ErrorCode left, ErrorCode right) => left.CompareTo(right) < 0;
+    public static bool operator <=(ErrorCode left, ErrorCode right) => left.CompareTo(right) <= 0;
+    public static bool operator >(ErrorCode left, ErrorCode right) => left.CompareTo(right) > 0;
+    public static bool operator >=(ErrorCode left, ErrorCode right) => left.CompareTo(right) >= 0;
+
+    public static implicit operator string(ErrorCode code) => code.Value;
 }
 ```
 
@@ -31,14 +45,17 @@ public readonly record struct ErrorCode(string Value)
 ```csharp
 // ✅ sealed par défaut sur tous les records concrets
 public sealed record UserNotFoundError(Guid UserId) 
-    : Error(ErrorCode.From("USER.NOT_FOUND"), $"User {UserId} not found");
+    : Error(ErrorCode.From("USER.NOT_FOUND"), $"User {UserId} not found")
+{
+    public override ErrorCategory Category => ErrorCategory.NotFound; // sinon Technical (HTTP 500)
+}
 ```
 
 ### Classes internes
 ```csharp
-// ✅ sealed + internal pour les helpers d'infrastructure
+// ✅ internal static pour les helpers d'infrastructure sans état
 internal static class ThrowHelper { }
-internal sealed class ResultGuard { }
+internal static class ResultGuard { }
 ```
 
 ## Constructeurs
@@ -46,22 +63,26 @@ internal sealed class ResultGuard { }
 ### Primary constructors (C# 12+)
 ```csharp
 // ✅ Primary constructor pour DI et value objects
-public sealed class DefaultExceptionMapper(ILogger<DefaultExceptionMapper> logger) 
-    : IExceptionMapper
+// DatabaseCallFailed ([LoggerMessage]), DatabaseError et TechnicalError : rules/no-exceptions-flow.md
+public sealed class DatabaseExceptionMapper(ILogger<DatabaseExceptionMapper> logger)
 {
-    public Result Map(Exception ex) => logger.LogAndMap(ex);
+    public IError Map(Exception ex)
+    {
+        logger.DatabaseCallFailed(ex);
+        // Try attrape toute exception : seule une exception du fournisseur se lit comme une panne de la base
+        return ex is DbException ? new DatabaseError() : new TechnicalError();
+    }
 }
+// Usage, pour un appel sans CancellationToken : Result<User> user = Result<User>.Try(() => repository.Load(id), mapper.Map);
 ```
 
-### Validation dans les constructeurs
+### Validation des arguments
 ```csharp
-// ✅ ArgumentNullException.ThrowIfNull (pas de guard manuel)
-public Error(ErrorCode code, string message)
+// ✅ ArgumentException.ThrowIfNullOrWhiteSpace / ArgumentNullException.ThrowIfNull (pas de guard manuel)
+public static ErrorCode From(string value)
 {
-    ArgumentNullException.ThrowIfNull(message);
-    ArgumentException.ThrowIfNullOrWhiteSpace(message);
-    Code = code;
-    Message = message;
+    ArgumentException.ThrowIfNullOrWhiteSpace(value);
+    return new(value);
 }
 ```
 
@@ -70,14 +91,14 @@ public Error(ErrorCode code, string message)
 ### readonly
 ```csharp
 // ✅ Tout champ non modifié après construction
-private readonly IReadOnlyList<IError> _errors;
+private readonly ImmutableArray<IError> _errors;
 ```
 
 ### in parameter modifier
+Aucun paramètre de `src/` n'utilise `in` : tous les structs, dont `Result` et `Result<T>` dans chaque extension, sont passés par valeur.
 ```csharp
-// ✅ Pour les gros structs passés sans modification
-public static Result<T> Ensure<T>(this in Result<T> result, ...)
-// Note: utiliser avec parcimonie, seulement pour structs > 16 bytes
+// ✅ Par valeur, comme dans toutes les extensions
+public static Result<TOut> Map<TIn, TOut>(this Result<TIn> result, Func<TIn, TOut> mapper)
 ```
 
 ## Méthodes
@@ -85,18 +106,24 @@ public static Result<T> Ensure<T>(this in Result<T> result, ...)
 ### Expression-bodied
 ```csharp
 // ✅ Pour one-liners
-public bool IsSuccess => _state == ResultState.Success;
-public bool IsFailure => !IsSuccess;
-public override string ToString() => IsSuccess ? $"Success({Value})" : $"Failure({Error})";
+public bool IsSuccess => _tag == TagSuccess;
+public bool IsFailure => _tag == TagFailure; // pas !IsSuccess : default(Result) n'est ni succès ni échec
+public override string ToString() => "()"; // Unit
 ```
 
 ### Pattern matching (préféré au casting)
 ```csharp
-// ✅
-if (result is { IsSuccess: true, Value: var value }) { }
+// ✅ Type pattern plutôt qu'un cast, une fois l'échec vérifié
+if (result.IsFailure && result.Error is ValidationError validation)
+    return validation.PropertyName;
 
-// ❌
-if (result.IsSuccess) { var value = (SomeType)result.Value; }
+// ❌ Cast
+var validation = (ValidationError)result.Error;
+
+// ❌ .Value dans un property pattern : l'ordre d'évaluation des sous-patterns n'est pas garanti
+if (result is { IsSuccess: true, Value: var value }) { }
+// ✅ Lecture vérifiée : TryGetValue, ou .Value après un test de IsSuccess
+if (result.TryGetValue(out var user)) { }
 ```
 
 ## Null handling
@@ -105,12 +132,12 @@ if (result.IsSuccess) { var value = (SomeType)result.Value; }
 var message = error?.Message ?? "Unknown error";
 
 // ✅ Pattern matching sur null
-if (value is null) return Result.Failure(new NullValueError());
+if (value is null) return Result.Failure(ValidationError.Required(nameof(value)));
 
 // ❌ Jamais de ! (null forgiving) sans commentaire justificatif
-var value = result.Value!; // ❌
+return _value!; // ❌
 // ✅ Avec justification:
-var value = result.Value!; // Safe: IsSuccess checked above
+return _value!; // Safe: _tag == TagSuccess checked above
 ```
 
 ## Documentation XML

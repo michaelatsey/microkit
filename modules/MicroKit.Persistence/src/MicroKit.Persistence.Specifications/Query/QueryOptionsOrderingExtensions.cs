@@ -2,7 +2,7 @@ namespace MicroKit.Persistence.Specifications;
 
 /// <summary>
 /// Property-selector ordering extensions for <see cref="QueryOptions{TAggregate}"/>.
-/// Complement the delegate-based <see cref="QueryOptionsExtensions.OrderBy{TAggregate}"/>
+/// Complement the delegate-based <see cref="QueryOptionsExtensions.WithOrdering{TAggregate}"/>
 /// in <c>MicroKit.Persistence</c> with concise key-selector overloads using the
 /// established <c>With-</c> prefix convention.
 /// Each method derives a new record instance — the original is not modified.

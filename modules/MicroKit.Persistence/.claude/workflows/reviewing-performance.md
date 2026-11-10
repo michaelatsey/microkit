@@ -1,63 +1,41 @@
 # Workflow: Reviewing Performance
 
-Step-by-step guide for auditing query performance in MicroKit.Persistence.
+## When
 
-## When to Use
+- A change to `EfRepository` (aggregate load, `AggregateIncludePlan`), `EfReadRepository`,
+  `EfSpecificationEvaluator`, `EfUnitOfWork` or the in-memory doubles
+- A consumer reports N+1 queries, slow pages or high memory
 
-- Before merging any change to a repository `ListAsync`, `FindAsync`, or `CommitAsync`
-- When a benchmark delta > 10% is observed in CI
-- When a consumer reports N+1 or high DB query latency
+## 1. Run `performance-reviewer`
 
-## Steps
+Against `.claude/rules/performance.md` and `.claude-context/standards/performance-budget.md`.
 
-### 1. Run `/review-performance`
+## 2. Read the code paths
 
-The `performance-reviewer` agent audits the changed files against:
-- `.claude/rules/performance.md`
-- `.claude-context/standards/performance-budget.md`
+- Tracking on read paths (no analyzer — review it)
+- `SaveChanges` in a read repository — MKP001; `DbContext` in a handler — MKP004
+- Round trips of the aggregate load: 1, or 1 + C when split
+- Navigations used without being loaded
 
-### 2. Run `/audit-queries`
+## 3. Look at the SQL
 
-Detects at the code level:
-- Missing `AsNoTracking()` — Analyzer PRDANA003
-- `SaveChanges` in read repos — Analyzer PRDANA002
-- `DbContext` in query handlers — Analyzer PRDANA001
-- Navigation properties accessed without explicit `.Include()` (potential lazy load)
-
-### 3. Run Benchmarks
-
-```bash
-dotnet run --project benchmarks/MicroKit.Persistence.Benchmarks/ -c Release --filter *
-```
-
-Focus metrics:
-- `FindAsync` overhead vs raw `DbContext.FindAsync`
-- `ListAsync` (paged, NoTracking) overhead vs raw query
-- `CommitAsync` overhead vs raw `SaveChangesAsync`
-- Allocations per operation (Gen0/Gen1/Gen2)
-
-### 4. Check EF Core Query Plan
+There is no benchmark project. Log the SQL from an integration test:
 
 ```csharp
-// Enable query logging temporarily
-optionsBuilder.LogTo(Console.WriteLine, LogLevel.Information)
-              .EnableSensitiveDataLogging();
+optionsBuilder.LogTo(output.WriteLine, LogLevel.Information).EnableSensitiveDataLogging();
+// or, for one query: query.ToQueryString()
 ```
 
-Review generated SQL in logs: look for:
-- `SELECT *` (projection missing)
-- Multiple queries per request (N+1)
-- `OFFSET 0 ROWS FETCH NEXT ...` without an ORDER BY (non-deterministic pagination)
+Look for: several statements per request (N+1), a Cartesian product from multiple collection
+joins, `OFFSET … FETCH` without `ORDER BY`, columns a DTO read does not need.
 
-### 5. Identify and Fix
+## 4. Fix
 
-Common fixes:
-- Add `.Select(Dto.Projection)` for server-side projection
-- Add `.Include()` via QueryOptions for navigation properties
-- Use `AnyAsync` instead of `CountAsync() > 0`
-- Use compiled queries for hot paths
-- Use `AsSplitQuery()` for multi-collection includes
+Server-side projection, `Includes` (read side) or `IsOutsideAggregate()` (write side), `AsSplitQuery()`,
+`AnyAsync` over `CountAsync() > 0`, ordering on paginated queries, a compiled query on a measured
+hot path.
 
-### 6. Re-run Benchmarks
+## 5. Prove it
 
-Confirm the fix does not regress other metrics before approving the PR.
+An integration test that pins the behaviour (statement count, rows loaded). A claim about time or
+allocations needs a measurement; without a benchmark project, say it is unmeasured.

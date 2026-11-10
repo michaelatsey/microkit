@@ -26,9 +26,29 @@ public sealed class SealedClassTests
     }
 
     [Fact]
+    public void AggregateVersionConflictException_IsSealed()
+    {
+        IsSealed(typeof(MicroKit.Persistence.AggregateVersionConflictException)).ShouldBeTrue();
+    }
+
+    [Fact]
+    public void FailureClassifiers_AreSealed()
+    {
+        IsSealed(typeof(MicroKit.Persistence.EntityFrameworkCore.PostgreSql.PostgreSqlFailureClassifier)).ShouldBeTrue();
+        IsSealed(typeof(MicroKit.Persistence.EntityFrameworkCore.SqlServer.SqlServerFailureClassifier)).ShouldBeTrue();
+    }
+
+    [Fact]
+    public void TheRelationalFixtures_AreSealed()
+    {
+        IsSealed(typeof(MicroKit.Persistence.Testing.PostgreSql.PostgreSqlFixture)).ShouldBeTrue();
+        IsSealed(typeof(MicroKit.Persistence.Testing.SqlServer.SqlServerFixture)).ShouldBeTrue();
+    }
+
+    [Fact]
     public void InMemoryRepository_IsSealed()
     {
-        IsSealed(typeof(MicroKit.Persistence.Testing.InMemoryRepository<>)).ShouldBeTrue();
+        IsSealed(typeof(MicroKit.Persistence.Testing.InMemoryRepository<,>)).ShouldBeTrue();
     }
 
     [Fact]
@@ -61,11 +81,11 @@ public sealed class SealedClassTests
         IsSealed(typeof(MicroKit.Persistence.PaginationOptions)).ShouldBeTrue();
     }
 
-    // EfRepository<,> is intentionally not sealed — consumers subclass it for typed repositories.
+    // EfRepository<,,> is intentionally not sealed — consumers subclass it for typed repositories.
     [Fact]
     public void EfRepository_BaseClass_IsNotSealed()
     {
-        IsSealed(typeof(MicroKit.Persistence.EntityFrameworkCore.EfRepository<,>)).ShouldBeFalse();
+        IsSealed(typeof(MicroKit.Persistence.EntityFrameworkCore.EfRepository<,,>)).ShouldBeFalse();
     }
 
     [Fact]

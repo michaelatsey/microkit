@@ -3,7 +3,7 @@ namespace MicroKit.Persistence;
 /// <summary>
 /// Encapsulates the loading strategy for a read query over <typeparamref name="TAggregate"/>
 /// aggregates. Combines the WHAT (a domain <see cref="Specification{T}"/>) with the HOW
-/// (eager includes, change-tracking hint, ordering, pagination, soft-delete visibility) — ADR-002.
+/// (eager includes, split query, ordering, offset or keyset pagination, soft-deleted rows) — ADR-002.
 /// </summary>
 /// <typeparam name="TAggregate">
 /// The aggregate root type. Must be a reference type implementing <see cref="IAggregateRoot"/>.
@@ -16,9 +16,8 @@ namespace MicroKit.Persistence;
 /// extension methods in <see cref="QueryOptionsExtensions"/> to derive modified options.
 /// </para>
 /// <para>
-/// <see cref="AsNoTrackingEnabled"/> defaults to <see langword="true"/> — read paths must not
-/// track entities. Set <see langword="false"/> only when the aggregate will be mutated inside a
-/// command handler after loading it via a read path.
+/// There is no tracking option: the read side never tracks. An aggregate a command modifies is
+/// loaded whole through <c>IRepository&lt;TAggregate, TId&gt;</c>, never through a read query.
 /// </para>
 /// <example>
 /// <code>
@@ -39,7 +38,7 @@ public sealed record QueryOptions<TAggregate>
     /// </summary>
     /// <param name="specification">
     /// The domain specification that determines which aggregates match the query.
-    /// Pass <see langword="null"/> to return all aggregates (subject to soft-delete filtering).
+    /// Pass <see langword="null"/> to return all aggregates (subject to the model's query filters).
     /// </param>
     public QueryOptions(Specification<TAggregate>? specification = null)
     {
@@ -65,18 +64,11 @@ public sealed record QueryOptions<TAggregate>
 
     /// <summary>
     /// Gets the pagination parameters.
-    /// <see langword="null"/> means no pagination — the full result set is returned.
+    /// <see langword="null"/> means no pagination: <c>ListAsync</c> returns the full result set,
+    /// <c>ListPagedAsync</c> returns the first page of <see cref="PaginationLimits.DefaultPageSize"/>
+    /// items. A requested page size above <see cref="PaginationLimits.MaxPageSize"/> is rejected.
     /// </summary>
     public PaginationOptions? Pagination { get; init; }
-
-    /// <summary>
-    /// Gets a value indicating whether queries execute without EF Core change tracking.
-    /// </summary>
-    /// <value>
-    /// <see langword="true"/> by default. Set to <see langword="false"/> only when the loaded
-    /// aggregate will be mutated and committed via <c>IRepository&lt;TAggregate&gt;</c>.
-    /// </value>
-    public bool AsNoTrackingEnabled { get; init; } = true;
 
     /// <summary>
     /// Gets a value indicating whether EF Core split-query mode is active.
@@ -93,21 +85,33 @@ public sealed record QueryOptions<TAggregate>
     /// <see langword="null"/> means no explicit ordering (database default order).
     /// </summary>
     /// <remarks>
-    /// Must be set whenever <see cref="Pagination"/> is non-null to ensure deterministic
-    /// page boundaries across requests.
+    /// Must be set whenever <see cref="Pagination"/> is non-null, and for every
+    /// <c>ListPagedAsync</c> call (which applies a default page when <see cref="Pagination"/> is
+    /// null), to ensure deterministic page boundaries across requests.
     /// </remarks>
     public Func<IQueryable<TAggregate>, IOrderedQueryable<TAggregate>>? OrderBy { get; init; }
 
     /// <summary>
-    /// Gets a value indicating whether soft-deleted aggregates are included in results.
+    /// Gets a value indicating whether soft-deleted aggregates are returned too.
     /// </summary>
-    /// <value>
-    /// <see langword="false"/> by default — soft-deleted rows are excluded.
-    /// Set to <see langword="true"/> for administrative or audit queries.
-    /// </value>
     /// <remarks>
-    /// The <see cref="ISpecificationEvaluator"/> implementation is responsible for honouring
-    /// this flag by bypassing the global query filter for soft-deleted entities.
+    /// The EF Core read side then ignores the soft-delete filter only (its named filter,
+    /// <c>SoftDelete.FilterName</c>), for the whole query: an included navigation that reaches another
+    /// soft-deletable aggregate returns its soft-deleted rows too. Every other query filter of the model,
+    /// named or anonymous (a tenant filter), still applies. It has no effect on the in-memory doubles,
+    /// which delete for real. The write side never loads a soft-deleted aggregate.
     /// </remarks>
     public bool IncludeDeleted { get; init; }
+
+    /// <summary>
+    /// Gets the keyset (cursor) pagination read by
+    /// <see cref="IReadRepository{TAggregate}.ListKeysetAsync(QueryOptions{TAggregate}, CancellationToken)"/>;
+    /// <see langword="null"/> when none is set.
+    /// </summary>
+    /// <remarks>
+    /// The keyset owns the ordering and the page: <c>ListKeysetAsync</c> refuses options that also set
+    /// <see cref="OrderBy"/> or <see cref="Pagination"/>, and <c>ListAsync</c> and <c>ListPagedAsync</c> refuse
+    /// options that set it (ADR-013).
+    /// </remarks>
+    public KeysetPagination<TAggregate>? Keyset { get; init; }
 }

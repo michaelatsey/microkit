@@ -122,12 +122,13 @@ public sealed class DbContextInjectionAnalyzerTests
     {
         var source = PersistenceStubs.All + """
             class MyAggregate : IAggregateRoot { }
+            class MyId : IEntityId { }
 
             namespace MyApp.Application
             {
                 class CreateOrderHandler
                 {
-                    public CreateOrderHandler(IRepository<MyAggregate> repo) { }
+                    public CreateOrderHandler(IRepository<MyAggregate, MyId> repo) { }
                 }
             }
             """;

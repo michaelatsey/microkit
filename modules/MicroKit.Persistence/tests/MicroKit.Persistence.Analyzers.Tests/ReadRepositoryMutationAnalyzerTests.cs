@@ -13,6 +13,7 @@ public sealed class ReadRepositoryMutationAnalyzerTests
     {
         var source = PersistenceStubs.All + """
             class MyAggregate : IAggregateRoot { }
+            class MyId : IEntityId { }
 
             class MyReadRepo : IReadRepository<MyAggregate>
             {
@@ -37,6 +38,7 @@ public sealed class ReadRepositoryMutationAnalyzerTests
     {
         var source = PersistenceStubs.All + """
             class MyAggregate : IAggregateRoot { }
+            class MyId : IEntityId { }
 
             class MyReadRepo : IReadRepository<MyAggregate>
             {
@@ -65,11 +67,12 @@ public sealed class ReadRepositoryMutationAnalyzerTests
     {
         var source = PersistenceStubs.All + """
             class MyAggregate : IAggregateRoot { }
+            class MyId : IEntityId { }
 
             class MyReadRepo : IReadRepository<MyAggregate>
             {
-                private readonly IRepository<MyAggregate> _repo;
-                public MyReadRepo(IRepository<MyAggregate> repo) => _repo = repo;
+                private readonly IRepository<MyAggregate, MyId> _repo;
+                public MyReadRepo(IRepository<MyAggregate, MyId> repo) => _repo = repo;
 
                 public async Task DoWorkAsync(MyAggregate agg, CancellationToken ct)
                 {
@@ -89,11 +92,14 @@ public sealed class ReadRepositoryMutationAnalyzerTests
     {
         var source = PersistenceStubs.All + """
             class MyAggregate : IAggregateRoot { }
+            class MyId : IEntityId { }
+
+            interface IMyWriter { ValueTask UpdateAsync(MyAggregate a, CancellationToken ct = default); }
 
             class MyReadRepo : IReadRepository<MyAggregate>
             {
-                private readonly IRepository<MyAggregate> _repo;
-                public MyReadRepo(IRepository<MyAggregate> repo) => _repo = repo;
+                private readonly IMyWriter _repo;
+                public MyReadRepo(IMyWriter repo) => _repo = repo;
 
                 public async Task DoWorkAsync(MyAggregate agg, CancellationToken ct)
                 {
@@ -113,11 +119,12 @@ public sealed class ReadRepositoryMutationAnalyzerTests
     {
         var source = PersistenceStubs.All + """
             class MyAggregate : IAggregateRoot { }
+            class MyId : IEntityId { }
 
             class MyReadRepo : IReadRepository<MyAggregate>
             {
-                private readonly IRepository<MyAggregate> _repo;
-                public MyReadRepo(IRepository<MyAggregate> repo) => _repo = repo;
+                private readonly IRepository<MyAggregate, MyId> _repo;
+                public MyReadRepo(IRepository<MyAggregate, MyId> repo) => _repo = repo;
 
                 public async Task DoWorkAsync(MyAggregate agg, CancellationToken ct)
                 {
@@ -141,6 +148,7 @@ public sealed class ReadRepositoryMutationAnalyzerTests
     {
         var source = PersistenceStubs.All + """
             class MyAggregate : IAggregateRoot { }
+            class MyId : IEntityId { }
 
             class MyReadRepo : IReadRepository<MyAggregate>
             {
@@ -160,17 +168,17 @@ public sealed class ReadRepositoryMutationAnalyzerTests
     // -------------------------------------------------------------------------
 
     [Fact]
-    public async Task CommitAsync_InWriteRepoImpl_NoDiagnostic()
+    public async Task WriteMethods_InWriteRepoImpl_NoDiagnostic()
     {
         var source = PersistenceStubs.All + """
             class MyAggregate : IAggregateRoot { }
+            class MyId : IEntityId { }
 
-            class MyWriteRepo : IRepository<MyAggregate>
+            class MyWriteRepo : IRepository<MyAggregate, MyId>
             {
+                public ValueTask<MyAggregate> FindAsync(MyId id, CancellationToken ct = default) => default;
                 public ValueTask AddAsync(MyAggregate a, CancellationToken ct = default) => default;
-                public ValueTask UpdateAsync(MyAggregate a, CancellationToken ct = default) => default;
                 public ValueTask DeleteAsync(MyAggregate a, CancellationToken ct = default) => default;
-                public ValueTask CommitAsync(CancellationToken ct = default) => default;
             }
             """;
 
@@ -207,8 +215,9 @@ public sealed class ReadRepositoryMutationAnalyzerTests
     {
         var source = PersistenceStubs.All + """
             class MyAggregate : IAggregateRoot { }
+            class MyId : IEntityId { }
 
-            class MyReadRepo : MicroKit.Persistence.IReadRepository<MyAggregate>
+            class MyReadRepo : IReadRepository<MyAggregate>
             {
                 public ValueTask<IReadOnlyList<MyAggregate>> ListAsync(CancellationToken ct = default)
                     => new ValueTask<IReadOnlyList<MyAggregate>>(new List<MyAggregate>());

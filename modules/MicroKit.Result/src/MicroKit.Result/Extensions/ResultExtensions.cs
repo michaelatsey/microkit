@@ -3,7 +3,7 @@ namespace MicroKit.Result;
 /// <summary>
 /// Synchronous extension methods for <see cref="Result{T}"/> and <see cref="Result"/>.
 /// </summary>
-public static class ResultExtensions
+public static partial class ResultExtensions
 {
     #region Map
 
@@ -16,6 +16,8 @@ public static class ResultExtensions
     /// <param name="result">The source result.</param>
     /// <param name="mapper">The transformation function.</param>
     /// <returns>A new result with the mapped value, or the original failure.</returns>
+    /// <exception cref="ArgumentNullException">Thrown when the delegate returns <see langword="null"/>: a success needs a value (ADR-RESULT-001 D6).</exception>
+    /// <exception cref="ArgumentException">Thrown when the delegate returns a result as the value; use Bind.</exception>
     public static Result<TOut> Map<TIn, TOut>(this Result<TIn> result, Func<TIn, TOut> mapper)
     {
         ResultGuard.NotNull(mapper);
@@ -199,9 +201,10 @@ public static class ResultExtensions
     public static Result<T> MapError<T>(this Result<T> result, Func<IError, IError> mapper)
     {
         ResultGuard.NotNull(mapper);
-        return result.IsFailure
-            ? Result<T>.Failure(mapper(result.Error))
-            : result;
+        // !IsSuccess, not IsFailure: Error throws ResultException on a default result
+        return result.IsSuccess
+            ? result
+            : Result<T>.Failure(mapper(result.Error));
     }
 
     #endregion
@@ -219,9 +222,10 @@ public static class ResultExtensions
     public static Result<T> Compensate<T>(this Result<T> result, Func<IError, Result<T>> fallback)
     {
         ResultGuard.NotNull(fallback);
-        return result.IsFailure
-            ? fallback(result.Error)
-            : result;
+        // !IsSuccess, not IsFailure: Error throws ResultException on a default result
+        return result.IsSuccess
+            ? result
+            : fallback(result.Error);
     }
 
     #endregion
@@ -251,7 +255,8 @@ public static class ResultExtensions
     /// When <see langword="null"/>, a <see cref="ResultException"/> is thrown instead.
     /// </param>
     /// <returns>The success value.</returns>
-    /// <exception cref="ResultException">Thrown when the result is a failure and no factory is provided.</exception>
+    /// <exception cref="ResultException">Thrown when the result is a failure and no factory is provided, or when it is uninitialized (<c>default</c>).</exception>
+    /// <exception cref="InvalidOperationException">Thrown when the result is a failure and <paramref name="exceptionFactory"/> returns <see langword="null"/>.</exception>
     public static T GetValueOrThrow<T>(
         this Result<T> result,
         Func<IError, Exception>? exceptionFactory = null)
@@ -260,7 +265,12 @@ public static class ResultExtensions
             return result.Value;
 
         if (exceptionFactory is not null)
-            throw exceptionFactory(result.Error);
+        {
+            // Error throws ResultException on a default result, before the factory runs
+            var exception = exceptionFactory(result.Error);
+            throw exception ?? new InvalidOperationException(
+                "The exception factory passed to GetValueOrThrow returned null; it must return the exception to throw.");
+        }
 
         // Delegate to Value getter, which calls ThrowHelper.ThrowResultFailure
         return result.Value;

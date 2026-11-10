@@ -3,8 +3,13 @@
     <IsPackable>false</IsPackable>
     <IsPublishable>false</IsPublishable>
     <GenerateDocumentationFile>false</GenerateDocumentationFile>
-    <NoWarn>$(NoWarn);CS1591;CA1707</NoWarn>
+    <!-- IL2026/IL3050: the test host maps endpoints with delegates (RequiresUnreferencedCode /
+         RequiresDynamicCode); this test project is never trimmed nor AOT-compiled. -->
+    <NoWarn>$(NoWarn);CS1591;CA1707;IL2026;IL3050</NoWarn>
   </PropertyGroup>
+  <ItemGroup>
+    <FrameworkReference Include="Microsoft.AspNetCore.App" />
+  </ItemGroup>
   <ItemGroup>
     <PackageReference Include="Microsoft.NET.Test.Sdk" />
     <PackageReference Include="xunit" />
@@ -14,5 +19,6 @@
   </ItemGroup>
   <ItemGroup>
     <ProjectReference Include="../../src/MicroKit.Result/MicroKit.Result.csproj" />
+    <ProjectReference Include="../../src/MicroKit.Result.AspNetCore/MicroKit.Result.AspNetCore.csproj" />
   </ItemGroup>
 </Project>

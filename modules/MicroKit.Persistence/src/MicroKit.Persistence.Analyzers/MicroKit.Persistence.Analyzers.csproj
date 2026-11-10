@@ -8,15 +8,16 @@
     <EnforceExtendedAnalyzerRules>true</EnforceExtendedAnalyzerRules>
     <!-- Not meaningful for netstandard2.0 analyzer DLLs -->
     <IsTrimmable>false</IsTrimmable>
-    <Description>Roslyn analyzers for MicroKit.Persistence — enforces CQRS data-access patterns, repository mutation boundaries, IUnitOfWork usage, and IQueryable containment at compile time.</Description>
+    <Description>Roslyn analyzers for MicroKit.Persistence — enforce CQRS data-access patterns, repository mutation boundaries, IUnitOfWork usage and IQueryable containment, and flag costly query shapes (cartesian includes, queries in loops, filtering after materialization, IgnoreQueryFilters()) at compile time.</Description>
     <PackageTags>microkit;persistence;analyzers;roslyn;cqrs;repository;dotnet</PackageTags>
     <!-- RS2008: Release tracking — will add AnalyzerReleases files before first NuGet publish. -->
     <NoWarn>RS2008;NU5128</NoWarn>
     <IncludeSymbols>false</IncludeSymbols>
   </PropertyGroup>
   <ItemGroup>
-    <!-- No code fixes in this package — CSharp (not Workspaces) is sufficient -->
-    <PackageReference Include="Microsoft.CodeAnalysis.CSharp" />
+    <!-- No code fixes in this package — CSharp (not Workspaces) is sufficient. Private: the compiler
+         loading the analyzer provides Roslyn, so consumers must not get it as a package dependency. -->
+    <PackageReference Include="Microsoft.CodeAnalysis.CSharp" PrivateAssets="all" />
   </ItemGroup>
   <!-- Place the analyzer DLL in the correct NuGet package location -->
   <ItemGroup>

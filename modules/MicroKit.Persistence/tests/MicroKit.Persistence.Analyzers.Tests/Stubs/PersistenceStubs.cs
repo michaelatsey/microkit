@@ -24,22 +24,32 @@ internal static class PersistenceStubs
         using System.Linq;
         using System.Threading;
         using System.Threading.Tasks;
+        using MicroKit.Domain.Aggregates;
+        using MicroKit.Domain.Identifiers;
+        using MicroKit.Persistence;
         using MicroKit.Persistence.Abstractions;
         using MicroKit.Persistence.EntityFrameworkCore;
         using Microsoft.EntityFrameworkCore;
 
-        namespace MicroKit.Persistence.Abstractions
+        namespace MicroKit.Domain.Aggregates
         {
             public interface IAggregateRoot { }
+        }
 
-            public interface IReadRepository<T> where T : IAggregateRoot { }
+        namespace MicroKit.Domain.Identifiers
+        {
+            public interface IEntityId { }
+        }
 
-            public interface IRepository<T> where T : IAggregateRoot
+        namespace MicroKit.Persistence.Abstractions
+        {
+            public interface IRepository<TAggregate, TId>
+                where TAggregate : IAggregateRoot
+                where TId : IEntityId
             {
-                ValueTask AddAsync(T aggregate, CancellationToken ct = default);
-                ValueTask UpdateAsync(T aggregate, CancellationToken ct = default);
-                ValueTask DeleteAsync(T aggregate, CancellationToken ct = default);
-                ValueTask CommitAsync(CancellationToken ct = default);
+                ValueTask<TAggregate> FindAsync(TId id, CancellationToken ct = default);
+                ValueTask AddAsync(TAggregate aggregate, CancellationToken ct = default);
+                ValueTask DeleteAsync(TAggregate aggregate, CancellationToken ct = default);
             }
 
             public interface IUnitOfWork
@@ -50,15 +60,10 @@ internal static class PersistenceStubs
 
         namespace MicroKit.Persistence
         {
-            // Extends the Abstractions marker with the full read contract.
-            // Reference this as MicroKit.Persistence.IReadRepository<T> in tests
-            // to avoid ambiguity with MicroKit.Persistence.Abstractions.IReadRepository<T>.
+            // The single read contract (#196 D8). Members are omitted: the analyzers match the
+            // interface by metadata name only, and test classes declare what they exercise.
             public interface IReadRepository<TAggregate>
-                : MicroKit.Persistence.Abstractions.IReadRepository<TAggregate>
-                where TAggregate : IAggregateRoot
-            {
-                ValueTask<IReadOnlyList<TAggregate>> ListAsync(CancellationToken ct = default);
-            }
+                where TAggregate : IAggregateRoot { }
         }
 
         namespace MicroKit.Persistence.EntityFrameworkCore

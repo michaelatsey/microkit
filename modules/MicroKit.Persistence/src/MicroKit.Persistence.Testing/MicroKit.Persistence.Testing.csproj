@@ -2,23 +2,25 @@
   <PropertyGroup>
     <AssemblyName>MicroKit.Persistence.Testing</AssemblyName>
     <RootNamespace>MicroKit.Persistence.Testing</RootNamespace>
-    <Description>In-memory IRepository / IReadRepository / IUnitOfWork test doubles for MicroKit.Persistence — unit-test command and query handlers with no database, EF Core, or DI container.</Description>
-    <PackageTags>persistence;testing;repository;unit-of-work;in-memory;microkit;ddd;dotnet</PackageTags>
+    <Description>In-memory IRepository / IReadRepository / IUnitOfWork test doubles for MicroKit.Persistence — unit-test command and query handlers with no database, EF Core, or DI container — and DockerProbe, a framework-neutral check that a Docker daemon answers.</Description>
+    <PackageTags>persistence;testing;repository;unit-of-work;in-memory;docker;microkit;ddd;dotnet</PackageTags>
     <!-- Test helper — uses reflection and AsQueryable; not intended for AOT/trimmed deployments -->
     <IsTrimmable>false</IsTrimmable>
     <NoWarn>$(NoWarn);IL2026;IL2090</NoWarn>
   </PropertyGroup>
 
-  <!-- DEV: source ProjectReferences — CI/Release: published NuGet packages -->
-  <!-- ⚠ Any new cross-module dependency must be added to BOTH ItemGroups -->
-  <ItemGroup Condition="'$(CIReleaseBuild)' != 'true'">
-    <ProjectReference Include="..\MicroKit.Persistence\MicroKit.Persistence.csproj" />
-  </ItemGroup>
-  <ItemGroup Condition="'$(CIReleaseBuild)' == 'true'">
-    <PackageReference Include="MicroKit.Persistence" />
+  <!-- The fixture packages, built and released with this one, share its container lifecycle and
+       connection-string edit (ADR-015); UnitTests, a test assembly that is never packed, tests them and the
+       Docker probe's per-endpoint seams. -->
+  <ItemGroup>
+    <InternalsVisibleTo Include="MicroKit.Persistence.Testing.PostgreSql" />
+    <InternalsVisibleTo Include="MicroKit.Persistence.Testing.SqlServer" />
+    <InternalsVisibleTo Include="MicroKit.Persistence.UnitTests" />
   </ItemGroup>
 
+  <!-- Intra-module: sibling packages are built and released together — always an unconditional
+       ProjectReference, in every build mode (ADR-GLOBAL-002 D5) -->
   <ItemGroup>
-    <PackageReference Include="NSubstitute" />
+    <ProjectReference Include="..\MicroKit.Persistence\MicroKit.Persistence.csproj" />
   </ItemGroup>
 </Project>

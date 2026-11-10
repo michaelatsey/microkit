@@ -1,138 +1,156 @@
 # Rule: Architecture — MicroKit.Persistence
 
-## Always active for every file in this module.
+Applies to every file in this module.
 
-## Repository Pattern
+## Write side — `IRepository<TAggregate, TId>` (Abstractions)
 
-### Write side — `IRepository<TAggregate>`
 ```csharp
-// ✅ Aggregate root constraint — only aggregates are persisted directly
-public interface IRepository<TAggregate>
-    where TAggregate : IAggregateRoot
+public interface IRepository<TAggregate, TId>
+    where TAggregate : class, IAggregateRoot
+    where TId : IEntityId
 {
-    ValueTask<TAggregate?> FindAsync(/* id */, CancellationToken ct = default);
+    ValueTask<TAggregate?> FindAsync(TId id, CancellationToken ct = default); // whole aggregate, tracked
+    ValueTask<TAggregate?> FindAsync(TId id, long expectedVersion, CancellationToken ct = default); // If-Match
+    long GetVersion(TAggregate aggregate);                                     // ETag
     ValueTask AddAsync(TAggregate aggregate, CancellationToken ct = default);
-    ValueTask UpdateAsync(TAggregate aggregate, CancellationToken ct = default);
     ValueTask DeleteAsync(TAggregate aggregate, CancellationToken ct = default);
-    ValueTask CommitAsync(CancellationToken ct = default);
 }
 
-// ✅ Custom repository extends the base
-public interface IUserRepository : IRepository<User>
+// ✅ A typed repository extends the contract; the EF implementation derives from EfRepository
+public interface IOrderRepository : IRepository<Order, OrderId>
 {
-    ValueTask<User?> FindByEmailAsync(Email email, CancellationToken ct = default);
+    ValueTask<Order?> FindByNumberAsync(string number, CancellationToken ct = default);
 }
 
-// ❌ Persisting a non-aggregate entity directly
-public interface IOrderLineRepository : IRepository<OrderLine> // ❌ OrderLine is not an aggregate root
+// ❌ A repository for a child entity — only aggregate roots have repositories
+public interface IOrderLineRepository : IRepository<OrderLine, OrderLineId> { }
 ```
 
-### Read side — `IReadRepository<TAggregate>`
+- No `CommitAsync`: committing belongs to `IUnitOfWork` only.
+- No `UpdateAsync`: an aggregate loaded through `FindAsync` is tracked; mutate it and commit.
+- `EfRepository.FindAsync` returns a root it loaded whole, or an `Added` one, as is, and refuses any
+  other tracked root; otherwise it loads the whole aggregate (every navigation inside the boundary,
+  never another aggregate root), split into separate queries when it has two or more collections.
+- Every root carries a version (`AggregateVersion`, ADR-010), bumped by every save that writes its
+  boundary; `FindAsync(id, expectedVersion)` makes the expected value the token's original, checked
+  in the commit's `UPDATE`. Bulk writes (`ExecuteUpdate`, raw SQL) bypass it.
+- The boundary lives in the model only (ADR-009): reference data leaves it through
+  `IsOutsideAggregate()`; no repository overrides the load. Each row has one parent: a many-to-one
+  reference held by the parent never reaches a non-root entity, and a many-to-many navigation is
+  only allowed marked outside — links are a link entity, a child of the root. A reference out of an
+  aggregate is `Restrict`. A typed finder calls `protected LoadAggregatesAsync(predicate, ct)`.
+- An aggregate whose root has `HasSoftDelete()` (ADR-012) is never deleted: `DeleteAsync` then a commit
+  marks the root and every entity of its boundary; the named filter hides them; the write side never
+  loads them again.
+
+## The `Result` path — `IResultUnitOfWork` (core, ADR-011)
+
 ```csharp
-// ✅ No mutations — reads only
-public interface IReadRepository<TAggregate>
-    where TAggregate : IAggregateRoot
+public interface IResultUnitOfWork
 {
-    ValueTask<TAggregate?> FindAsync(/* id */, CancellationToken ct = default);
+    ValueTask<Result> TryCommitAsync(CancellationToken ct = default);                    // flush, no open transaction
+    ValueTask<Result> TryExecuteAsync<TState>(Func<TState, CancellationToken, Task<Result>> operation, TState state, CancellationToken ct = default);
+    ValueTask<Result<TValue>> TryExecuteAsync<TState, TValue>(Func<TState, CancellationToken, Task<Result<TValue>>> operation, TState state, CancellationToken ct = default);
+}
+```
+
+- Unique, foreign-key and concurrency failures become `PersistenceErrors` (`PERSISTENCE.<ROOT>.<REASON>`,
+  category `Conflict`); everything else still throws `PersistenceException`.
+- It converts only at the owner of the transaction, after the rollback and once the strategy gave up;
+  joined, it converts nothing. A failed `Result` the operation returns rolls the owned transaction back.
+  `TryCommitAsync` is refused inside an open transaction.
+- The contract, codes, messages and `AggregateVersionConflictException` live in core (which references
+  `MicroKit.Result`; Abstractions never does). `EfUnitOfWork` and `InMemoryUnitOfWork` implement it.
+
+## Read side — `IReadRepository<TAggregate>` (core)
+
+```csharp
+public interface IReadRepository<TAggregate> where TAggregate : class, IAggregateRoot
+{
+    ValueTask<TAggregate?> FindAsync(object[] keyValues, CancellationToken ct = default);
     ValueTask<IReadOnlyList<TAggregate>> ListAsync(QueryOptions<TAggregate> opts, CancellationToken ct = default);
+    ValueTask<IPagedResult<TAggregate>> ListPagedAsync(QueryOptions<TAggregate> opts, CancellationToken ct = default);
     ValueTask<bool> AnyAsync(QueryOptions<TAggregate> opts, CancellationToken ct = default);
     ValueTask<int> CountAsync(QueryOptions<TAggregate> opts, CancellationToken ct = default);
 }
-
-// ❌ Read repository with mutation methods
-public interface IUserReadRepository : IReadRepository<User>
-{
-    ValueTask CommitAsync(); // ❌ read repos never commit
-}
 ```
 
-## Unit of Work
+It is the only read contract (it lives in core because it takes `QueryOptions<T>`). It never
+mutates or commits (MKP001/MKP002), never tracks and never consults the change tracker.
+`EfReadRepository<TAggregate, TContext>(context, evaluator, paginationLimits)` implements it; a
+typed read repository derives from it.
 
-### IUnitOfWork — the change-set boundary
+## Unit of Work — `IUnitOfWork` (Abstractions)
+
 ```csharp
-// ✅ Two exits: commit or discard — never SaveChangesAsync on the public interface
 public interface IUnitOfWork
 {
-    ValueTask CommitAsync(CancellationToken ct = default);
-
-    // Abandons the pending change set without writing it (ADR-005).
-    // Synchronous — no implementation performs I/O (EF Core: ChangeTracker.Clear()).
-    // Called by TransactionBehavior on every non-commit exit, never by a handler.
-    void DiscardChanges();
+    ValueTask CommitAsync(CancellationToken ct = default);  // throws PersistenceException
+    void DiscardChanges();  // abandons the change set, no I/O (EF Core: ChangeTracker.Clear) — ADR-005
 }
-
-// ✅ Injection in command handlers
-public sealed class CreateUserHandler(IUserRepository repo, IUnitOfWork uow) { ... }
-
-// ❌ Inject IUnitOfWork in a query handler
-public sealed class GetUsersHandler(IUserReadRepository repo, IUnitOfWork uow) { ... } // ❌
 ```
 
-## Transaction Context
+`DiscardChanges` is called by `TransactionBehavior` on every non-commit exit, not by handlers.
 
-### ITransactionalContext — transactional execution
+## Transactions — `ITransactionalContext` (Abstractions)
+
 ```csharp
-// ✅ Begin/Commit/Rollback are internal to the implementation — the contract exposes execution only,
-//    because the implementation wraps the operation in the provider's execution strategy and may
-//    re-invoke it on a transient failure.
 public interface ITransactionalContext
 {
-    Task ExecuteAsync<TState>(
-        Func<TState, CancellationToken, Task> operation,
-        TState state,
-        CancellationToken ct = default);
-
-    Task<TResult> ExecuteAsync<TState, TResult>(
-        Func<TState, CancellationToken, Task<TResult>> operation,
-        TState state,
-        CancellationToken ct = default);
+    Task ExecuteAsync<TState>(Func<TState, CancellationToken, Task> operation, TState state, CancellationToken ct = default);
+    Task<TResult> ExecuteAsync<TState, TResult>(Func<TState, CancellationToken, Task<TResult>> operation, TState state, CancellationToken ct = default);
 }
-
-// ✅ ITransactionalUnitOfWork (EF Core composite) — never in Abstractions
-public interface ITransactionalUnitOfWork : IUnitOfWork, ITransactionalContext { }
-
-// ✅ TransactionBehavior in MediatR.Behaviors injects ITransactionalContext, IUnitOfWork,
-//    and IDomainEventsDispatcher. It wraps ICommand handlers — queries are not transactional.
-//    On success: next() → DispatchEventsAsync → IUnitOfWork.CommitAsync (the flush MUST follow
-//    the dispatch, or the outbox rows it staged are never written).
-//    On business failure OR exception: IUnitOfWork.DiscardChanges().
 ```
 
-## QueryOptions Pattern
+There is no Begin/Commit/Rollback on the contract: the implementation runs the operation inside
+the provider's execution strategy and may re-invoke it. `EfUnitOfWork<TContext>` (ADR-006):
+
+- joins a transaction already open on the context — no strategy, no begin, commit or rollback;
+- otherwise begins a transaction per attempt, retries what the strategy classifies as transient
+  (at-least-once: keep retries off for non-idempotent operations), and surfaces only
+  `PersistenceException`;
+- rolls back with `CancellationToken.None`, swallows rollback/dispose failures so the original
+  exception survives, and clears the change tracker after a failed attempt.
+
+`ITransactionalUnitOfWork : IUnitOfWork, ITransactionalContext` is the EF Core composite and stays
+out of Abstractions (ADR-004).
+
+`TransactionBehavior` (MicroKit.MediatR.Behaviors) wraps command handlers in `ExecuteAsync`; on
+success it dispatches domain events and then calls `CommitAsync` (the flush must follow the
+dispatch, or the outbox rows it staged are lost); on failure or exception it calls `DiscardChanges`.
+
+## QueryOptions — WHAT vs HOW (ADR-002)
 
 ```csharp
-// ✅ WHAT (specification, from Domain) + HOW (loading strategy, from Core)
-var opts = new QueryOptions<User>(new ActiveUsersSpec())
-    .WithIncludes(q => q.Include(u => u.Roles))
-    .WithPagination(page: 1, pageSize: 20)
-    .AsNoTracking();  // redundant on IReadRepository, required on IRepository read paths
-
-// ❌ Specification with Include — Specification is domain-pure (criteria only)
-public sealed class UserWithRolesSpec : Specification<User>
-{
-    public UserWithRolesSpec()
-    {
-        AddCriteria(u => u.IsActive);
-        AddInclude(u => u.Roles); // ❌ no includes in Specification
-    }
-}
+var opts = new QueryOptions<Order>(new OpenOrdersSpec())   // WHAT — Specification<T> from Domain
+    .WithIncludes(q => q.Include(o => o.Lines))            // HOW  — core extensions
+    .WithOrderByDescending(o => o.CreatedAt)               //        MicroKit.Persistence.Specifications
+    .WithPagination(page: 1, pageSize: 20);
 ```
+
+The read side never tracks; `QueryOptions` has no tracking option (ADR-009). `WithDeleted()` sets
+`IncludeDeleted`: soft-deleted aggregates (ADR-012) are returned too, every other filter still applies.
+
+ADR-013 adds the projections (`ListAsync`/`ListPagedAsync`/`ListKeysetAsync` with a selector, built by the
+database) and keyset pagination: `WithKeyset(KeysetPagination<T>.OrderBy(…))` read by `ListKeysetAsync`, the
+root's key appended, forward only, non-nullable scalar keys of the root whose worst-case cursor fits
+`KeysetCursor.MaxTokenLength` (a `string`/`byte[]` key needs a maximum length), an opaque `KeysetCursor` checked
+against the root type and the ordering. A keyset owns the ordering and the page (`KeysetRules`).
 
 ## CQRS Data-Access Alignment
 
-| Handler Type | Inject | Forbidden |
+| Handler | Inject | Forbidden |
 |---|---|---|
-| CommandHandler | `IRepository<T>` + `IUnitOfWork` | `IReadRepository`, `DbContext` |
-| QueryHandler | `IReadRepository<T>` | `IRepository<T>`, `IUnitOfWork`, `DbContext` |
-| Either | Custom typed repo extending correct base | Raw `IQueryable<T>` on public interfaces |
+| Command | `IRepository<TAggregate, TId>` (or a typed one) + `IUnitOfWork` | `IReadRepository`, `DbContext` |
+| Query | `IReadRepository<T>` (or a typed one) | `IRepository`, `IUnitOfWork`, `DbContext` |
 
 ## Strict Rules
 
 ```
-🔴 IReadRepository must not have: AddAsync, UpdateAsync, DeleteAsync, CommitAsync
-🔴 SaveChangesAsync must not appear in any public method name — use CommitAsync
-🔴 DbContext injected in a handler — always inject a typed repository
-🔴 IRepository<T> in a QueryHandler — queries are read-only
-🔴 IQueryable<T> on any IReadRepository public method signature
-🟡 IUnitOfWork in MicroKit.Domain code — it moved to Persistence.Abstractions (ADR-001)
+🔴 IReadRepository with AddAsync / UpdateAsync / DeleteAsync / CommitAsync
+🔴 A repository with CommitAsync or SaveChangesAsync — commit through IUnitOfWork
+🔴 DbContext injected in a handler (MKP004 heuristic)
+🔴 IQueryable<T> returned by a repository method (MKP005)
+🔴 Parameterless IgnoreQueryFilters() in library code (IlCallScanTests)
+🟡 IUnitOfWork referenced from MicroKit.Domain — it lives in Persistence.Abstractions (ADR-001)
 ```

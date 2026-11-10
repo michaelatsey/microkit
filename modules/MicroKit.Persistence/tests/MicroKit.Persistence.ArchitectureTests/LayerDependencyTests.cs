@@ -14,10 +14,16 @@ public sealed class LayerDependencyTests
         typeof(MicroKit.Persistence.EntityFrameworkCore.ITransactionalUnitOfWork).Assembly;
 
     private static readonly Assembly TestingAssembly =
-        typeof(MicroKit.Persistence.Testing.InMemoryRepository<>).Assembly;
+        typeof(MicroKit.Persistence.Testing.InMemoryRepository<,>).Assembly;
 
     private static readonly Assembly SpecificationsAssembly =
         typeof(MicroKit.Persistence.Specifications.QueryOptionsOrderingExtensions).Assembly;
+
+    private static readonly Assembly TestingPostgreSqlAssembly =
+        typeof(MicroKit.Persistence.Testing.PostgreSql.PostgreSqlFixture).Assembly;
+
+    private static readonly Assembly TestingSqlServerAssembly =
+        typeof(MicroKit.Persistence.Testing.SqlServer.SqlServerFixture).Assembly;
 
     private static readonly Assembly PostgreSqlAssembly =
         typeof(MicroKit.Persistence.EntityFrameworkCore.PostgreSql.PostgreSqlEfCoreBuilderExtensions).Assembly;
@@ -26,6 +32,19 @@ public sealed class LayerDependencyTests
         typeof(MicroKit.Persistence.EntityFrameworkCore.SqlServer.SqlServerEfCoreBuilderExtensions).Assembly;
 
     // --- Abstractions assembly ---
+
+    [Fact]
+    public void Abstractions_DoesNotReferenceResult()
+    {
+        // #196 D17: the Result path lives in core (#197 phase 3), never in Abstractions.
+        AbstractionsAssembly.GetReferencedAssemblies().Any(a => a.Name == "MicroKit.Result").ShouldBeFalse();
+    }
+
+    [Fact]
+    public void Core_ReferencesResult()
+    {
+        CoreAssembly.GetReferencedAssemblies().Any(a => a.Name == "MicroKit.Result").ShouldBeTrue();
+    }
 
     [Fact]
     public void Abstractions_DoesNotReferenceEntityFrameworkCore()
@@ -138,6 +157,51 @@ public sealed class LayerDependencyTests
         refs.Any(a => a.Name!.Contains("MediatR.Contracts")).ShouldBeFalse();
     }
 
+    [Fact]
+    public void Testing_DoesNotReferenceTestcontainers()
+    {
+        // #197 phase 7: the in-memory doubles and the Docker probe take no Testcontainers dependency.
+        var refs = TestingAssembly.GetReferencedAssemblies();
+        refs.Any(a => a.Name!.Contains("Testcontainers")).ShouldBeFalse();
+    }
+
+    // --- Relational fixture packages (#197 phase 7, ADR-015) ---
+
+    [Theory]
+    [InlineData("Microsoft.EntityFrameworkCore")]
+    [InlineData("MicroKit.Persistence.EntityFrameworkCore")]
+    [InlineData("Npgsql")]
+    [InlineData("Microsoft.Data.SqlClient")]
+    [InlineData("xunit")]
+    [InlineData("nunit")]
+    [InlineData("MSTest")]
+    [InlineData("Microsoft.VisualStudio.TestPlatform.TestFramework")]
+    public void TheFixturePackages_DoNotReference(string prefix)
+    {
+        foreach (var assembly in new[] { TestingPostgreSqlAssembly, TestingSqlServerAssembly })
+        {
+            assembly.GetReferencedAssemblies()
+                .Any(a => a.Name!.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
+                .ShouldBeFalse($"{assembly.GetName().Name} references {prefix}");
+        }
+    }
+
+    [Fact]
+    public void TheFixturePackages_DoNotReferenceEachOther()
+    {
+        TestingPostgreSqlAssembly.GetReferencedAssemblies().Any(a => a.Name == "MicroKit.Persistence.Testing.SqlServer").ShouldBeFalse();
+        TestingSqlServerAssembly.GetReferencedAssemblies().Any(a => a.Name == "MicroKit.Persistence.Testing.PostgreSql").ShouldBeFalse();
+    }
+
+    [Fact]
+    public void TheFixturePackages_ReferenceTesting_AndTheirTestcontainersModule()
+    {
+        TestingPostgreSqlAssembly.GetReferencedAssemblies().Any(a => a.Name == "MicroKit.Persistence.Testing").ShouldBeTrue();
+        TestingSqlServerAssembly.GetReferencedAssemblies().Any(a => a.Name == "MicroKit.Persistence.Testing").ShouldBeTrue();
+        TestingPostgreSqlAssembly.GetReferencedAssemblies().Any(a => a.Name == "Testcontainers.PostgreSql").ShouldBeTrue();
+        TestingSqlServerAssembly.GetReferencedAssemblies().Any(a => a.Name == "Testcontainers.MsSql").ShouldBeTrue();
+    }
+
     // --- Sibling isolation ---
 
     [Fact]
@@ -145,6 +209,15 @@ public sealed class LayerDependencyTests
     {
         var refs = SpecificationsAssembly.GetReferencedAssemblies();
         refs.Any(a => a.Name == "MicroKit.Persistence.Testing").ShouldBeFalse();
+    }
+
+    [Fact]
+    public void Specifications_AndTheFixturePackages_DoNotReferenceEachOther()
+    {
+        SpecificationsAssembly.GetReferencedAssemblies()
+            .Any(a => a.Name!.StartsWith("MicroKit.Persistence.Testing.", StringComparison.Ordinal)).ShouldBeFalse();
+        TestingPostgreSqlAssembly.GetReferencedAssemblies().Any(a => a.Name == "MicroKit.Persistence.Specifications").ShouldBeFalse();
+        TestingSqlServerAssembly.GetReferencedAssemblies().Any(a => a.Name == "MicroKit.Persistence.Specifications").ShouldBeFalse();
     }
 
     [Fact]

@@ -1,6 +1,7 @@
 using MicroKit.Domain.Aggregates;
 using MicroKit.Domain.Identifiers;
 using MicroKit.Domain.ValueObjects.Common;
+using MicroKit.Persistence.EntityFrameworkCore;
 using MicroKit.Persistence.IntegrationTests.PostgreSql;
 using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
@@ -67,13 +68,15 @@ public sealed class AuditableAggregateRoundTripSqliteTests
 }
 
 [Collection(PostgreSqlSuite.Name)]
-public sealed class AuditableAggregateRoundTripPostgreSqlTests(PostgreSqlFixture fixture)
+public sealed class AuditableAggregateRoundTripPostgreSqlTests(PostgreSqlSuiteFixture fixture)
 {
     [DockerRequiredFact]
     public void AuditableAggregate_RoundTripsThroughEfCore_OnPostgreSql()
     {
+        // Its own database: the round trip drops and recreates the one it is given.
+        var connectionString = fixture.GetConnectionString("ledger_" + Guid.NewGuid().ToString("N"));
         AuditableAggregateRoundTrip.Run(() => new LedgerDbContext(
-            new DbContextOptionsBuilder<LedgerDbContext>().UseNpgsql(fixture.ConnectionString).Options));
+            new DbContextOptionsBuilder<LedgerDbContext>().UseNpgsql(connectionString).Options));
     }
 }
 
@@ -110,6 +113,10 @@ public sealed class LedgerDbContext(DbContextOptions<LedgerDbContext> options) :
 {
     public DbSet<Ledger> Ledgers => Set<Ledger>();
 
+    // Actor and audit-instant mapping come from the module's conventions (#196 D13, D14).
+    protected override void ConfigureConventions(ModelConfigurationBuilder configurationBuilder) =>
+        configurationBuilder.AddActorConvention().AddAuditInstantConvention();
+
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
         modelBuilder.Entity<Ledger>(b =>
@@ -119,9 +126,9 @@ public sealed class LedgerDbContext(DbContextOptions<LedgerDbContext> options) :
             b.Property(l => l.Id).HasConversion(id => id.Value, value => new LedgerId(value)).ValueGeneratedNever();
             b.Property(l => l.Name);
             b.Property(l => l.CreatedAt);
-            b.Property(l => l.CreatedBy).HasConversion(a => a.Value, value => Actor.Restore(value));
+            b.Property(l => l.CreatedBy);
             b.Property(l => l.UpdatedAt);
-            b.Property(l => l.UpdatedBy).HasConversion(a => a!.Value, value => Actor.Restore(value));
+            b.Property(l => l.UpdatedBy);
             b.Ignore(l => l.DomainEvents);
         });
     }

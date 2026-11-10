@@ -26,7 +26,9 @@ public static class PersistenceServiceCollectionExtensions
     /// <summary>
     /// Adds EF Core persistence services and returns an <see cref="EfCoreBuilder"/> for
     /// further configuration. Registers <see cref="EfSpecificationEvaluator"/> as a singleton
-    /// <see cref="ISpecificationEvaluator"/> (idempotent — safe to call multiple times).
+    /// <see cref="ISpecificationEvaluator"/> and <see cref="PaginationLimits.Default"/> as the
+    /// singleton <see cref="PaginationLimits"/> (idempotent — safe to call multiple times; use
+    /// <see cref="ConfigurePagination"/> to change the limits).
     /// </summary>
     /// <param name="builder">The parent persistence builder.</param>
     /// <param name="configure">Optional delegate to configure EF Core services.</param>
@@ -37,14 +39,34 @@ public static class PersistenceServiceCollectionExtensions
     {
         ArgumentNullException.ThrowIfNull(builder);
         builder.Services.TryAddSingleton<ISpecificationEvaluator, EfSpecificationEvaluator>();
+        builder.Services.TryAddSingleton(PaginationLimits.Default);
         var efBuilder = new EfCoreBuilder(builder);
         configure?.Invoke(efBuilder);
         return efBuilder;
     }
 
     /// <summary>
+    /// Replaces the <see cref="PaginationLimits"/> the read repositories enforce
+    /// (<see cref="PaginationLimits.Default"/> unless configured).
+    /// </summary>
+    /// <param name="builder">The EF Core builder.</param>
+    /// <param name="limits">
+    /// The default and maximum page sizes. Its constructor validates them, so an invalid
+    /// configuration fails here, at registration, not on the first query.
+    /// </param>
+    /// <returns><paramref name="builder"/> for fluent chaining.</returns>
+    public static EfCoreBuilder ConfigurePagination(this EfCoreBuilder builder, PaginationLimits limits)
+    {
+        ArgumentNullException.ThrowIfNull(builder);
+        ArgumentNullException.ThrowIfNull(limits);
+        builder.Services.Replace(ServiceDescriptor.Singleton(limits));
+        return builder;
+    }
+
+    /// <summary>
     /// Registers a <typeparamref name="TContext"/> <see cref="DbContext"/> in the service
-    /// collection. Delegates to <see cref="EntityFrameworkServiceCollectionExtensions.AddDbContext{TContext}(IServiceCollection, Action{DbContextOptionsBuilder}?, ServiceLifetime, ServiceLifetime)"/>.
+    /// collection, with <see cref="MicroKitPersistenceDbContextOptionsExtensions.UseMicroKitPersistence(DbContextOptionsBuilder)"/>.
+    /// Delegates to <see cref="EntityFrameworkServiceCollectionExtensions.AddDbContext{TContext}(IServiceCollection, Action{DbContextOptionsBuilder}?, ServiceLifetime, ServiceLifetime)"/>.
     /// </summary>
     /// <typeparam name="TContext">The application <see cref="DbContext"/> type.</typeparam>
     /// <param name="builder">The EF Core builder.</param>
@@ -56,14 +78,19 @@ public static class PersistenceServiceCollectionExtensions
         where TContext : DbContext
     {
         ArgumentNullException.ThrowIfNull(builder);
-        builder.Services.AddDbContext<TContext>(configure);
+        builder.Services.AddDbContext<TContext>(options =>
+        {
+            configure?.Invoke(options);
+            options.UseMicroKitPersistence();
+        });
         return builder;
     }
 
     /// <summary>
     /// Registers <see cref="EfUnitOfWork{TContext}"/> as a scoped service and binds it to
-    /// <see cref="IUnitOfWork"/>, <see cref="ITransactionalContext"/>, and
-    /// <see cref="ITransactionalUnitOfWork"/> — one instance, three interface pointers.
+    /// <see cref="IUnitOfWork"/>, <see cref="ITransactionalContext"/>,
+    /// <see cref="ITransactionalUnitOfWork"/>, and <see cref="IResultUnitOfWork"/> — one instance, four
+    /// interface pointers.
     /// Additionally registers <see cref="EfDomainEventsProvider{TContext}"/> as the scoped
     /// <see cref="IDomainEventsProvider"/> — a separate instance sharing the same
     /// <typeparamref name="TContext"/>.
@@ -104,6 +131,8 @@ public static class PersistenceServiceCollectionExtensions
         builder.Services.AddScoped<ITransactionalContext>(
             sp => sp.GetRequiredService<EfUnitOfWork<TContext>>());
         builder.Services.AddScoped<ITransactionalUnitOfWork>(
+            sp => sp.GetRequiredService<EfUnitOfWork<TContext>>());
+        builder.Services.AddScoped<IResultUnitOfWork>(
             sp => sp.GetRequiredService<EfUnitOfWork<TContext>>());
         builder.Services.AddScoped<IDomainEventsProvider, EfDomainEventsProvider<TContext>>();
         return builder;

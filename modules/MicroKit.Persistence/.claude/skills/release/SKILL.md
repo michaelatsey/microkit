@@ -1,51 +1,41 @@
 ---
 name: release
-description: How to release MicroKit.Persistence — all 8 packages simultaneously. Use whenever preparing a release, bumping versions, tagging, or publishing to NuGet.
+description: How to release MicroKit.Persistence — all 10 packages under one version. Use whenever preparing a release, choosing a version, packing, tagging, or publishing to NuGet.
 ---
 
 # Skill: Release
 
-How to release all 8 MicroKit.Persistence packages.
+The root `/release Persistence` command runs the `release-manager` agent; the full checklist is
+`.claude/workflows/releasing-module.md`. ADR-GLOBAL-002 (root) governs releases; no tag is cut
+until steps 1–4 of its migration land.
 
-## Quick Release
-
-```
-/release
-```
-
-The `release-manager` agent orchestrates all steps.
-
-## Manual Steps
+## Manual steps
 
 ```bash
-# 1. Build Release
+# 1. Build and test (Docker available, so the PostgreSQL tests run)
 dotnet build modules/MicroKit.Persistence/MicroKit.Persistence.slnx -c Release
+dotnet test  modules/MicroKit.Persistence/MicroKit.Persistence.slnx -c Release --no-build
 
-# 2. Run full tests
-dotnet test modules/MicroKit.Persistence/MicroKit.Persistence.slnx -c Release --no-build
+# 2. Pack with the release version, check the 10 packages, consume them from a local feed
+dotnet pack modules/MicroKit.Persistence/MicroKit.Persistence.slnx -c Release \
+  -p:PackageVersion={version} -o artifacts/persistence/
+ls artifacts/persistence/*.nupkg | wc -l   # 10
 
-# 3. Pack
-dotnet pack modules/MicroKit.Persistence/MicroKit.Persistence.slnx -c Release -o /tmp/prd-pack/
-
-# 4. Verify 8 packages
-ls /tmp/prd-pack/*.nupkg | wc -l  # should be 8
-
-# 5. Tag
+# 3. Tag — after the human confirms
 git tag persistence-v{version} -m "MicroKit.Persistence {version}"
 git push origin persistence-v{version}
 ```
 
-## Tag Convention
+## Versions and tags
 
-```
-persistence-v1.0.0
-persistence-v1.0.0-preview.1
-persistence-v1.1.0
-```
+`persistence-v1.0.0-preview.N` while on preview (`preview.N`, never `alpha`/`beta`/`rc` — ADR-GLOBAL-002 D8), then
+`persistence-v1.0.0`. The tag is the version: `release-persistence.yml` strips the
+`persistence-v` prefix and passes it as `-p:PackageVersion`. `version.json` is not read.
 
-## CI/CD
+## CI
 
-Tag push triggers `release-persistence.yml` which publishes all 8 packages to NuGet.org.
+The tag push runs `.github/workflows/release-persistence.yml`: restore, build (the other MicroKit
+modules from source, as in every build), test, pack, push to NuGet.org.
 
 ```bash
 gh run list --workflow=release-persistence.yml --limit=5

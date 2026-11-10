@@ -12,7 +12,7 @@ public sealed class ContractPlacementTests
         typeof(MicroKit.Persistence.EntityFrameworkCore.ITransactionalUnitOfWork).Assembly;
 
     private static readonly Assembly TestingAssembly =
-        typeof(MicroKit.Persistence.Testing.InMemoryRepository<>).Assembly;
+        typeof(MicroKit.Persistence.Testing.InMemoryRepository<,>).Assembly;
 
     // --- In Abstractions ---
 
@@ -37,14 +37,7 @@ public sealed class ContractPlacementTests
     [Fact]
     public void IRepository_IsInAbstractions()
     {
-        typeof(MicroKit.Persistence.Abstractions.IRepository<>).Assembly.ShouldBe(AbstractionsAssembly);
-    }
-
-    [Fact]
-    public void IReadRepository_Marker_IsInAbstractions()
-    {
-        // NOTE 1: The Abstractions marker IReadRepository<T> is intentionally empty.
-        typeof(MicroKit.Persistence.Abstractions.IReadRepository<>).Assembly.ShouldBe(AbstractionsAssembly);
+        typeof(MicroKit.Persistence.Abstractions.IRepository<,>).Assembly.ShouldBe(AbstractionsAssembly);
     }
 
     [Fact]
@@ -58,7 +51,7 @@ public sealed class ContractPlacementTests
     [Fact]
     public void IReadRepository_Full_IsInCore()
     {
-        // NOTE 1: Core's IReadRepository<T> extends the Abstractions marker and adds query methods.
+        // #196 D8: the only read repository contract; it needs QueryOptions, so it lives in Core.
         typeof(MicroKit.Persistence.IReadRepository<>).Assembly.ShouldBe(CoreAssembly);
         typeof(MicroKit.Persistence.IReadRepository<>).Assembly.ShouldNotBe(AbstractionsAssembly);
     }
@@ -80,6 +73,25 @@ public sealed class ContractPlacementTests
     public void PagedResult_IsInCore()
     {
         typeof(MicroKit.Persistence.PagedResult<>).Assembly.ShouldBe(CoreAssembly);
+    }
+
+    [Fact]
+    public void TheResultPath_IsInCore_NotAbstractions()
+    {
+        // #197 phase 3: a handler depends on IResultUnitOfWork without referencing EF Core; the codes,
+        // the messages and the version-conflict marker live with it.
+        typeof(MicroKit.Persistence.IResultUnitOfWork).Assembly.ShouldBe(CoreAssembly);
+        typeof(MicroKit.Persistence.PersistenceErrors).Assembly.ShouldBe(CoreAssembly);
+        typeof(MicroKit.Persistence.AggregateVersionConflictException).Assembly.ShouldBe(CoreAssembly);
+    }
+
+    [Fact]
+    public void TheResultPath_IsImplementedByTheEfCoreUnitOfWorkAndTheDouble()
+    {
+        typeof(MicroKit.Persistence.IResultUnitOfWork)
+            .IsAssignableFrom(typeof(MicroKit.Persistence.EntityFrameworkCore.EfUnitOfWork<>).MakeGenericType(typeof(Microsoft.EntityFrameworkCore.DbContext)))
+            .ShouldBeTrue();
+        typeof(MicroKit.Persistence.IResultUnitOfWork).IsAssignableFrom(typeof(MicroKit.Persistence.Testing.InMemoryUnitOfWork)).ShouldBeTrue();
     }
 
     // --- In EFCore (not Abstractions) ---
@@ -109,6 +121,6 @@ public sealed class ContractPlacementTests
     [Fact]
     public void InMemoryRepository_IsInTesting()
     {
-        typeof(MicroKit.Persistence.Testing.InMemoryRepository<>).Assembly.ShouldBe(TestingAssembly);
+        typeof(MicroKit.Persistence.Testing.InMemoryRepository<,>).Assembly.ShouldBe(TestingAssembly);
     }
 }
