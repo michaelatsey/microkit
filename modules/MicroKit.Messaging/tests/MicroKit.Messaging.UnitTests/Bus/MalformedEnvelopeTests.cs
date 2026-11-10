@@ -119,7 +119,9 @@ public sealed class MalformedEnvelopeTests
 
         var ex = await Should.ThrowAsync<ArgumentException>(async () => await transport.SendAsync(malformed));
 
-        ex.Message.ShouldContain(member);
+        // The LEADING words, case-sensitive: every message ends with "an id, a source, a type and
+        // a content type", so a contains-check would pass for a check that names the wrong member.
+        ex.Message.ShouldStartWith($"The envelope's {member} ", Case.Sensitive);
         await transport.SendAsync(valid);   // CONTROL: a valid envelope is accepted.
     }
 

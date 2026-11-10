@@ -48,8 +48,8 @@ internal static partial class BusLogs
     public static partial void DeadLettered(
         ILogger logger,
         Exception? exception,
-        string messageId,
-        string type,
+        string? messageId,
+        string? type,
         int failedAttempts,
         string? reason);
 
@@ -74,7 +74,7 @@ internal static partial class BusLogs
         EventId = 3013,
         Level = LogLevel.Error,
         Message = "An unexpected fault escaped the delivery of message {MessageId} ('{Type}'). The " +
-                  "message is dead-lettered, and the in-memory consume loop continues.")]
+                  "message was {Disposition}.")]
     public static partial void UnexpectedDeliveryFault(
-        ILogger logger, Exception exception, string? messageId, string? type);
+        ILogger logger, Exception exception, string? messageId, string? type, string disposition);
 }
