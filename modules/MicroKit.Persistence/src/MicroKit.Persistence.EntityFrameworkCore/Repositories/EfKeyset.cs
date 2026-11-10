@@ -108,7 +108,42 @@ internal sealed class EfKeyset<TAggregate>
         var keys = new List<Key>(properties.Count);
         for (var i = 0; i < properties.Count; i++)
             keys.Add(Resolve(root, properties[i].Property, properties[i].Descending, first: i == 0, optionsName));
+        EnsureTheCursorFits(root, keys);
         return new EfKeyset<TAggregate>(root, keys);
+    }
+
+    // The cursor's size is bounded when the plan is built, from the model, never on the page that happens to carry
+    // a long value: every key needs a worst-case size, and their sum must fit in KeysetCursor.MaxTokenLength.
+    private static void EnsureTheCursorFits(IEntityType root, List<Key> keys)
+    {
+        long total = 0;
+        foreach (var key in keys)
+        {
+            var size = KeysetCursor.MaxEncodedLength(key.ProviderType, key.Property.GetMaxLength());
+            if (size is null)
+            {
+                throw new InvalidOperationException(
+                    $"The keyset sort key '{root.DisplayName()}.{key.Property.Name}' is a " +
+                    $"{(key.ProviderType == typeof(string) ? "string" : "byte[]")} without a maximum length: a value could need " +
+                    $"a cursor longer than {nameof(KeysetCursor)}.{nameof(KeysetCursor.MaxTokenLength)} ({KeysetCursor.MaxTokenLength} " +
+                    "characters). Give it a maximum length (HasMaxLength), or sort by another key.");
+            }
+
+            total += size.Value;
+        }
+
+        var length = KeysetCursor.TokenLengthFor(total);
+        if (length <= KeysetCursor.MaxTokenLength)
+            return;
+
+        var bounded = string.Join(", ", keys
+            .Where(k => k.ProviderType == typeof(string) || k.ProviderType == typeof(byte[]))
+            .Select(k => $"'{root.DisplayName()}.{k.Property.Name}' (maximum length {k.Property.GetMaxLength()})"));
+        throw new InvalidOperationException(
+            $"The keyset ordering of '{root.DisplayName()}' can need a {length}-character cursor, above " +
+            $"{nameof(KeysetCursor)}.{nameof(KeysetCursor.MaxTokenLength)} ({KeysetCursor.MaxTokenLength}); a string counts " +
+            $"4 UTF-8 bytes per character at worst. Its variable-length keys: {bounded}. Lower their maximum length " +
+            "(HasMaxLength), or sort by other keys.");
     }
 
     private static IProperty PropertyOf(IEntityType root, KeysetKey key, string optionsName)

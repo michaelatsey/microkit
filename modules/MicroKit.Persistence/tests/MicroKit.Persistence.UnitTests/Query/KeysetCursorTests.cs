@@ -240,4 +240,62 @@ public sealed class KeysetCursorTests
     private static string Encode(byte[] bytes) => Base64Url.EncodeToString(bytes);
 
     private static byte[] Decode(string token) => Base64Url.DecodeFromChars(token);
+
+    // ---- Worst-case size (PR #200 review, #197 Spec phase 5) -----------------------------------------
+
+    public static TheoryData<object> FixedSizeValues() => new()
+    {
+        true, byte.MaxValue, sbyte.MinValue, short.MinValue, ushort.MaxValue, int.MinValue, uint.MaxValue, long.MinValue,
+        ulong.MaxValue, float.MinValue, double.MaxValue, decimal.MinValue, Guid.NewGuid(), DateTime.MaxValue,
+        DateTimeOffset.MaxValue, DateOnly.MaxValue, TimeOnly.MaxValue,
+    };
+
+    [Theory]
+    [MemberData(nameof(FixedSizeValues))]
+    public void MaxEncodedLength_OfAFixedSizeType_IsExactlyWhatItsCursorTakes(object value)
+    {
+        var size = KeysetCursor.MaxEncodedLength(value.GetType(), maxLength: null);
+
+        size.ShouldNotBeNull();
+        KeysetCursor.TokenLengthFor(size.Value).ShouldBe(KeysetCursor.Create("Shop.Order", [("Key", false)], [value]).ToString().Length);
+    }
+
+    [Theory]
+    [InlineData("a")]
+    [InlineData("é")]
+    [InlineData("€")]
+    [InlineData("😀")]
+    public void MaxEncodedLength_OfABoundedString_CoversItsWorstUtf8Encoding(string unit)
+    {
+        const int maxLength = 60;
+        var longest = string.Concat(Enumerable.Repeat(unit, maxLength / unit.Length));
+        var size = KeysetCursor.MaxEncodedLength(typeof(string), maxLength);
+
+        size.ShouldNotBeNull();
+        ((long)KeysetCursor.Create("Shop.Order", [("Key", false)], [longest]).ToString().Length)
+            .ShouldBeLessThanOrEqualTo(KeysetCursor.TokenLengthFor(size.Value));
+    }
+
+    [Fact]
+    public void MaxEncodedLength_OfBoundedBytes_IsExactlyWhatItsCursorTakes()
+    {
+        var size = KeysetCursor.MaxEncodedLength(typeof(byte[]), 100);
+
+        size.ShouldNotBeNull();
+        KeysetCursor.TokenLengthFor(size.Value).ShouldBe(KeysetCursor.Create("Shop.Order", [("Key", false)], [new byte[100]]).ToString().Length);
+    }
+
+    [Theory]
+    [InlineData(typeof(string))]
+    [InlineData(typeof(byte[]))]
+    public void MaxEncodedLength_WithoutAMaximumLength_HasNoBound(Type type) =>
+        KeysetCursor.MaxEncodedLength(type, maxLength: null).ShouldBeNull();
+
+    [Fact]
+    public void TokenLengthFor_SeveralValues_IsTheirSum_UnderOneHeader()
+    {
+        var sizes = new[] { typeof(int), typeof(Guid) }.Sum(t => KeysetCursor.MaxEncodedLength(t, null)!.Value);
+
+        KeysetCursor.TokenLengthFor(sizes).ShouldBe(KeysetCursor.Create("Shop.Order", Ordering, [42, Guid.NewGuid()]).ToString().Length);
+    }
 }

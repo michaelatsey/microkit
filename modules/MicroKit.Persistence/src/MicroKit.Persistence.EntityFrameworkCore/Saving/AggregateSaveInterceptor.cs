@@ -22,8 +22,8 @@ namespace MicroKit.Persistence.EntityFrameworkCore;
 /// </remarks>
 internal sealed class AggregateSaveInterceptor : SaveChangesInterceptor
 {
-    // The versions bumped by the save in flight, per context: a save that fails or is canceled writes
-    // nothing, so its bumps are undone and GetVersion never reports a version that was not committed.
+    // The versions bumped by the save in flight, per context: a save that fails, conflicts or is canceled
+    // writes nothing, so its bumps are undone and GetVersion never reports a version that was not committed.
     private static readonly ConditionalWeakTable<DbContext, IReadOnlyList<VersionBump>> s_inFlight = new();
 
     /// <inheritdoc/>
@@ -70,6 +70,29 @@ internal sealed class AggregateSaveInterceptor : SaveChangesInterceptor
     {
         Undo(eventData?.Context);
         return Task.CompletedTask;
+    }
+
+    /// <inheritdoc/>
+    /// <remarks>
+    /// EF Core raises this, not <see cref="SaveChangesFailed"/>, before it throws a
+    /// <see cref="DbUpdateConcurrencyException"/>: the bumps of the failed save are undone here too. The result is
+    /// returned unchanged, so the exception is still thrown.
+    /// </remarks>
+    public override InterceptionResult ThrowingConcurrencyException(ConcurrencyExceptionEventData eventData, InterceptionResult result)
+    {
+        Undo(eventData?.Context);
+        return result;
+    }
+
+    /// <inheritdoc/>
+    /// <remarks>The asynchronous counterpart of <see cref="ThrowingConcurrencyException"/>.</remarks>
+    public override ValueTask<InterceptionResult> ThrowingConcurrencyExceptionAsync(
+        ConcurrencyExceptionEventData eventData,
+        InterceptionResult result,
+        CancellationToken cancellationToken = default)
+    {
+        Undo(eventData?.Context);
+        return ValueTask.FromResult(result);
     }
 
     /// <inheritdoc/>

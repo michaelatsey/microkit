@@ -35,7 +35,8 @@ namespace MicroKit.Persistence.Testing;
 /// </para>
 /// <para>
 /// Versions: a stored aggregate starts at version 1 and does not move on its own — the double
-/// cannot see mutations. <see cref="SetVersion"/> sets another one, and
+/// cannot see mutations. The double applies writes at once, so a staged aggregate is already at version 1 after
+/// <see cref="AddAsync"/>, where EF Core reads 0 until the commit. <see cref="SetVersion"/> sets another one, and
 /// <see cref="FindAsync(TId, long, CancellationToken)"/> checks the expected version at the find,
 /// where EF Core checks it in the <c>UPDATE</c> of the commit. A stale version throws a
 /// <see cref="PersistenceException"/> whose inner <see cref="AggregateVersionConflictException"/> carries
@@ -170,7 +171,10 @@ public sealed class InMemoryRepository<TAggregate, TId>
 
     /// <summary>Gets the stored version of an aggregate.</summary>
     /// <param name="aggregate">A stored aggregate.</param>
-    /// <returns>1 from <see cref="AddAsync"/>, or the value of the last <see cref="SetVersion"/>.</returns>
+    /// <returns>
+    /// 1 from <see cref="AddAsync"/> — at once, where EF Core reads 0 until the commit — or the value of the last
+    /// <see cref="SetVersion"/>.
+    /// </returns>
     /// <exception cref="InvalidOperationException">The aggregate is not stored.</exception>
     public long GetVersion(TAggregate aggregate)
     {

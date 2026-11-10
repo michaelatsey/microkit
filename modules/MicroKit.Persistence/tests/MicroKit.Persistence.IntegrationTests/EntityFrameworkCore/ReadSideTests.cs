@@ -267,6 +267,7 @@ public abstract class ReadSideScenarios
         NotAProperty,
         UnsupportedProviderType,
         PrimitiveCollection,
+        UnboundedString,
     }
 
     [DockerRequiredTheory]
@@ -274,6 +275,7 @@ public abstract class ReadSideScenarios
     [InlineData(BadKey.NotAProperty, "is not a scalar property of 'RsOrder'")]
     [InlineData(BadKey.UnsupportedProviderType, "'RsOrder.Duration' is stored as 'TimeSpan'")]
     [InlineData(BadKey.PrimitiveCollection, "'RsOrder.Codes' is a primitive collection")]
+    [InlineData(BadKey.UnboundedString, "'RsOrder.Tenant' is a string without a maximum length")]
     public async Task ASortKeyTheCursorCannotCarry_IsRefused_NamingIt(BadKey bad, string reason)
     {
         await using var db = await CreateDatabaseAsync();
@@ -283,15 +285,44 @@ public abstract class ReadSideScenarios
             BadKey.NullableColumn => KeysetPagination<RsOrder>.OrderBy(o => o.Note),
             BadKey.NotAProperty => KeysetPagination<RsOrder>.OrderBy(o => o.Number.Length),
             BadKey.UnsupportedProviderType => KeysetPagination<RsOrder>.OrderBy(o => o.Duration),
+            BadKey.UnboundedString => KeysetPagination<RsOrder>.OrderBy(o => o.Tenant),
             _ => KeysetPagination<RsOrder>.OrderBy(o => o.Codes),
         };
 
         var thrown = await Should.ThrowAsync<Exception>(async () => await Reads(context).ListKeysetAsync(new QueryOptions<RsOrder>().WithKeyset(keyset)));
 
-        thrown.ShouldBeAssignableTo(bad is BadKey.UnsupportedProviderType or BadKey.PrimitiveCollection
+        thrown.ShouldBeAssignableTo(bad is BadKey.UnsupportedProviderType or BadKey.PrimitiveCollection or BadKey.UnboundedString
             ? typeof(InvalidOperationException)
             : typeof(ArgumentException));
         thrown.Message.ShouldContain(reason);
+    }
+
+    // PR #200 review, #197 Spec phase 5: the cursor's size is bounded when the query is built, never on the page
+    // that happens to carry a long value. Number is HasMaxLength(20): its worst case fits, so the walk ends.
+    [DockerRequiredFact]
+    public async Task ABoundedStringKeyThatFits_PagesToTheEnd_WithItsLongestValues()
+    {
+        await using var db = await CreateDatabaseAsync();
+        await using (var seed = db.Create())
+        {
+            for (var i = 0; i < 5; i++)
+                seed.Orders.Add(new RsOrder { Number = new string('€', 19) + i, PlacedAt = DateTimeOffset.UnixEpoch });
+            await new EfUnitOfWork<RsDbContext>(seed).CommitAsync();
+        }
+
+        await using var context = db.Create();
+        var keyset = KeysetPagination<RsOrder>.OrderBy(o => o.Number) with { PageSize = 2 };
+        var seen = new List<string>();
+        for (var page = await Reads(context).ListKeysetAsync(new QueryOptions<RsOrder>().WithKeyset(keyset)); ;
+             page = await Reads(context).ListKeysetAsync(new QueryOptions<RsOrder>().WithKeyset(keyset with { After = page.Next })))
+        {
+            seen.AddRange(page.Items.Select(o => o.Number));
+            if (page.Next is null)
+                break;
+        }
+
+        seen.ShouldBe(await context.Orders.OrderBy(o => o.Number).ThenBy(o => o.Id).Select(o => o.Number).ToListAsync());
+        seen.ShouldContain(new string('€', 19) + 4);
     }
 
     [DockerRequiredFact]

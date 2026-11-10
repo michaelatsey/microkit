@@ -202,6 +202,9 @@ conventions.
 `IRepository<TAggregate, TId>` is the only write-side contract: `FindAsync` (optionally at an expected
 version), `AddAsync`, `DeleteAsync` and `GetVersion` (see [Optimistic concurrency](#optimistic-concurrency)).
 It never commits — `IUnitOfWork` does — and has no update method: an aggregate it returns is tracked.
+`DeleteAsync` takes only an aggregate the repository loaded whole or staged: any other instance (one built by
+hand, attached, or read by a query outside the repository) would reach the database with an unknown version, so it
+throws `InvalidOperationException`, naming the root type, before any SQL.
 
 ```csharp
 public interface IOrderRepository : IRepository<Order, OrderId>
@@ -322,8 +325,9 @@ wrapping `DbUpdateConcurrencyException`, and nothing of it is written. The check
 On an existing database **a migration is needed**: it adds a `NOT NULL` column to every root's table (EF Core
 scaffolds `defaultValue: 0L`), so existing rows start at 0 and their first change takes them to 1.
 
-- An inserted aggregate starts at 1; `GetVersion` reads 0 on an `Added` root until its commit, and a failed save
-  puts the version back.
+- An inserted aggregate starts at 1; `GetVersion` reads 0 on an `Added` root until its commit, and a save that
+  fails or conflicts puts the version back: after a `CONCURRENCY` result, `GetVersion` still reads the loaded
+  version, so a retry that states it commits once.
 - A child that moves from one aggregate to another bumps both, and both must have been loaded or
   staged by their repository; a changed child whose root is not tracked fails the save. Entities
   outside every aggregate (an outbox row, reference data) are ignored.
@@ -550,7 +554,9 @@ nothing of the command is written.
   context with `UseMicroKitPersistence()`, whether the `Result` path is used or not — when a root's default name is
   not valid UPPER_SNAKE (a CLR name such as `Opération`, or one starting with `_`): give it a name. When the failing entities belong
   to more than one aggregate, or to none (an outbox row, a constraint checked at COMMIT), the code is
-  `PERSISTENCE.<REASON>`: a root is never guessed.
+  `PERSISTENCE.<REASON>`: a root is never guessed. EF Core reports every entry of the failed batch, not only the
+  row that broke the constraint, so a batch that mixes aggregates or outside entities — outbox rows saved in the
+  same commit as the order — yields `PERSISTENCE.<REASON>` too.
 - **The message is fixed and client-safe**: no table, constraint or column name. The provider exception
   stays in process, in EF Core's log (`SaveChangesFailed`).
 - **Provider codes** are recognised by `PostgreSqlFailureClassifier` and `SqlServerFailureClassifier`,
@@ -690,6 +696,11 @@ public sealed class BrowseOpenOrders(IReadRepository<Order> orders)
   carries (integers, `Guid`, `string`, `bool`, `decimal`, `double`, `float`, `DateTime`, `DateTimeOffset`,
   `DateOnly`, `TimeOnly`, `byte[]`), after its value converter: a strongly typed id stored as a `Guid` is
   fine. Another stored type fails, naming the property.
+- **The cursor's size is bounded when the query is built**, from the model: every key needs a worst-case size, and
+  together they must fit in `KeysetCursor.MaxTokenLength` (1024 characters), a `string` counting 4 UTF-8 bytes per
+  character. A `string` or `byte[]` key without a maximum length, or with one too large, is refused at the first
+  call, naming the key — give it `HasMaxLength`, or sort by another key — never on the page that happens to carry
+  a long value.
 - **Forward only.** Each page returns `Next`, the cursor of the next one, `null` on the last page. There is
   no total count; use `CountAsync` if one is needed.
 - **The cursor is an opaque token.** `ToString()` gives it to a client; `KeysetCursor.TryParse` reads it
@@ -725,7 +736,9 @@ repository and support projections and keyset pages. Projections compile the sel
 memory (strings ordinally) with the store's key appended, and their cursors are valid only on the double
 that issued them. Its versions start at 1 and do not move on their
 own (it cannot see mutations): `SetVersion` sets one, and `FindAsync(id, expectedVersion)` checks it at
-the find, where EF Core checks it at the commit.
+the find, where EF Core checks it at the commit. The double applies writes at once: a staged aggregate is already
+at version 1 after `AddAsync`, where EF Core reads 0 until the commit — `FindAsync(id, expectedVersion: 0)` on it
+passes on EF Core and throws on the double.
 
 ## Testing against a real database
 

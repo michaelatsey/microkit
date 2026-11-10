@@ -254,15 +254,33 @@ public class EfRepository<TAggregate, TId, TContext>(TContext context)
     /// Stages an aggregate for deletion. Nothing is written until the unit of work commits.
     /// </summary>
     /// <remarks>
-    /// For an aggregate with <c>HasSoftDelete()</c>, the commit writes an <c>UPDATE</c> that marks the root
-    /// and every entity of its aggregate instead of a <c>DELETE</c> (<see cref="SoftDelete"/>); it fails with
-    /// <see cref="InvalidOperationException"/> when the root was not loaded whole by this repository.
+    /// Only a root the repository loaded whole (<see cref="FindAsync(TId, CancellationToken)"/>,
+    /// <see cref="LoadAggregatesAsync"/>) or staged (<see cref="AddAsync"/>) can be deleted: any other instance
+    /// would reach the database with an unknown version and surface as a false concurrency conflict, so it is
+    /// refused here, before any SQL. For an aggregate with <c>HasSoftDelete()</c>, the commit writes an
+    /// <c>UPDATE</c> that marks the root and every entity of its aggregate instead of a <c>DELETE</c>
+    /// (<see cref="SoftDelete"/>).
     /// </remarks>
     /// <param name="aggregate">The aggregate to delete.</param>
     /// <param name="ct">Propagates notification that operations should be cancelled.</param>
+    /// <returns>A task that completes when the deletion is staged.</returns>
+    /// <exception cref="ArgumentNullException"><paramref name="aggregate"/> is <see langword="null"/>.</exception>
+    /// <exception cref="InvalidOperationException">
+    /// The context was not configured with <c>UseMicroKitPersistence()</c>, or <paramref name="aggregate"/> is
+    /// neither a root this repository loaded whole nor an <c>Added</c> one.
+    /// </exception>
     public ValueTask DeleteAsync(TAggregate aggregate, CancellationToken ct = default)
     {
         ArgumentNullException.ThrowIfNull(aggregate);
+        var record = KeyLookup.LoadRecordOf(Context);
+        if (!record.IsRecorded(aggregate) && Context.Entry(aggregate).State != EntityState.Added)
+        {
+            throw new InvalidOperationException(
+                $"This '{typeof(TAggregate).Name}' aggregate was not loaded whole by the repository, nor staged by it: " +
+                "deleting it would reach the database with an unknown version. Load it through the repository " +
+                "(FindAsync, LoadAggregatesAsync) before deleting it.");
+        }
+
         Context.Set<TAggregate>().Remove(aggregate);
         return ValueTask.CompletedTask;
     }

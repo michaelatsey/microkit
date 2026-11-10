@@ -19,6 +19,9 @@ public sealed class InMemoryReadRepository<TAggregate> : IReadRepository<TAggreg
 {
     private readonly InMemoryStore<TAggregate> _store;
 
+    /// <summary>Gets how many keyset cursors the store holds (tests: the table stays bounded).</summary>
+    internal int IssuedCursorCount => _store.IssuedCursorCount;
+
     /// <summary>
     /// Initializes a read repository seeded with the supplied aggregates. The aggregate's
     /// identity is extracted from its conventional public <c>Id</c> property.

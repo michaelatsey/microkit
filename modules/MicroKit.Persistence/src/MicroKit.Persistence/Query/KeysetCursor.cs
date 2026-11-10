@@ -92,6 +92,32 @@ public sealed class KeysetCursor
     internal static bool IsSupported(Type type) => TagOf(type) != Tag.None;
 
     /// <summary>
+    /// The most bytes one value of <paramref name="type"/> takes in a cursor, its tag included, or
+    /// <see langword="null"/> when nothing bounds it: a <see cref="string"/> or <see cref="byte"/> array without
+    /// <paramref name="maxLength"/>. A string counts 4 UTF-8 bytes per character, its worst case whether the column
+    /// counts UTF-16 units or code points.
+    /// </summary>
+    internal static long? MaxEncodedLength(Type type, int? maxLength) => TagOf(type) switch
+    {
+        Tag.Boolean or Tag.Byte or Tag.SByte => 1 + 1,
+        Tag.Int16 or Tag.UInt16 => 1 + 2,
+        Tag.Int32 or Tag.UInt32 or Tag.Single or Tag.DateOnly => 1 + 4,
+        Tag.Int64 or Tag.UInt64 or Tag.Double or Tag.DateTime or Tag.TimeOnly => 1 + 8,
+        Tag.DateTimeOffset => 1 + 8 + 2,
+        Tag.Decimal or Tag.Guid => 1 + 16,
+        Tag.String => maxLength is { } characters and >= 0 ? 1 + 4 + (4L * characters) : null,
+        Tag.Bytes => maxLength is { } length and >= 0 ? 1 + 4 + (long)length : null,
+        _ => null,
+    };
+
+    /// <summary>The length of the token whose values take <paramref name="valueBytes"/> bytes: Base64Url, unpadded.</summary>
+    internal static long TokenLengthFor(long valueBytes)
+    {
+        var bytes = 1 + FingerprintLength + 1 + valueBytes; // version, fingerprint, count
+        return ((bytes * 4) + 2) / 3;
+    }
+
+    /// <summary>
     /// Issues the cursor of <paramref name="values"/>, for the ordering of <paramref name="root"/> by
     /// <paramref name="keys"/>.
     /// </summary>

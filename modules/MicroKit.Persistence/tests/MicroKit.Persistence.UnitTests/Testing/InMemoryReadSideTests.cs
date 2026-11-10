@@ -49,6 +49,36 @@ public sealed class InMemoryReadSideTests
     }
 
     [Fact]
+    public async Task PagingTheSameSetAgain_IssuesNoNewCursor_SoTheTableStaysBounded()
+    {
+        // PR #200 review: a long-lived double (a singleton in a test host) must not grow with every page read.
+        var reads = Seeded();
+        var opts = new QueryOptions<Ticket>().WithKeyset(KeysetPagination<Ticket>.OrderBy(t => t.Priority) with { PageSize = 1 });
+
+        async Task<List<string>> WalkAsync()
+        {
+            var titles = new List<string>();
+            KeysetCursor? after = null;
+            do
+            {
+                var page = await reads.ListKeysetAsync(opts.WithKeyset(opts.Keyset! with { After = after }), t => t.Title);
+                titles.AddRange(page.Items);
+                after = page.Next;
+            }
+            while (after is not null);
+            return titles;
+        }
+
+        var first = await WalkAsync();
+        var issued = reads.IssuedCursorCount;
+        var second = await WalkAsync();
+
+        second.ShouldBe(first);
+        issued.ShouldBeGreaterThan(0);
+        reads.IssuedCursorCount.ShouldBe(issued, "the cursor of a row already paged is reused");
+    }
+
+    [Fact]
     public async Task ACursorFromAnotherOrdering_OrAnotherDouble_IsRefused()
     {
         var reads = Seeded();

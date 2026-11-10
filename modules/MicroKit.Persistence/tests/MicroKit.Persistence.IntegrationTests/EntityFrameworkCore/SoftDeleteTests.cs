@@ -334,6 +334,48 @@ public abstract class SoftDeleteScenarios
         (await verify.Set<SdOrder>().CountAsync()).ShouldBe(1, "nothing was written");
     }
 
+    // PR #200 review, #197 Spec phase 1: deleting an instance the repository did not load would reach the
+    // database with an unknown version (a false conflict) — DeleteAsync refuses it, with or without soft delete.
+    [DockerRequiredTheory]
+    [InlineData(true, "stub")]
+    [InlineData(true, "query")]
+    [InlineData(false, "stub")]
+    [InlineData(false, "query")]
+    public async Task DeleteAsync_OnARootTheRepositoryDidNotLoad_IsRefusedBeforeAnySql(bool softDeletable, string how)
+    {
+        await using var db = await CreateDatabaseAsync();
+        var orderId = await SeedOrderAsync(db, "SO-1");
+        var basketId = await SeedBasketAsync(db);
+        var commands = new CommandCounter();
+        await using var context = db.Create(o => o.AddInterceptors(commands));
+
+        Func<Task> delete;
+        if (softDeletable)
+        {
+            var order = how == "stub"
+                ? new SdOrder { Id = orderId, Number = "SO-1", Tenant = "main" }
+                : await context.Set<SdOrder>().SingleAsync(o => o.Id == orderId);
+            delete = () => Orders(context).DeleteAsync(order).AsTask();
+        }
+        else
+        {
+            var basket = how == "stub"
+                ? new SdBasket { Id = basketId }
+                : await context.Set<SdBasket>().SingleAsync(b => b.Id == basketId);
+            delete = () => Baskets(context).DeleteAsync(basket).AsTask();
+        }
+
+        var before = commands.Count;
+        var thrown = await Should.ThrowAsync<InvalidOperationException>(delete);
+
+        thrown.Message.ShouldContain(softDeletable ? "'SdOrder'" : "'SdBasket'");
+        commands.Count.ShouldBe(before, "the refusal comes before any SQL");
+        context.ChangeTracker.Entries().ShouldNotContain(e => e.State == EntityState.Deleted, "nothing is staged");
+        await using var verify = db.Create();
+        (await verify.Set<SdOrder>().CountAsync()).ShouldBe(1);
+        (await verify.Set<SdBasket>().CountAsync()).ShouldBe(1);
+    }
+
     [DockerRequiredFact]
     public async Task ASoftDeleteAtAStaleVersion_Conflicts()
     {
@@ -919,6 +961,34 @@ public abstract class SoftDeleteScenarios
     }
 
     /// <summary>Fails the first <c>failures</c> UPDATE commands with the exception a test classifies as transient.</summary>
+    /// <summary>Counts the commands the context sends.</summary>
+    private sealed class CommandCounter : Microsoft.EntityFrameworkCore.Diagnostics.DbCommandInterceptor
+    {
+        private int _count;
+
+        public int Count => _count;
+
+        public override ValueTask<Microsoft.EntityFrameworkCore.Diagnostics.InterceptionResult<System.Data.Common.DbDataReader>> ReaderExecutingAsync(
+            System.Data.Common.DbCommand command,
+            Microsoft.EntityFrameworkCore.Diagnostics.CommandEventData eventData,
+            Microsoft.EntityFrameworkCore.Diagnostics.InterceptionResult<System.Data.Common.DbDataReader> result,
+            CancellationToken cancellationToken = default)
+        {
+            Interlocked.Increment(ref _count);
+            return base.ReaderExecutingAsync(command, eventData, result, cancellationToken);
+        }
+
+        public override ValueTask<Microsoft.EntityFrameworkCore.Diagnostics.InterceptionResult<int>> NonQueryExecutingAsync(
+            System.Data.Common.DbCommand command,
+            Microsoft.EntityFrameworkCore.Diagnostics.CommandEventData eventData,
+            Microsoft.EntityFrameworkCore.Diagnostics.InterceptionResult<int> result,
+            CancellationToken cancellationToken = default)
+        {
+            Interlocked.Increment(ref _count);
+            return base.NonQueryExecutingAsync(command, eventData, result, cancellationToken);
+        }
+    }
+
     private sealed class FailingUpdateInterceptor(int failures) : Microsoft.EntityFrameworkCore.Diagnostics.DbCommandInterceptor
     {
         private int _remaining = failures;

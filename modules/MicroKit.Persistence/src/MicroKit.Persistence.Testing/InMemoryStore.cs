@@ -19,9 +19,14 @@ internal sealed class InMemoryStore<TAggregate>
     private readonly PaginationLimits _paginationLimits;
 
     // The cursors this store issued. The double has no value converters to turn a key into a provider value, so
-    // its cursor carries a handle into this table: a cursor is valid only on the double that issued it.
+    // its cursor carries a handle into this table: a cursor is valid only on the double that issued it. A row's
+    // handle is reused (keyed by its sort-key values), so the table is bounded by the distinct rows paged.
     private readonly Dictionary<long, object?[]> _cursorKeys = [];
+    private readonly Dictionary<object?[], long> _cursorHandles = new(RowKeysComparer.Instance);
     private long _lastCursor;
+
+    /// <summary>Gets how many cursors the store holds.</summary>
+    internal int IssuedCursorCount => _cursorKeys.Count;
 
     internal InMemoryStore(Func<TAggregate, object>? keySelector = null, PaginationLimits? paginationLimits = null)
     {
@@ -148,8 +153,15 @@ internal sealed class InMemoryStore<TAggregate>
         KeysetCursor? next = null;
         if (read.Count > pageSize)
         {
-            _cursorKeys[++_lastCursor] = page[^1].Keys;
-            next = KeysetCursor.Create(root, ordering, [_lastCursor]);
+            var last = page[^1].Keys;
+            if (!_cursorHandles.TryGetValue(last, out var handle))
+            {
+                handle = ++_lastCursor;
+                _cursorHandles[last] = handle;
+                _cursorKeys[handle] = last;
+            }
+
+            next = KeysetCursor.Create(root, ordering, [handle]);
         }
 
         return new KeysetPage<TResult>(page.Select(row => project(row.Item)).ToList().AsReadOnly(), pageSize, next);
@@ -187,6 +199,18 @@ internal sealed class InMemoryStore<TAggregate>
     }
 
     private const string StoreKeyName = "<store key>";
+
+    /// <summary>Compares a row's sort-key values element by element (arrays structurally).</summary>
+    private sealed class RowKeysComparer : IEqualityComparer<object?[]>
+    {
+        public static readonly RowKeysComparer Instance = new();
+
+        public bool Equals(object?[]? x, object?[]? y) =>
+            System.Collections.StructuralComparisons.StructuralEqualityComparer.Equals(x, y);
+
+        public int GetHashCode(object?[] obj) =>
+            System.Collections.StructuralComparisons.StructuralEqualityComparer.GetHashCode(obj);
+    }
 
     private sealed record SortKey(string Name, bool Descending, Func<TAggregate, object?> Value);
 

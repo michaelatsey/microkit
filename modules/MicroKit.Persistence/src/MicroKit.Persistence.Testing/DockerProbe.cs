@@ -56,20 +56,7 @@ public static class DockerProbe
     /// Connects to <paramref name="endpoint"/>, sends <c>GET /_ping</c> and reports whether the answer is an
     /// HTTP 200. Never throws.
     /// </summary>
-    internal static bool Probe(EndPoint endpoint) => Try(() =>
-    {
-        using var socket = endpoint is UnixDomainSocketEndPoint
-            ? new Socket(AddressFamily.Unix, SocketType.Stream, ProtocolType.Unspecified)
-            : new Socket(SocketType.Stream, ProtocolType.Tcp);
-        socket.SendTimeout = (int)Timeout.TotalMilliseconds;
-        socket.ReceiveTimeout = (int)Timeout.TotalMilliseconds;
-
-        using (var connecting = new CancellationTokenSource(Timeout))
-            socket.ConnectAsync(endpoint, connecting.Token).AsTask().GetAwaiter().GetResult();
-
-        using var stream = new NetworkStream(socket, ownsSocket: false);
-        return Ping(stream);
-    });
+    internal static bool Probe(EndPoint endpoint) => Try(() => RunBlocking(() => ProbeAsync(endpoint)));
 
     /// <summary>
     /// Probes the endpoint a <c>DOCKER_HOST</c> value names. A TLS daemon (<c>DOCKER_TLS_VERIFY</c>) cannot
@@ -110,27 +97,46 @@ public static class DockerProbe
     }
 
     // A TCP connection the endpoint accepts within the timeout.
-    private static bool Connects(EndPoint endpoint) => Try(() =>
+    private static bool Connects(EndPoint endpoint) => Try(() => RunBlocking(async () =>
     {
         using var socket = new Socket(SocketType.Stream, ProtocolType.Tcp);
         using var connecting = new CancellationTokenSource(Timeout);
-        socket.ConnectAsync(endpoint, connecting.Token).AsTask().GetAwaiter().GetResult();
+        await socket.ConnectAsync(endpoint, connecting.Token).ConfigureAwait(false);
         return socket.Connected;
-    });
+    }));
 
-    private static bool ProbeNamedPipe(string pipeName) => Try(() =>
+    private static bool ProbeNamedPipe(string pipeName) => Try(() => RunBlocking(async () =>
     {
         using var pipe = new NamedPipeClientStream(".", pipeName, PipeDirection.InOut, PipeOptions.Asynchronous);
-        pipe.Connect(Timeout);
-        return Ping(pipe);
-    });
+        using (var connecting = new CancellationTokenSource(Timeout))
+            await pipe.ConnectAsync(connecting.Token).ConfigureAwait(false);
+        return await PingAsync(pipe).ConfigureAwait(false);
+    }));
 
     /// <summary>
     /// Sends the ping and reads the status line ("HTTP/1.x 200 …"), the whole exchange under one 2-second
     /// deadline. Each operation is abandoned at the deadline even when the stream ignores cancellation — a
     /// named pipe has no read timeout. Never throws.
     /// </summary>
-    internal static bool Ping(Stream stream) => Try(() => PingAsync(stream).GetAwaiter().GetResult());
+    internal static bool Ping(Stream stream) => Try(() => RunBlocking(() => PingAsync(stream)));
+
+    // The documented exception to "no sync-over-async" (rules/performance.md): IsAvailable is a cached,
+    // once-per-process check whose public API must be synchronous — a test framework's skip condition reads it
+    // in an attribute constructor — and only the asynchronous socket and pipe calls bound every wait. Task.Run
+    // runs the probe on the thread pool, so no SynchronizationContext the caller holds can deadlock it.
+    private static bool RunBlocking(Func<Task<bool>> probe) => Task.Run(probe).GetAwaiter().GetResult();
+
+    private static async Task<bool> ProbeAsync(EndPoint endpoint)
+    {
+        using var socket = endpoint is UnixDomainSocketEndPoint
+            ? new Socket(AddressFamily.Unix, SocketType.Stream, ProtocolType.Unspecified)
+            : new Socket(SocketType.Stream, ProtocolType.Tcp);
+        using (var connecting = new CancellationTokenSource(Timeout))
+            await socket.ConnectAsync(endpoint, connecting.Token).ConfigureAwait(false);
+
+        using var stream = new NetworkStream(socket, ownsSocket: false);
+        return await PingAsync(stream).ConfigureAwait(false);
+    }
 
     private static async Task<bool> PingAsync(Stream stream)
     {

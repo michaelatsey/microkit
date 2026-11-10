@@ -50,7 +50,8 @@ var orders = await LoadAggregatesAsync(o => o.Number == number, ct).ConfigureAwa
 return orders.SingleOrDefault();
 ```
 
-- `AddAsync` and `DeleteAsync` only stage changes; the unit of work commits.
+- `AddAsync` and `DeleteAsync` only stage changes; the unit of work commits. `DeleteAsync` refuses, before any SQL, a
+  root neither recorded nor `Added` (`InvalidOperationException` naming the type): its version would be unknown.
 
 ## Aggregate version — ADR-010
 
@@ -66,7 +67,8 @@ return orders.SingleOrDefault();
   the parents' original or current FK; keys compared with EF Core's key value comparers. Entities
   outside every boundary are ignored; a changed child without a tracked root, or a move between aggregates
   not both recorded, fails the save.
-- Bump: `Added` → 1, otherwise original + 1, `Deleted` untouched. Do not bump by hand, and do not
+- Bump: `Added` → 1, otherwise original + 1, `Deleted` untouched; undone when the save fails, is canceled or conflicts
+  (`SaveChangesFailed`, `SaveChangesCanceled`, `ThrowingConcurrencyException`). Do not bump by hand, and do not
   write aggregate rows with `ExecuteUpdate`/raw SQL when the version must hold.
 
 ## Persistence failures as `Result` — ADR-011
@@ -126,8 +128,9 @@ return orders.SingleOrDefault();
   `ArgumentOutOfRangeException`.
 - Projections (ADR-013): the evaluator without includes (the split hint kept), `AsNoTracking()`, then `Select(selector)`.
 - Keyset (`EfKeyset<T>`, ADR-013): keys resolved on the model (scalar, non-nullable, a provider type the cursor
-  carries after the converter, no primitive collection), the primary key appended, the plan cached per root and
-  ordering; `k1 >= v1 AND ((k1 > v1) OR (k1 = v1 AND …))` as binary nodes with a
+  carries after the converter, no primitive collection, a worst-case cursor within `KeysetCursor.MaxTokenLength` —
+  a `string`/`byte[]` key needs `HasMaxLength`, a string counted at 4 UTF-8 bytes per character), the primary key
+  appended, the plan cached per root and ordering; `k1 >= v1 AND ((k1 > v1) OR (k1 = v1 AND …))` as binary nodes with a
   helper method (EF Core translates the operator for any key type), values from a holder; `pageSize + 1` rows
   projected as `KeysetRow(keys, item)`; the cursor's fingerprint covers the root's model name and the ordering.
 - Compiled finds (`CompiledFinds`, ADR-013): `EfRepository.FindAsync(TId)` and the single-key

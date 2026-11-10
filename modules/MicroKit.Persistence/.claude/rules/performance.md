@@ -62,6 +62,12 @@ key serves it.
 
 Never `.Result`/`.Wait()`. Every `await` in library code has `.ConfigureAwait(false)`.
 
+One recorded exception: `DockerProbe.IsAvailable` (MicroKit.Persistence.Testing, ADR-015). It is a cached,
+once-per-process check whose public API must be synchronous — a test framework's skip condition reads it in an
+attribute constructor — and only the asynchronous socket and pipe calls bound every wait (a named pipe has no read
+timeout). It runs the probe through `Task.Run(…).GetAwaiter().GetResult()`, so no captured context can deadlock it.
+Nothing else blocks on asynchronous work.
+
 ## Budget
 
 Targets: `.claude-context/standards/performance-budget.md`. There is no benchmark project yet, so

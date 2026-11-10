@@ -107,7 +107,8 @@ Abstractions + EntityFrameworkCore. Details: `.claude-context/context/dependency
 IRepository<TAggregate, TId>   // TAggregate : class, IAggregateRoot; TId : IEntityId
     FindAsync(TId id, ct)      // whole aggregate, tracked
     FindAsync(TId id, long expectedVersion, ct) · GetVersion(aggregate)   // ETag / If-Match (ADR-010)
-    AddAsync(aggregate, ct) · DeleteAsync(aggregate, ct)   // stage only — no commit, no update
+    AddAsync(aggregate, ct) · DeleteAsync(aggregate, ct)   // stage only — no commit, no update; DeleteAsync refuses a
+                               // root the repository neither loaded whole nor staged
 IUnitOfWork                    // CommitAsync(ct) · DiscardChanges()
 ITransactionalContext          // ExecuteAsync<TState>(op, state, ct) · ExecuteAsync<TState, TResult>(…)
 

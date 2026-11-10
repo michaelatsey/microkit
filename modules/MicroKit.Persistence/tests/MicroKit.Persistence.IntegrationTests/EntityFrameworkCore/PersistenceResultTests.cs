@@ -209,6 +209,38 @@ public abstract class PersistenceResultScenarios
     }
 
     [DockerRequiredFact]
+    public async Task TryCommitAsync_AfterAStaleVersionConflict_KeepsTheLoadedVersion_AndAResolvedRetryCommitsOnce()
+    {
+        // PR #200 review: EF Core raises ThrowingConcurrencyException, not SaveChangesFailed, for a concurrency
+        // conflict — the bumps of the failed save must be undone there too, or GetVersion reports a version
+        // that was never written. Two commits elsewhere keep "stale + 1" apart from the loaded version.
+        await using var db = await CreateDatabaseAsync();
+        var (accountId, _) = await SeedAccountWithConsignmentAsync(db);
+        for (var i = 0; i < 2; i++)
+        {
+            await using var other = db.Create();
+            (await Accounts(other).FindAsync(accountId))!.Email = $"moved{i}@example.com";
+            await new EfUnitOfWork<ResultsDbContext>(other).CommitAsync();
+        }
+
+        await using var context = db.Create();
+        var accounts = Accounts(context);
+        var unitOfWork = new EfUnitOfWork<ResultsDbContext>(context);
+        var account = await accounts.FindAsync(accountId, expectedVersion: 1);
+        account!.Email = "stale@example.com";
+
+        (await unitOfWork.TryCommitAsync()).Error.ShouldBe(PersistenceErrors.Concurrency("ACCOUNT"));
+        accounts.GetVersion(account).ShouldBe(3, "the failed save wrote nothing: the loaded version stands");
+
+        await accounts.FindAsync(accountId, expectedVersion: accounts.GetVersion(account)); // the conflict, resolved
+        (await unitOfWork.TryCommitAsync()).IsSuccess.ShouldBeTrue();
+        accounts.GetVersion(account).ShouldBe(4);
+        await using var verify = db.Create();
+        (await verify.Set<Account>().Where(a => a.Id == accountId)
+            .Select(a => EF.Property<long>(a, AggregateVersion.PropertyName)).SingleAsync()).ShouldBe(4);
+    }
+
+    [DockerRequiredFact]
     public async Task TryExecuteAsync_WhenAnAddedRootIsFoundWithAVersionOtherThanZero_ReturnsConcurrency()
     {
         await using var db = await CreateDatabaseAsync();

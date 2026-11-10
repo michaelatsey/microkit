@@ -133,8 +133,9 @@ The read side never tracks; `QueryOptions` has no tracking option (ADR-009). `Wi
 
 ADR-013 adds the projections (`ListAsync`/`ListPagedAsync`/`ListKeysetAsync` with a selector, built by the
 database) and keyset pagination: `WithKeyset(KeysetPagination<T>.OrderBy(…))` read by `ListKeysetAsync`, the
-root's key appended, forward only, non-nullable scalar keys of the root, an opaque `KeysetCursor` checked against
-the root type and the ordering. A keyset owns the ordering and the page (`KeysetRules`).
+root's key appended, forward only, non-nullable scalar keys of the root whose worst-case cursor fits
+`KeysetCursor.MaxTokenLength` (a `string`/`byte[]` key needs a maximum length), an opaque `KeysetCursor` checked
+against the root type and the ordering. A keyset owns the ordering and the page (`KeysetRules`).
 
 ## CQRS Data-Access Alignment
 

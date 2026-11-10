@@ -129,7 +129,44 @@ public sealed class DockerProbeTests : IDisposable
         (await ping.WaitAsync(TimeSpan.FromSeconds(10))).ShouldBeFalse();
     }
 
+    [Fact]
+    public async Task ProbeUnixSocket_UnderASynchronizationContextThatNeverRuns_StillAnswers()
+    {
+        // The probe blocks on asynchronous I/O (its public API is synchronous): it must not depend on the caller's
+        // context, here one that drops every callback posted to it.
+        var path = Path.Combine(_directory, "docker.sock");
+        using var listener = new Socket(AddressFamily.Unix, SocketType.Stream, ProtocolType.Unspecified);
+        listener.Bind(new UnixDomainSocketEndPoint(path));
+        listener.Listen();
+        var daemon = AnswerOnePingAsync(listener, "HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nOK");
+
+        var probe = Task.Factory.StartNew(
+            () =>
+            {
+                SynchronizationContext.SetSynchronizationContext(new DroppingContext());
+                return DockerProbe.ProbeUnixSocket(path);
+            },
+            CancellationToken.None,
+            TaskCreationOptions.LongRunning,
+            TaskScheduler.Default);
+
+        (await probe.WaitAsync(TimeSpan.FromSeconds(10))).ShouldBeTrue();
+        await daemon;
+    }
+
     public void Dispose() => Directory.Delete(_directory, recursive: true);
+
+    /// <summary>A context that never runs what is posted to it: a continuation captured there would hang.</summary>
+    private sealed class DroppingContext : SynchronizationContext
+    {
+        public override void Post(SendOrPostCallback d, object? state)
+        {
+        }
+
+        public override void Send(SendOrPostCallback d, object? state)
+        {
+        }
+    }
 
     /// <summary>Accepts the request, then blocks every read and ignores cancellation: the worst listener.</summary>
     private sealed class NeverAnsweringStream : Stream

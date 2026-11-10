@@ -736,6 +736,11 @@ whole ones only.
   `PersistenceException`, `AddMicroKitPersistence` and `AddUnitOfWork` are unchanged.
 - Tests: `AggregateBoundaryTests` (PostgreSQL and SQL Server), `EfReadRepositoryFindTests`,
   `EfReadRepositoryTrackingTests`, `EfRepositoryAggregateLoadTests`.
+- **`DeleteAsync` (Spec phase 1, amended after the PR #200 review).** It refuses, with an
+  `InvalidOperationException` naming the root type and before any SQL, a root that is neither recorded nor `Added`:
+  an instance the repository did not load would reach the database with an unknown version (the token's original
+  value is whatever the instance carries, 0 for one built by hand) and surface as a false concurrency conflict.
+  Pinned with and without `HasSoftDelete()` (`SoftDeleteTests`).
 
 ---
 
@@ -812,6 +817,11 @@ whole ones only.
 
 - Every root's table needs a migration: a `NOT NULL` column, scaffolded with `defaultValue: 0L`;
   existing rows start at 0 and their first change takes them to 1.
+- **A failed save writes no version.** The bumps of a save are undone when it fails, is canceled, or conflicts:
+  EF Core raises `ThrowingConcurrencyException` (not `SaveChangesFailed`) before it throws a
+  `DbUpdateConcurrencyException`, and the interceptor undoes there too, returning the result unchanged (PR #200
+  review). After a `CONCURRENCY` result `GetVersion` reads the loaded version, so a retry that states it commits
+  exactly that version + 1 (`PersistenceResultTests`).
 - **Known limit — bulk writes bypass the version.** `ExecuteUpdate`, `ExecuteDelete` and raw SQL do
   not go through the change tracker: they write an aggregate's rows without bumping its version and
   without conflicting with a concurrent command.
@@ -1163,6 +1173,13 @@ Builds on ADR-002 (`QueryOptions`), ADR-009 (the read side never tracks) and ADR
 - `KeysetPagination`, `KeysetKey`, `KeysetCursor` and `KeysetPage` are new public types in core.
 - A keyset ordering by a column whose provider type is outside the set (`TimeSpan`, a JSON column) is not
   supported; sort by another property or convert it.
+- **The cursor's size is bounded when the query is built** (Spec phase 5, amended after the PR #200 review). Every
+  key has a worst-case encoded size (`KeysetCursor.MaxEncodedLength`: fixed for the scalar types; a `string` counts
+  4 UTF-8 bytes per character of its maximum length — the worst case whether the column counts UTF-16 units or code
+  points — and a `byte[]` its maximum length), and their sum must fit in `MaxTokenLength`. A `string` or `byte[]`
+  key without a maximum length (`GetMaxLength()`, provider-neutral: SQL Server's default `nvarchar(450)` for a key
+  column does not count), or with one too large, is refused naming the key, never on the page that happens to carry
+  a long value. The doubles have no model: they do not check it, and their cursor carries a handle, reused per row.
 - Tests: `ReadSideTests` (PostgreSQL and SQL Server), `ReadSideFoundationTests` (EF Core facts),
   `KeysetCursorTests`, `KeysetPaginationTests`, `InMemoryReadSideTests`.
 
@@ -1386,6 +1403,9 @@ is cached.
    override): gating `StartAsync` would refuse a working setup. The caller asks the probe and skips in its own
    framework's way, so a probe that disagrees can skip a test, never fail one — and the module's "0 skipped" gate
    shows a skip.
+   The probe's public API is synchronous (an xUnit attribute constructor reads it) while only the asynchronous
+   socket and pipe calls bound every wait: it runs through `Task.Run(…).GetAwaiter().GetResult()`, the one exception
+   to "no sync-over-async" recorded in `rules/performance.md`; no caller's context can deadlock it.
 6. **No framework adapter ships.** An adapter would force a framework. The module's own suites run on the fixtures
    through `PostgreSqlSuiteFixture` / `SqlServerSuiteFixture`, xUnit `IAsyncLifetime` adapters that start the fixture
    when the probe answers; `DockerRequiredFact` / `DockerRequiredTheory` stay xUnit attributes in the tests.
