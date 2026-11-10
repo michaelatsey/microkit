@@ -162,7 +162,7 @@ contexts, and it is a different type on purpose — an aggregate should never re
 // Business payload only. Everything about delivery — identity, tenant, correlation, timestamps —
 // is assigned when the row is staged. The attribute is the wire name and is mandatory: a CLR type
 // name cannot serve as one, because a consumer in another service holds a different type.
-[IntegrationEvent("shop.orders.order-placed.v1")]
+[MessageContract("shop.orders.order-placed")]   // wire type: shop.orders.order-placed.v1
 public sealed record OrderPlaced(Guid OrderId, Guid CustomerId) : IIntegrationEvent;
 ```
 
@@ -190,7 +190,7 @@ type does not travel and would be useless if it did.
 ```csharp
 // The shipping module's own type for a contract the orders module emits. Same name, different
 // assembly, different CLR type — that is the whole point of a wire name.
-[IntegrationEvent("shop.orders.order-placed.v1")]
+[MessageContract("shop.orders.order-placed")]   // wire type: shop.orders.order-placed.v1
 public sealed record OrderPlaced(Guid OrderId, Guid CustomerId) : IIntegrationEvent;
 
 services.AddIntegrationEventSubscriptions(events =>

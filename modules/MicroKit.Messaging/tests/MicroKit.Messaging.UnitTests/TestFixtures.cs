@@ -257,9 +257,13 @@ internal sealed class RecordingInboxHandler : IMessageHandler<InboxTestEvent>
     /// <summary>Gets or sets the exception thrown on every invocation, if any.</summary>
     public Exception? ThrowOnHandle { get; set; }
 
-    public ValueTask HandleAsync(InboxTestEvent evt, CancellationToken ct = default)
+    /// <summary>Gets the context of the most recent invocation, if any.</summary>
+    public MessageContext? LastContext { get; private set; }
+
+    public ValueTask HandleAsync(InboxTestEvent message, MessageContext context, CancellationToken ct = default)
     {
         Interlocked.Increment(ref _invocationCount);
+        LastContext = context;
 
         if (ThrowOnHandle is not null)
         {
@@ -344,4 +348,16 @@ internal sealed class CapturingLogger<T> : ILogger<T>
         Exception? exception,
         Func<TState, Exception?, string> formatter)
         => Records.Add(new CapturedLog(logLevel, eventId.Id, formatter(state, exception)));
+}
+
+/// <summary>Reads the #186 envelope the way a test asserts on it.</summary>
+internal static class EnvelopeReading
+{
+    /// <summary>The body as UTF-8 text.</summary>
+    public static string BodyText(this MessageEnvelope envelope)
+        => System.Text.Encoding.UTF8.GetString(envelope.Body.Span);
+
+    /// <summary>A header's value, or null when absent.</summary>
+    public static string? Header(this MessageEnvelope envelope, string name)
+        => envelope.Headers.TryGetValue(name, out var value) ? value : null;
 }

@@ -2,8 +2,9 @@
   <PropertyGroup>
     <AssemblyName>MicroKit.Messaging</AssemblyName>
     <RootNamespace>MicroKit.Messaging</RootNamespace>
-    <Description>Messaging core for MicroKit — OutboxProcessor, InboxProcessor, the transport
-    outbox dispatcher, integration-event publishing, DI extensions.</Description>
+    <Description>Messaging core for MicroKit — the message bus (publish straight to a transport,
+    receive pipeline with middleware and typed verdicts), the in-memory transport, System.Text.Json
+    serialization, and the transitional outbox and inbox engine, with its DI extensions.</Description>
     <PackageTags>microkit;messaging;outbox;inbox;integration-events;dotnet</PackageTags>
     <Authors>Ange-Michaël Atsé</Authors>
     <PackageLicenseExpression>MIT</PackageLicenseExpression>
@@ -54,5 +55,7 @@
     <PackageReference Include="Microsoft.Extensions.DependencyInjection.Abstractions" />
     <PackageReference Include="Microsoft.Extensions.Hosting.Abstractions" />
     <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" />
+    <!-- ConfigureJson(Action<JsonSerializerOptions>) is backed by IOptions (#186). -->
+    <PackageReference Include="Microsoft.Extensions.Options" />
   </ItemGroup>
 </Project>

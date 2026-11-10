@@ -143,8 +143,10 @@ public sealed class MessagingSerializerDefaultTests
 
     private sealed class RecordingSerializer : IMessageSerializer
     {
-        public string Serialize(object payload) => string.Empty;
+        public string ContentType => "application/x-recording";
 
-        public object? Deserialize(string payload, string eventType) => null;
+        public ReadOnlyMemory<byte> Serialize(object message, Type type) => ReadOnlyMemory<byte>.Empty;
+
+        public object? Deserialize(ReadOnlyMemory<byte> body, Type type) => null;
     }
 }

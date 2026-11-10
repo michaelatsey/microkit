@@ -14,7 +14,10 @@ public sealed class OutboxMessageFactoryTests
 
     public OutboxMessageFactoryTests()
     {
-        _serializer.Serialize(Arg.Any<object>()).Returns(x => $"{{\"$t\":\"{x.Arg<object>().GetType().Name}\"}}");
+        _serializer.ContentType.Returns("application/json");
+        _serializer.Serialize(Arg.Any<object>(), Arg.Any<Type>())
+            .Returns(x => (ReadOnlyMemory<byte>)System.Text.Encoding.UTF8.GetBytes(
+                $"{{\"$t\":\"{x.Arg<object>().GetType().Name}\"}}"));
         _sut = new OutboxMessageFactory(_serializer, new FakeTimeProvider(Now));
     }
 
@@ -121,11 +124,29 @@ public sealed class OutboxMessageFactoryTests
     public void CreateNotification_Payload_DelegatesTo_Serializer()
     {
         var payload = new FakeNotification();
-        _serializer.Serialize(payload).Returns("{\"serialized\":true}");
+        // Serialized as its RUNTIME type, and the bytes land on the row as UTF-8 text (#186).
+        _serializer.Serialize(payload, typeof(FakeNotification))
+            .Returns((ReadOnlyMemory<byte>)"{\"serialized\":true}"u8.ToArray());
 
         var msg = _sut.CreateNotification(payload, Guid.NewGuid(), DateTimeOffset.UtcNow, _ctx);
 
         msg.Payload.ShouldBe("{\"serialized\":true}");
+    }
+
+    [Fact]
+    public void CreateContract_WithANonJsonSerializer_RefusesRatherThanCorruptingTheRow()
+    {
+        // The row stores the body as JSON text and the dispatcher sends it as application/json:
+        // decoding a binary body as UTF-8 would corrupt it in silence.
+        var binary = Substitute.For<IMessageSerializer>();
+        binary.ContentType.Returns("application/x-msgpack");
+        var sut = new OutboxMessageFactory(binary, new FakeTimeProvider(Now));
+
+        var ex = Should.Throw<OutboxConfigurationException>(() => sut.CreateContract(
+            new FakeNotification(), "c.v1", "/s", originMessageId: null, occurredOnUtc: null, _ctx));
+
+        ex.Message.ShouldContain("application/x-msgpack");
+        binary.DidNotReceiveWithAnyArgs().Serialize(default!, default!);
     }
 
     // ── helpers ──────────────────────────────────────────────────────────────

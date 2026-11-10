@@ -20,11 +20,12 @@ namespace MicroKit.Messaging;
 /// </para>
 /// <para>
 /// An integration event now carries business payload only. Everything about its delivery lives on
-/// the message row, assigned at staging by <see cref="IIntegrationEventPublisher"/> from the
-/// ambient execution context:
+/// the envelope — and on the outbox row when the outbox stages it — assigned at publication by
+/// <see cref="IEventPublisher"/> or <see cref="IIntegrationEventPublisher"/> from the ambient
+/// execution context:
 /// </para>
 /// <code>
-/// [IntegrationEvent("saasbtp.safety.constat-recorded.v1")]
+/// [MessageContract("saasbtp.safety.constat-recorded")]   // wire type: ...constat-recorded.v1
 /// public sealed record ConstatRecorded(Guid ConstatId, Guid SiteId) : IIntegrationEvent;
 /// </code>
 /// <para>

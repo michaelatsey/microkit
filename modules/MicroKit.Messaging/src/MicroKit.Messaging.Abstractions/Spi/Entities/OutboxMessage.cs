@@ -243,7 +243,7 @@ public sealed class OutboxMessage
     /// <para>
     /// Intrinsic to the event, not to the row (ADR-MSG-008 §4) — unlike <see cref="CreatedAtUtc"/>.
     /// It is what a consumer orders and windows on, and it is the only timestamp that travels:
-    /// <see cref="MessageEnvelope.OccurredOnUtc"/> carries this value.
+    /// <see cref="MessageEnvelope.Time"/> carries this value.
     /// </para>
     /// <para>
     /// <b>The claim no longer orders on it, and operator tooling still does.</b> Dispatch order is

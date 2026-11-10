@@ -86,7 +86,7 @@ public sealed class InboxMessage
 
     /// <summary>
     /// Gets or sets the UTC time at which the underlying business fact occurred, carried from
-    /// <see cref="MessageEnvelope.OccurredOnUtc"/>.
+    /// <see cref="MessageEnvelope.Time"/>.
     /// </summary>
     /// <remarks>
     /// <para>

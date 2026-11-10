@@ -128,13 +128,13 @@ public sealed class OutboxTransportClassificationTests
         var (store, captured) = StoreReturning(OutboxFixtures.Claim(poison, healthy));
 
         var transport = new RecordingMessageTransport(
-            e => e.MessageId == poison.Id.Value ? new OutboxPayloadException("rejected") : null);
+            e => e.Id == poison.Id.Value.ToString() ? new OutboxPayloadException("rejected") : null);
 
         var result = await Build(store, transport).ProcessBatchAsync(10, CancellationToken.None);
 
         result.DeadLettered.ShouldBe(1);
         result.Published.ShouldBe(1);
-        transport.Sent.ShouldHaveSingleItem().MessageId.ShouldBe(healthy.Id.Value);
+        transport.Sent.ShouldHaveSingleItem().Id.ShouldBe(healthy.Id.Value.ToString());
         captured.Count.ShouldBe(2);
     }
 

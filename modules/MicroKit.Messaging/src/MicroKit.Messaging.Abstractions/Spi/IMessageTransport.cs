@@ -48,17 +48,23 @@ namespace MicroKit.Messaging.Spi;
 /// provider, not after an incident.
 /// </para>
 /// <para>
-/// <b>No implementation of this interface ships in any MicroKit package.</b> That is deliberate.
-/// An in-process transport is meaningless until the receiving seam exists, and one that returned
-/// successfully with nothing to deliver to would be the silent-success failure this module treats
-/// as blocking. A broker provider supplies the implementation from its own
-/// <c>Add{Provider}Transport()</c> extension; until one is registered, a
+/// <b>One implementation ships: Core's in-memory transport</b> (#186), registered by
+/// <c>MessagingBuilder.UseInMemoryTransport()</c> together with the consume loop that runs every
+/// envelope through the receive pipeline. A send that returns is a message the transport holds, and
+/// the guarantee goes no further than the transport's own durability: while the process runs, the
+/// in-memory broker hands every message it holds to the pipeline, which handles or dead-letters it,
+/// but it is not durable and loses the messages still queued when the process exits. A broker
+/// provider supplies its own implementation from
+/// its <c>Add{Provider}Transport()</c> extension. With no transport registered at all, a
 /// <see cref="MessageKind.Contract"/> row fails loudly and reversibly — see
-/// <c>MessagingBuilder.AddTransportDispatcher</c>.
+/// <c>MessagingBuilder.AddTransportDispatcher</c> — and a bus publication throws.
 /// </para>
 /// <para>
-/// Registered as <b>scoped</b>, alongside the dispatcher that consumes it: both are resolved from
-/// the per-message execution scope <c>OutboxProcessor</c> creates.
+/// <b>Lifetime.</b> <c>UseInMemoryTransport()</c> registers the in-memory transport as a
+/// <b>singleton</b>: the bus resolves it from any publishing scope, and <c>OutboxProcessor</c>
+/// resolves it through the dispatcher in each per-message execution scope. A provider may register
+/// its transport scoped or singleton, but it is resolved from both kinds of scope, so it must not
+/// depend on state of the scope it was first resolved in.
 /// </para>
 /// </remarks>
 public interface IMessageTransport

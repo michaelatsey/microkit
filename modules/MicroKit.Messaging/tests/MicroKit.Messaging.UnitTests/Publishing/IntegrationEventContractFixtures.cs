@@ -45,33 +45,33 @@ internal static class IntegrationEventContractFixtures
         => new([], [.. consumers.Select(Subscriptions)]);
 }
 
-[IntegrationEvent("saasbtp.safety.constat-recorded.v1")]
+[MessageContract("saasbtp.safety.constat-recorded")]
 internal sealed record ConstatRecorded(Guid ConstatId) : IIntegrationEvent;
 
-[IntegrationEvent("saasbtp.access.workspace-created.v1")]
+[MessageContract("saasbtp.access.workspace-created")]
 internal sealed record WorkspaceCreated(Guid WorkspaceId) : IIntegrationEvent;
 
 /// <summary>Claims a contract name that already belongs to <see cref="ConstatRecorded"/>.</summary>
-[IntegrationEvent("saasbtp.safety.constat-recorded.v1")]
+[MessageContract("saasbtp.safety.constat-recorded")]
 internal sealed record ImpostorEvent(Guid Whatever) : IIntegrationEvent;
 
 /// <summary>
 /// A contract emitted by another service. This process understands it and never publishes it —
 /// the case that only exists because consumption is registered separately from publication.
 /// </summary>
-[IntegrationEvent("partner.billing.invoice-settled.v1")]
+[MessageContract("partner.billing.invoice-settled")]
 internal sealed record InvoiceSettled(Guid InvoiceId) : IIntegrationEvent;
 
-/// <summary>Carries no <c>[IntegrationEvent]</c> attribute, deliberately.</summary>
+/// <summary>Carries no <c>[MessageContract]</c> attribute, deliberately.</summary>
 internal sealed record NeverRegistered : IIntegrationEvent;
 
 /// <summary>
 /// Carries a wire identity that is not one. The attribute applies and compiles; it throws when the
 /// attribute is materialized, which is inside the registration call that names this type.
 /// </summary>
-[IntegrationEvent("")]
+[MessageContract("")]
 internal sealed record BlankContractName : IIntegrationEvent;
 
 /// <summary>Whitespace is the same defect wearing a disguise the compiler will not strip.</summary>
-[IntegrationEvent("   ")]
+[MessageContract("   ")]
 internal sealed record WhitespaceContractName : IIntegrationEvent;

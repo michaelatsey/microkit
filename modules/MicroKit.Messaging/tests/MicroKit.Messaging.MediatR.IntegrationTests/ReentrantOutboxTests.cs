@@ -90,11 +90,11 @@ public sealed class ReentrantOutboxTests
         await E2EHarness.DrainOnceAsync(provider, CancellationToken.None);
 
         var envelope = transport.Sent.ShouldHaveSingleItem();
-        envelope.MessageId.ShouldBe(
-            contract.Id.Value, "the receiver deduplicates on this, so it must be the row's own id");
-        envelope.ContractName.ShouldBe(WidgetShipped.ContractName);
+        envelope.Id.ShouldBe(
+            contract.Id.Value.ToString(), "the receiver deduplicates on this, so it must be the row's own id");
+        envelope.Type.ShouldBe(WidgetShipped.ContractName);
         envelope.Source.ShouldBe(Source);
-        envelope.Payload.ShouldContain(WidgetIdOf(envelope));
+        BodyText(envelope).ShouldContain(WidgetIdOf(envelope));
 
         (await E2EHarness.ReadOutboxAsync(connection))
             .ShouldAllBe(m => m.Status == OutboxMessageStatus.Published);
@@ -214,5 +214,8 @@ public sealed class ReentrantOutboxTests
     }
 
     private static string WidgetIdOf(MessageEnvelope envelope)
-        => envelope.Payload.Split('"').First(p => Guid.TryParse(p, out _));
+        => BodyText(envelope).Split('"').First(p => Guid.TryParse(p, out _));
+
+    private static string BodyText(MessageEnvelope envelope)
+        => System.Text.Encoding.UTF8.GetString(envelope.Body.Span);
 }

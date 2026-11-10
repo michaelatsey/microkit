@@ -77,8 +77,9 @@ namespace MicroKit.Messaging.Spi;
 /// <b>The direction is the opposite of <see cref="IMessageTransport"/>, and that is the point.</b>
 /// A provider implements <c>IMessageTransport</c> and <c>MicroKit.Messaging</c> calls it; here
 /// <c>MicroKit.Messaging</c> implements the receiver and the provider's consume loop calls it. So
-/// unlike the transport — of which <b>no</b> implementation ships in any MicroKit package — an
-/// implementation of this interface does ship, and a provider resolves it rather than writing one.
+/// unlike the transport — of which the only implementation shipped is Core's in-memory one, and a
+/// broker provider writes its own — an implementation of this interface does ship, and a provider
+/// resolves it rather than writing one.
 /// </para>
 /// <para>
 /// <b>Registered by <c>AddIntegrationEventConsumption()</c> or
@@ -99,11 +100,11 @@ namespace MicroKit.Messaging.Spi;
 /// </para>
 /// <para>
 /// <b>The fan-out is: contract name → local type → consumers.</b>
-/// <see cref="MessageEnvelope.ContractName"/> resolves to <i>this</i> process's own CLR type
+/// <see cref="MessageEnvelope.Type"/> resolves to <i>this</i> process's own CLR type
 /// through the contract registry — never to the producer's, which a consumer does not hold — and
 /// that type resolves to every <c>IMessageHandler&lt;T&gt;</c> registered for it. Each consumer
 /// gets its own <see cref="InboxMessage"/>, keyed by
-/// (<see cref="MessageEnvelope.MessageId"/>, <c>ConsumerType</c>), so the rows advance
+/// (<see cref="MessageEnvelope.Id"/>, <c>ConsumerType</c>), so the rows advance
 /// independently: one handler may succeed while another retries.
 /// </para>
 /// <para>
@@ -163,7 +164,7 @@ public interface IEnvelopeReceiver
     /// contract matched at all.
     /// </returns>
     /// <exception cref="InboxPayloadException">
-    /// <see cref="MessageEnvelope.ContractName"/> is bound to no local type in this process.
+    /// <see cref="MessageEnvelope.Type"/> is bound to no local type in this process.
     /// <para>
     /// <b>A provider must dead-letter this message, never nack it for retry.</b> The binding is
     /// established at composition, so it cannot appear without a redeployment and no number of

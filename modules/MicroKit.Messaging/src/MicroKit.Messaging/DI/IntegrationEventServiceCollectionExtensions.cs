@@ -185,7 +185,7 @@ public static class IntegrationEventServiceCollectionExtensions
     }
 
     /// <summary>
-    /// The three registrations both application-level entry points need, in one place so they
+    /// The registrations both application-level entry points need, in one place so they
     /// cannot drift apart.
     /// </summary>
     /// <remarks>
@@ -213,9 +213,7 @@ public static class IntegrationEventServiceCollectionExtensions
     /// </remarks>
     private static void AddContractRegistry(IServiceCollection services)
     {
-        services.TryAddSingleton(sp => new IntegrationEventRegistry(
-            sp.GetServices<IntegrationEventContracts>(),
-            sp.GetServices<IntegrationEventSubscriptions>()));
+        AddContractRegistrySingleton(services);
 
         services.TryAddEnumerable(
             ServiceDescriptor.Singleton<IHostedService, IntegrationEventRegistryValidator>());
@@ -223,5 +221,20 @@ public static class IntegrationEventServiceCollectionExtensions
         // Singleton: it creates its own execution scope per envelope, so a provider's consume loop
         // may hold one for its lifetime and cannot share a DbContext across messages by accident.
         services.TryAddSingleton<IEnvelopeReceiver, EnvelopeReceiver>();
+
+        // EnvelopeReceiver records its ingestion counters here. Also registered by
+        // AddOutboxInboxProcessing(); TryAdd on both sides, so either order yields one instance.
+        services.TryAddSingleton<InboxMetrics>();
     }
+
+    /// <summary>
+    /// Registers the contract registry singleton, and nothing else. Shared with
+    /// <c>AddMicroKitMessaging()</c>, which the bus needs it from (#186): TryAdd with one factory,
+    /// so every entry point yields the same instance.
+    /// </summary>
+    /// <param name="services">The service collection.</param>
+    internal static void AddContractRegistrySingleton(IServiceCollection services)
+        => services.TryAddSingleton(sp => new IntegrationEventRegistry(
+            sp.GetServices<IntegrationEventContracts>(),
+            sp.GetServices<IntegrationEventSubscriptions>()));
 }

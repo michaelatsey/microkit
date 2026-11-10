@@ -25,13 +25,15 @@ public sealed class MediatROutboxDispatcherTests
 
     private static OutboxMessage MakeOutboxMessage(
         MessageKind kind = MessageKind.Notification,
-        string eventType = "SomeType",
+        string? eventType = null,
         string payload = "{}")
         => new()
         {
             Id = MessageId.New(),
             MessageKind = kind,
-            EventType = eventType,
+            // Resolvable by default: since #186 the dispatcher resolves the row's EventType itself
+            // before handing the serializer a type.
+            EventType = eventType ?? typeof(FakeNotification).AssemblyQualifiedName!,
             Payload = payload,
             TenantId = "tenant-1",
             Status = OutboxMessageStatus.Pending,
@@ -118,18 +120,33 @@ public sealed class MediatROutboxDispatcherTests
     [Fact]
     public async Task DispatchAsync_WhenKindIsNotification_AndPayloadDoesNotDeserialize_ThrowsOutboxPayloadException()
     {
-        // Null means the EventType resolved to no CLR type or the JSON was malformed —
-        // IMessageSerializer returns null rather than throwing for both. Permanent, so the
-        // processor dead-letters on first sight instead of spending the retry budget re-reaching
-        // the same verdict.
+        // Null means the body denotes no value. Permanent, so the processor dead-letters on first
+        // sight instead of spending the retry budget re-reaching the same verdict.
         var message = MakeOutboxMessage(MessageKind.Notification);
 
         var ex = await Should.ThrowAsync<OutboxPayloadException>(
             async () => await Build(deserializesTo: null).DispatchAsync(message));
 
-        ex.Message.ShouldContain("SomeType");
+        ex.Message.ShouldContain(nameof(FakeNotification));
         _publisher.Published.ShouldBeEmpty();
         _inner.Dispatched.ShouldBeEmpty();
+    }
+
+    [Fact]
+    public async Task DispatchAsync_WhenKindIsNotification_AndEventTypeDoesNotResolve_ThrowsBeforeTheSerializer()
+    {
+        // The serializer is type-based since #186, so resolving the row's EventType moved here.
+        // A name that resolves to nothing is as permanent as malformed JSON — and the serializer
+        // must not be reached with a guessed type.
+        var serializer = new RecordingSerializer(new FakeNotification());
+        var message = MakeOutboxMessage(MessageKind.Notification, eventType: "SomeType");
+
+        var ex = await Should.ThrowAsync<OutboxPayloadException>(
+            async () => await Build(serializer: serializer).DispatchAsync(message));
+
+        ex.Message.ShouldContain("SomeType");
+        serializer.Calls.ShouldBeEmpty();
+        _publisher.Published.ShouldBeEmpty();
     }
 
     [Fact]
@@ -187,15 +204,17 @@ public sealed class MediatROutboxDispatcherTests
     {
         public List<string> Calls { get; } = [];
 
-        public string Serialize(object payload)
+        public string ContentType => "application/json";
+
+        public ReadOnlyMemory<byte> Serialize(object message, Type type)
         {
-            Calls.Add($"Serialize({payload.GetType().Name})");
-            return "{}";
+            Calls.Add($"Serialize({type.Name})");
+            return "{}"u8.ToArray();
         }
 
-        public object? Deserialize(string payload, string eventType)
+        public object? Deserialize(ReadOnlyMemory<byte> body, Type type)
         {
-            Calls.Add($"Deserialize({eventType})");
+            Calls.Add($"Deserialize({type.Name})");
             return deserializesTo;
         }
     }

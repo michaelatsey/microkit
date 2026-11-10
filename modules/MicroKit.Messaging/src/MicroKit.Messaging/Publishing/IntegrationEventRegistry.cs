@@ -233,8 +233,8 @@ internal sealed class IntegrationEventRegistry
             : throw new IntegrationEventConfigurationException(
                 $"Contract name '{contractName}' resolves to no local type. Add " +
                 "events.Consumes<TEvent>() to the module's composition root, with " +
-                $"[IntegrationEvent(\"{contractName}\")] on that type. The assembly-qualified name " +
-                "of the producer's type cannot serve here: this process does not hold that " +
-                "assembly, which is why the contract name exists.");
+                "a [MessageContract] on that type whose wire type ('<name>.v<version>') is this " +
+                "name. The assembly-qualified name of the producer's type cannot serve here: this " +
+                "process does not hold that assembly, which is why the contract name exists.");
     }
 }

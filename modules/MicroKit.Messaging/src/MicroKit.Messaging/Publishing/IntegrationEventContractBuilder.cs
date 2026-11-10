@@ -18,26 +18,26 @@ public sealed class IntegrationEventContractBuilder
 
     /// <summary>Declares that this module publishes <typeparamref name="TEvent"/>.</summary>
     /// <typeparam name="TEvent">
-    /// The event type. Must carry <see cref="IntegrationEventAttribute"/>.
+    /// The event type. Must carry <see cref="MessageContractAttribute"/>.
     /// </typeparam>
     /// <returns>The same builder, for chaining.</returns>
     /// <exception cref="IntegrationEventConfigurationException">
-    /// <typeparamref name="TEvent"/> has no <see cref="IntegrationEventAttribute"/>. Rejected here,
+    /// <typeparamref name="TEvent"/> has no <see cref="MessageContractAttribute"/>. Rejected here,
     /// at registration, rather than on the one code path that emits the event.
     /// </exception>
     public IntegrationEventContractBuilder Publishes<TEvent>()
         where TEvent : IIntegrationEvent
     {
         var eventType = typeof(TEvent);
-        var attribute = eventType.GetCustomAttribute<IntegrationEventAttribute>(inherit: false)
+        var attribute = eventType.GetCustomAttribute<MessageContractAttribute>(inherit: false)
             ?? throw new IntegrationEventConfigurationException(
-                $"'{eventType.FullName}' has no [IntegrationEvent] attribute. Every published event " +
+                $"'{eventType.FullName}' has no [MessageContract] attribute. Every published event " +
                 "declares its wire contract name there: the CLR type name cannot serve as one, " +
                 "because a consumer in another service holds a different type in a different " +
                 "assembly and a namespace rename would invalidate rows already in flight.");
 
         _registrations.Add(
-            new IntegrationEventRegistration(eventType, attribute.ContractName, _source));
+            new IntegrationEventRegistration(eventType, attribute.WireType, _source));
 
         return this;
     }

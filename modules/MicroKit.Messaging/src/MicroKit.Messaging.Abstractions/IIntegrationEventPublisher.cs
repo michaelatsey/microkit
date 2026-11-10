@@ -93,7 +93,7 @@ public interface IIntegrationEventPublisher
 {
     /// <summary>Stages one integration event for publication.</summary>
     /// <typeparam name="TEvent">
-    /// The event type. Must be registered and carry <see cref="IntegrationEventAttribute"/>.
+    /// The event type. Must be registered and carry <see cref="MessageContractAttribute"/>.
     /// </typeparam>
     /// <param name="integrationEvent">The event. Business payload only.</param>
     /// <param name="occurredOnUtc">

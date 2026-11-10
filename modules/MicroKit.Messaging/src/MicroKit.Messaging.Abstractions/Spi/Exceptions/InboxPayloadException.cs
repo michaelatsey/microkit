@@ -28,7 +28,7 @@ namespace MicroKit.Messaging.Spi;
 /// back-off, which no amount of waiting could ever resolve.
 /// </para>
 /// <para>
-/// <b>Raised by the receiving seam for:</b> a <see cref="MessageEnvelope.ContractName"/> bound to
+/// <b>Raised by the receiving seam for:</b> a <see cref="MessageEnvelope.Type"/> bound to
 /// no local type in this process. The binding is established at composition, so it cannot appear
 /// without a redeployment — the same permanence, reached one step earlier, before any row was
 /// written.

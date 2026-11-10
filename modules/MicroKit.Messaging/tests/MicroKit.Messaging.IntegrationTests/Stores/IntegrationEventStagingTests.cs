@@ -315,8 +315,11 @@ public sealed class IntegrationEventStagingTests
     }
 }
 
-[IntegrationEvent(ContractName)]
+[MessageContract(Name)]
 internal sealed record StagingTestEvent(Guid ConstatId) : IIntegrationEvent
 {
-    internal const string ContractName = "microkit.test.staging-event.v1";
+    internal const string Name = "microkit.test.staging-event";
+
+    /// <summary>The wire type: the name and the default version 1.</summary>
+    internal const string ContractName = Name + ".v1";
 }

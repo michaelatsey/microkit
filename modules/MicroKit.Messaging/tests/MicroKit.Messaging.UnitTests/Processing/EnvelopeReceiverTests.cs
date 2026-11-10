@@ -82,21 +82,21 @@ public sealed class EnvelopeReceiverTests
 
         foreach (var row in harness.Writer.Written)
         {
-            row.MessageId.Value.ShouldBe(
-                envelope.MessageId, "the consumer deduplicates on the producing row's id");
-            row.TenantId.ShouldBe(envelope.TenantId);
-            row.Payload.ShouldBe(envelope.Payload, "the payload travels byte for byte");
-            row.CorrelationId!.Value.ShouldBe(envelope.CorrelationId!.Value);
+            row.MessageId.Value.ToString().ShouldBe(
+                envelope.Id, "the consumer deduplicates on the producing row's id");
+            row.TenantId.ShouldBe(Tenant);
+            row.Payload.ShouldBe(Payload, "the UTF-8 body lands on the row as its text");
+            row.CorrelationId!.Value.ToString().ShouldBe(Correlation);
 
             // COPIED, not derived. The row records who caused the MESSAGE, which the producer
             // assigned. Deriving here would overwrite the producer's link with this message's own
             // id and lose the hop the envelope carried.
-            row.CausationId!.Value.ShouldBe(envelope.CausationId!.Value);
+            row.CausationId!.Value.ToString().ShouldBe(Causation);
 
             // The producer's business clock, carried whole. Since ADR-MSG-018 made
             // IIntegrationEvent a bare marker the payload need carry no timestamp of its own, so
             // dropping this would leave the business time nowhere on the receiving side.
-            row.OccurredOnUtc.ShouldBe(envelope.OccurredOnUtc);
+            row.OccurredOnUtc.ShouldBe(envelope.Time);
 
             row.Status.ShouldBe(InboxMessageStatus.Received);
             row.RetryCount.ShouldBe(0);
@@ -124,7 +124,9 @@ public sealed class EnvelopeReceiverTests
         // IMessageSerializer.Deserialize. A column that merely looks right but does not round-trip
         // dead-letters every row on its first claim, with a payload that was perfectly well-formed.
         new SystemTextJsonMessageSerializer()
-            .Deserialize(harness.Writer.Written[0].Payload, eventType)
+            .Deserialize(
+                System.Text.Encoding.UTF8.GetBytes(harness.Writer.Written[0].Payload),
+                RowEventTypes.Resolve(eventType!)!)
             .ShouldBeOfType<InvoiceSettled>();
     }
 
@@ -163,7 +165,7 @@ public sealed class EnvelopeReceiverTests
     public async Task ReceiveAsync_WhenTheEnvelopeCarriesNoCorrelation_MintsOneForTheWholeFanOut()
     {
         var harness = Harness.Build(consumers: 2);
-        var envelope = Envelope() with { CorrelationId = null };
+        var envelope = Envelope(withCorrelation: false);
 
         await harness.Receiver.ReceiveAsync(envelope);
 
@@ -190,7 +192,7 @@ public sealed class EnvelopeReceiverTests
 
         await harness.Receiver.ReceiveAsync(envelope);
 
-        harness.Writer.Written.ShouldAllBe(r => r.CorrelationId!.Value == envelope.CorrelationId!.Value);
+        harness.Writer.Written.ShouldAllBe(r => r.CorrelationId!.Value.ToString() == Correlation);
     }
 
     [Fact]
@@ -296,14 +298,14 @@ public sealed class EnvelopeReceiverTests
         // and the same tenant, so there is nothing to isolate between them.
         var context = harness.Scopes.Contexts.ShouldHaveSingleItem();
 
-        context.TenantId.ShouldBe(envelope.TenantId, "a tenant-aware factory resolves the database from this");
-        context.CorrelationId.ShouldBe(envelope.CorrelationId!.Value.ToString(), "correlation is copied");
+        context.TenantId.ShouldBe(Tenant, "a tenant-aware factory resolves the database from this");
+        context.CorrelationId.ShouldBe(Correlation, "correlation is copied");
 
         // DERIVED from the envelope's own MessageId — everything recorded in this scope was caused
-        // by delivering THIS message. Copying envelope.CausationId would name the grandparent, and
+        // by delivering THIS message. Copying the causationid header would name the grandparent, and
         // the envelope seeds the two differently so that copy-through cannot pass.
-        context.CausationId.ShouldBe(envelope.MessageId.ToString());
-        context.CausationId.ShouldNotBe(envelope.CausationId!.Value.ToString());
+        context.CausationId.ShouldBe(envelope.Id);
+        context.CausationId.ShouldNotBe(Causation);
     }
 
     [Fact]
@@ -359,6 +361,42 @@ public sealed class EnvelopeReceiverTests
     }
 
     [Fact]
+    public async Task ReceiveAsync_WhenTheBodyIsNotJson_ThrowsPermanentlyAndWritesNothing()
+    {
+        // The inbox row stores the body as JSON text (#186 boundary): any other content type
+        // cannot be recorded, and no redelivery will change that.
+        var harness = Harness.Build(consumers: 1);
+
+        var ex = await Should.ThrowAsync<InboxPayloadException>(
+            async () => await harness.Receiver.ReceiveAsync(Envelope(contentType: "application/avro")));
+
+        ex.Message.ShouldContain("application/avro");
+        harness.Writer.Written.ShouldBeEmpty();
+    }
+
+    [Fact]
+    public async Task ReceiveAsync_AcceptsAJsonContentTypeWithParameters()
+    {
+        var harness = Harness.Build(consumers: 1);
+
+        await harness.Receiver.ReceiveAsync(Envelope(contentType: "application/json; charset=utf-8"));
+
+        harness.Writer.Written.ShouldHaveSingleItem();
+    }
+
+    [Fact]
+    public async Task ReceiveAsync_WhenTheIdIsNotAGuid_ThrowsPermanentlyAndWritesNothing()
+    {
+        var harness = Harness.Build(consumers: 1);
+
+        var ex = await Should.ThrowAsync<InboxPayloadException>(
+            async () => await harness.Receiver.ReceiveAsync(Envelope(id: "order-42")));
+
+        ex.Message.ShouldContain("order-42");
+        harness.Writer.Written.ShouldBeEmpty();
+    }
+
+    [Fact]
     public async Task ReceiveAsync_WithNoEnvelope_Throws()
     {
         var harness = Harness.Build(consumers: 1);
@@ -367,19 +405,42 @@ public sealed class EnvelopeReceiverTests
             async () => await harness.Receiver.ReceiveAsync(null!));
     }
 
-    private static MessageEnvelope Envelope()
-        => new(
-            MessageId: Guid.Parse("11111111-1111-4111-8111-111111111111"),
-            ContractName: ContractName,
-            Source: Source,
-            Payload: """{"invoiceId":"22222222-2222-4222-8222-222222222222"}""",
-            TenantId: "tenant-a",
-            CorrelationId: Guid.Parse("33333333-3333-4333-8333-333333333333"),
+    private const string EnvelopeId = "11111111-1111-4111-8111-111111111111";
+    private const string Payload = """{"invoiceId":"22222222-2222-4222-8222-222222222222"}""";
+    private const string Tenant = "tenant-a";
+    private const string Correlation = "33333333-3333-4333-8333-333333333333";
 
-            // Different from MessageId on purpose: the row must COPY this one while the execution
-            // context DERIVES from MessageId. A shared value would let either bug pass.
-            CausationId: Guid.Parse("44444444-4444-4444-8444-444444444444"),
-            OccurredOnUtc: OccurredOn);
+    // Different from the id on purpose: the row must COPY this one while the execution context
+    // DERIVES from the id. A shared value would let either bug pass.
+    private const string Causation = "44444444-4444-4444-8444-444444444444";
+
+    private static MessageEnvelope Envelope(
+        bool withCorrelation = true,
+        string id = EnvelopeId,
+        string contentType = "application/json")
+    {
+        var headers = new Dictionary<string, string>(StringComparer.Ordinal)
+        {
+            [MessageHeaders.TenantId] = Tenant,
+            [MessageHeaders.CausationId] = Causation,
+        };
+
+        if (withCorrelation)
+        {
+            headers[MessageHeaders.CorrelationId] = Correlation;
+        }
+
+        return new MessageEnvelope
+        {
+            Id = id,
+            Type = ContractName,
+            Source = Source,
+            Time = OccurredOn,
+            DataContentType = contentType,
+            Headers = headers,
+            Body = System.Text.Encoding.UTF8.GetBytes(Payload),
+        };
+    }
 
     private sealed record Harness(
         EnvelopeReceiver Receiver,
@@ -444,13 +505,13 @@ public sealed class EnvelopeReceiverTests
 
     private sealed class FirstConsumer : IMessageHandler<InvoiceSettled>
     {
-        public ValueTask HandleAsync(InvoiceSettled evt, CancellationToken ct = default)
+        public ValueTask HandleAsync(InvoiceSettled message, MessageContext context, CancellationToken ct = default)
             => ValueTask.CompletedTask;
     }
 
     private sealed class SecondConsumer : IMessageHandler<InvoiceSettled>
     {
-        public ValueTask HandleAsync(InvoiceSettled evt, CancellationToken ct = default)
+        public ValueTask HandleAsync(InvoiceSettled message, MessageContext context, CancellationToken ct = default)
             => ValueTask.CompletedTask;
     }
 }

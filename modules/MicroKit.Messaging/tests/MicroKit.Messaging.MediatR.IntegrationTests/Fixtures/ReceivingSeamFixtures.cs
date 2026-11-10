@@ -31,7 +31,7 @@ internal abstract class RecordingWidgetShippedHandler(
     HandlerInvocationRecorder recorder)
     : IMessageHandler<WidgetShipped>
 {
-    public async ValueTask HandleAsync(WidgetShipped evt, CancellationToken ct = default)
+    public async ValueTask HandleAsync(WidgetShipped message, MessageContext context, CancellationToken ct = default)
     {
         // The causation the PROCESSOR derived for this scope, not anything off the event. That is
         // the whole subject of the end-to-end assertion: work done while handling a delivery must
@@ -39,7 +39,7 @@ internal abstract class RecordingWidgetShippedHandler(
         // this" in another process is the inbox row's MessageId.
         recorder.Record(GetType().Name, executionContext.CausationId ?? "<null>");
 
-        writer.Stage(new E2EAggregate { Name = $"handled-{evt.WidgetId}" });
+        writer.Stage(new E2EAggregate { Name = $"handled-{message.WidgetId}" });
 
         // Commits the handler's own write AND the staged processed mark, together or not at all.
         await unitOfWork.CommitAsync(ct);

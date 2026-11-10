@@ -42,7 +42,7 @@ internal sealed class MessageHandlerRegistry
     public readonly record struct HandlerEntry(
         string ConsumerType,
         Type HandlerType,
-        Func<object, IIntegrationEvent, CancellationToken, ValueTask> Invoker);
+        Func<object, IIntegrationEvent, MessageContext, CancellationToken, ValueTask> Invoker);
 
     /// <summary>
     /// Registers a handler using an invoker closed over <typeparamref name="TEvent"/> at
@@ -66,7 +66,7 @@ internal sealed class MessageHandlerRegistry
         var entry = new HandlerEntry(
             consumerType,
             handlerType,
-            (h, e, ct) => ((IMessageHandler<TEvent>)h).HandleAsync((TEvent)e, ct));
+            (h, e, c, ct) => ((IMessageHandler<TEvent>)h).HandleAsync((TEvent)e, c, ct));
 
         AddEntry(typeof(TEvent), entry);
     }
@@ -87,13 +87,13 @@ internal sealed class MessageHandlerRegistry
             .GetMethod(nameof(BuildReflectionInvoker), BindingFlags.NonPublic | BindingFlags.Static)!
             .MakeGenericMethod(eventType);
 
-        var invoker = (Func<object, IIntegrationEvent, CancellationToken, ValueTask>)method.Invoke(null, null)!;
+        var invoker = (Func<object, IIntegrationEvent, MessageContext, CancellationToken, ValueTask>)method.Invoke(null, null)!;
         AddEntry(eventType, new HandlerEntry(consumerType, handlerType, invoker));
     }
 
-    private static Func<object, IIntegrationEvent, CancellationToken, ValueTask> BuildReflectionInvoker<TEvent>()
+    private static Func<object, IIntegrationEvent, MessageContext, CancellationToken, ValueTask> BuildReflectionInvoker<TEvent>()
         where TEvent : IIntegrationEvent
-        => (h, e, ct) => ((IMessageHandler<TEvent>)h).HandleAsync((TEvent)e, ct);
+        => (h, e, c, ct) => ((IMessageHandler<TEvent>)h).HandleAsync((TEvent)e, c, ct);
 
     /// <summary>
     /// Adds one entry, idempotently in <c>ConsumerType</c>. A repeated registration of the same

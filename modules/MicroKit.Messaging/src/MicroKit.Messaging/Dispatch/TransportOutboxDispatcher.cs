@@ -1,5 +1,8 @@
 namespace MicroKit.Messaging.Dispatch;
 
+using System.Text;
+using MicroKit.Messaging.Serialization;
+
 /// <summary>
 /// The standard <see cref="IOutboxDispatcher"/>: turns a <see cref="MessageKind.Contract"/> row
 /// into a <see cref="MessageEnvelope"/> and hands it to <see cref="IMessageTransport"/>.
@@ -137,44 +140,48 @@ internal sealed class TransportOutboxDispatcher(
                 "staged this row did not set it.");
         }
 
-        var envelope = new MessageEnvelope(
-            // Every field from the row, and MessageId above all: the receiver deduplicates on it,
-            // so it must be identical across every redelivery of this row. Deriving it from the
-            // payload would only survive a retry by coincidence.
-            MessageId: message.Id.Value,
-            ContractName: message.ContractName,
-            Source: message.Source,
-            Payload: message.Payload,
-            TenantId: message.TenantId,
-            // Null-conditional on both: OutboxMessage enforces no invariant on CorrelationId, so a
-            // row written by anything other than OutboxMessageFactory can carry null — the same
-            // reason OutboxProcessor guards it when building the execution context.
-            CorrelationId: message.CorrelationId?.Value,
-            CausationId: message.CausationId?.Value,
-            OccurredOnUtc: message.OccurredOnUtc);
+        // The row keeps its string payload; the envelope carries bytes (#186 boundary). Payload is
+        // the default serializer's JSON text, so it goes out as UTF-8 application/json. The
+        // reserved headers come from the row's own columns, captured at staging — traceparent
+        // included, which is the trace of the publication rather than of this relay.
+        var headers = new Dictionary<string, string>(StringComparer.Ordinal);
 
-        // FORWARD NOTE — the trace link, for whoever adds a member to MessageEnvelope.
-        //
-        // message.TraceParent is NOT copied here, because MessageEnvelope declares no member for
-        // it: a member that could only ever be null is worse than an absent one, since a consumer
-        // builds on it (see OutboxMessage.TraceParent). Adding one is additive and this is the
-        // line it lands on.
-        //
-        // There is a second, smaller gap to close at the same time, and it is upstream of this
-        // class: OutboxProcessor starts no Activity from message.TraceParent before dispatching, so
-        // a contract published by a notification handler captures the WORKER's ambient activity —
-        // usually none — rather than the trace that produced the row it came from. The correlation
-        // chain survives that hop in a column; the W3C trace does not. Both halves are needed for
-        // an end-to-end trace, and doing only this one produces an envelope carrying a traceparent
-        // that names the relay instead of the producer, which is worse than carrying none.
-        //
-        // Deliberately deferred, not overlooked. Reviewed and recorded 2026-08-28.
+        // Non-nullable and required on a stored row, but a row built by hand can still carry null;
+        // the dispatcher sends it without a correlation rather than failing it until dead-letter.
+        if (message.CorrelationId is not null)
+        {
+            headers[MessageHeaders.CorrelationId] = message.CorrelationId.Value.ToString();
+        }
 
-        // Unguarded on purpose: the transport's exception type is its failure classification, and
-        // the processor routes on it. See the class remarks.
+        if (message.TenantId is not null)
+        {
+            headers[MessageHeaders.TenantId] = message.TenantId;
+        }
+
+        if (message.CausationId is not null)
+        {
+            headers[MessageHeaders.CausationId] = message.CausationId.Value.ToString();
+        }
+
+        if (message.TraceParent is not null)
+        {
+            headers[MessageHeaders.TraceParent] = message.TraceParent;
+        }
+
+        var envelope = new MessageEnvelope
+        {
+            Id = message.Id.Value.ToString(),
+            Source = message.Source,
+            Type = message.ContractName,
+            Time = message.OccurredOnUtc,
+            DataContentType = SystemTextJsonMessageSerializer.JsonContentType,
+            Headers = headers,
+            Body = Encoding.UTF8.GetBytes(message.Payload),
+        };
+
         await transport.SendAsync(envelope, ct).ConfigureAwait(false);
 
         TransportDispatcherLogs.EnvelopeSent(
-            logger, message.Id.Value, envelope.ContractName, envelope.Source);
+            logger, message.Id.Value, envelope.Type, envelope.Source);
     }
 }

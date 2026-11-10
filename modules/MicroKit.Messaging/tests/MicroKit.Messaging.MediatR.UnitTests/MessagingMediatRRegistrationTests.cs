@@ -200,7 +200,7 @@ public sealed class MessagingMediatRRegistrationTests
 
         await dispatcher.DispatchAsync(ContractRow());
 
-        transport.Sent.ShouldHaveSingleItem().ContractName.ShouldBe("test.contract.v1");
+        transport.Sent.ShouldHaveSingleItem().Type.ShouldBe("test.contract.v1");
     }
 
     [Fact]

@@ -20,7 +20,7 @@ namespace MicroKit.Messaging.Publishing;
 /// </remarks>
 /// <param name="EventType">The local CLR type the contract deserializes into.</param>
 /// <param name="ContractName">
-/// The wire contract name, taken from <see cref="IntegrationEventAttribute"/> on
+/// The wire contract name, taken from <see cref="MessageContractAttribute"/> on
 /// <paramref name="EventType"/>.
 /// </param>
 internal sealed record IntegrationEventSubscription(Type EventType, string ContractName);
