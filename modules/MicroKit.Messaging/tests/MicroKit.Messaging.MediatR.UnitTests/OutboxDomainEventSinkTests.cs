@@ -25,7 +25,9 @@ public sealed class OutboxDomainEventSinkTests
 
     public OutboxDomainEventSinkTests()
     {
-        _serializer.Serialize(Arg.Any<object>()).Returns("{}");
+        _serializer.ContentType.Returns("application/json");
+        _serializer.Serialize(Arg.Any<object>(), Arg.Any<Type>())
+            .Returns((ReadOnlyMemory<byte>)"{}"u8.ToArray());
         _sut = new OutboxDomainEventSink(
             _factory, new OutboxMessageFactory(_serializer, TimeProvider.System), _outboxWriter, _ctx);
     }
@@ -75,7 +77,7 @@ public sealed class OutboxDomainEventSinkTests
         await _sut.ReceiveAsync([domainEvent]);
 
         // Payload is the serialized NOTIFICATION (not the raw domain event).
-        _serializer.Received(1).Serialize(notification);
+        _serializer.Received(1).Serialize(notification, typeof(TestNotification));
     }
 
     [Fact]

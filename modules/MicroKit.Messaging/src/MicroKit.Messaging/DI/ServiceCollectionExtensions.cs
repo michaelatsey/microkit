@@ -1,6 +1,6 @@
+using MicroKit.Messaging.Bus;
 using MicroKit.Messaging.Execution;
 using MicroKit.Messaging.Outbox;
-using MicroKit.Messaging.Processing;
 using MicroKit.Messaging.Registry;
 using MicroKit.Messaging.Serialization;
 using Microsoft.Extensions.DependencyInjection.Extensions;
@@ -13,8 +13,9 @@ namespace MicroKit.Messaging;
 public static class ServiceCollectionExtensions
 {
     /// <summary>
-    /// Registers MicroKit.Messaging core services: outbox and inbox workers, the
-    /// in-process execution scope factory, and the handler registry.
+    /// Registers MicroKit.Messaging core services: the message bus (<see cref="IMessageBus"/> and
+    /// <see cref="IEventPublisher"/>), the receive pipeline, the contract and handler registries,
+    /// the default serializer, and the in-process execution scope factory.
     /// </summary>
     /// <param name="services">The service collection to register into.</param>
     /// <param name="configureOutbox">Optional callback to configure outbox processor options.</param>
@@ -25,7 +26,15 @@ public static class ServiceCollectionExtensions
     /// </returns>
     /// <remarks>
     /// <para>
-    /// <strong>Required services NOT registered here:</strong>
+    /// <b>No hosted service is registered here (#186).</b> The bus works with no persistence: add
+    /// a transport — <see cref="MessagingBuilder.UseInMemoryTransport"/>, which registers its own
+    /// consume loop — and the bus publishes and consumes. The outbox and inbox workers, processors
+    /// and coordinators are registered by the store provider that needs them, through
+    /// <see cref="Spi.OutboxInboxProcessingExtensions.AddOutboxInboxProcessing"/> (which
+    /// <c>AddEfCoreOutbox&lt;TContext&gt;()</c> calls) — a transitional step that #188 replaces.
+    /// </para>
+    /// <para>
+    /// <strong>Required by the outbox and inbox path, and NOT registered here:</strong>
     /// <list type="bullet">
     /// <item><description>
     /// <c>IOutboxProcessorStore</c> — must be provided by a store implementation,
@@ -49,14 +58,15 @@ public static class ServiceCollectionExtensions
     /// dispatcher from <c>MicroKit.Messaging.MediatR</c> instead.
     /// </description></item>
     /// </list>
-    /// The outbox and inbox workers will log a critical error and stop if required services
-    /// are missing at runtime.
+    /// The outbox and inbox workers, once registered, log a critical error and stop if required
+    /// services are missing at runtime.
     /// </para>
     /// <para>
     /// <b><c>IMessageSerializer</c> IS registered here</b>, as a <c>TryAdd</c>ed
-    /// <c>SystemTextJsonMessageSerializer</c> default. It belongs to this method rather than to an
-    /// optional builder call because this method registers <c>InboxProcessor</c> and
-    /// <c>OutboxMessageFactory</c> unconditionally and both require one (ADR-MSG-019).
+    /// <c>SystemTextJsonMessageSerializer</c> default, configured through
+    /// <see cref="MessagingBuilder.ConfigureJson"/>. It belongs to this method rather than to an
+    /// optional builder call because the bus, the receive pipeline and <c>OutboxMessageFactory</c>
+    /// all require one (ADR-MSG-019).
     /// <b>To supply your own, register it BEFORE calling this method</b> — a registration made
     /// afterwards loses to the default that is already in the collection. Neither
     /// <c>AddIntegrationEventPublishing()</c> nor <c>AddMediatRDomainEvents()</c> registers a
@@ -119,34 +129,28 @@ public static class ServiceCollectionExtensions
         services.TryAddScoped<OriginMessageHolder>();
 
         // The serializer default. It belongs HERE and not on an optional builder method, because
-        // the two types that require it — InboxProcessor and OutboxMessageFactory — are registered
-        // by this method unconditionally. It used to come from AddInProcessTransport(), and when
-        // that was deleted (ADR-MSG-019) a host composing plain outbox + transport was left with a
-        // registered InboxProcessor it could not activate: a gap that surfaces at the first worker
-        // tick, not at composition. TryAdd, so a host registering its own beforehand keeps it.
+        // the types that require it — the bus, the receive pipeline and OutboxMessageFactory — are
+        // registered by this method unconditionally. TryAdd, so a host registering its own
+        // beforehand keeps it. Its options start from the Web defaults and are extended by
+        // MessagingBuilder.ConfigureJson, through IOptions, and used in both directions.
+        services.AddOptions<MessagingJsonOptions>();
         services.TryAddSingleton<IMessageSerializer, SystemTextJsonMessageSerializer>();
 
-        services.AddScoped<IOutboxProcessor, OutboxProcessor>();
-        services.AddScoped<IOutboxCoordinator, SharedDbOutboxCoordinator>();
-        services.AddHostedService<OutboxWorker>();
+        // The contract registry the bus resolves wire types through. The same singleton
+        // AddIntegrationEventPublishing() and AddIntegrationEventConsumption() register: TryAdd on
+        // both sides, one factory.
+        IntegrationEventServiceCollectionExtensions.AddContractRegistrySingleton(services);
 
-        // Retention. Without it DeleteProcessedAsync has no caller, RetentionDays is read by
-        // nothing, and the outbox grows without bound in production.
-        services.AddHostedService<OutboxRetentionWorker>();
+        // The bus (#186). Scoped, because it reads the ambient tenant, correlation and causation
+        // from the scope's IExecutionContext — never from an AsyncLocal. IMessageBus and
+        // IEventPublisher resolve to one instance per scope.
+        services.TryAddScoped<MessageBus>();
+        services.TryAddScoped<IMessageBus>(sp => sp.GetRequiredService<MessageBus>());
+        services.TryAddScoped<IEventPublisher>(sp => sp.GetRequiredService<MessageBus>());
 
-        services.AddScoped<IInboxProcessor, InboxProcessor>();
-        services.AddScoped<IInboxCoordinator, SharedDbInboxCoordinator>();
-        services.AddHostedService<InboxWorker>();
-
-        // Inbox retention. The window is deliberately longer than the outbox's and must stay
-        // that way: the inbox only deduplicates messages it still holds, so deleting early
-        // reopens reprocessing rather than merely losing history.
-        services.AddHostedService<InboxRetentionWorker>();
-
-        // Ingestion counters, recorded by EnvelopeReceiver. Owns its Meter rather than taking
-        // IMeterFactory, so no host is obliged to call AddMetrics(); subscribe with
-        // AddMeter(MessagingDiagnostics.InboxMeterName).
-        services.TryAddSingleton<InboxMetrics>();
+        // The receive pipeline, driven by a transport's consume loop. Singleton: every scope it
+        // needs is created per handler through IExecutionScopeFactory.
+        services.TryAddSingleton<MessageReceivePipeline>();
 
         return new MessagingBuilder(services, registry);
     }

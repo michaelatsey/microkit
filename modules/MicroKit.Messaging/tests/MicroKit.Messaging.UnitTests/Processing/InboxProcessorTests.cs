@@ -192,7 +192,7 @@ public sealed class InboxProcessorTests
         var store = StoreReturning(InboxFixtures.Claim(message));
 
         var serializer = Substitute.For<IMessageSerializer>();
-        serializer.Deserialize(Arg.Any<string>(), Arg.Any<string>())
+        serializer.Deserialize(Arg.Any<ReadOnlyMemory<byte>>(), Arg.Any<Type>())
             .Returns(_ => throw new InvalidOperationException("malformed JSON"));
 
         var sut = Build(store, out var handler, out _, serializer: serializer);
@@ -210,7 +210,7 @@ public sealed class InboxProcessorTests
         var store = StoreReturning(InboxFixtures.Claim(message));
 
         var serializer = Substitute.For<IMessageSerializer>();
-        serializer.Deserialize(Arg.Any<string>(), Arg.Any<string>()).Returns((object?)null);
+        serializer.Deserialize(Arg.Any<ReadOnlyMemory<byte>>(), Arg.Any<Type>()).Returns((object?)null);
 
         var sut = Build(store, out _, out _, serializer: serializer);
         var result = await sut.ProcessBatchAsync(batchSize: 10, CancellationToken.None);
@@ -222,6 +222,61 @@ public sealed class InboxProcessorTests
     // -----------------------------------------------------------------------------------
     // Transient failures and the retry ceiling
     // -----------------------------------------------------------------------------------
+
+    [Fact]
+    public async Task ProcessBatch_WhenTheHandlerThrowsPermanentMessageException_DeadLettersOnFirstSight()
+    {
+        // The handler-raised permanent verdict (#186): a handler never references the SPI to get
+        // what InboxPayloadException gives the engine.
+        var message = InboxFixtures.Message(
+            consumerType: ConsumerType, eventType: EventType, retryCount: 0);
+        var store = StoreReturning(InboxFixtures.Claim(message));
+
+        var sut = Build(store, out var handler, out var settlement);
+        handler.ThrowOnHandle = new PermanentMessageException("violates the contract");
+        settlement.MarkUncommitted = true;
+
+        var result = await sut.ProcessBatchAsync(batchSize: 10, CancellationToken.None);
+
+        result.DeadLettered.ShouldBe(1);
+        result.Retried.ShouldBe(0);
+        var outcome = (await CapturedOutcomes(store))[0];
+        outcome.Kind.ShouldBe(InboxOutcomeKind.DeadLetter);
+        outcome.RetryCount.ShouldBe(0, "a permanent verdict consumes no retry");
+    }
+
+    [Fact]
+    public async Task ProcessBatch_HandsTheHandlerAContextBuiltFromTheRow()
+    {
+        // The transitional inbox path keeps working with the #186 handler signature. Causation is
+        // COPIED here: the context describes the message, whose cause the row recorded — unlike
+        // the scope's execution context, which names the message itself as the cause of its work.
+        var correlation = CorrelationId.New();
+        var causation = CausationId.New();
+        var message = InboxFixtures.Message(
+            consumerType: ConsumerType, eventType: EventType, tenantId: "tenant-z",
+            correlationId: correlation);
+        message.CausationId = causation;
+        message.OccurredOnUtc = new DateTimeOffset(2025, 3, 4, 5, 6, 7, TimeSpan.Zero);
+        var store = StoreReturning(InboxFixtures.Claim(message));
+
+        var sut = Build(store, out var handler, out _);
+        await sut.ProcessBatchAsync(batchSize: 10, CancellationToken.None);
+
+        var context = handler.LastContext.ShouldNotBeNull();
+        context.MessageId.ShouldBe(message.MessageId);
+        context.TenantId.ShouldBe("tenant-z");
+        context.CorrelationId.ShouldBe(correlation.Value.ToString());
+        context.CausationId.ShouldBe(causation.Value.ToString());
+        context.OccurredOnUtc.ShouldBe(message.OccurredOnUtc);
+
+        // The row records neither source nor headers (#188 replaces this path), and the fixture
+        // type carries no [MessageContract].
+        context.Source.ShouldBeEmpty();
+        context.Headers.ShouldBeEmpty();
+        context.ContractName.ShouldBeEmpty();
+        context.ContractVersion.ShouldBe(0);
+    }
 
     [Fact]
     public async Task ProcessBatch_WhenHandlerThrows_BelowMaxRetries_SchedulesARetry()
@@ -820,7 +875,7 @@ public sealed class InboxProcessorTests
     private static IMessageSerializer RoundTripSerializer()
     {
         var serializer = Substitute.For<IMessageSerializer>();
-        serializer.Deserialize(Arg.Any<string>(), Arg.Any<string>())
+        serializer.Deserialize(Arg.Any<ReadOnlyMemory<byte>>(), Arg.Any<Type>())
             .Returns(_ => new InboxTestEvent(MessageId.New(), "tenant-a"));
 
         return serializer;

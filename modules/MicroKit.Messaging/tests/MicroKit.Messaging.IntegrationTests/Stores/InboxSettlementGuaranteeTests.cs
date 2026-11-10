@@ -302,7 +302,7 @@ internal sealed class InvocationRecorder
 internal sealed class RecordingSettlementHandler(InvocationRecorder recorder)
     : IMessageHandler<SettlementTestEvent>
 {
-    public ValueTask HandleAsync(SettlementTestEvent evt, CancellationToken ct = default)
+    public ValueTask HandleAsync(SettlementTestEvent message, MessageContext context, CancellationToken ct = default)
     {
         recorder.Record();
         return ValueTask.CompletedTask;

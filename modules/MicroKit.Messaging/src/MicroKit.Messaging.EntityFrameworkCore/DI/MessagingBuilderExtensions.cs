@@ -34,6 +34,13 @@ public static class MessagingBuilderExtensions
     /// staged processed mark commits in the handler's own transaction. <b>Registering either
     /// store with any lifetime other than scoped breaks that guarantee silently.</b>
     /// </para>
+    /// <para>
+    /// <b>It also switches on the outbox and inbox engine</b> — the four hosted workers, the
+    /// processors and the coordinators — through
+    /// <see cref="OutboxInboxProcessingExtensions.AddOutboxInboxProcessing"/>. Since #186
+    /// <c>AddMicroKitMessaging()</c> registers no hosted service, so a host without this call runs
+    /// no worker at all. Transitional: #188 replaces it with opt-in durability on the bus.
+    /// </para>
     /// </remarks>
     public static MessagingBuilder AddEfCoreOutbox<TContext>(this MessagingBuilder builder)
         where TContext : DbContext
@@ -71,6 +78,11 @@ public static class MessagingBuilderExtensions
             sp => sp.GetRequiredService<EfInboxStore<TContext>>());
         builder.Services.AddScoped<IInboxRetentionStore>(
             sp => sp.GetRequiredService<EfInboxStore<TContext>>());
+
+        // The workers require the stores registered above, so the store provider is what
+        // registers them (#186) — not AddMicroKitMessaging().
+        builder.AddOutboxInboxProcessing();
+
         return builder;
     }
 

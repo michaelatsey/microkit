@@ -42,7 +42,7 @@ public sealed record IntegrationEventWriteResult
     /// this call, or the one already there.
     /// </summary>
     /// <remarks>
-    /// Either way this is the value stamped into <see cref="MessageEnvelope.MessageId"/> when the
+    /// Either way this is the value stamped into <see cref="MessageEnvelope.Id"/> when the
     /// row is dispatched, and therefore the key a consumer's inbox deduplicates on.
     /// </remarks>
     public MessageId Id { get; }

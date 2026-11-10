@@ -50,13 +50,23 @@ public sealed class PublicSurfaceTests
 
     /// <summary>
     /// The application surface: what a developer who publishes and handles integration events
-    /// touches, and nothing else. Eight types from Abstractions, four composition-root types from
-    /// Core.
+    /// touches, and nothing else. Eighteen types from Abstractions, five composition-root types
+    /// from Core.
     /// </summary>
     /// <remarks>
+    /// <para>
     /// This is the allow-list issue #185 asks for by name. It spans two assemblies because
     /// <c>MicroKit.Messaging</c> is the <c>RootNamespace</c> of both the contracts package and the
     /// implementation package.
+    /// </para>
+    /// <para>
+    /// #186 widened it deliberately: the bus (<c>IMessageBus</c>, <c>IEventPublisher</c>,
+    /// <c>PublishOptions</c>), the handler's <c>MessageContext</c>, <c>MessageContractAttribute</c>
+    /// replacing <c>IntegrationEventAttribute</c>, the send and receive middleware and the scope
+    /// initializer a host registers (with their two context types), the handler-raised
+    /// <c>PermanentMessageException</c> — so a handler never references the SPI — and, from
+    /// Core, the <c>InMemoryBroker</c> a host may supply.
+    /// </para>
     /// </remarks>
     [Fact]
     public void TheApplicationSurface_MatchesTheSnapshot()
@@ -64,16 +74,28 @@ public sealed class PublicSurfaceTests
         string[] expected =
         [
             // Abstractions — the contracts an application names. InboxDependencyUnavailableException
-            // is here, not in Spi: a handler is its ONLY source, and the engine catches it.
+            // and PermanentMessageException are here, not in Spi: a handler is their ONLY source,
+            // and the engine catches them.
+            "IEventPublisher",
             "IIntegrationEvent",
             "IIntegrationEventPublisher",
-            "InboxDependencyUnavailableException",
+            "IMessageBus",
             "IMessageHandler`1",
-            "IntegrationEventAttribute",
+            "IMessageReceiveMiddleware",
+            "IMessageScopeInitializer",
+            "IMessageSendMiddleware",
+            "InboxDependencyUnavailableException",
             "IntegrationEventConfigurationException",
             "IntegrationEventPublishException",
+            "MessageContext",
+            "MessageContractAttribute",
             "MessageId",
-            // Core — composition and diagnostics.
+            "MessageReceiveContext",
+            "MessageSendContext",
+            "PermanentMessageException",
+            "PublishOptions",
+            // Core — composition, diagnostics, and the in-memory broker a host may supply.
+            "InMemoryBroker",
             "IntegrationEventServiceCollectionExtensions",
             "MessagingBuilder",
             "MessagingDiagnostics",
@@ -102,9 +124,13 @@ public sealed class PublicSurfaceTests
     {
         string[] expected =
         [
-            // Transport and the wire form.
-            "IMessageTransport", "MessageEnvelope", "IEnvelopeReceiver", "EnvelopeReceiveResult",
-            "IMessageSerializer",
+            // Transport and the wire form. MessageHeaders names the envelope's reserved
+            // extensions (#186).
+            "IMessageTransport", "MessageEnvelope", "MessageHeaders", "IEnvelopeReceiver",
+            "EnvelopeReceiveResult", "IMessageSerializer",
+            // The seam a store provider calls to switch on the outbox and inbox engine — Core,
+            // transitional until #188.
+            "OutboxInboxProcessingExtensions",
             // Dispatch.
             "IOutboxDispatcher", "OutboxDispatcherKeys",
             // Stores, split by consumer (ISP).
@@ -160,8 +186,10 @@ public sealed class PublicSurfaceTests
     public void Core_ExposesCompositionOnly()
     {
         VisibleNamespacesIn(CoreAssembly).ShouldBe(
-            ["MicroKit.Messaging", "MicroKit.Messaging.Options", "MicroKit.Messaging.Publishing"],
-            "Core publishes composition and options only (#185). MicroKit.Messaging.Processing and " +
+            ["MicroKit.Messaging", "MicroKit.Messaging.Options", "MicroKit.Messaging.Publishing",
+             "MicroKit.Messaging.Spi"],
+            "Core publishes composition and options only (#185), plus one SPI registration seam " +
+            "for store providers (#186). MicroKit.Messaging.Processing and " +
             "MicroKit.Messaging.Registry must expose NOTHING — a name appearing there means a " +
             "processor, coordinator, batch result, metric or registry went public again");
 

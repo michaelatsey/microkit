@@ -1,141 +1,93 @@
 namespace MicroKit.Messaging.UnitTests.Transport;
 
-using System.Text.Json;
-
-using MicroKit.Messaging.Serialization;
+using System.Reflection;
 
 /// <summary>
-/// The wire format. These tests exist because <see cref="MessageEnvelope"/> is a compatibility
-/// commitment: once a message has travelled, every member is something a deployed consumer must
-/// still be able to read, including one built by someone who does not share this repository.
+/// Pins the wire form of <see cref="MessageEnvelope"/> (#186): the CloudEvents-aligned member set,
+/// its types, and that it can only be built through init-only members.
 /// </summary>
+/// <remarks>
+/// The envelope is a compatibility commitment at the member level: every member below is something
+/// a broker provider maps and a consumer reads. The byte encoding belongs to the provider's
+/// CloudEvents binding, so the assertion is on members, not on a serialized shape.
+/// </remarks>
 public sealed class MessageEnvelopeTests
 {
-    private readonly SystemTextJsonMessageSerializer _serializer = new();
-
-    private static MessageEnvelope FullyPopulated() => new(
-        MessageId: Guid.Parse("11111111-1111-4111-8111-111111111111"),
-        ContractName: "shop.orders.order-placed.v1",
-        Source: "/shop/orders",
-        Payload: """{"orderId":"e0b3a1f2-0000-4000-8000-000000000001"}""",
-        TenantId: "tenant-a",
-        CorrelationId: Guid.Parse("22222222-2222-4222-8222-222222222222"),
-        CausationId: Guid.Parse("33333333-3333-4333-8333-333333333333"),
-        OccurredOnUtc: new DateTimeOffset(2026, 8, 25, 12, 0, 0, TimeSpan.Zero));
-
-    /// <summary>
-    /// Pins the wire shape by name. A rename here is a breaking change to every deployed consumer
-    /// at once, so it must fail a test rather than pass a review — the same reason the contract
-    /// registry's names are snapshot-tested.
-    /// </summary>
-    /// <remarks>
-    /// The exact set is asserted, not merely a subset: an assertion that only checks the expected
-    /// names are present would stay green if a member were <i>added</i>, and an accidental addition
-    /// is a commitment too. It also pins the camelCase that <c>JsonSerializerDefaults.Web</c>
-    /// produces, which is part of the format whether or not anyone chose it deliberately.
-    /// </remarks>
     [Fact]
-    public void MessageEnvelope_SerializesToTheDeclaredWireShape()
+    public void MessageEnvelope_ExposesTheCloudEventsAttributesHeadersAndBody()
     {
-        var json = _serializer.Serialize(FullyPopulated());
+        var members = typeof(MessageEnvelope)
+            .GetProperties(BindingFlags.Public | BindingFlags.Instance)
+            .ToDictionary(p => p.Name, p => p.PropertyType);
 
-        using var document = JsonDocument.Parse(json);
-        var names = document.RootElement.EnumerateObject().Select(p => p.Name).Order().ToList();
-
-        names.ShouldBe(
-        [
-            "causationId",
-            "contractName",
-            "correlationId",
-            "messageId",
-            "occurredOnUtc",
-            "payload",
-            "source",
-            "tenantId",
-        ]);
+        members.ShouldBe(
+            new Dictionary<string, Type>
+            {
+                ["Id"] = typeof(string),
+                ["Source"] = typeof(string),
+                ["Type"] = typeof(string),
+                ["Time"] = typeof(DateTimeOffset),
+                ["DataContentType"] = typeof(string),
+                ["DataSchema"] = typeof(string),
+                ["Headers"] = typeof(IReadOnlyDictionary<string, string>),
+                ["Body"] = typeof(ReadOnlyMemory<byte>),
+            },
+            ignoreOrder: true,
+            "the envelope's member set is a wire commitment: a rename or removal breaks every " +
+            "provider and every deployed consumer, so change it deliberately");
     }
 
-    /// <summary>
-    /// The identifiers travel as bare strings, not as <c>{"value":"…"}</c> wrappers.
-    /// </summary>
-    /// <remarks>
-    /// Pinned separately from the name check because it is a different failure: retyping these
-    /// members back to <c>MessageId</c> / <c>CorrelationId</c> / <c>CausationId</c> would keep every
-    /// property name intact and silently nest the values one level deeper, which no deployed
-    /// consumer could absorb. The names test would stay green through exactly that change.
-    /// </remarks>
     [Fact]
-    public void MessageEnvelope_CarriesIdentifiersAsBareStrings()
+    public void MessageEnvelope_HasNoPositionalConstructor_SoAddingAHeaderNeverChangesOne()
     {
-        var json = _serializer.Serialize(FullyPopulated());
+        typeof(MessageEnvelope).IsSealed.ShouldBeTrue();
+        typeof(MessageEnvelope).GetConstructors()
+            .ShouldHaveSingleItem().GetParameters().ShouldBeEmpty();
 
-        using var document = JsonDocument.Parse(json);
-        var root = document.RootElement;
-
-        root.GetProperty("messageId").ValueKind.ShouldBe(JsonValueKind.String);
-        root.GetProperty("messageId").GetString()
-            .ShouldBe("11111111-1111-4111-8111-111111111111");
-        root.GetProperty("correlationId").GetString()
-            .ShouldBe("22222222-2222-4222-8222-222222222222");
-        root.GetProperty("causationId").GetString()
-            .ShouldBe("33333333-3333-4333-8333-333333333333");
-    }
-
-    /// <summary>
-    /// The single-tenant, no-correlation, root-event case: the one a deployment without Tenancy
-    /// actually produces.
-    /// </summary>
-    /// <remarks>
-    /// Proves the optional members are optional <i>on the wire</i> and not merely nullable in C#.
-    /// A serializer configuration that refused null, or a receiver that required every member,
-    /// would fail here rather than in the first single-tenant deployment.
-    /// </remarks>
-    [Fact]
-    public void MessageEnvelope_RoundTripsWithEveryOptionalFieldNull()
-    {
-        var envelope = FullyPopulated() with
+        foreach (var property in typeof(MessageEnvelope).GetProperties())
         {
-            TenantId = null,
-            CorrelationId = null,
-            CausationId = null,
+            var setter = property.SetMethod.ShouldNotBeNull($"{property.Name} must be init-only");
+            setter.ReturnParameter.GetRequiredCustomModifiers()
+                .ShouldContain(typeof(System.Runtime.CompilerServices.IsExternalInit),
+                    $"{property.Name} must be init-only, not settable");
+        }
+    }
+
+    [Fact]
+    public void MessageEnvelope_DefaultsToNoHeadersAndNoSchema()
+    {
+        var envelope = new MessageEnvelope
+        {
+            Id = Guid.NewGuid().ToString(),
+            Source = "/shop/orders",
+            Type = "shop.orders.order-placed.v1",
+            Time = DateTimeOffset.UnixEpoch,
+            DataContentType = "application/json",
+            Body = "{}"u8.ToArray(),
         };
 
-        var json = _serializer.Serialize(envelope);
-        var restored = _serializer.Deserialize(json, typeof(MessageEnvelope).AssemblyQualifiedName!);
-
-        restored.ShouldBeOfType<MessageEnvelope>().ShouldBe(envelope);
+        envelope.Headers.ShouldBeEmpty();
+        envelope.DataSchema.ShouldBeNull();
     }
 
     [Fact]
-    public void MessageEnvelope_RoundTripsEveryPopulatedField()
+    public void MessageHeaders_AreTheFourLowerCaseCloudEventsExtensions()
     {
-        var envelope = FullyPopulated();
+        // CloudEvents extension attribute names are lower-case alphanumeric. A name outside that
+        // alphabet would not survive a binding that maps extensions to broker headers.
+        string[] reserved =
+        [
+            MessageHeaders.TenantId,
+            MessageHeaders.CorrelationId,
+            MessageHeaders.CausationId,
+            MessageHeaders.TraceParent,
+        ];
 
-        var json = _serializer.Serialize(envelope);
-        var restored = _serializer.Deserialize(json, typeof(MessageEnvelope).AssemblyQualifiedName!);
-
-        restored.ShouldBeOfType<MessageEnvelope>().ShouldBe(envelope);
-    }
-
-    /// <summary>
-    /// The payload is opaque: it survives the envelope byte for byte, never re-serialized.
-    /// </summary>
-    /// <remarks>
-    /// The payload here is deliberately awkward — it contains a quote, a backslash and a non-ASCII
-    /// character. A round trip that re-parsed and re-emitted it would still produce <i>equivalent</i>
-    /// JSON, so a well-behaved sample would pass either way; this one changes if anything touches
-    /// the string.
-    /// </remarks>
-    [Fact]
-    public void MessageEnvelope_PayloadIsCarriedVerbatim()
-    {
-        const string Payload = """{"note":"a \"quoted\" value \\ with an accent: é","n":1.50}""";
-        var envelope = FullyPopulated() with { Payload = Payload };
-
-        var json = _serializer.Serialize(envelope);
-        var restored = (MessageEnvelope)_serializer
-            .Deserialize(json, typeof(MessageEnvelope).AssemblyQualifiedName!)!;
-
-        restored.Payload.ShouldBe(Payload);
+        reserved.ShouldBe(["tenantid", "correlationid", "causationid", "traceparent"]);
+        reserved.ShouldAllBe(name => MessageHeaders.IsReserved(name));
+        MessageHeaders.IsReserved("x-custom").ShouldBeFalse();
+        MessageHeaders.IsReserved("TenantId").ShouldBeTrue(
+            "reserved names compare ignoring case: a case-insensitive binding would otherwise carry " +
+            "two values for one attribute");
     }
 }

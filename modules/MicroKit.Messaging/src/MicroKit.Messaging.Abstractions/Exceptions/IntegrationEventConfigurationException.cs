@@ -5,7 +5,7 @@ namespace MicroKit.Messaging;
 /// <summary>
 /// Thrown when integration event publication is misconfigured: an event type that is not
 /// registered, a contract name claimed twice, or an event declared without
-/// <see cref="IntegrationEventAttribute"/>. A deployment defect, never a runtime fault.
+/// <see cref="MessageContractAttribute"/>. A deployment defect, never a runtime fault.
 /// </summary>
 /// <remarks>
 /// <para>

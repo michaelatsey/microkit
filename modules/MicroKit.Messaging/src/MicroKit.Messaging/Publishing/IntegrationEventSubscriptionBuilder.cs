@@ -33,28 +33,28 @@ public sealed class IntegrationEventSubscriptionBuilder
 
     /// <summary>Declares that this module understands <typeparamref name="TEvent"/>.</summary>
     /// <typeparam name="TEvent">
-    /// The local event type. Must carry <see cref="IntegrationEventAttribute"/> bearing the same
+    /// The local event type. Must carry <see cref="MessageContractAttribute"/> bearing the same
     /// contract name the producer publishes under — that attribute is what binds a wire name to a
     /// local type.
     /// </typeparam>
     /// <returns>The same builder, for chaining.</returns>
     /// <exception cref="IntegrationEventConfigurationException">
-    /// <typeparamref name="TEvent"/> has no <see cref="IntegrationEventAttribute"/>. Rejected here,
+    /// <typeparamref name="TEvent"/> has no <see cref="MessageContractAttribute"/>. Rejected here,
     /// at registration, rather than on the first message that arrives under that name.
     /// </exception>
     public IntegrationEventSubscriptionBuilder Consumes<TEvent>()
         where TEvent : IIntegrationEvent
     {
         var eventType = typeof(TEvent);
-        var attribute = eventType.GetCustomAttribute<IntegrationEventAttribute>(inherit: false)
+        var attribute = eventType.GetCustomAttribute<MessageContractAttribute>(inherit: false)
             ?? throw new IntegrationEventConfigurationException(
-                $"'{eventType.FullName}' has no [IntegrationEvent] attribute. A consumed event " +
+                $"'{eventType.FullName}' has no [MessageContract] attribute. A consumed event " +
                 "declares the contract name it answers to there — the same name the producer " +
                 "publishes under. Without it nothing binds the name arriving on the wire to this " +
                 "local type, and the CLR type name cannot serve: the producer holds a different " +
                 "type in a different assembly.");
 
-        _subscriptions.Add(new IntegrationEventSubscription(eventType, attribute.ContractName));
+        _subscriptions.Add(new IntegrationEventSubscription(eventType, attribute.WireType));
 
         return this;
     }

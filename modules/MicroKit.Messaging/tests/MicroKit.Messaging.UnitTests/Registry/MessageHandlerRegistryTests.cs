@@ -130,7 +130,15 @@ public sealed class MessageHandlerRegistryTests
         var handler = new RecordingInboxHandler();
         var evt = new InboxTestEvent(MessageId.New(), "tenant-1");
 
-        await entry.Invoker(handler, evt, CancellationToken.None);
+        var context = new MessageContext
+        {
+            MessageId = evt.MessageId,
+            ContractName = "test.inbox-event",
+            ContractVersion = 1,
+            Source = "/tests",
+            OccurredOnUtc = DateTimeOffset.UnixEpoch,
+        };
+        await entry.Invoker(handler, evt, context, CancellationToken.None);
 
         handler.InvocationCount.ShouldBe(1);
     }
@@ -168,7 +176,7 @@ public sealed class MessageHandlerRegistryTests
 
     private sealed class SecondHandler : IMessageHandler<InboxTestEvent>
     {
-        public ValueTask HandleAsync(InboxTestEvent evt, CancellationToken ct = default)
+        public ValueTask HandleAsync(InboxTestEvent message, MessageContext context, CancellationToken ct = default)
             => ValueTask.CompletedTask;
     }
 }

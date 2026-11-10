@@ -112,7 +112,7 @@ public sealed class ReceivingSeamTests
 
             row.Status.ShouldBe(InboxMessageStatus.Received);
             row.RetryCount.ShouldBe(0);
-            row.TenantId.ShouldBe(envelope.TenantId);
+            row.TenantId.ShouldBe(envelope.Headers.GetValueOrDefault(MessageHeaders.TenantId));
         }
 
         // ── the drain ─────────────────────────────────────────────────────────────────────────
@@ -131,7 +131,7 @@ public sealed class ReceivingSeamTests
 
         invocations.Count.ShouldBe(2, "both consumers ran — otherwise this proves nothing");
 
-        invocations.ShouldAllBe(i => i.EventId == envelope.MessageId.ToString());
+        invocations.ShouldAllBe(i => i.EventId == envelope.Id);
 
         // Three candidate values, all different, so no copy-through can pass by coincidence:
         // the row's own CausationId names the notification, RowId is a local surrogate, and only

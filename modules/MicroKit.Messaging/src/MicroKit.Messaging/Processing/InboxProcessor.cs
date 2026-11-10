@@ -1,3 +1,6 @@
+using System.Text;
+using MicroKit.Messaging.Bus;
+using MicroKit.Messaging.Serialization;
 using MicroKit.Messaging.Registry;
 
 using MessageCtx = MicroKit.Messaging.Execution.ExecutionContext;
@@ -193,8 +196,10 @@ internal sealed class InboxProcessor : IInboxProcessor
                 InboxProcessorLogs.ServiceUnresolvable(_logger, ex, messages.Count - index);
                 break;
             }
-            catch (InboxPayloadException ex)
+            catch (Exception ex) when (ex is InboxPayloadException or PermanentMessageException)
             {
+                // InboxPayloadException is the engine's own verdict (unknown consumer, unreadable
+                // payload); PermanentMessageException is a handler's (#186). Same disposition.
                 InboxProcessorLogs.PermanentFailure(
                     _logger, ex, message.MessageId.Value, message.ConsumerType);
 
@@ -268,7 +273,8 @@ internal sealed class InboxProcessor : IInboxProcessor
             .CreateScopeAsync(ctx, cancellationToken)
             .ConfigureAwait(false);
 
-        var evt = Deserialize(message);
+        var (evt, eventType) = Deserialize(message);
+        var context = BuildContext(message, eventType);
 
         var handler = Resolve(scope.ServiceProvider, entry.HandlerType);
         var settlement = ResolveSettlement(scope.ServiceProvider);
@@ -291,7 +297,7 @@ internal sealed class InboxProcessor : IInboxProcessor
 
         try
         {
-            await entry.Invoker(handler, evt, cancellationToken).ConfigureAwait(false);
+            await entry.Invoker(handler, evt, context, cancellationToken).ConfigureAwait(false);
         }
         catch (Exception ex) when (
             ex is not OperationCanceledException && settlement.IsLeaseLost(ex))
@@ -349,13 +355,22 @@ internal sealed class InboxProcessor : IInboxProcessor
     /// <see cref="IMessageSerializer"/>; until that contract changes, wrapping here is the
     /// honest fix.
     /// </remarks>
-    private IIntegrationEvent Deserialize(InboxMessage message)
+    private (IIntegrationEvent Event, Type EventType) Deserialize(InboxMessage message)
     {
+        // The row records the local type by assembly-qualified name; the serializer is type-based
+        // since #186, so the name is resolved here. A name that no longer resolves is as permanent
+        // as an unreadable payload: the row must change before it can succeed.
+        var eventType = RowEventTypes.Resolve(message.EventType)
+            ?? throw new InboxPayloadException(
+                $"EventType '{message.EventType}' does not resolve to a type in this process. " +
+                "The persisted row must change before this can succeed.");
+
         object? deserialized;
 
         try
         {
-            deserialized = _serializer.Deserialize(message.Payload, message.EventType);
+            // The row stores the body as UTF-8 JSON text (application/json).
+            deserialized = _serializer.Deserialize(Encoding.UTF8.GetBytes(message.Payload), eventType);
         }
         catch (Exception ex)
         {
@@ -366,11 +381,41 @@ internal sealed class InboxProcessor : IInboxProcessor
         }
 
         // The narrowing is part of the contract: the inbox only ever holds integration events.
-        return deserialized as IIntegrationEvent
+        var evt = deserialized as IIntegrationEvent
             ?? throw new InboxPayloadException(
                 $"Payload for EventType '{message.EventType}' deserialized to null or to a type " +
                 "that is not an IIntegrationEvent. The persisted row must change before this " +
                 "can succeed.");
+
+        return (evt, eventType);
+    }
+
+    /// <summary>
+    /// Builds the handler's <see cref="MessageContext"/> from the row, so the transitional inbox
+    /// path keeps working with the #186 handler signature.
+    /// </summary>
+    /// <remarks>
+    /// The row records neither the producer's source nor its headers, so
+    /// <see cref="MessageContext.Source"/> is empty and <see cref="MessageContext.Headers"/> has
+    /// none; #188 replaces this path. The contract name and version come from the local type's
+    /// <see cref="MessageContractAttribute"/>; a type without one — reachable only through a row
+    /// written outside <c>EnvelopeReceiver</c> — reports an empty name and version 0.
+    /// </remarks>
+    private static MessageContext BuildContext(InboxMessage message, Type eventType)
+    {
+        var contract = MessageContracts.Find(eventType);
+
+        return new MessageContext
+        {
+            MessageId = message.MessageId,
+            ContractName = contract?.Name ?? string.Empty,
+            ContractVersion = contract?.Version ?? 0,
+            Source = string.Empty,
+            OccurredOnUtc = message.OccurredOnUtc,
+            TenantId = message.TenantId,
+            CorrelationId = message.CorrelationId?.Value.ToString(),
+            CausationId = message.CausationId?.Value.ToString(),
+        };
     }
 
     /// <summary>What one message attempt produced.</summary>

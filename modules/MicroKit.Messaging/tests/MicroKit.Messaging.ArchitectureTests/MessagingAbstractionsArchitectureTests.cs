@@ -238,48 +238,51 @@ public sealed class MessagingAbstractionsArchitectureTests
     }
 
     /// <summary>
-    /// No MicroKit package implements <see cref="IMessageTransport"/>, and none must.
+    /// The only <see cref="IMessageTransport"/> any MicroKit package ships is Core's in-memory one;
+    /// broker transports ship from provider packages.
     /// </summary>
     /// <remarks>
     /// <para>
-    /// An <c>InProcessTransport</c> is the obvious missing piece and the reason this test exists.
-    /// Until the receiving seam is built, such a type has exactly two possible behaviours and both
-    /// are defects: returning normally is the silent success this module treats as blocking — the
-    /// processor marks the row <c>Published</c>, <c>Published</c> is terminal, and the message is
-    /// gone with nothing recording that no delivery happened — while throwing on every send makes
-    /// it a type that exists only to fail, which someone will nevertheless register.
+    /// This test used to forbid every implementation. Its premise was that, without a receiving
+    /// side, an in-process transport could only succeed silently on messages it never delivered,
+    /// or exist purely to throw. #186 removed the premise: the in-memory transport is registered by
+    /// <c>UseInMemoryTransport()</c> together with its consume loop, which runs every envelope
+    /// through the receive pipeline, so a send that returns is a message that will be handled or
+    /// dead-lettered.
     /// </para>
     /// <para>
-    /// Every shipped assembly is asserted, not only Core, because that is the claim being made:
-    /// the docs, the CHANGELOG and <c>AddTransportDispatcher</c> all say "no implementation ships
-    /// in <i>any</i> MicroKit package", and a test covering two of the four would leave the glue
-    /// and the EF Core package free to contradict it.
-    /// </para>
-    /// <para>
-    /// A transport ships from a broker provider package, or not at all. If this test fails, read
-    /// the new type's delivery path before deleting the assertion.
+    /// The rule that remains is narrow on purpose: exactly one implementation, internal, in Core,
+    /// and none anywhere else. A second implementation — or a public one — is a decision, not a
+    /// convenience. Every shipped assembly is asserted, so the glue and the EF Core package cannot
+    /// contradict it either.
     /// </para>
     /// </remarks>
     [Fact]
-    public void NoMicroKitPackageShipsAnIMessageTransportImplementation()
+    public void OnlyCoreShipsAnIMessageTransport_AndItIsTheInternalInMemoryOne()
     {
-        Assembly[] shipped =
-            [AbstractionsAssembly, CoreAssembly, EfCoreAssembly, MediatRGlueAssembly];
+        Assembly[] others = [AbstractionsAssembly, EfCoreAssembly, MediatRGlueAssembly];
 
-        foreach (var assembly in shipped)
+        foreach (var assembly in others)
         {
-            var implementations = Types.InAssembly(assembly)
+            Types.InAssembly(assembly)
                 .That()
                 .ImplementInterface(typeof(IMessageTransport))
                 .GetTypes()
                 .Select(t => t.FullName)
-                .ToList();
-
-            implementations.ShouldBeEmpty(
-                $"{assembly.GetName().Name} must ship no IMessageTransport: with no receiver, an " +
-                "in-process transport can only succeed silently on messages it never delivered, " +
-                "or exist purely to throw. Broker providers supply the implementation.");
+                .ShouldBeEmpty(
+                    $"{assembly.GetName().Name} must ship no IMessageTransport: broker transports " +
+                    "ship from provider packages, and the in-memory one lives in Core.");
         }
+
+        var core = Types.InAssembly(CoreAssembly)
+            .That()
+            .ImplementInterface(typeof(IMessageTransport))
+            .GetTypes()
+            .ToList();
+
+        var only = core.ShouldHaveSingleItem("Core ships exactly one transport: the in-memory one");
+        only.FullName.ShouldBe("MicroKit.Messaging.Transport.InMemoryTransport");
+        only.IsPublic.ShouldBeFalse("the transport is reached through UseInMemoryTransport(), never named");
     }
 
     [Fact]
@@ -341,6 +344,9 @@ public sealed class MessagingAbstractionsArchitectureTests
         {
             Coordinator,
             "MicroKit.Messaging.ServiceCollectionExtensions",
+            // Since #186 the outbox and inbox engine is registered by the store provider through
+            // this SPI seam, not by AddMicroKitMessaging(): it is the composition root now.
+            "MicroKit.Messaging.Spi.OutboxInboxProcessingExtensions",
         };
 
         var offenders = Types.InAssembly(CoreAssembly)
@@ -372,6 +378,9 @@ public sealed class MessagingAbstractionsArchitectureTests
         {
             Coordinator,
             "MicroKit.Messaging.ServiceCollectionExtensions",
+            // Since #186 the outbox and inbox engine is registered by the store provider through
+            // this SPI seam, not by AddMicroKitMessaging(): it is the composition root now.
+            "MicroKit.Messaging.Spi.OutboxInboxProcessingExtensions",
         };
 
         var offenders = Types.InAssembly(CoreAssembly)

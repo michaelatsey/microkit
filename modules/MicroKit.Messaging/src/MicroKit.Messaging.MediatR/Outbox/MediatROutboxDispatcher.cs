@@ -1,5 +1,8 @@
 namespace MicroKit.Messaging.MediatR.Outbox;
 
+using System.Text;
+using MicroKit.Messaging.Serialization;
+
 /// <summary>
 /// Routing <see cref="IOutboxDispatcher"/> decorator contributed by
 /// <c>MicroKit.Messaging.MediatR</c>. It serves <see cref="MessageKind.Notification"/> rows by
@@ -107,25 +110,35 @@ internal sealed class MediatROutboxDispatcher(
 
     private async ValueTask PublishAsync(OutboxMessage message, CancellationToken ct)
     {
-        // IMessageSerializer.Deserialize never throws: it returns null when the EventType does not
-        // resolve or the JSON is malformed. Both are permanent — nothing infrastructural (a nack, a
-        // timeout, a refused connection, an HTTP 503, a database timeout) can reach this branch,
-        // which is exactly the exclusion rule OutboxPayloadException documents.
-        var payload = serializer.Deserialize(message.Payload, message.EventType);
+        // The serializer is type-based since #186, so the row's assembly-qualified EventType is
+        // resolved here; the row keeps its payload as UTF-8 JSON text. A name that does not
+        // resolve, a body that does not parse and a body denoting null are the same verdict:
+        // this row can never be published.
+        var eventType = RowEventTypes.Resolve(message.EventType)
+            ?? throw new OutboxPayloadException(
+                $"Cannot resolve EventType '{message.EventType}' of outbox message {message.Id} " +
+                "in this process. The event type must be resolvable in the current assembly context.");
+
+        object? payload;
+        try
+        {
+            payload = serializer.Deserialize(Encoding.UTF8.GetBytes(message.Payload), eventType);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            throw new OutboxPayloadException(
+                $"Cannot deserialize EventType '{message.EventType}' from outbox message " +
+                $"{message.Id}: the payload is not valid JSON for it.",
+                ex);
+        }
 
         if (payload is null)
         {
             throw new OutboxPayloadException(
-                $"Cannot deserialize EventType '{message.EventType}' from outbox message " +
-                $"{message.Id}. The event type must be resolvable in the current assembly context " +
-                "and the payload must be valid JSON for it.");
+                $"Outbox message {message.Id} deserialized to null for EventType " +
+                $"'{message.EventType}'.");
         }
 
-        // The row declared itself a notification; the payload is not one. This is a staging defect
-        // written into a persisted row, so it is permanent in the same sense as the case above —
-        // and it must not be delegated inward, where the inner dispatcher would answer a
-        // Notification kind with a configuration fault and hide a payload defect behind a message
-        // telling the operator to install a package they already have.
         if (payload is not INotification notification)
         {
             throw new OutboxPayloadException(

@@ -13,6 +13,7 @@ MicroKit.Messaging (Core)
     ← Microsoft.Extensions.DependencyInjection.Abstractions
     ← Microsoft.Extensions.Hosting.Abstractions
     ← Microsoft.Extensions.Logging.Abstractions
+    ← Microsoft.Extensions.Options                   (ConfigureJson is backed by IOptions — #186)
 
 MicroKit.Messaging.EntityFrameworkCore
     ← MicroKit.Messaging (Core)
@@ -82,7 +83,7 @@ See monorepo root `.claude/rules/cross-module-references.md` for the full canoni
 | Project | Allowed packages |
 |---------|-----------------|
 | `Abstractions` | `MicroKit.Result` + `MicroKit.Domain` (ADR-MSG-010: `IIntegrationEvent : IEvent`) |
-| `Core` | Abstractions + `Microsoft.Extensions.{DI,Hosting,Logging}.Abstractions` |
+| `Core` | Abstractions + `Microsoft.Extensions.{DI,Hosting,Logging}.Abstractions` + `Microsoft.Extensions.Options` (`ConfigureJson`, #186) |
 | `EntityFrameworkCore` | Core + `MicroKit.Persistence.EntityFrameworkCore` + `Microsoft.EntityFrameworkCore.Relational` |
 | `Testing` | Abstractions only — `xunit`, `Shouldly`, `NSubstitute` belong in the consumer's test project, NOT in this library |
 | `RabbitMQ` | Core + `RabbitMQ.Client` |

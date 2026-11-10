@@ -18,6 +18,10 @@ MicroKit.Messaging            ← transactional outbox, inbox dedup, transport s
         │
         ├── OutboxProcessor (IHostedService)   ← polls and dispatches pending messages
         ├── InboxProcessor  (IHostedService)   ← drains inbound rows written by IEnvelopeReceiver
+        │     (#186: both workers, and the two retention workers, are registered by
+        │      AddEfCoreOutbox<TContext>() through AddOutboxInboxProcessing() — NOT by
+        │      AddMicroKitMessaging(), which registers no hosted service. The only other one is
+        │      the in-memory transport's consume loop, from UseInMemoryTransport())
         └── IOutboxDispatcher                  ← routes on MessageKind, never on a CLR type
                 │
                 ├── TransportOutboxDispatcher  ← Kind=Contract → IMessageTransport (Core)
@@ -107,6 +111,7 @@ MicroKit.Messaging (Core)
     ← Microsoft.Extensions.DependencyInjection.Abstractions
     ← Microsoft.Extensions.Hosting.Abstractions            (IHostedService)
     ← Microsoft.Extensions.Logging.Abstractions
+    ← Microsoft.Extensions.Options                         (ConfigureJson — #186)
 
 MicroKit.Messaging.EntityFrameworkCore
     ← MicroKit.Messaging (Core)
@@ -142,7 +147,7 @@ which may reference `MicroKit.MediatR` / `MediatR` / `MediatR.Contracts` (ADR-MS
 > #188 — so read them against these three rules:
 >
 > 1. **Namespace `MicroKit.Messaging`** holds the application surface and nothing else:
->    `IIntegrationEvent`, `IntegrationEventAttribute`, `IIntegrationEventPublisher`,
+>    `IIntegrationEvent`, `MessageContractAttribute` (replaced `IntegrationEventAttribute`, #186), `IIntegrationEventPublisher`,
 >    `IMessageHandler<T>`, `MessageId`, `IntegrationEventPublishException`,
 >    `IntegrationEventConfigurationException`, `InboxDependencyUnavailableException` (a handler is
 >    its only source, so it is API and not SPI) — plus, from Core, `ServiceCollectionExtensions`,
@@ -172,7 +177,10 @@ IIntegrationEvent                  // BARE MARKER (ADR-MSG-018) — business pay
                                    //   declared MessageId/TenantId/CorrelationId/CausationId/
                                    //   OccurredOnUtc; all message metadata now lives on the row,
                                    //   assigned at staging from IExecutionContext
-IntegrationEventAttribute          // [IntegrationEvent("name.v1")] — mandatory wire contract name
+MessageContractAttribute           // [MessageContract("name", Version = n)] — mandatory wire contract
+                                   //   (#186, replaced IntegrationEventAttribute with no alias). Wire
+                                   //   type "<name>.v<n>", Version defaults to 1; a name already
+                                   //   ending in .v<digits> is rejected
 IIntegrationEventPublisher         // PublishAsync<T>(evt, occurredOnUtc, ct) → ValueTask<MessageId>
                                    //   writes a Contract row into the CALLER's open transaction;
                                    //   never commits. A replayed publication returns the EXISTING
@@ -217,7 +225,10 @@ CausationId                        // sealed record — causal parent identifier
 
 ### Handling
 ```csharp
-IMessageHandler<T>                 // HandleAsync(T evt, CancellationToken ct) → ValueTask
+IMessageHandler<T>                 // HandleAsync(T message, MessageContext context, CancellationToken ct)
+                                   //   → ValueTask (#186). MessageContext: MessageId, ContractName,
+                                   //   ContractVersion, Source, OccurredOnUtc, TenantId,
+                                   //   CorrelationId, CausationId, Headers
 ```
 
 ### Outbox / Inbox stores (namespace `MicroKit.Messaging.Spi`, in Abstractions — #185)
@@ -253,11 +264,15 @@ IEnvelopeReceiver                  // the RECEIVING seam — ReceiveAsync(Messag
                                    //   local type → one InboxMessage per registered consumer
 EnvelopeReceiveResult              // sealed record — RowsAdded / Duplicates / ConsumersMatched.
                                    //   ConsumersMatched == 0 is legal and never silent
-MessageEnvelope                    // sealed record — the WIRE FORM. MessageId/ContractName/Source/
-                                   //   opaque Payload/TenantId/Correlation/Causation/OccurredOnUtc.
-                                   //   A COMPATIBILITY COMMITMENT: adding a member is additive,
-                                   //   removing or renaming one breaks every deployed consumer.
-                                   //   Identifiers are bare Guids, not the VO records
+MessageEnvelope                    // sealed CLASS, init-only (#186) — the WIRE FORM, aligned on
+                                   //   CloudEvents: Id (string) / Source / Type (wire type
+                                   //   <name>.v<n>) / Time / DataContentType / DataSchema, plus
+                                   //   Headers (tenantid, correlationid, causationid, traceparent —
+                                   //   MessageHeaders) and Body (ReadOnlyMemory<byte>). No positional
+                                   //   constructor: adding a header never changes one. Outbox and
+                                   //   inbox rows keep a string Payload, converted as UTF-8
+                                   //   application/json at the TransportOutboxDispatcher /
+                                   //   EnvelopeReceiver boundary
 ```
 
 ---
@@ -425,7 +440,7 @@ All v1 packages share one version per release.
   rather than one of the two being made safe.
 - **ADR-MSG-015:** `IOutboxCoordinator.ExecuteAsync` and `IOutboxProcessor.ProcessBatchAsync` return `ValueTask<OutboxBatchResult>` — the batch now produces a result the worker needs to adapt its cadence, and ADR-MSG-014's `.AsTask()` rationale was factually wrong. The inbox asymmetry it recorded was closed by ADR-MSG-017.
 - **Step 5 (implemented):** `IIntegrationEventPublisher` now writes a `MessageKind.Contract` row into the **outbox**; `IntegrationEventMessage`, `IntegrationEventStatus` and their EF configuration are **deleted**, and re-introduction is blocked by `NoAssemblyStillCarriesTheDedicatedIntegrationEventTable`. `IIntegrationEventWriter.AddAsync` takes an `OutboxMessage`, returns `IntegrationEventWriteResult`, and **flushes inside the caller's transaction** (savepoint + post-hoc verification, the `EfInboxStore.AddAsync` pattern) so a replayed publication is absorbed before `PublishAsync` returns. `OutboxMessageFactory.Create` is renamed **`CreateNotification`** and gains **`CreateContract`**; `OutboxMessage` gains `TraceParent`; the claim now orders on **`CreatedAtUtc`**; retention refuses to purge a `Contract` row while its origin can still be dispatched.
-- **ADR-MSG-018:** integration events are a **marker** contract — `IIntegrationEvent` loses every member and keeps only the `IEvent` base; the wire name moves to `[IntegrationEvent]`; metadata is assigned at staging from `IExecutionContext` onto ~~`IntegrationEventMessage`, which gets **its own table**~~ — **superseded by step 5: the dedicated table is retired and metadata lands on a `MessageKind.Contract` outbox row**. `IMessagePublisher`/`InProcessMessagePublisher` are **deleted** and ~~the in-process fan-out moves into `InProcessIntegrationDispatcher`~~, sourcing every field from the `OutboxMessage` row — which is what made the marker possible and closes a latent bug (the inbox dedup key was read off the event and survived redelivery only by accident). Publishing requires an open transaction the caller owns: `IUnitOfWork.CommitAsync` alone is **not** one. Also fixes L0 #21 — `IExecutionContext` now resolves through a scoped holder, so constructor injection finally sees the message row.
+- **ADR-MSG-018:** integration events are a **marker** contract — `IIntegrationEvent` loses every member and keeps only the `IEvent` base; the wire name moves to `[IntegrationEvent]` (since #186 `[MessageContract(name, Version = n)]`, wire type `<name>.v<n>`); metadata is assigned at staging from `IExecutionContext` onto ~~`IntegrationEventMessage`, which gets **its own table**~~ — **superseded by step 5: the dedicated table is retired and metadata lands on a `MessageKind.Contract` outbox row**. `IMessagePublisher`/`InProcessMessagePublisher` are **deleted** and ~~the in-process fan-out moves into `InProcessIntegrationDispatcher`~~, sourcing every field from the `OutboxMessage` row — which is what made the marker possible and closes a latent bug (the inbox dedup key was read off the event and survived redelivery only by accident). Publishing requires an open transaction the caller owns: `IUnitOfWork.CommitAsync` alone is **not** one. Also fixes L0 #21 — `IExecutionContext` now resolves through a scoped holder, so constructor injection finally sees the message row.
   **⚠ Superseded in part by ADR-MSG-019 — three points, no more.** The fan-out was *withdrawn*, not relocated: `InProcessIntegrationDispatcher` does not exist, and the row-is-the-source-of-metadata reasoning is now carried by `TransportOutboxDispatcher`. Also superseded: the claim that `AddInProcessTransport()` keeps its registrations, and the rejected alternative that cited `InboxRedeliveryTests` as blocking evidence. **Everything else above stands.**
 - **ADR-MSG-019:** the reentrant outbox. One table, two natures of row, **routed by `MessageKind`
   and never by a CLR type test**. `MicroKit.Messaging.MediatR` **decorates** rather than replaces:

@@ -1,4 +1,6 @@
+using System.Text;
 using MicroKit.Messaging.Publishing;
+using MicroKit.Messaging.Serialization;
 using MicroKit.Messaging.Registry;
 
 using MessageCtx = MicroKit.Messaging.Execution.ExecutionContext;
@@ -34,14 +36,14 @@ namespace MicroKit.Messaging.Processing;
 /// </para>
 /// <para>
 /// <b><c>ReceivedAtUtc</c> comes from the clock, never from
-/// <see cref="MessageEnvelope.OccurredOnUtc"/>.</b> It is the local receipt instant, and it is the
+/// <see cref="MessageEnvelope.Time"/>.</b> It is the local receipt instant, and it is the
 /// inbox claim's ordering key. Ordering on a caller-supplied business timestamp would let a
 /// backdated event jump the whole queue — the same defect the outbox claim closed when it moved to
 /// <c>CreatedAtUtc</c>.
 /// </para>
 /// <para>
 /// <b>Both clocks are recorded, because they answer different questions.</b>
-/// <see cref="MessageEnvelope.OccurredOnUtc"/> is carried onto
+/// <see cref="MessageEnvelope.Time"/> is carried onto
 /// <see cref="InboxMessage.OccurredOnUtc"/> verbatim: since ADR-MSG-018 made
 /// <c>IIntegrationEvent</c> a bare marker, a payload need carry no timestamp of its own, so
 /// dropping the envelope's would leave the business time nowhere on the receiving side and a
@@ -61,11 +63,11 @@ namespace MicroKit.Messaging.Processing;
 /// same method.</b> Two different questions, one hop apart, and the answer differs by target:
 /// <list type="bullet">
 ///   <item><see cref="InboxMessage.CausationId"/> is <b>copied</b> from
-///         <see cref="MessageEnvelope.CausationId"/>. The row records who caused the
+///         <c>causationid</c> header. The row records who caused the
 ///         <i>message</i>, which the producer assigned; deriving it here would overwrite the
 ///         producer's link and lose the hop that crossed the wire.</item>
 ///   <item>The <see cref="IExecutionContext"/> built below is <b>derived</b> —
-///         <see cref="MessageEnvelope.MessageId"/>, never the envelope's own causation. Everything
+///         <see cref="MessageEnvelope.Id"/>, never the envelope's own causation. Everything
 ///         recorded in this scope was caused by delivering <i>this</i> message, so the cause is
 ///         its identity; copying would name the grandparent, one hop too far up.</item>
 /// </list>
@@ -102,16 +104,37 @@ internal sealed class EnvelopeReceiver(
         // in this direction is DATA off the wire, not a programming error, so the caller supplies
         // the classification. Ours is InboxPayloadException — permanent, and with no row written
         // there is nothing to dead-letter but the broker message itself.
-        if (!contracts.TryResolveLocalType(envelope.ContractName, out var eventType))
+        if (!contracts.TryResolveLocalType(envelope.Type, out var eventType))
         {
             throw new InboxPayloadException(
-                $"Contract name '{envelope.ContractName}' (from '{envelope.Source}') resolves to " +
+                $"Contract name '{envelope.Type}' (from '{envelope.Source}') resolves to " +
                 "no local type, so this message cannot be recorded for any consumer. Add " +
                 "events.Consumes<TEvent>() to the module's composition root, with " +
-                $"[IntegrationEvent(\"{envelope.ContractName}\")] on that type. This is permanent " +
+                "a [MessageContract] whose wire type is that name on the type. This is permanent " +
                 "until the process is redeployed — dead-letter the message rather than nacking it " +
                 "for retry.");
         }
+
+        // The inbox row stores the body as JSON text and the id as a GUID (#186 boundary): an
+        // envelope that is neither cannot be recorded, and no redelivery will change that.
+        if (!SystemTextJsonMessageSerializer.IsJson(envelope.DataContentType))
+        {
+            throw new InboxPayloadException(
+                $"Message '{envelope.Id}' ('{envelope.Type}') carries content type " +
+                $"'{envelope.DataContentType}'. The inbox records bodies as application/json text " +
+                "only, so this message cannot be recorded for any consumer.");
+        }
+
+        if (!Guid.TryParse(envelope.Id, out var envelopeId))
+        {
+            throw new InboxPayloadException(
+                $"Message id '{envelope.Id}' ('{envelope.Type}') is not a GUID. The inbox keys its " +
+                "deduplication on a GUID message id, so this message cannot be recorded.");
+        }
+
+        var tenantId = envelope.Headers.TryGetValue(MessageHeaders.TenantId, out var tenant)
+            ? tenant
+            : null;
 
         var consumers = handlers.GetHandlers(eventType);
 
@@ -124,16 +147,17 @@ internal sealed class EnvelopeReceiver(
             // composition this catches is real: Consumes<T>() declared, AddMessageHandler<,>()
             // forgotten.
             InboxIngestionLogs.NoConsumer(
-                logger, envelope.ContractName, envelope.Source, eventType.FullName!);
-            metrics.RecordUnconsumed(envelope.ContractName);
+                logger, envelope.Type, envelope.Source, eventType.FullName!);
+            metrics.RecordUnconsumed(envelope.Type);
 
             return EnvelopeReceiveResult.From(rowsAdded: 0, duplicates: 0);
         }
 
-        var messageId = MessageId.From(envelope.MessageId);
+        var messageId = MessageId.From(envelopeId);
+        var payload = Encoding.UTF8.GetString(envelope.Body.Span);
         var eventTypeName = eventType.AssemblyQualifiedName!;
         var receivedAtUtc = timeProvider.GetUtcNow();
-        var causationId = envelope.CausationId is { } causation
+        var causationId = TryReadGuid(envelope, MessageHeaders.CausationId) is { } causation
             ? CausationId.From(causation)
             : null;
 
@@ -143,21 +167,21 @@ internal sealed class EnvelopeReceiver(
         // consumers of one uncorrelated delivery would land on N unrelated chains, none of them
         // reaching back to the delivery that caused all of them. One id assigned here puts every
         // row, the scope, and everything the handlers go on to stage on the same chain.
-        var correlationId = envelope.CorrelationId is { } correlation
+        var correlationId = TryReadGuid(envelope, MessageHeaders.CorrelationId) is { } correlation
             ? CorrelationId.From(correlation)
             : CorrelationId.New();
 
         var context = new MessageCtx
         {
-            TenantId = envelope.TenantId,
+            TenantId = tenantId,
 
             // Correlation identifies the chain and never advances — copied, or the one minted
             // just above. Causation is DERIVED from the envelope's own MessageId: everything
             // recorded in this scope was caused by delivering THIS message, so the cause is its
-            // identity. Copying envelope.CausationId would name the grandparent, one hop too far
+            // identity. Copying the envelope's causationid header would name the grandparent, one hop too far
             // up.
             CorrelationId = correlationId.Value.ToString(),
-            CausationId = envelope.MessageId.ToString(),
+            CausationId = envelopeId.ToString(),
         };
 
         await using var scope = await executionScopeFactory
@@ -177,16 +201,16 @@ internal sealed class EnvelopeReceiver(
             {
                 MessageId = messageId,
                 ConsumerType = consumer.ConsumerType,
-                TenantId = envelope.TenantId,
+                TenantId = tenantId,
                 EventType = eventTypeName,
-                Payload = envelope.Payload,
+                Payload = payload,
                 Status = InboxMessageStatus.Received,
                 ReceivedAtUtc = receivedAtUtc,
 
                 // The producer's business clock, carried through. Never the claim's sort key —
                 // that is ReceivedAtUtc, one line above, and the two are seeded in opposite
                 // directions by the tests precisely so a swap cannot pass.
-                OccurredOnUtc = envelope.OccurredOnUtc,
+                OccurredOnUtc = envelope.Time,
 
                 CorrelationId = correlationId,
                 CausationId = causationId,
@@ -197,7 +221,7 @@ internal sealed class EnvelopeReceiver(
 
             if (result is InboxWriteResult.AlreadyPresent)
             {
-                InboxIngestionLogs.Deduplicated(logger, envelope.MessageId, consumer.ConsumerType);
+                InboxIngestionLogs.Deduplicated(logger, envelopeId, consumer.ConsumerType);
                 duplicates++;
 
                 // `continue`, never `return`. A redelivery absorbed for one consumer must not cost
@@ -221,12 +245,17 @@ internal sealed class EnvelopeReceiver(
                     "which carry the same two cases and must not drift apart.");
             }
 
-            InboxIngestionLogs.Added(logger, envelope.MessageId, consumer.ConsumerType);
+            InboxIngestionLogs.Added(logger, envelopeId, consumer.ConsumerType);
             added++;
         }
 
         return EnvelopeReceiveResult.From(added, duplicates);
     }
+
+    private static Guid? TryReadGuid(MessageEnvelope envelope, string header)
+        => envelope.Headers.TryGetValue(header, out var value) && Guid.TryParse(value, out var id)
+            ? id
+            : null;
 
     /// <summary>Resolves the writer, converting a MISSING registration into a typed fault.</summary>
     /// <remarks>

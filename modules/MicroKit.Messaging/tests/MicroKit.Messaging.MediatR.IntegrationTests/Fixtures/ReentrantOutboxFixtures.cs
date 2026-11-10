@@ -16,10 +16,13 @@ internal sealed class WidgetShippedNotification(WidgetShippedEvent domainEvent)
     : DomainEventNotification<WidgetShippedEvent>(domainEvent);
 
 /// <summary>The published contract — what crosses the process boundary.</summary>
-[IntegrationEvent(WidgetShipped.ContractName)]
+[MessageContract(WidgetShipped.Name)]
 internal sealed record WidgetShipped(Guid WidgetId) : IIntegrationEvent
 {
-    internal const string ContractName = "microkit.e2e.widget-shipped.v1";
+    internal const string Name = "microkit.e2e.widget-shipped";
+
+    /// <summary>The wire type: the name and the default version 1.</summary>
+    internal const string ContractName = Name + ".v1";
 }
 
 /// <summary>

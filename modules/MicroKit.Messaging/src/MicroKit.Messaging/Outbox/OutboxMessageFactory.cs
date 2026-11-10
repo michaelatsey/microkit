@@ -1,6 +1,8 @@
 namespace MicroKit.Messaging.Outbox;
 
 using System.Diagnostics;
+using System.Text;
+using MicroKit.Messaging.Serialization;
 
 /// <summary>
 /// The single production construction site for <see cref="OutboxMessage"/>, with one method per
@@ -75,7 +77,7 @@ internal sealed class OutboxMessageFactory(IMessageSerializer serializer, TimePr
             Id = MessageId.From(messageId),
             MessageKind = MessageKind.Notification,
             EventType = payload.GetType().AssemblyQualifiedName!,
-            Payload = serializer.Serialize(payload),
+            Payload = SerializeAsText(payload),
             TenantId = context.TenantId,   // null pass-through — ADR-MSG-008 §5
             CorrelationId = ResolveCorrelation(context),
             CausationId = ResolveCausation(context),
@@ -92,7 +94,7 @@ internal sealed class OutboxMessageFactory(IMessageSerializer serializer, TimePr
     /// </summary>
     /// <param name="payload">The integration event. Business payload only.</param>
     /// <param name="contractName">
-    /// The wire contract name from <see cref="IntegrationEventAttribute"/>, e.g.
+    /// The wire contract name from <see cref="MessageContractAttribute"/>, e.g.
     /// <c>saasbtp.safety.constat-recorded.v1</c>.
     /// </param>
     /// <param name="source">The emitting module, e.g. <c>/saasbtp/safety</c>.</param>
@@ -111,7 +113,7 @@ internal sealed class OutboxMessageFactory(IMessageSerializer serializer, TimePr
     /// <remarks>
     /// <para>
     /// <b><paramref name="occurredOnUtc"/> is resolved here, not deferred.</b>
-    /// <see cref="OutboxMessage.OccurredOnUtc"/> and <see cref="MessageEnvelope.OccurredOnUtc"/> are
+    /// <see cref="OutboxMessage.OccurredOnUtc"/> and <see cref="MessageEnvelope.Time"/> are
     /// both non-nullable, so "not stated" cannot survive onto the row: null becomes the staging
     /// time. That is the same fallback the transport would otherwise apply, moved one step earlier
     /// and made visible — the publisher logs when it happens, which is the only remaining trace of
@@ -151,7 +153,7 @@ internal sealed class OutboxMessageFactory(IMessageSerializer serializer, TimePr
             // an assembly-qualified name — but the column is required and a row staged in a
             // modular monolith may still be read locally.
             EventType = payload.GetType().AssemblyQualifiedName!,
-            Payload = serializer.Serialize(payload),
+            Payload = SerializeAsText(payload),
 
             TenantId = context.TenantId,   // null pass-through — ADR-MSG-008 §5
             CorrelationId = ResolveCorrelation(context),
@@ -164,6 +166,31 @@ internal sealed class OutboxMessageFactory(IMessageSerializer serializer, TimePr
             Status = OutboxMessageStatus.Pending,
             RetryCount = 0,
         };
+    }
+
+    /// <summary>
+    /// Serializes <paramref name="payload"/> as its runtime type, into the row's text column.
+    /// </summary>
+    /// <remarks>
+    /// The serializer works on bytes since #186; the outbox row keeps a string, so the bytes are
+    /// read as UTF-8 JSON — the content type the dispatcher declares when it sends the row. A
+    /// serializer of any other content type is refused here, loudly, rather than decoded as UTF-8:
+    /// a binary body would be corrupted in the row and then sent labelled as JSON.
+    /// </remarks>
+    /// <exception cref="OutboxConfigurationException">
+    /// The registered serializer does not produce <c>application/json</c>.
+    /// </exception>
+    private string SerializeAsText(object payload)
+    {
+        if (!SystemTextJsonMessageSerializer.IsJson(serializer.ContentType))
+        {
+            throw new OutboxConfigurationException(
+                $"The registered {nameof(IMessageSerializer)} produces '{serializer.ContentType}', " +
+                "but outbox rows store the body as application/json text. A serializer of another " +
+                "content type works on the bus only; the outbox path requires a JSON serializer.");
+        }
+
+        return Encoding.UTF8.GetString(serializer.Serialize(payload, payload.GetType()).Span);
     }
 
     /// <summary>

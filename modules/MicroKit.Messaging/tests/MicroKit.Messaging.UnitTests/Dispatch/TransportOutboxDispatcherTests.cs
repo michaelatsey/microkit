@@ -25,14 +25,15 @@ public sealed class TransportOutboxDispatcherTests
         await Build().DispatchAsync(message);
 
         var envelope = _transport.Sent.ShouldHaveSingleItem();
-        envelope.MessageId.ShouldBe(message.Id.Value);
-        envelope.ContractName.ShouldBe(message.ContractName);
+        envelope.Id.ShouldBe(message.Id.Value.ToString());
+        envelope.Type.ShouldBe(message.ContractName);
         envelope.Source.ShouldBe(message.Source);
-        envelope.Payload.ShouldBe(message.Payload);
-        envelope.TenantId.ShouldBe(message.TenantId);
-        envelope.CorrelationId.ShouldBe(message.CorrelationId!.Value);
-        envelope.CausationId.ShouldBe(message.CausationId!.Value);
-        envelope.OccurredOnUtc.ShouldBe(message.OccurredOnUtc);
+        envelope.BodyText().ShouldBe(message.Payload);
+        envelope.DataContentType.ShouldBe("application/json");
+        envelope.Time.ShouldBe(message.OccurredOnUtc);
+        envelope.Header(MessageHeaders.TenantId).ShouldBe(message.TenantId);
+        envelope.Header(MessageHeaders.CorrelationId).ShouldBe(message.CorrelationId!.Value.ToString());
+        envelope.Header(MessageHeaders.CausationId).ShouldBe(message.CausationId!.Value.ToString());
     }
 
     /// <summary>
@@ -58,8 +59,8 @@ public sealed class TransportOutboxDispatcherTests
         await Build().DispatchAsync(message);
 
         var envelope = _transport.Sent.ShouldHaveSingleItem();
-        envelope.MessageId.ShouldBe(message.Id.Value);
-        envelope.MessageId.ShouldNotBe(otherIdentity);
+        envelope.Id.ShouldBe(message.Id.Value.ToString());
+        envelope.Id.ShouldNotBe(otherIdentity.ToString());
     }
 
     /// <summary>
@@ -110,17 +111,43 @@ public sealed class TransportOutboxDispatcherTests
 
         await Build().DispatchAsync(message);
 
-        _transport.Sent.ShouldHaveSingleItem().Payload.ShouldBe(NotEvenJson);
+        _transport.Sent.ShouldHaveSingleItem().BodyText().ShouldBe(NotEvenJson);
     }
 
     [Fact]
-    public async Task DispatchAsync_WhenTenantIsNull_SendsANullTenantRatherThanInventingOne()
+    public async Task DispatchAsync_WhenTenantIsNull_SendsNoTenantHeaderRatherThanInventingOne()
     {
         var message = OutboxFixtures.ContractMessage(tenantId: null);
 
         await Build().DispatchAsync(message);
 
-        _transport.Sent.ShouldHaveSingleItem().TenantId.ShouldBeNull();
+        _transport.Sent.ShouldHaveSingleItem().Header(MessageHeaders.TenantId).ShouldBeNull();
+    }
+
+    [Fact]
+    public async Task DispatchAsync_CarriesTheRowsStagedTraceParent_NotTheRelaysTrace()
+    {
+        // The row captured the publisher's trace at staging; the relay's own Activity, if any, is
+        // a different trace and must not replace it.
+        const string Staged = "00-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-01";
+        var message = OutboxFixtures.ContractMessage();
+        message.TraceParent = Staged;
+
+        using var relay = new System.Diagnostics.Activity("relay").Start();
+        await Build().DispatchAsync(message);
+
+        _transport.Sent.ShouldHaveSingleItem().Header(MessageHeaders.TraceParent).ShouldBe(Staged);
+    }
+
+    [Fact]
+    public async Task DispatchAsync_WhenTheRowHasNoCausation_SendsNoCausationHeader()
+    {
+        var message = OutboxFixtures.ContractMessage();
+        message.CausationId = null;
+
+        await Build().DispatchAsync(message);
+
+        _transport.Sent.ShouldHaveSingleItem().Header(MessageHeaders.CausationId).ShouldBeNull();
     }
 
     // -----------------------------------------------------------------------------------------

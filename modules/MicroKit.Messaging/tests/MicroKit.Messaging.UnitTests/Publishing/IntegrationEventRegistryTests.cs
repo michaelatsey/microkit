@@ -75,7 +75,7 @@ public sealed class IntegrationEventRegistryTests
     /// Null fails somewhere regardless; an empty string is a perfectly serviceable dictionary key.
     /// Unguarded it binds, resolves, and goes out on the wire as an event published under no
     /// identity at all — matchable only by a consumer that made the same mistake. The guard lives on
-    /// <c>IntegrationEventAttribute</c> rather than in either builder, so one check covers both
+    /// <c>MessageContractAttribute</c> rather than in either builder, so one check covers both
     /// directions; these two tests are what say so, one per builder.
     /// </remarks>
     [Fact]
@@ -87,7 +87,7 @@ public sealed class IntegrationEventRegistryTests
             () => services.AddIntegrationEventContracts(
                 "/saasbtp/safety", e => e.Publishes<BlankContractName>()));
 
-        exception.ParamName.ShouldBe("contractName");
+        exception.ParamName.ShouldBe("name");
     }
 
     [Fact]
@@ -99,7 +99,7 @@ public sealed class IntegrationEventRegistryTests
             () => services.AddIntegrationEventSubscriptions(
                 e => e.Consumes<WhitespaceContractName>()));
 
-        exception.ParamName.ShouldBe("contractName");
+        exception.ParamName.ShouldBe("name");
     }
 
     /// <summary>
@@ -244,7 +244,7 @@ public sealed class IntegrationEventRegistryTests
 
     /// <summary>
     /// The consumer-side counterpart to the publish snapshot. In a service that only consumes,
-    /// nothing else catches a renamed <c>[IntegrationEvent]</c> on a local type: the old name
+    /// nothing else catches a renamed <c>[MessageContract]</c> on a local type: the old name
     /// simply stops arriving.
     /// </summary>
     [Fact]
@@ -444,10 +444,10 @@ public sealed class IntegrationEventRegistryTests
         var registry = IntegrationEventContractFixtures.Registry(
             ("/saasbtp/safety", e => e.Publishes<ConstatRecorded>()));
         var serializer = BuildSerializer();
-        var payload = serializer.Serialize(new ConstatRecorded(Guid.NewGuid()));
+        var payload = serializer.Serialize(new ConstatRecorded(Guid.NewGuid()), typeof(ConstatRecorded));
 
         var eventType = registry.ResolveLocalType("saasbtp.safety.constat-recorded.v1");
-        var deserialized = serializer.Deserialize(payload, eventType.AssemblyQualifiedName!);
+        var deserialized = serializer.Deserialize(payload, eventType);
 
         deserialized.ShouldBeOfType<ConstatRecorded>();
     }

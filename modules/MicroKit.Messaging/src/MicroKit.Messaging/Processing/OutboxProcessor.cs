@@ -273,7 +273,7 @@ internal sealed class OutboxProcessor : IOutboxProcessor
             // Copying it through made every descendant inherit one ancestor's causation, and since
             // nothing in the module ever assigns a causation at the root, that ancestor's value is
             // null: the chain was null on every row, on every path, while OutboxMessage.CausationId,
-            // the CausationId value object and MessageEnvelope.CausationId all documented a link
+            // the CausationId value object and the envelope causation all documented a link
             // that was never built. The reentrant hop is where that stopped being harmless — a
             // contract published by a notification handler demonstrably has a cause, and it is the
             // row this scope is dispatching.

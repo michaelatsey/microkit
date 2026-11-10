@@ -1,5 +1,90 @@
 # Changelog — MicroKit.Messaging
 
+## [Unreleased] — the bus publishes and consumes without persistence (#186)
+
+### Added — a message bus that needs no database
+
+- **`IMessageBus` and `IEventPublisher`**, scoped. `PublishAsync<T>(message, PublishOptions?, ct)`
+  goes straight to the transport and returns the `MessageId`. Tenant, correlation and causation
+  are read from the scope's `IExecutionContext` — never from an `AsyncLocal` — so a message
+  published while handling another inherits its tenant and correlation and takes the incoming
+  message id as causation. `PublishOptions.TenantId` supplies a tenant outside a message; one that
+  contradicts a non-null ambient tenant throws `IntegrationEventPublishException` before anything
+  is sent. With no transport registered, `PublishAsync` throws
+  `IntegrationEventConfigurationException`.
+- **A receive pipeline**, inline: transport → message scope → execution context filled from the
+  envelope → `IMessageScopeInitializer`s in registration order → `IMessageReceiveMiddleware`s →
+  handler. Each handler of a contract runs in its own scope. Three verdicts: permanent
+  (dead-letter at once: undeserializable body, unknown contract, bad id,
+  `PermanentMessageException`), transient (redeliver: any other exception), dependency unavailable
+  (`InboxDependencyUnavailableException`: pause the endpoint, redeliver without counting). Several
+  handlers yield the most redeliverable verdict. Host shutdown is not a failure: an
+  `OperationCanceledException` under a cancelled host token, or an `ObjectDisposedException`,
+  leaves the message unsettled with its attempt count unchanged (#128 folded in).
+  **Delivery is at-least-once, and without an inbox a handler that already succeeded runs again
+  when another handler of the same message fails.** #188 removes the rerun.
+- **`IMessageSendMiddleware`** and **`IMessageReceiveMiddleware`**, registered with
+  `AddSendMiddleware<T>()` / `AddReceiveMiddleware<T>()`, run in registration order. The reserved
+  headers are written after the last send middleware and overwrite whatever it set: a middleware
+  cannot forge the tenant. A send middleware that does not call the rest of the pipeline makes
+  `PublishAsync` throw rather than succeed silently.
+- **`IMessageScopeInitializer`** (`AddScopeInitializer<T>()`): runs after the message scope is
+  created and its context filled, before the handler or any of its dependencies is resolved, so an
+  adapter can establish a tenant before a `DbContext` is configured (#189, #190).
+- **`PermanentMessageException`**, in the application namespace: a handler's permanent verdict on
+  the bus and on the inbox path alike, without referencing `MicroKit.Messaging.Spi`.
+- **The in-memory transport**, `UseInMemoryTransport(InMemoryBroker? broker = null)`: the only
+  transport of this release and the only feature here that registers a hosted service (its consume
+  loop). A host may supply the `InMemoryBroker` so successive hosts share one queue. The broker
+  bounds redelivery (`MaxDeliveryAttempts`, default 5), pauses on an unavailable dependency
+  (`DependencyUnavailableBackoff`), and exposes `DeadLetters` and `GetFailedAttempts(id)`.
+- **`ConfigureJson(Action<JsonSerializerOptions>)`** on the builder, backed by `IOptions`: host
+  converters and a `JsonSerializerContext` in `TypeInfoResolverChain`, used to serialize and to
+  deserialize. Reflection stays the fallback after the host's resolvers.
+- **`MessageHeaders`** (SPI): `tenantid`, `correlationid`, `causationid`, `traceparent`,
+  reserved case-insensitively.
+  `traceparent` is set from `Activity.Current` on publish when one exists.
+- **`OutboxInboxProcessingExtensions.AddOutboxInboxProcessing()`** (SPI): the seam a store
+  provider calls to register the outbox and inbox workers, processors, coordinators and metrics.
+  Transitional until #188.
+
+### Changed — BREAKING
+
+- **`IMessageHandler<T>.HandleAsync(T message, MessageContext context, CancellationToken ct)`.**
+  `MessageContext` carries `MessageId`, `ContractName`, `ContractVersion`, `Source`,
+  `OccurredOnUtc`, `TenantId`, `CorrelationId`, `CausationId` and `Headers`. On the transitional
+  inbox path it is built from the row, which records no source and no headers: those are empty.
+  Migration: add the `MessageContext context` parameter to every handler.
+- **`[MessageContract(name, Version = n)]` replaces `IntegrationEventAttribute`**, with no alias.
+  The wire type is `<name>.v<n>`, `Version` defaults to 1, and a name already ending in
+  `.v<digits>` is rejected. The registry and the outbox `ContractName` use the wire type, so a
+  contract keeps its wire name when migrated as
+  `[IntegrationEvent("orders.placed.v1")]` → `[MessageContract("orders.placed")]`.
+- **`MessageEnvelope` is a sealed class with init-only members aligned on CloudEvents**: `Id`,
+  `Source`, `Type`, `Time`, `DataContentType`, `DataSchema`, `Headers`, and a
+  `ReadOnlyMemory<byte> Body`. The positional record is gone, and with it `MessageId`,
+  `ContractName`, `Payload`, `TenantId`, `CorrelationId`, `CausationId` and `OccurredOnUtc` as
+  members: tenant, correlation and causation travel as headers. The outbox and inbox rows keep
+  their string `Payload`; `TransportOutboxDispatcher` and `EnvelopeReceiver` convert it as UTF-8
+  `application/json` at the boundary, and `EnvelopeReceiver` rejects any other content type or a
+  non-GUID id as permanent.
+- **`IMessageSerializer` works on bytes and types**: `ContentType`,
+  `Serialize(object, Type) → ReadOnlyMemory<byte>`, `Deserialize(ReadOnlyMemory<byte>, Type)`.
+  The lookup from a name to a type belongs to the registry; the outbox and inbox paths resolve
+  their rows' `EventType` themselves. The default throws `JsonException` on a malformed body
+  instead of returning null. The outbox path refuses a serializer whose content type is not
+  `application/json` with `OutboxConfigurationException`, rather than decoding its bytes as text.
+  Supersedes #174.
+- **`AddMicroKitMessaging()` registers no hosted service.** `OutboxWorker`,
+  `OutboxRetentionWorker`, `InboxWorker` and `InboxRetentionWorker` — and the processors and
+  coordinators they drive — are registered by `AddEfCoreOutbox<TContext>()`, through
+  `AddOutboxInboxProcessing()`. A host composing the outbox through `AddEfCoreOutbox` is
+  unaffected; a host that relied on `AddMicroKitMessaging()` alone for the workers — with stores it
+  registered itself — must now call `AddOutboxInboxProcessing()` on the builder, or no worker runs. The signature of `AddMicroKitMessaging()` is unchanged (#187 replaces it).
+- The architecture rule that no MicroKit package ships an `IMessageTransport` now admits exactly
+  one: Core's internal in-memory transport, registered with its consume loop.
+- Core now references `Microsoft.Extensions.Options`, which backs `ConfigureJson`.
+
 ## [Unreleased] — the user API is separated from the storage and transport SPI
 
 ### Changed — BREAKING: `MicroKit.Messaging.Abstractions` splits into an API and an SPI (#185)
