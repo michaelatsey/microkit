@@ -18,3 +18,5 @@ global using Microsoft.Extensions.DependencyInjection;
 global using Shouldly;
 global using Xunit;
 global using Xunit.Abstractions;   // ITestOutputHelper (xunit v2)
+global using MicroKit.Messaging.Spi;
+global using MicroKit.Messaging.Processing;   // internal drain seams via InternalsVisibleTo (#185, removed by #135)

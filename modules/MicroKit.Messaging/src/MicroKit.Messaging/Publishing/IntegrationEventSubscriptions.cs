@@ -10,7 +10,7 @@ namespace MicroKit.Messaging.Publishing;
 /// not see that one type publishes a name a second type claims to consume, and the relay would
 /// have to pick one arbitrarily.
 /// </remarks>
-public sealed class IntegrationEventSubscriptions
+internal sealed class IntegrationEventSubscriptions
 {
     internal IntegrationEventSubscriptions(IReadOnlyList<IntegrationEventSubscription> subscriptions)
         => Subscriptions = subscriptions;

@@ -768,7 +768,9 @@ including every bare `ServiceCollection` test host, and the end-to-end harness â
 `services.AddMetrics()` or fail at resolution, and it pulls `Microsoft.Extensions.Diagnostics` into
 Central Package Management on both sides. The only thing it buys is per-container meter isolation,
 which nothing in this repository exercises. `InboxMetrics` owns its `Meter` instead; subscribing is
-unaffected, since OpenTelemetry picks it up with `AddMeter(InboxMetrics.MeterName)` either way.
+unaffected, since OpenTelemetry picks it up with `AddMeter(MessagingDiagnostics.InboxMeterName)`
+either way. (#185 made `InboxMetrics` internal and moved the name to `MessagingDiagnostics`; the
+value is unchanged.)
 **If per-container isolation is ever needed, switching back is a one-line change in `InboxMetrics`
 plus `AddMetrics()` in the consumer's composition root** â€” this was weighed, not overlooked.
 

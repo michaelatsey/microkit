@@ -9,3 +9,4 @@ global using MicroKit.Execution.Abstractions;
 global using NSubstitute;
 global using Shouldly;
 global using Xunit;
+global using MicroKit.Messaging.Spi;

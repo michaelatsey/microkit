@@ -265,7 +265,7 @@ public sealed class EnvelopeReceiverTests
 
         listener.InstrumentPublished = (instrument, l) =>
         {
-            if (instrument.Meter.Name == InboxMetrics.MeterName
+            if (instrument.Meter.Name == MessagingDiagnostics.InboxMeterName
                 && instrument.Name == "microkit.inbox.envelopes.unconsumed")
             {
                 l.EnableMeasurementEvents(instrument);

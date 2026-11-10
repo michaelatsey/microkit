@@ -2,7 +2,7 @@
   <PropertyGroup>
     <AssemblyName>MicroKit.Messaging.Abstractions</AssemblyName>
     <RootNamespace>MicroKit.Messaging</RootNamespace>
-    <Description>Pure contracts for MicroKit.Messaging — IIntegrationEvent, IIntegrationEventPublisher, IMessageHandler, IMessageTransport, IOutboxWriter, IOutboxProcessorStore, IInboxWriter, IInboxProcessorStore, IInboxSettlementStore, OutboxMessage, InboxMessage, MessageEnvelope. Zero framework dependency.</Description>
+    <Description>Pure contracts for MicroKit.Messaging, in two layers. The application surface in namespace MicroKit.Messaging — IIntegrationEvent, IntegrationEventAttribute, IIntegrationEventPublisher, IMessageHandler, MessageId, IntegrationEventPublishException, IntegrationEventConfigurationException, InboxDependencyUnavailableException — is what an application names. The MicroKit.Messaging.Spi namespace is the contract for authors of a store, a transport or a dispatcher — IMessageTransport, MessageEnvelope, IEnvelopeReceiver, IOutboxDispatcher, the outbox and inbox store interfaces, and the row types they exchange. Zero framework dependency.</Description>
     <PackageTags>microkit;messaging;outbox;inbox;integration-events;abstractions;dotnet</PackageTags>
     <Authors>Ange-Michaël Atsé</Authors>
     <PackageProjectUrl>https://github.com/michaelatsey/microkit</PackageProjectUrl>

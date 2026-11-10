@@ -62,7 +62,7 @@ public sealed class MessagingBuilder
     /// dispatcher. That is a registered dispatcher that cannot be activated, not a missing
     /// registration, and it is not <see cref="OutboxConfigurationException"/>: the batch is released
     /// untouched, no retry budget is consumed, the rows stay <see cref="OutboxMessageStatus.Pending"/>,
-    /// the batch result reports <see cref="OutboxBatchAbortReason.DispatcherActivationFailed"/>, and an
+    /// the batch result reports <c>OutboxBatchAbortReason.DispatcherActivationFailed</c>, and an
     /// error is logged on every cycle. The worker keeps running and backs off rather than stopping, so
     /// the rows drain on the first cycle after a build that registers a transport is deployed, and a
     /// cause that clears on its own drains them with no intervention at all.

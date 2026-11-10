@@ -21,7 +21,7 @@ namespace MicroKit.Messaging.Processing;
 /// host — including bare <c>ServiceCollection</c> test hosts — to call <c>AddMetrics()</c> or
 /// fail at resolution. The only thing a factory buys is per-container meter isolation, which
 /// nothing in this library needs. Subscribing is unaffected: OpenTelemetry picks this up with
-/// <c>AddMeter(InboxMetrics.MeterName)</c> exactly as it would a factory-created meter.
+/// <c>AddMeter(MessagingDiagnostics.InboxMeterName)</c> exactly as it would a factory-created meter.
 /// </para>
 /// <para>
 /// If per-container isolation is ever required, switching to <c>IMeterFactory</c> is a one-line
@@ -31,11 +31,8 @@ namespace MicroKit.Messaging.Processing;
 /// Registered as a singleton by <c>AddMicroKitMessaging()</c>.
 /// </para>
 /// </remarks>
-public sealed class InboxMetrics : IDisposable
+internal sealed class InboxMetrics : IDisposable
 {
-    /// <summary>The meter name to subscribe to.</summary>
-    public const string MeterName = "MicroKit.Messaging.Inbox";
-
     private readonly Meter _meter;
     private readonly Counter<long> _added;
     private readonly Counter<long> _deduplicated;
@@ -44,7 +41,7 @@ public sealed class InboxMetrics : IDisposable
     /// <summary>Initializes a new <see cref="InboxMetrics"/>.</summary>
     public InboxMetrics()
     {
-        _meter = new Meter(MeterName);
+        _meter = new Meter(MessagingDiagnostics.InboxMeterName);
 
         _added = _meter.CreateCounter<long>(
             "microkit.inbox.messages.added",
@@ -78,9 +75,10 @@ public sealed class InboxMetrics : IDisposable
     /// an enum and missed a call site, and the two sites must fail together or not at all.
     /// </para>
     /// <para>
-    /// Unreachable while <see cref="InboxWriteResult"/> has its two documented values. It is
-    /// reachable by a caller passing an undefined enum value — a broker adapter that records rows
-    /// itself is on this path — so it is documented rather than left to be discovered.
+    /// Unreachable while <see cref="InboxWriteResult"/> has its two documented values, and since
+    /// #185 this type is <c>internal</c>, so <c>EnvelopeReceiver</c> is the only caller — an
+    /// external broker adapter can no longer reach it. The guard stays because the enum and this
+    /// call site must fail together if a third value is ever added.
     /// </para>
     /// </exception>
     public void Record(InboxWriteResult result, string consumerType)

@@ -44,8 +44,9 @@ public sealed record InboxProcessorOptions
     /// <remarks>
     /// The most consequential inbox setting. It must comfortably exceed the worst-case handler
     /// duration: a lease expiring while a handler is still running lets a second processor claim
-    /// the row. <see cref="InboxBatchResult.LeasesLost"/> is the signal that this value is too
-    /// low — without that counter the system stays correct but quietly does less work than it
+    /// the row. The signal that this value is too low is the processor's per-occurrence
+    /// <c>LeaseLostBeforeHandler</c> / <c>LeaseLostDuringHandler</c> log events — alert on their
+    /// rate. Without watching them the system stays correct but quietly does less work than it
     /// appears to. Default: 5 minutes.
     /// </remarks>
     public TimeSpan LeaseDuration { get; set; } = TimeSpan.FromMinutes(5);

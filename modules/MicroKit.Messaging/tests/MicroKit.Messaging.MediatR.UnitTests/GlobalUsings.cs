@@ -12,3 +12,4 @@ global using Microsoft.Extensions.Logging.Abstractions;
 global using NSubstitute;
 global using Shouldly;
 global using Xunit;
+global using MicroKit.Messaging.Spi;

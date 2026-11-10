@@ -4,3 +4,5 @@ global using MicroKit.Execution.Abstractions;
 global using Microsoft.Extensions.DependencyInjection;
 global using Microsoft.Extensions.Hosting;
 global using Microsoft.Extensions.Logging;
+global using MicroKit.Messaging.Spi;
+global using MicroKit.Messaging.Processing;
