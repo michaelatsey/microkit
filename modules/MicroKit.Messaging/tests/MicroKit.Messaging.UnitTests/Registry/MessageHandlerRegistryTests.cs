@@ -98,14 +98,14 @@ public sealed class MessageHandlerRegistryTests
         registry.GetHandlers(typeof(InboxTestEvent)).ShouldHaveSingleItem()
             .HandlerType.ShouldBe(typeof(SecondHandler));
 
-        registry.TryGetInvoker(ConsumerType, out var entry).ShouldBeTrue();
+        registry.TryGetInvoker(ConsumerType, typeof(InboxTestEvent), out var entry).ShouldBeTrue();
         entry.HandlerType.ShouldBe(typeof(SecondHandler));
     }
 
     [Fact]
     public void TryGetInvoker_WhenRegistered_ReturnsTheEntry()
     {
-        WithOneHandler().TryGetInvoker(ConsumerType, out var entry).ShouldBeTrue();
+        WithOneHandler().TryGetInvoker(ConsumerType, typeof(InboxTestEvent), out var entry).ShouldBeTrue();
 
         entry.HandlerType.ShouldBe(typeof(RecordingInboxHandler));
     }
@@ -116,7 +116,7 @@ public sealed class MessageHandlerRegistryTests
         // InboxProcessor turns this into an InboxPayloadException and dead-letters on first sight:
         // a row naming a consumer this process does not have will never become processable by
         // waiting.
-        new MessageHandlerRegistry().TryGetInvoker("nobody", out _).ShouldBeFalse();
+        new MessageHandlerRegistry().TryGetInvoker("nobody", typeof(InboxTestEvent), out _).ShouldBeFalse();
     }
 
     [Fact]
@@ -125,7 +125,7 @@ public sealed class MessageHandlerRegistryTests
         // The invoker is a closure built at registration time and holds the only cast from object
         // to IMessageHandler<TEvent>. If it is wrong, nothing else in the registry reveals it.
         var registry = WithOneHandler();
-        registry.TryGetInvoker(ConsumerType, out var entry).ShouldBeTrue();
+        registry.TryGetInvoker(ConsumerType, typeof(InboxTestEvent), out var entry).ShouldBeTrue();
 
         var handler = new RecordingInboxHandler();
         var evt = new InboxTestEvent(MessageId.New(), "tenant-1");
@@ -146,14 +146,76 @@ public sealed class MessageHandlerRegistryTests
     [Fact]
     public void Register_ReflectionOverload_ProducesAnEquivalentEntry()
     {
-        // The overload that exists for callers with no compile-time type argument. It has no
-        // production caller and never had one, so this is its only coverage.
+        // The overload handler discovery uses (#187): bus.AddHandler<THandler>() knows each handled
+        // type only at run time, from the handler's closed IMessageHandler<T> interfaces.
         var registry = new MessageHandlerRegistry();
         registry.Register(typeof(InboxTestEvent), ConsumerType, typeof(RecordingInboxHandler));
 
         registry.GetHandlers(typeof(InboxTestEvent)).ShouldHaveSingleItem()
             .HandlerType.ShouldBe(typeof(RecordingInboxHandler));
-        registry.TryGetInvoker(ConsumerType, out _).ShouldBeTrue();
+        registry.TryGetInvoker(ConsumerType, typeof(InboxTestEvent), out _).ShouldBeTrue();
+    }
+
+    /// <summary>
+    /// The key is the pair (#187). One consumer handling two types holds two entries, and
+    /// registering it for the second type replaces nothing of the first — keyed on the consumer
+    /// alone, the inbox would hand a row of one type to the invoker of the other.
+    /// </summary>
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public void OneConsumerOfTwoTypes_HoldsOneEntryPerType_InEitherRegistrationOrder(bool firstTypeFirst)
+    {
+        var registry = new MessageHandlerRegistry();
+        if (firstTypeFirst)
+        {
+            registry.Register(typeof(InboxTestEvent), ConsumerType, typeof(TwoTypeHandler));
+            registry.Register(typeof(OtherInboxEvent), ConsumerType, typeof(TwoTypeHandler));
+        }
+        else
+        {
+            registry.Register(typeof(OtherInboxEvent), ConsumerType, typeof(TwoTypeHandler));
+            registry.Register(typeof(InboxTestEvent), ConsumerType, typeof(TwoTypeHandler));
+        }
+
+        registry.TryGetInvoker(ConsumerType, typeof(InboxTestEvent), out var first).ShouldBeTrue();
+        registry.TryGetInvoker(ConsumerType, typeof(OtherInboxEvent), out var second).ShouldBeTrue();
+        first.Invoker.ShouldNotBeSameAs(second.Invoker);
+        registry.GetHandlers(typeof(InboxTestEvent)).ShouldHaveSingleItem();
+        registry.GetHandlers(typeof(OtherInboxEvent)).ShouldHaveSingleItem();
+        registry.RegisteredConsumerTypes.ShouldBe([ConsumerType]);
+    }
+
+    [Fact]
+    public async Task OneConsumerOfTwoTypes_EachInvokerReachesItsOwnMethod()
+    {
+        var registry = new MessageHandlerRegistry();
+        registry.Register(typeof(InboxTestEvent), ConsumerType, typeof(TwoTypeHandler));
+        registry.Register(typeof(OtherInboxEvent), ConsumerType, typeof(TwoTypeHandler));
+        var handler = new TwoTypeHandler();
+        var context = new MessageContext
+        {
+            MessageId = MessageId.New(),
+            ContractName = "test",
+            ContractVersion = 1,
+            Source = "/tests",
+            OccurredOnUtc = DateTimeOffset.UnixEpoch,
+        };
+
+        registry.TryGetInvoker(ConsumerType, typeof(InboxTestEvent), out var first).ShouldBeTrue();
+        await first.Invoker(handler, new InboxTestEvent(MessageId.New(), "t"), context, CancellationToken.None);
+        registry.TryGetInvoker(ConsumerType, typeof(OtherInboxEvent), out var second).ShouldBeTrue();
+        await second.Invoker(handler, new OtherInboxEvent(), context, CancellationToken.None);
+
+        handler.Calls.ShouldBe([nameof(InboxTestEvent), nameof(OtherInboxEvent)]);
+    }
+
+    [Fact]
+    public void TryGetInvoker_WhenTheConsumerIsRegisteredForAnotherTypeOnly_ReturnsFalse()
+    {
+        var registry = WithOneHandler();
+
+        registry.TryGetInvoker(ConsumerType, typeof(OtherInboxEvent), out _).ShouldBeFalse();
     }
 
     [Fact]
@@ -178,5 +240,25 @@ public sealed class MessageHandlerRegistryTests
     {
         public ValueTask HandleAsync(InboxTestEvent message, MessageContext context, CancellationToken ct = default)
             => ValueTask.CompletedTask;
+    }
+}
+
+internal sealed record OtherInboxEvent : IIntegrationEvent;
+
+/// <summary>One consumer handling two message types, recording which method each call reached.</summary>
+internal sealed class TwoTypeHandler : IMessageHandler<InboxTestEvent>, IMessageHandler<OtherInboxEvent>
+{
+    public List<string> Calls { get; } = [];
+
+    public ValueTask HandleAsync(InboxTestEvent message, MessageContext context, CancellationToken ct = default)
+    {
+        Calls.Add(nameof(InboxTestEvent));
+        return ValueTask.CompletedTask;
+    }
+
+    public ValueTask HandleAsync(OtherInboxEvent message, MessageContext context, CancellationToken ct = default)
+    {
+        Calls.Add(nameof(OtherInboxEvent));
+        return ValueTask.CompletedTask;
     }
 }

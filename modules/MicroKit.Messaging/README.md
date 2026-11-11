@@ -34,8 +34,8 @@ transaction is durable, and nothing durable goes unpublished.
 
 | Package | Description |
 |---------|-------------|
-| `MicroKit.Messaging.Abstractions` | Contracts, in two layers. **`MicroKit.Messaging`** — what an application names: `IIntegrationEvent`, `IntegrationEventAttribute`, `IIntegrationEventPublisher`, `IMessageHandler<T>`, `MessageId`, `IntegrationEventPublishException`, `IntegrationEventConfigurationException`, `InboxDependencyUnavailableException`. **`MicroKit.Messaging.Spi`** — what an author of a store, transport or dispatcher implements: `IMessageTransport`, `MessageEnvelope`, `IEnvelopeReceiver`, `IOutboxDispatcher`, `IOutboxWriter` and the other store interfaces, `OutboxMessage`, `InboxMessage`, `IntegrationEventWriteResult` |
-| `MicroKit.Messaging` | Outbox/inbox processors and workers, the transport dispatcher, integration-event publishing, DI |
+| `MicroKit.Messaging.Abstractions` | Contracts, in two layers. **`MicroKit.Messaging`** — what an application names: `IIntegrationEvent`, `MessageContractAttribute`, `IMessageBus`, `IIntegrationEventPublisher`, `IMessageHandler<T>`, `MessageId`, `IntegrationEventPublishException`, `IntegrationEventConfigurationException`, `InboxDependencyUnavailableException`. **`MicroKit.Messaging.Spi`** — what an author of a store, transport or dispatcher implements: `IMessageTransport`, `MessageEnvelope`, `IEnvelopeReceiver`, `IOutboxDispatcher`, `IOutboxWriter` and the other store interfaces, `OutboxMessage`, `InboxMessage`, `IntegrationEventWriteResult` |
+| `MicroKit.Messaging` | The bus and its in-memory transport, the outbox/inbox processors and workers, the transport dispatcher, integration-event publishing, `AddMicroKitMessaging` |
 | `MicroKit.Messaging.EntityFrameworkCore` | `EfOutboxStore`, `EfInboxStore`, entity configuration for your `DbContext` |
 | `MicroKit.Messaging.MediatR` | Glue: puts MicroKit.MediatR domain events on the outbox as notifications |
 
@@ -44,43 +44,226 @@ transaction is durable, and nothing durable goes unpublished.
 ## Installation
 
 ```bash
-dotnet add package MicroKit.Messaging
-dotnet add package MicroKit.Messaging.EntityFrameworkCore
-dotnet add package MicroKit.Messaging.MediatR   # only if you use MicroKit.MediatR
+dotnet add package MicroKit.Messaging                      # the bus, the in-memory transport, the outbox and inbox engine
+dotnet add package MicroKit.Messaging.EntityFrameworkCore  # only for the outbox and inbox stores
+dotnet add package MicroKit.Messaging.MediatR              # only to put MicroKit.MediatR domain events on the outbox
 ```
+
+The bus needs nothing else: no database, no broker. Persistence is a feature you add, not a
+prerequisite.
 
 ---
 
 ## Composition
 
-The full wiring, as it actually works. Call order does not matter except where noted.
+One entry point, `AddMicroKitMessaging(bus => ...)`, validated when the host starts.
 
+### Quick start — publish and consume, no database
+
+A message type carries its wire contract; a handler is its subscription:
+
+<!-- snippet: quick-start-contracts -->
 ```csharp
-// 1. Your DbContext owns the outbox and inbox tables — that is what makes the write atomic.
+[MessageContract("shop.orders.order-placed")]   // wire type: shop.orders.order-placed.v1
+public sealed record OrderPlaced(Guid OrderId) : IIntegrationEvent;
+
+public sealed class OrderPlacedHandler(ILogger<OrderPlacedHandler> logger) : IMessageHandler<OrderPlaced>
+{
+    public ValueTask HandleAsync(OrderPlaced message, MessageContext context, CancellationToken ct = default)
+    {
+        logger.LogInformation("Order {OrderId} placed ({MessageId})", message.OrderId, context.MessageId);
+        return ValueTask.CompletedTask;
+    }
+}
+```
+
+The whole composition:
+
+<!-- snippet: quick-start -->
+```csharp
+services.AddMicroKitMessaging(bus =>
+{
+    bus.ServiceName = "shop.orders";
+    bus.Publishes<OrderPlaced>();
+    bus.AddHandler<OrderPlacedHandler>();
+    bus.UseInMemoryTransport();
+});
+```
+
+Publish from any scoped service:
+
+<!-- snippet: quick-start-publish -->
+```csharp
+public sealed class Checkout(IMessageBus bus)
+{
+    public async Task PlaceAsync(Guid orderId, CancellationToken ct = default)
+        => await bus.PublishAsync(new OrderPlaced(orderId), ct: ct);
+}
+```
+
+- **`bus.ServiceName`** names the service. It is the `Source` of every message the service
+  publishes, and the endpoint the service consumes from.
+- **`bus.Publishes<T>()`** declares a publication. Publications are declared rather than
+  discovered: that is what lets startup detect a duplicated contract name and a publication with
+  no route.
+- **`bus.AddHandler<THandler>()`** registers one subscription per closed `IMessageHandler<T>` the
+  handler implements, so a handler of two message types is registered once. The contract comes from
+  each type's `[MessageContract]`, with no separate declaration. Registering a handler twice is a
+  no-op.
+- **`bus.UseInMemoryTransport()`** registers the in-memory transport and its consume loop, and the
+  dispatcher that routes outbox contract rows to it.
+
+### A service consuming another service's contract
+
+The consumer declares the producer's contract name on **its own** local type. The producer's type
+does not travel, and would be useless if it did:
+
+<!-- snippet: consuming-contract -->
+```csharp
+[MessageContract("shop.orders.order-placed")]   // the producer's name, on this service's own type
+public sealed record OrderPlaced(Guid OrderId) : IIntegrationEvent;
+
+public sealed class ReserveStock : IMessageHandler<OrderPlaced>
+{
+    public ValueTask HandleAsync(OrderPlaced message, MessageContext context, CancellationToken ct = default)
+        => ValueTask.CompletedTask;
+}
+```
+
+<!-- snippet: consuming-composition -->
+```csharp
+services.AddMicroKitMessaging(bus =>
+{
+    bus.ServiceName = "shop.shipping";
+    bus.AddHandler<Shipping.ReserveStock>();   // a handler is its subscription
+    bus.UseInMemoryTransport();
+});
+```
+
+Two services on one `InMemoryBroker` each receive their own copy of a message. Two hosts with the
+same `ServiceName` share one endpoint and compete for its messages, so each message is handled once
+between them. A host binds its own endpoint on the first use of its transport or when it starts,
+whichever comes first, so a message a single host publishes before it starts still reaches its own
+handlers. Across hosts sharing one broker — tests only — start the consumers before the producers:
+a message sent while no endpoint is bound to its type reaches no one (`Warning` 3014). Each host
+sets its own `bus.ServiceName`: left unset, they all take the entry assembly's name and share one
+endpoint. See `InMemoryBroker` for routing, redelivery and dead letters, which are kept per
+endpoint.
+
+### Handler discovery
+
+`AddHandler<THandler>()` is the trim-safe registration. To register every handler of an assembly:
+
+<!-- snippet: handler-discovery -->
+```csharp
+services.AddMicroKitMessaging(bus =>
+{
+    bus.ServiceName = "shop.shipping";
+    bus.AddHandlersFromAssemblyContaining<OrderPlacedHandler>();   // reflection: not trim-safe
+    bus.UseInMemoryTransport();
+});
+```
+
+> ⚠ **Not trim-safe.** The scan reads the assembly's types by reflection, so a handler the trimmer
+> removed is silently not registered. The method carries `[RequiresUnreferencedCode]`; in a trimmed
+> application, register handlers with `AddHandler<THandler>()`.
+
+### Options
+
+`MessagingOptions` binds from the `MicroKit:Messaging` configuration section:
+
+```json
+{
+  "MicroKit": {
+    "Messaging": {
+      "ServiceName": "shop.orders",
+      "Outbox": { "BatchSize": 200, "PollingInterval": "00:00:02" },
+      "Inbox": { "LeaseDuration": "00:10:00", "RetentionDays": 45 }
+    }
+  }
+}
+```
+
+or in code, applied after the configuration:
+
+<!-- snippet: options -->
+```csharp
+services.AddMicroKitMessaging(bus =>
+{
+    bus.Configure(options =>
+    {
+        options.Outbox.BatchSize = 200;
+        options.Inbox.LeaseDuration = TimeSpan.FromMinutes(10);
+    });
+});
+```
+
+- **Precedence, lowest first:** the host's `IHostEnvironment.ApplicationName` (the service name
+  only), configuration, `bus.Configure(...)`, `bus.ServiceName`. A blank value counts as absent and
+  falls back to the next source. `bus.ServiceName = ""` throws; `null` leaves it unset.
+- **Read once.** Configuration is read when the options are first resolved. There is no reload: a
+  changed value takes effect on the next start. A container without an `IConfiguration` keeps the
+  defaults.
+- **Validated at start** (`ValidateOnStart`). Every value is range-checked: positive sizes and
+  intervals, `PollingInterval` not above `MaxPollingInterval`, and no delay beyond what
+  `Task.Delay` accepts. Each failure names its key and the accepted range, e.g.
+  `MicroKit:Messaging:Outbox:BatchSize must be at least 1; it is 0.`
+
+### What fails at host start
+
+The composition is checked before any worker runs. Every problem is listed in one
+`IntegrationEventConfigurationException`, each with its fix:
+
+- a published or handled type without `[MessageContract]`, or with one whose arguments are invalid;
+- two types claiming one wire type (`<name>.v<version>`). Two versions of one name are two contracts;
+- two `AddMicroKitMessaging` calls setting different `bus.ServiceName` values;
+- a publication with no `IMessageTransport` registered;
+- an `IOutboxProcessorStore` or `IInboxProcessorStore` registered without the engine that drains it.
+
+The last two are structural checks: they verify that a service is registered, not that it can be
+activated. `AddMicroKitMessaging` may be called once per module of a modular monolith; the calls add
+to one composition.
+
+### With persistence — the outbox and domain events
+
+<!-- snippet: durable-context -->
+```csharp
+// Your DbContext owns the outbox and inbox tables — that is what makes the write atomic.
 public sealed class AppDbContext(DbContextOptions<AppDbContext> options) : DbContext(options)
 {
     protected override void OnModelCreating(ModelBuilder modelBuilder)
         => modelBuilder.ApplyMessagingConfiguration();
 }
+```
 
-// 2. Persistence: AddUnitOfWork binds IUnitOfWork / ITransactionalContext and registers the
-//    IDomainEventsProvider the dispatcher drains — all on the same DbContext.
+<!-- snippet: durable-composition -->
+```csharp
+// Persistence: AddUnitOfWork binds IUnitOfWork / ITransactionalContext and registers the
+// IDomainEventsProvider the dispatcher drains — all on the same DbContext.
 services.AddMicroKitPersistence(p => p
     .AddEntityFrameworkCore()
     .AddDbContext<AppDbContext>(o => o.UseNpgsql(connectionString))
     .AddUnitOfWork<AppDbContext>());
 
-// 3. CQRS. TransactionBehavior (order 700) is the dispatch-and-commit owner: it dispatches domain
-//    events and only then commits, so outbox rows land in the same SaveChanges as the aggregate.
+// CQRS. TransactionBehavior (order 700) is the dispatch-and-commit owner: it dispatches domain
+// events and only then commits, so outbox rows land in the same SaveChanges as the aggregate.
 services.AddMicroKitMediatR(cfg => cfg
-    .FromAssemblyContaining<CreateOrderCommand>()
+    .FromAssemblyContaining<PlaceOrderCommand>()
     .AddTransactionBehavior());
 
-// 4. Messaging. Domain events only — no transport, and none needed.
-services.AddMicroKitMessaging()
-    .AddEfCoreOutbox<AppDbContext>()
-    .AddMediatRDomainEvents();    // only with MicroKit.Messaging.MediatR
+// Messaging, durable: domain events go through the outbox. No transport, and none needed.
+services.AddMicroKitMessaging(bus =>
+{
+    bus.ServiceName = "shop.orders";
+    bus.AddEfCoreOutbox<AppDbContext>();
+    bus.AddMediatRDomainEvents();    // only with MicroKit.Messaging.MediatR
+});
 ```
+
+The durable calls live in their packages' namespaces: `MicroKit.Messaging.EntityFrameworkCore`
+(`AddEfCoreOutbox`, `ApplyMessagingConfiguration`), `MicroKit.Messaging.MediatR.DependencyInjection`
+(`AddMediatRDomainEvents`) and `MicroKit.MediatR.Behaviors.DependencyInjection`
+(`AddTransactionBehavior`).
 
 > **PostgreSQL and SQLite only.** `ApplyMessagingConfiguration()` declares a unique index over
 > `(OriginMessageId, ContractName)` on the outbox, and that index is a model invariant rather than
@@ -89,37 +272,69 @@ services.AddMicroKitMessaging()
 > your application ever writes is rejected. Not at DDL time, not on the first row: in production, on
 > the second insert. See *State* below for the workaround you would own.
 
-**Nothing here composes in a required order.** Add `.AddTransportDispatcher()` (or a broker
-provider's `Add{Provider}Transport()`, which calls it) when you publish integration events, before
-or after `AddMediatRDomainEvents()` — either works.
+**Nothing here composes in a required order.** `UseInMemoryTransport()` — or a broker provider's
+`Add{Provider}Transport()` — goes before or after `AddMediatRDomainEvents()`; either works.
 
 A host that publishes only domain-event notifications registers no transport at all, as above. Do
-**not** call `AddTransportDispatcher()` "just in case": it declares an intent to send contracts, and
-without an `IMessageTransport` behind it the outbox cannot dispatch a row of any kind — loudly, with
-every batch released, nothing lost and no retry budget spent, but nothing delivered either.
+**not** add one "just in case": it declares an intent to send contracts, and without a working
+`IMessageTransport` behind it the outbox cannot dispatch a row of any kind — loudly, with every
+batch released, nothing lost and no retry budget spent, but nothing delivered either.
 
-> ⚠ **A registered handler needs a transport to reach it.** Inbox rows are written by
-> `IEnvelopeReceiver`, which a broker provider's consume loop calls — and no broker provider ships
-> yet. Beyond `AddMessageHandler<,>()`, a consuming host needs `AddIntegrationEventConsumption()`
-> (or `AddIntegrationEventPublishing()`) so the contract name binds to your event type, and
-> `AddEfCoreOutbox<TContext>()` so there is somewhere to write. Miss the binding and the receiver
-> refuses the message permanently; miss the handler and it logs at `Warning` and writes nothing.
+> ⚠ **The inbox path needs a receiving transport.** Inbox rows are written by `IEnvelopeReceiver`,
+> which a broker provider's consume loop calls — and no broker provider ships yet. A consuming host
+> registers its handlers with `bus.AddHandler<THandler>()` and `AddEfCoreOutbox<TContext>()` so
+> there is somewhere to write.
 
 A host built with `Host.CreateApplicationBuilder()` or `WebApplication.CreateBuilder()` already has
 logging. A bare `ServiceCollection` does not, and several types here require `ILogger<T>` — call
 `AddLogging()` yourself if you compose by hand.
 
-> **Notification handlers must be idempotent.** There is no per-consumer inbox on the notification
-> path: an outbox retry re-publishes the notification and re-runs *all* of its handlers. The same
-> contract applies to `IMessageHandler<T>` on the inbox path — delivery is at-least-once by design.
+> **Handlers must be idempotent.** Delivery is at-least-once by design. On the bus, a message
+> redelivered because one handler failed runs every handler again. On the notification path an
+> outbox retry re-publishes the notification and re-runs *all* of its handlers. The same contract
+> applies to `IMessageHandler<T>` on the inbox path.
 
 ---
 
 ## End to end
 
+A complete program on the bus:
+
+<!-- snippet: end-to-end -->
+```csharp
+var builder = Host.CreateApplicationBuilder(args);
+builder.Services.AddMicroKitMessaging(bus =>
+{
+    bus.ServiceName = "shop.orders";
+    bus.Publishes<OrderPlaced>();
+    bus.AddHandler<OrderPlacedHandler>();
+    bus.UseInMemoryTransport();
+});
+
+using var host = builder.Build();
+await host.StartAsync();   // validates the options and the composition, then binds the endpoint
+
+await using (var scope = host.Services.CreateAsyncScope())
+{
+    var checkout = ActivatorUtilities.CreateInstance<Checkout>(scope.ServiceProvider);
+    await checkout.PlaceAsync(Guid.NewGuid());   // OrderPlacedHandler logs it, in its own scope
+}
+
+await host.StopAsync();
+```
+
+`StartAsync` validates the options and the composition, then binds the `shop.orders` endpoint to
+the contracts its handlers handle. `PublishAsync` returns once the transport accepted the message;
+`OrderPlacedHandler` runs in its own message scope, with the tenant, correlation and causation of
+the message.
+
+With persistence, a domain fact goes through the outbox instead:
+
+<!-- snippet: durable-end-to-end -->
 ```csharp
 // The fact.
-public sealed record OrderPlacedEvent(Guid OrderId) : DomainEvent;
+public sealed record OrderPlacedEvent(Guid OrderId, Guid CustomerId, DateTimeOffset OccurredAt)
+    : DomainEvent(OccurredAt);
 
 // The outbox payload. Declaring it is what puts the event on the outbox; an event with no
 // notification is dispatched to its handlers and goes no further.
@@ -132,10 +347,10 @@ public sealed class PlaceOrderHandler(IOrderRepository repo)
 {
     public async ValueTask<Result<Guid>> Handle(PlaceOrderCommand command, CancellationToken ct = default)
     {
-        var order = Order.Place(command.CustomerId, command.Lines);
-        order.Raise(new OrderPlacedEvent(order.Id));
+        var order = Order.Place(command.CustomerId);
+        order.Raise(new OrderPlacedEvent(order.Id, command.CustomerId, DateTimeOffset.UtcNow));
         await repo.AddAsync(order, ct);
-        return Result.Success(order.Id);
+        return Success(order.Id);
     }
 }
 
@@ -143,8 +358,8 @@ public sealed class PlaceOrderHandler(IOrderRepository repo)
 public sealed class ProjectOrderHandler(IReadModel readModel)
     : INotificationHandler<OrderPlacedNotification>
 {
-    public Task Handle(OrderPlacedNotification n, CancellationToken ct)
-        => readModel.UpsertOrderAsync(n.DomainEvent.OrderId, ct);
+    public Task Handle(OrderPlacedNotification n, CancellationToken cancellationToken)
+        => readModel.UpsertOrderAsync(n.DomainEvent.OrderId, cancellationToken);
 }
 ```
 
@@ -158,6 +373,7 @@ picks the row up on its next poll and publishes it; `ProjectOrderHandler` runs t
 A domain event is internal. An **integration event** is the contract you publish for other bounded
 contexts, and it is a different type on purpose — an aggregate should never reference one.
 
+<!-- snippet: publishing-contract -->
 ```csharp
 // Business payload only. Everything about delivery — identity, tenant, correlation, timestamps —
 // is assigned when the row is staged. The attribute is the wire name and is mandatory: a CLR type
@@ -166,55 +382,31 @@ contexts, and it is a different type on purpose — an aggregate should never re
 public sealed record OrderPlaced(Guid OrderId, Guid CustomerId) : IIntegrationEvent;
 ```
 
-Composition — contracts once per module, publishing once per application:
+Composition — the publication is declared like any other, and `AddEfCoreIntegrationEvents<TContext>()`
+registers both the outbox writer and `IIntegrationEventPublisher`:
 
+<!-- snippet: publishing-composition -->
 ```csharp
-services.AddIntegrationEventContracts("/shop/orders", events =>
+services.AddMicroKitMessaging(bus =>
 {
-    events.Publishes<OrderPlaced>();
+    bus.ServiceName = "shop.orders";
+    bus.Publishes<OrderPlaced>();
+    bus.AddEfCoreOutbox<AppDbContext>();
+    bus.AddEfCoreIntegrationEvents<AppDbContext>();   // the outbox writer and IIntegrationEventPublisher
+    bus.UseInMemoryTransport();                       // or a broker provider's transport
 });
-
-services.AddMicroKitMessaging()
-        .AddEfCoreOutbox<AppDbContext>()
-        .AddTransportDispatcher()   // plus an IMessageTransport from a broker provider
-        .AddIntegrationEventPublishing()
-        .AddEfCoreIntegrationEvents<AppDbContext>();
 ```
 
 ### Consuming a contract you do not publish
 
-A module that *understands* a contract declares it separately, and the declaration looks almost the
-same — the same attribute, carrying the same wire name, on **its own** local type. The producer's
-type does not travel and would be useless if it did.
+A service that consumes a contract registers a handler of its own local type carrying the
+producer's wire name — see *A service consuming another service's contract* above. There is no
+separate subscription declaration: a handler is its subscription, and a consumer declares **no
+source**, since it emitted nothing.
 
-```csharp
-// The shipping module's own type for a contract the orders module emits. Same name, different
-// assembly, different CLR type — that is the whole point of a wire name.
-[MessageContract("shop.orders.order-placed")]   // wire type: shop.orders.order-placed.v1
-public sealed record OrderPlaced(Guid OrderId, Guid CustomerId) : IIntegrationEvent;
-
-services.AddIntegrationEventSubscriptions(events =>
-{
-    events.Consumes<OrderPlaced>();
-});
-
-services.AddMicroKitMessaging()
-        .AddIntegrationEventConsumption();
-```
-
-`AddIntegrationEventSubscriptions` takes **no `source`**. A source names the module that *emitted*
-an event; a consumer emitted nothing, so it has nothing truthful to put there.
-
-`AddIntegrationEventConsumption()` wires the registry and its startup validator, and nothing else —
-a service that only consumes gets the same boot-time check on duplicated contract names that a
-publishing one gets, instead of discovering the collision inside a handler, inside a transaction,
-where no retry can fix it. A service that does both calls both, in either order.
-
-You only need `Consumes<T>()` for a contract this application does not publish itself: `Publishes<T>()`
-already binds the name, so a modular monolith routes its own contracts with no second declaration.
-
-Declaring both is accepted as a no-op — a module must not have to know whether its producer happens
-to be in-process. What *is* rejected, at startup, is two different types claiming one contract name.
+Publishing a contract also binds its name for receiving, so a modular monolith routes its own
+contracts with no second declaration, and a service may handle what it publishes. What *is*
+rejected, at startup, is two different types claiming one wire type.
 
 The call site is a notification handler — the point where a domain fact becomes a published
 contract:
@@ -288,18 +480,18 @@ row is never purged while the row that produced it can still be dispatched again
 
 An outbox row carries one of two natures, declared in its `MessageKind` column. A `Contract` row is
 handed to a transport; a `Notification` row is fanned out in process by `MicroKit.Messaging.MediatR`.
-`AddTransportDispatcher()` wires the dispatcher for the first of those — and a provider's own
-`Add{Provider}Transport()` calls it for you, so composing a broker is one line:
+Registering a transport wires the dispatcher for the first of those: `UseInMemoryTransport()` does,
+and a broker provider's `Add{Provider}Transport()` is meant to, so composing a broker is one line.
+No broker provider ships yet; with one, the composition would read:
 
 ```csharp
-services.AddMicroKitMessaging()
-        .AddEfCoreOutbox<AppDbContext>()
-        .AddRabbitMqTransport();      // wires the transport AND the dispatcher that feeds it
+services.AddMicroKitMessaging(bus =>
+{
+    bus.ServiceName = "shop.orders";
+    bus.AddEfCoreOutbox<AppDbContext>();
+    bus.AddRabbitMqTransport();      // hypothetical: wires the transport AND the dispatcher that feeds it
+});
 ```
-
-Call `AddTransportDispatcher()` yourself only when you register an `IMessageTransport` directly
-rather than through a provider package. It is `TryAdd`, so calling it as well is a no-op rather than
-a duplicate.
 
 **No `IMessageTransport` implementation ships in MicroKit.** A provider package supplies one, and
 owes a conformance test that `SendAsync` does not return before its broker has acknowledged. The
@@ -329,7 +521,15 @@ The first row is what stops an hour-long outage from dead-lettering the whole qu
 
 ### With no transport registered
 
-A `Contract` row then fails **loudly and reversibly**: the batch is released untouched, no retry
+A declared publication with no transport fails at host start, on the bus and through the outbox
+alike (#187): `UseInMemoryTransport()`, or a provider's transport registration, registers the
+outbox's transport dispatcher with the transport. A `Contract` row reaching a host with no
+dispatcher at all — staged by an earlier deployment, say — is a missing registration: the batch is
+released untouched, no retry budget is consumed, and the worker stops (see the last paragraph).
+
+The rest of this section is about a transport that **is** registered but whose dispatcher cannot
+be built — a transport whose own dependencies are missing. A `Contract` row then fails **loudly and
+reversibly**: the batch is released untouched, no retry
 budget is consumed, the rows stay `Pending`, and an error (event 1009) is logged on every cycle.
 The worker does **not** stop — it backs off and tries again, reporting
 `OutboxBatchAbortReason.DispatcherActivationFailed` — so the rows drain on the first cycle after a
@@ -353,11 +553,12 @@ the table above.
 A dispatcher that is **not registered at all** is different and stays fatal: the batch is released
 and the worker stops, because nothing but a redeployment can fix it.
 
-This is not checked at startup, deliberately — whether a transport is needed depends on whether any
-contract row exists, which is data rather than composition. An application that publishes only
-domain-event notifications composes legitimately without one. The exception is a host that validates
-its container when it is built, which the default host builders do in the `Development` environment:
-there, the missing transport fails at startup.
+A declared publication (`bus.Publishes<T>()`) with no transport fails at host start (#187). An
+application that publishes only domain-event notifications declares none and composes legitimately
+without a transport; for it, whether a transport is needed depends on whether any contract row
+exists, which is data rather than composition. A host that validates its container when it is built,
+which the default host builders do in the `Development` environment, also fails at startup on a
+transport dispatcher with no transport behind it.
 
 ### A known defect: one tenant's row can stall the whole outbox
 
@@ -500,8 +701,9 @@ duplicate and the rest are written.
 
 ### A contract nobody consumes
 
-A name you understand with no `IMessageHandler<T>` registered writes nothing and throws nothing —
-a legitimate composition. But it is also what a forgotten `AddMessageHandler<,>()` produces, and the
+A name you understand with no `IMessageHandler<T>` registered — since #187, a contract this service
+publishes and does not handle itself — writes nothing and throws nothing: a legitimate composition.
+But it is also what forgetting `bus.AddHandler<THandler>()` for a type you publish produces, and the
 two look identical from outside, so it is logged at `Warning` and counted as
 `microkit.inbox.envelopes.unconsumed`. Alert on a sustained non-zero value.
 

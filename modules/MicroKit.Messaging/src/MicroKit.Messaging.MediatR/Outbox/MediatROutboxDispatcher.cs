@@ -100,8 +100,8 @@ internal sealed class MediatROutboxDispatcher(
                 $"Outbox message {message.Id} carries MessageKind '{message.MessageKind}', which " +
                 "this composition cannot route: MicroKit.Messaging.MediatR serves only " +
                 $"{nameof(MessageKind.Notification)} rows, and no inner dispatcher is registered to " +
-                "take the rest. Call AddTransportDispatcher() on the MessagingBuilder, or a broker " +
-                "provider's Add{Provider}Transport() which calls it. The row is released untouched " +
+                "take the rest. Register a transport — bus.UseInMemoryTransport(), or a broker " +
+                "provider's Add{Provider}Transport() — which registers that dispatcher. The row is released untouched " +
                 "and will dispatch once the missing registration is deployed.");
         }
 

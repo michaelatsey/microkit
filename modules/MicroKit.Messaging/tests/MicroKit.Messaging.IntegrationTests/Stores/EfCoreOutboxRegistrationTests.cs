@@ -14,12 +14,12 @@ public sealed class EfCoreOutboxRegistrationTests
     {
         var services = new ServiceCollection();
 
-        services.AddMicroKitMessaging().AddEfCoreOutbox<TestMessagingDbContext>();
+        services.AddMicroKitMessaging(bus => bus.AddEfCoreOutbox<TestMessagingDbContext>());
 
         services.Where(d => d.ServiceType == typeof(IHostedService))
             .Select(d => d.ImplementationType!.Name)
             .ShouldBe(
-                ["OutboxWorker", "OutboxRetentionWorker", "InboxWorker", "InboxRetentionWorker"],
+                ["MessagingCompositionValidator", "OutboxWorker", "OutboxRetentionWorker", "InboxWorker", "InboxRetentionWorker"],
                 ignoreOrder: true);
     }
 
@@ -28,10 +28,11 @@ public sealed class EfCoreOutboxRegistrationTests
     {
         var services = new ServiceCollection();
 
-        services.AddMicroKitMessaging().AddTransportDispatcher().AddIntegrationEventConsumption();
+        services.AddMicroKitMessaging(bus => bus.UseInMemoryTransport());
 
         services.Where(d => d.ServiceType == typeof(IHostedService))
             .Select(d => d.ImplementationType?.Name)
-            .ShouldNotContain(name => name != null && name.EndsWith("Worker", StringComparison.Ordinal));
+            .ShouldNotContain(name => name != null && name.EndsWith("Worker", StringComparison.Ordinal)
+                && name != "InMemoryTransportWorker");
     }
 }

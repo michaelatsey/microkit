@@ -81,7 +81,7 @@ internal sealed class MessageBus(
         }
 
         BusLogs.Published(
-            logger, messageId.ToString(), registration.ContractName, registration.Source, tenantId);
+            logger, messageId.ToString(), registration.ContractName, registry.Source, tenantId);
 
         return messageId;
 
@@ -95,7 +95,7 @@ internal sealed class MessageBus(
             var envelope = new MessageEnvelope
             {
                 Id = messageId.ToString(),
-                Source = registration.Source,
+                Source = registry.Source,
                 Type = registration.ContractName,
                 Time = timeProvider.GetUtcNow(),
                 DataContentType = serializer.ContentType,

@@ -1,6 +1,7 @@
 using MicroKit.Messaging.MediatR.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.DependencyInjection.Extensions;
 
 namespace MicroKit.Messaging.MediatR.UnitTests;
 
@@ -48,7 +49,7 @@ public sealed class MessagingMediatRRegistrationTests
     {
         var services = NewServices();
 
-        services.AddMicroKitMessaging()
+        services.AddMicroKitMessaging(_ => { })
             .AddTransportDispatcher()
             .AddMediatRDomainEvents()
             .AddMediatRDomainEvents();
@@ -70,7 +71,7 @@ public sealed class MessagingMediatRRegistrationTests
         // makes that structural, and this is the test the marker never had.
         var services = NewServices();
 
-        services.AddMicroKitMessaging()
+        services.AddMicroKitMessaging(_ => { })
             .AddTransportDispatcher()
             .AddMediatRDomainEvents()
             .AddMediatRDomainEvents();
@@ -88,7 +89,7 @@ public sealed class MessagingMediatRRegistrationTests
     {
         var services = NewServices();
 
-        services.AddMicroKitMessaging()
+        services.AddMicroKitMessaging(_ => { })
             .AddTransportDispatcher()
             .AddMediatRDomainEvents();
 
@@ -103,7 +104,7 @@ public sealed class MessagingMediatRRegistrationTests
     {
         var services = NewServices();
 
-        services.AddMicroKitMessaging()
+        services.AddMicroKitMessaging(_ => { })
             .AddTransportDispatcher()
             .AddMediatRDomainEvents();
 
@@ -117,7 +118,7 @@ public sealed class MessagingMediatRRegistrationTests
         // standard dispatcher lives in a keyed slot the glue never competes for, so
         // AddTransportDispatcher() can land afterwards and still be found.
         var services = NewServices();
-        var builder = services.AddMicroKitMessaging();
+        var builder = services.AddMicroKitMessaging(_ => { });
 
         builder.AddMediatRDomainEvents();
         builder.AddTransportDispatcher();
@@ -132,7 +133,7 @@ public sealed class MessagingMediatRRegistrationTests
         // that slot. What must NOT abstain with it is the keyed registration, or the decorator would
         // find no inner and every contract row would fail in a host that wired everything correctly.
         var services = NewServices();
-        var builder = services.AddMicroKitMessaging();
+        var builder = services.AddMicroKitMessaging(_ => { });
 
         builder.AddMediatRDomainEvents();
         builder.AddTransportDispatcher();
@@ -149,7 +150,7 @@ public sealed class MessagingMediatRRegistrationTests
     public void Registration_InEitherOrder_LeavesExactlyOneUnkeyedDispatcher(bool transportFirst)
     {
         var services = NewServices();
-        var builder = services.AddMicroKitMessaging();
+        var builder = services.AddMicroKitMessaging(_ => { });
 
         if (transportFirst)
         {
@@ -181,7 +182,7 @@ public sealed class MessagingMediatRRegistrationTests
         var services = NewServices();
         services.AddSingleton<IMessageTransport>(transport);
 
-        var builder = services.AddMicroKitMessaging();
+        var builder = services.AddMicroKitMessaging(_ => { });
 
         if (transportFirst)
         {
@@ -203,13 +204,62 @@ public sealed class MessagingMediatRRegistrationTests
         transport.Sent.ShouldHaveSingleItem().Type.ShouldBe("test.contract.v1");
     }
 
+    /// <summary>
+    /// D1 of #187: <c>UseInMemoryTransport()</c> now registers the transport dispatcher itself, and
+    /// the composition stays order-independent with the glue's seam. Proven through the chain — the
+    /// contract row reaches the in-memory broker — not through descriptors.
+    /// </summary>
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task UseInMemoryTransport_InEitherOrderWithTheGlue_TheDecoratorReachesTheBroker(
+        bool transportFirst)
+    {
+        var broker = new InMemoryBroker();
+        broker.Bind("probe", ["test.contract.v1"]);
+        var services = NewServices();
+
+        // NewServices registers a stand-in transport for the other tests; this one uses the real one.
+        services.RemoveAll<IMessageTransport>();
+
+        services.AddMicroKitMessaging(bus =>
+        {
+            // The transport validates the composition — options included — on its first use.
+            bus.ServiceName = "tests.glue";
+            if (transportFirst)
+            {
+                bus.UseInMemoryTransport(broker);
+                bus.AddMediatRDomainEvents();
+            }
+            else
+            {
+                bus.AddMediatRDomainEvents();
+                bus.UseInMemoryTransport(broker);
+            }
+        });
+
+        UnkeyedDispatchers(services).Count.ShouldBe(1);
+        using var provider = services.BuildServiceProvider();
+        using var scope = provider.CreateScope();
+        var dispatcher = scope.ServiceProvider.GetRequiredService<IOutboxDispatcher>();
+        dispatcher.ShouldBeOfType<MediatROutboxDispatcher>();
+
+        var row = ContractRow();
+        await dispatcher.DispatchAsync(row);
+
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+        var received = await broker.DequeueAsync("probe", timeout.Token);
+        received.Id.ShouldBe(row.Id.Value.ToString());
+        received.Type.ShouldBe("test.contract.v1");
+    }
+
     [Fact]
     public async Task Registration_WithNoTransportDispatcher_ComposesAndDispatchesNotifications()
     {
         // The notification-only host of ADR-MSG-019: AddMediatRDomainEvents() alone, no transport
         // dispatcher, no IMessageTransport. This used to throw at registration.
         var services = NewServices();
-        services.AddMicroKitMessaging().AddMediatRDomainEvents();
+        services.AddMicroKitMessaging(_ => { }).AddMediatRDomainEvents();
 
         using var provider = services.BuildServiceProvider();
         using var scope = provider.CreateScope();
@@ -218,7 +268,7 @@ public sealed class MessagingMediatRRegistrationTests
         dispatcher.ShouldBeOfType<MediatROutboxDispatcher>();
 
         // A notification row still dispatches. The serializer default comes from
-        // AddMicroKitMessaging() — NOT from AddMediatRDomainEvents(), which registers none of its
+        // AddMicroKitMessaging(_ => { }) — NOT from AddMediatRDomainEvents(), which registers none of its
         // own (ADR-MSG-019) — and returns null for an unresolvable EventType, which is a payload
         // fault rather than the configuration fault the next test asserts. Reaching
         // OutboxPayloadException is therefore proof the notification arm ran at all.
@@ -234,11 +284,11 @@ public sealed class MessagingMediatRRegistrationTests
         //
         // Worth its own test rather than being left implied by the dispatch above: this method used
         // to TryAdd a serializer, and the notification arm is the ONLY path in this package that
-        // needs one. If the default ever stops arriving from AddMicroKitMessaging(), a
+        // needs one. If the default ever stops arriving from AddMicroKitMessaging(_ => { }), a
         // notification-only host loses its dispatch path entirely — at the first worker tick, not
         // at composition.
         var services = NewServices();
-        services.AddMicroKitMessaging().AddMediatRDomainEvents();
+        services.AddMicroKitMessaging(_ => { }).AddMediatRDomainEvents();
 
         using var provider = services.BuildServiceProvider();
 
@@ -248,10 +298,10 @@ public sealed class MessagingMediatRRegistrationTests
     [Fact]
     public void AddMediatRDomainEvents_AddsNoSerializerOfItsOwn()
     {
-        // A DELTA, not an absence: AddMicroKitMessaging() has already supplied one. Asserting "no
+        // A DELTA, not an absence: AddMicroKitMessaging(_ => { }) has already supplied one. Asserting "no
         // serializer in the collection" would fail for the right reason and prove nothing.
         var services = NewServices();
-        var builder = services.AddMicroKitMessaging();
+        var builder = services.AddMicroKitMessaging(_ => { });
         var before = services.Count(d => d.ServiceType == typeof(IMessageSerializer));
 
         builder.AddMediatRDomainEvents();
@@ -263,7 +313,7 @@ public sealed class MessagingMediatRRegistrationTests
     public async Task Registration_WithNoTransportDispatcher_ContractRowIsAConfigurationFault()
     {
         var services = NewServices();
-        services.AddMicroKitMessaging().AddMediatRDomainEvents();
+        services.AddMicroKitMessaging(_ => { }).AddMediatRDomainEvents();
 
         using var provider = services.BuildServiceProvider();
         using var scope = provider.CreateScope();
@@ -274,7 +324,7 @@ public sealed class MessagingMediatRRegistrationTests
         var ex = await Should.ThrowAsync<OutboxConfigurationException>(
             async () => await dispatcher.DispatchAsync(ContractRow()));
 
-        ex.Message.ShouldContain("AddTransportDispatcher()");
+        ex.Message.ShouldContain("bus.UseInMemoryTransport()");
     }
 
     // ── helpers ──────────────────────────────────────────────────────────────

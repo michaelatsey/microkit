@@ -202,9 +202,12 @@ public sealed class InboxSettlementGuaranteeTests
             // IInboxCoordinator directly and seeds its own inbox rows rather than going through
             // IEnvelopeReceiver. That keeps the drain's guarantees tested independently of how the
             // rows got there.
-            services.AddMicroKitMessaging()
-                .AddEfCoreOutbox<TestMessagingDbContext>()
-                .AddMessageHandler<RecordingSettlementHandler, SettlementTestEvent>();
+            services.AddMicroKitMessaging(bus =>
+            {
+                bus.ServiceName = "tests.settlement";
+                bus.AddEfCoreOutbox<TestMessagingDbContext>();
+                bus.AddHandler<RecordingSettlementHandler>();
+            });
 
             var provider = services.BuildServiceProvider(
                 new ServiceProviderOptions { ValidateScopes = true });
@@ -288,6 +291,8 @@ internal sealed class SettlementExecutionContext : IExecutionContext
 
 // A bare marker (ADR-MSG-018). The seeded payload below still carries the old fields as JSON;
 // deserialization ignores members the type no longer declares, so the fixture is unaffected.
+// A handled type carries its contract (#187): the composition is rejected otherwise.
+[MessageContract("tests.settlement.settlement-test")]
 internal sealed record SettlementTestEvent : IIntegrationEvent;
 
 internal sealed class InvocationRecorder

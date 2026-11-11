@@ -1,9 +1,10 @@
 using MicroKit.Messaging.Bus;
 using MicroKit.Messaging.Execution;
 using MicroKit.Messaging.Outbox;
-using MicroKit.Messaging.Registry;
+using MicroKit.Messaging.Publishing;
 using MicroKit.Messaging.Serialization;
 using Microsoft.Extensions.DependencyInjection.Extensions;
+using Microsoft.Extensions.Options;
 
 namespace MicroKit.Messaging;
 
@@ -13,83 +14,101 @@ namespace MicroKit.Messaging;
 public static class ServiceCollectionExtensions
 {
     /// <summary>
-    /// Registers MicroKit.Messaging core services: the message bus (<see cref="IMessageBus"/> and
-    /// <see cref="IEventPublisher"/>), the receive pipeline, the contract and handler registries,
-    /// the default serializer, and the in-process execution scope factory.
+    /// Registers MicroKit.Messaging and composes it in one call: what the service publishes, its
+    /// handlers, its transport and its options.
     /// </summary>
     /// <param name="services">The service collection to register into.</param>
-    /// <param name="configureOutbox">Optional callback to configure outbox processor options.</param>
-    /// <param name="configureInbox">Optional callback to configure inbox processor options.</param>
-    /// <returns>
-    /// A <see cref="MessagingBuilder"/> for chaining additional registrations
-    /// (transports and handlers).
-    /// </returns>
+    /// <param name="configure">
+    /// The composition: <see cref="MessagingBuilder.ServiceName"/>,
+    /// <see cref="MessagingBuilder.Publishes{TMessage}"/>, <see cref="MessagingBuilder.AddHandler{THandler}"/>,
+    /// <see cref="MessagingBuilder.UseInMemoryTransport"/>, <see cref="MessagingBuilder.Configure"/>.
+    /// </param>
+    /// <returns>The builder, for chaining further registrations.</returns>
     /// <remarks>
     /// <para>
-    /// <b>No hosted service is registered here (#186).</b> The bus works with no persistence: add
-    /// a transport — <see cref="MessagingBuilder.UseInMemoryTransport"/>, which registers its own
-    /// consume loop — and the bus publishes and consumes. The outbox and inbox workers, processors
-    /// and coordinators are registered by the store provider that needs them, through
-    /// <see cref="Spi.OutboxInboxProcessingExtensions.AddOutboxInboxProcessing"/> (which
-    /// <c>AddEfCoreOutbox&lt;TContext&gt;()</c> calls) — a transitional step that #188 replaces.
+    /// <b>The quick start:</b>
+    /// <code>
+    /// services.AddMicroKitMessaging(bus =>
+    /// {
+    ///     bus.ServiceName = "shop.orders";
+    ///     bus.Publishes&lt;OrderPlaced&gt;();
+    ///     bus.AddHandler&lt;OrderPlacedHandler&gt;();
+    ///     bus.UseInMemoryTransport();
+    /// });
+    /// </code>
     /// </para>
     /// <para>
-    /// <strong>Required by the outbox and inbox path, and NOT registered here:</strong>
-    /// <list type="bullet">
-    /// <item><description>
-    /// <c>IOutboxProcessorStore</c> — must be provided by a store implementation,
-    /// e.g. <c>AddEfCoreOutbox()</c> from <c>MicroKit.Messaging.EntityFrameworkCore</c>.
-    /// </description></item>
-    /// <item><description>
-    /// <c>IOutboxRetentionStore</c> — required by the retention worker; supplied by the same
-    /// store implementation.
-    /// </description></item>
-    /// <item><description>
-    /// <c>IInboxWriter</c>, <c>IInboxProcessorStore</c>, <c>IInboxSettlementStore</c> and
-    /// <c>IInboxRetentionStore</c> — same requirement as above. <c>IInboxSettlementStore</c>
-    /// must resolve from the per-message execution scope against the same <c>DbContext</c> the
-    /// handler writes through, which is what lets the processed mark commit in the handler's own
-    /// transaction.
-    /// </description></item>
-    /// <item><description>
-    /// <c>IOutboxDispatcher</c> — call <see cref="MessagingBuilder.AddTransportDispatcher"/> on the
-    /// returned builder, or a broker provider's <c>Add{Provider}Transport()</c>, which calls it.
-    /// A host that publishes only domain-event notifications registers none of them and gets its
-    /// dispatcher from <c>MicroKit.Messaging.MediatR</c> instead.
-    /// </description></item>
-    /// </list>
-    /// The outbox and inbox workers, once registered, log a critical error and stop if required
-    /// services are missing at runtime.
+    /// <b>Validated at host start.</b> The options are validated (<c>ValidateOnStart</c>), then the
+    /// composition: a published or handled type without <see cref="MessageContractAttribute"/>, two
+    /// types claiming one wire type, conflicting service names, a publication with no transport,
+    /// and a store registered without the engine that drains it. Every composition problem is
+    /// listed in one <see cref="IntegrationEventConfigurationException"/>, each with its fix.
+    /// </para>
+    /// <para>
+    /// <b>Options</b> bind from the <c>MicroKit:Messaging</c> configuration section when the
+    /// container holds an <c>IConfiguration</c>, and keep their defaults when it does not.
+    /// Configuration is read <b>once</b>, when the options are first resolved: there is no reload.
+    /// Precedence, lowest first: <c>IHostEnvironment.ApplicationName</c> (the service name only),
+    /// configuration, <see cref="MessagingBuilder.Configure"/>, <see cref="MessagingBuilder.ServiceName"/>.
+    /// </para>
+    /// <para>
+    /// <b>Calling it again adds to the same composition</b> — one call per module of a modular
+    /// monolith works. Two calls setting different <see cref="MessagingBuilder.ServiceName"/>
+    /// values fail at start.
+    /// </para>
+    /// <para>
+    /// <b>No hosted service besides the validator is registered here.</b> The bus works with no
+    /// persistence: <see cref="MessagingBuilder.UseInMemoryTransport"/> registers its own consume
+    /// loop. The outbox and inbox engine is registered by the store provider that needs it,
+    /// through <see cref="Spi.OutboxInboxProcessingExtensions.AddOutboxInboxProcessing"/> (which
+    /// <c>AddEfCoreOutbox&lt;TContext&gt;()</c> calls) — a transitional step that #188 replaces.
     /// </para>
     /// <para>
     /// <b><c>IMessageSerializer</c> IS registered here</b>, as a <c>TryAdd</c>ed
     /// <c>SystemTextJsonMessageSerializer</c> default, configured through
-    /// <see cref="MessagingBuilder.ConfigureJson"/>. It belongs to this method rather than to an
-    /// optional builder call because the bus, the receive pipeline and <c>OutboxMessageFactory</c>
-    /// all require one (ADR-MSG-019).
-    /// <b>To supply your own, register it BEFORE calling this method</b> — a registration made
-    /// afterwards loses to the default that is already in the collection. Neither
-    /// <c>AddIntegrationEventPublishing()</c> nor <c>AddMediatRDomainEvents()</c> registers a
-    /// serializer any more; both are extensions on the builder this method returns, so a
-    /// <c>TryAdd</c> in either could never have been reached.
+    /// <see cref="MessagingBuilder.ConfigureJson"/>. <b>To supply your own, register it BEFORE
+    /// calling this method</b> — a registration made afterwards loses to the default already in
+    /// the collection.
     /// </para>
     /// </remarks>
+    /// <exception cref="ArgumentNullException">An argument is null.</exception>
     public static MessagingBuilder AddMicroKitMessaging(
         this IServiceCollection services,
-        Action<OutboxProcessorOptions>? configureOutbox = null,
-        Action<InboxProcessorOptions>? configureInbox = null)
+        Action<MessagingBuilder> configure)
     {
-        var outboxOptions = new OutboxProcessorOptions();
-        configureOutbox?.Invoke(outboxOptions);
+        ArgumentNullException.ThrowIfNull(services);
+        ArgumentNullException.ThrowIfNull(configure);
 
-        var inboxOptions = new InboxProcessorOptions();
-        configureInbox?.Invoke(inboxOptions);
+        var composition = services
+            .Select(d => d.ServiceType == typeof(MessagingComposition) ? d.ImplementationInstance : null)
+            .OfType<MessagingComposition>()
+            .FirstOrDefault();
 
-        var registry = new MessageHandlerRegistry();
+        if (composition is null)
+        {
+            composition = new MessagingComposition();
+            AddCore(services, composition);
+        }
 
-        services.AddSingleton(registry);
-        services.AddSingleton(outboxOptions);
-        services.AddSingleton(inboxOptions);
+        var builder = new MessagingBuilder(services, composition);
+        configure(builder);
+        return builder;
+    }
+
+    /// <summary>The registrations made once per service collection, on the first call.</summary>
+    private static void AddCore(IServiceCollection services, MessagingComposition composition)
+    {
+        services.AddSingleton(composition);
+        services.AddSingleton(composition.Handlers);
+
+        // FIRST, before the lambda of this call can register any hosted service: the host runs
+        // StartingAsync in registration order, and the in-memory transport binds its endpoint in
+        // its own StartingAsync. An invalid composition must fail before anything is bound.
+        services.TryAddEnumerable(
+            ServiceDescriptor.Singleton<IHostedService, MessagingCompositionValidator>());
+
+        MessagingOptionsSetup.Register(services, composition);
+
         services.AddSingleton<IExecutionScopeFactory, PassThroughExecutionScopeFactory>();
         services.AddSingleton<OutboxMessageFactory>();
 
@@ -136,10 +155,19 @@ public static class ServiceCollectionExtensions
         services.AddOptions<MessagingJsonOptions>();
         services.TryAddSingleton<IMessageSerializer, SystemTextJsonMessageSerializer>();
 
-        // The contract registry the bus resolves wire types through. The same singleton
-        // AddIntegrationEventPublishing() and AddIntegrationEventConsumption() register: TryAdd on
-        // both sides, one factory.
-        IntegrationEventServiceCollectionExtensions.AddContractRegistrySingleton(services);
+        // The contract registry, composed from the declarations of every AddMicroKitMessaging call
+        // once the container is built, with the service name as the source. Resolving it applies
+        // the contract rules (MessagingCompositionAnalysis), so a container resolved without a
+        // host rejects what a host start rejects.
+        services.TryAddSingleton(sp => new IntegrationEventRegistry(
+            composition,
+            sp.GetRequiredService<IOptions<MessagingOptions>>().Value.ServiceName!));
+
+        // The receiving seam a transport provider hands arriving envelopes to, and the counters it
+        // records (#187: here rather than on a separate consumption call). Singleton: it creates
+        // its own execution scope per envelope.
+        services.TryAddSingleton<IEnvelopeReceiver, EnvelopeReceiver>();
+        services.TryAddSingleton<InboxMetrics>();
 
         // The bus (#186). Scoped, because it reads the ambient tenant, correlation and causation
         // from the scope's IExecutionContext — never from an AsyncLocal. IMessageBus and
@@ -152,6 +180,5 @@ public static class ServiceCollectionExtensions
         // needs is created per handler through IExecutionScopeFactory.
         services.TryAddSingleton<MessageReceivePipeline>();
 
-        return new MessagingBuilder(services, registry);
     }
 }

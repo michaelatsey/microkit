@@ -177,11 +177,10 @@ public sealed class ReentrantOutboxTests
             // seam exists to make irrelevant: the glue holds the unkeyed slot and resolves its
             // inner through OutboxDispatcherKeys.Standard, so the transport dispatcher still runs.
             messaging.Services.AddSingleton<IMessageTransport>(transport);
-            messaging.Services.AddIntegrationEventContracts(
-                Source, e => e.Publishes<WidgetShipped>());
+            messaging.ServiceName = Source;
+            messaging.Publishes<WidgetShipped>();
 
             messaging
-                .AddIntegrationEventPublishing()
                 .AddEfCoreIntegrationEvents<E2EDbContext>()
                 .AddTransportDispatcher();
         });

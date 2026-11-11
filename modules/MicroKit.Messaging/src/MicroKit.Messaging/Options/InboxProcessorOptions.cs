@@ -4,10 +4,10 @@ namespace MicroKit.Messaging.Options;
 /// Configuration for the inbox worker, coordinator, processor and retention worker.
 /// </summary>
 /// <remarks>
-/// Accessors are <c>{ get; set; }</c>, not <c>{ get; init; }</c>. With <c>init</c>, the
-/// <c>Action&lt;InboxProcessorOptions&gt;</c> callback taken by <c>AddMicroKitMessaging</c>
-/// could not assign anything, so every inbox configuration callback was silently a no-op —
-/// the same defect the outbox options carried and fixed.
+/// Accessors are <c>{ get; set; }</c>, not <c>{ get; init; }</c>: the configuration binding and
+/// <c>bus.Configure(o =&gt; o.Inbox...)</c> assign them after construction (#187). With
+/// <c>init</c>, nothing could, and every inbox setting would silently keep its default — the
+/// same defect the outbox options carried and fixed.
 /// </remarks>
 public sealed record InboxProcessorOptions
 {

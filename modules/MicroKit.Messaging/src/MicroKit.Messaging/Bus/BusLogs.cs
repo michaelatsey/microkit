@@ -77,4 +77,29 @@ internal static partial class BusLogs
                   "message was {Disposition}.")]
     public static partial void UnexpectedDeliveryFault(
         ILogger logger, Exception exception, string? messageId, string? type, string disposition);
+
+    [LoggerMessage(
+        EventId = 3014,
+        Level = LogLevel.Warning,
+        Message = "Message {MessageId} ('{WireType}' from '{Source}') was sent on the in-memory " +
+                  "broker, but no endpoint is bound to its type, so it reaches no one. Start a " +
+                  "host whose handlers handle it on the same broker.")]
+    public static partial void NoEndpointBound(
+        ILogger logger, string messageId, string wireType, string source);
+
+    [LoggerMessage(
+        EventId = 3015,
+        Level = LogLevel.Debug,
+        Message = "In-memory endpoint '{Endpoint}' is bound to {Count} wire type(s): {WireTypes}.")]
+    public static partial void EndpointBound(
+        ILogger logger, string endpoint, int count, string wireTypes);
+
+    [LoggerMessage(
+        EventId = 3016,
+        Level = LogLevel.Warning,
+        Message = "Handler discovery could not load {Count} type(s) of assembly '{Assembly}' " +
+                  "({TypeNames}); the types that loaded were registered. A handler among those " +
+                  "that failed is not registered. First loader error: {FirstError}")]
+    public static partial void TypesNotLoaded(
+        ILogger logger, string assembly, int count, string typeNames, string firstError);
 }

@@ -4,65 +4,93 @@ using System.Collections.Concurrent;
 using Microsoft.Extensions.Hosting;
 
 /// <summary>
-/// A host with the bus, the in-memory transport and nothing else: no <c>DbContext</c>, no store,
-/// no EF Core reference in this test project at all. It starts and stops the registered hosted
-/// services the way a generic host does.
+/// A generic host with the bus, the in-memory transport and nothing else: no <c>DbContext</c>, no
+/// store, no EF Core reference in this test project at all. Started and stopped by the real
+/// <see cref="IHost"/>, so the hosted lifecycle — the composition validator and the endpoint
+/// binding in <c>StartingAsync</c> — runs exactly as in production (#187).
 /// </summary>
 internal sealed class BusTestHost : IAsyncDisposable
 {
+    /// <summary>The service name of a test host: its endpoint, and the source of what it publishes.</summary>
     internal const string Source = "/tests/orders";
 
-    private readonly IHostedService[] _hosted;
+    private readonly IHost _host;
     private bool _stopped;
 
-    private BusTestHost(ServiceProvider provider, InMemoryBroker broker)
+    private BusTestHost(IHost host, InMemoryBroker broker, string serviceName)
     {
-        Provider = provider;
+        _host = host;
         Broker = broker;
-        _hosted = [.. provider.GetServices<IHostedService>()];
+        ServiceName = serviceName;
     }
 
-    public ServiceProvider Provider { get; }
+    public IServiceProvider Provider => _host.Services;
 
     public InMemoryBroker Broker { get; }
 
+    /// <summary>Gets this host's service name, which is also its endpoint on the broker.</summary>
+    public string ServiceName { get; }
+
     public BusRecorder Recorder => Provider.GetRequiredService<BusRecorder>();
+
+    /// <summary>Gets this host's dead letters on the broker.</summary>
+    public IReadOnlyList<MessageEnvelope> DeadLetters => Broker.GetDeadLetters(ServiceName);
+
+    /// <summary>Gets the failed attempts this host's endpoint recorded for a message.</summary>
+    public int FailedAttempts(string messageId) => Broker.GetFailedAttempts(ServiceName, messageId);
 
     /// <summary>Composes and starts a host.</summary>
     /// <param name="compose">Adds handlers, middleware and options to the builder.</param>
     /// <param name="broker">A broker to share with another host; a new one when omitted.</param>
     /// <param name="services">Extra registrations made before <c>AddMicroKitMessaging()</c>.</param>
+    /// <param name="serviceName">The host's service name; <see cref="Source"/> when omitted.</param>
     public static async Task<BusTestHost> StartAsync(
         Action<MessagingBuilder> compose,
         InMemoryBroker? broker = null,
-        Action<IServiceCollection>? services = null)
+        Action<IServiceCollection>? services = null,
+        string serviceName = Source)
     {
-        broker ??= new InMemoryBroker();
-        var collection = new ServiceCollection();
-        collection.AddLogging();
-        collection.AddSingleton<BusRecorder>();
-        collection.AddScoped<ScopeMarker>();
-        services?.Invoke(collection);
-
-        collection.AddIntegrationEventContracts(
-            Source,
-            c => c.Publishes<OrderPlaced>().Publishes<OrderShipped>().Publishes<InvoiceIssued>());
-
-        compose(collection.AddMicroKitMessaging().UseInMemoryTransport(broker));
-
-        var provider = collection.BuildServiceProvider(
-            new ServiceProviderOptions { ValidateScopes = true });
-        var host = new BusTestHost(provider, broker);
-
-        foreach (var hosted in host._hosted)
-        {
-            await hosted.StartAsync(CancellationToken.None).ConfigureAwait(false);
-        }
-
+        var host = Build(compose, broker, services, serviceName, out _);
+        await host._host.StartAsync().ConfigureAwait(false);
         return host;
     }
 
-    /// <summary>Publishes from a fresh scope, outside any message.</summary>
+    /// <summary>Composes a host without starting it.</summary>
+    public static BusTestHost Build(
+        Action<MessagingBuilder> compose,
+        InMemoryBroker? broker,
+        Action<IServiceCollection>? services,
+        string serviceName,
+        out InMemoryBroker used)
+    {
+        used = broker ?? new InMemoryBroker();
+        var shared = used;
+        var builder = Host.CreateApplicationBuilder(new HostApplicationBuilderSettings
+        {
+            DisableDefaults = true,
+            ApplicationName = "MicroKit.Messaging.UnitTests",
+        });
+        builder.ConfigureContainer(new DefaultServiceProviderFactory(
+            new ServiceProviderOptions { ValidateScopes = true, ValidateOnBuild = false }));
+
+        builder.Services.AddSingleton<BusRecorder>();
+        builder.Services.AddScoped<ScopeMarker>();
+        services?.Invoke(builder.Services);
+
+        builder.Services.AddMicroKitMessaging(bus =>
+        {
+            bus.ServiceName = serviceName;
+            bus.Publishes<OrderPlaced>().Publishes<OrderShipped>().Publishes<InvoiceIssued>();
+            bus.UseInMemoryTransport(shared);
+            compose(bus);
+        });
+
+        return new BusTestHost(builder.Build(), shared, serviceName);
+    }
+
+    /// <summary>Starts a host built with <see cref="Build"/>.</summary>
+    public Task StartHostAsync() => _host.StartAsync();
+
     public async Task<MessageId> PublishAsync<T>(T message, PublishOptions? options = null)
         where T : class, IIntegrationEvent
     {
@@ -81,16 +109,13 @@ internal sealed class BusTestHost : IAsyncDisposable
         }
 
         _stopped = true;
-        foreach (var hosted in _hosted.Reverse())
-        {
-            await hosted.StopAsync(CancellationToken.None).ConfigureAwait(false);
-        }
+        await _host.StopAsync().ConfigureAwait(false);
     }
 
     public async ValueTask DisposeAsync()
     {
         await StopAsync().ConfigureAwait(false);
-        await Provider.DisposeAsync().ConfigureAwait(false);
+        _host.Dispose();
     }
 }
 

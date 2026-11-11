@@ -7,8 +7,8 @@ namespace MicroKit.Messaging.Spi;
 /// </summary>
 /// <remarks>
 /// <para>
-/// <b>Transitional, until #188.</b> Since #186 <c>AddMicroKitMessaging()</c> registers no hosted
-/// service: the bus works without persistence, and the outbox and inbox workers require stores. A
+/// <b>Transitional, until #188.</b> Since #186 <c>AddMicroKitMessaging()</c> registers no worker
+/// (its only hosted service is the composition validator, #187): the bus works without persistence, and the outbox and inbox workers require stores. A
 /// store provider — <c>AddEfCoreOutbox&lt;TContext&gt;()</c> today — calls
 /// <see cref="AddOutboxInboxProcessing"/> once it has registered those stores. #188 replaces this
 /// with opt-in durability on the bus.

@@ -3,14 +3,26 @@ namespace MicroKit.Messaging.Transport;
 using MicroKit.Messaging.Bus;
 
 /// <summary>
-/// The consume loop of the in-memory transport: takes one envelope at a time off the
-/// <see cref="InMemoryBroker"/>, runs it through the receive pipeline inline, and settles it by
-/// the pipeline's verdict.
+/// The consume loop of the in-memory transport: takes one envelope at a time off this service's
+/// endpoint on the <see cref="InMemoryBroker"/>, runs it through the receive pipeline inline, and
+/// settles it by the pipeline's verdict.
 /// </summary>
 /// <remarks>
 /// <para>
-/// The only hosted service #186 registers. It depends on singletons only; every scope is created
-/// per handler by the pipeline.
+/// <b>The endpoint is the service name</b> (#187), bound by <see cref="InMemoryEndpointBinder"/> on
+/// the transport's first use or in <see cref="StartingAsync"/>, whichever comes first. The binder
+/// validates the composition before it binds — the same checks as
+/// <c>MessagingCompositionValidator</c> — so the order in which the host starts its services does
+/// not matter. Retry counts and dead letters are
+/// recorded on that endpoint.
+/// </para>
+/// <para>
+/// <b>Only <see cref="IServiceScopeFactory"/> and singletons that do not compose the
+/// registry</b> are taken by the constructor. The host resolves every hosted service before it
+/// starts any, so a constructor dependency on the receive pipeline would build the registry — and
+/// throw on an invalid composition — before the validator could list every problem. The pipeline
+/// is resolved when the consume loop starts instead. Every message scope is
+/// created per handler by the pipeline.
 /// </para>
 /// <para>
 /// <b>Shutdown.</b> The host's stopping token is the pipeline's token. A message interrupted by it
@@ -20,31 +32,75 @@ using MicroKit.Messaging.Bus;
 /// </remarks>
 internal sealed class InMemoryTransportWorker(
     InMemoryBroker broker,
-    MessageReceivePipeline pipeline,
+    IServiceScopeFactory scopeFactory,
     TimeProvider timeProvider,
     ILogger<InMemoryTransportWorker> logger)
-    : BackgroundService
+    : BackgroundService, IHostedLifecycleService
 {
+    /// <summary>
+    /// Binds this service's endpoint, before any hosted service starts — unless the transport's
+    /// first use already did.
+    /// </summary>
+    /// <param name="cancellationToken">The host's start token.</param>
+    /// <returns>A completed task.</returns>
+    /// <exception cref="IntegrationEventConfigurationException">The composition is invalid.</exception>
+    public Task StartingAsync(CancellationToken cancellationToken)
+    {
+        EnsureBound();
+        return Task.CompletedTask;
+    }
+
+    /// <inheritdoc />
+    public Task StartedAsync(CancellationToken cancellationToken) => Task.CompletedTask;
+
+    /// <inheritdoc />
+    public Task StoppingAsync(CancellationToken cancellationToken) => Task.CompletedTask;
+
+    /// <inheritdoc />
+    public Task StoppedAsync(CancellationToken cancellationToken) => Task.CompletedTask;
+
     /// <inheritdoc />
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
+        // A host that drives StartAsync without the lifecycle callbacks still gets its binding.
+        var endpoint = EnsureBound();
+
+        // A singleton, resolved through a scope only because a hosted service takes the scope
+        // factory and nothing narrower; the scope owns none of it.
+        MessageReceivePipeline pipeline;
+        using (var scope = scopeFactory.CreateScope())
+        {
+            pipeline = scope.ServiceProvider.GetRequiredService<MessageReceivePipeline>();
+        }
+
         while (!stoppingToken.IsCancellationRequested)
         {
             MessageEnvelope envelope;
             try
             {
-                envelope = await broker.DequeueAsync(stoppingToken).ConfigureAwait(false);
+                envelope = await broker.DequeueAsync(endpoint, stoppingToken).ConfigureAwait(false);
             }
             catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
             {
                 return;
             }
 
-            if (!await ProcessOneAsync(envelope, stoppingToken).ConfigureAwait(false))
+            if (!await ProcessOneAsync(pipeline, endpoint, envelope, stoppingToken).ConfigureAwait(false))
             {
                 return;
             }
         }
+    }
+
+    /// <summary>
+    /// Binds the endpoint through the singleton <see cref="InMemoryEndpointBinder"/>, resolved through
+    /// the scope factory — the only constructor dependency a background worker takes for services
+    /// it resolves; the scope owns none of them.
+    /// </summary>
+    private string EnsureBound()
+    {
+        using var scope = scopeFactory.CreateScope();
+        return scope.ServiceProvider.GetRequiredService<InMemoryEndpointBinder>().EnsureBound();
     }
 
     /// <summary>Delivers and settles one envelope. Never throws.</summary>
@@ -63,9 +119,12 @@ internal sealed class InMemoryTransportWorker(
     /// </para>
     /// </remarks>
     private async ValueTask<bool> ProcessOneAsync(
-        MessageEnvelope envelope, CancellationToken stoppingToken)
+        MessageReceivePipeline pipeline,
+        string endpoint,
+        MessageEnvelope envelope,
+        CancellationToken stoppingToken)
     {
-        var delivery = new Delivery(envelope, broker);
+        var delivery = new Delivery(envelope, broker, endpoint);
         Exception? escaped = null;
 
         DeliveryOutcome outcome;
@@ -135,7 +194,7 @@ internal sealed class InMemoryTransportWorker(
                 delivery.DeadLetter();
                 if (logDisposition)
                 {
-                    var attempts = envelope.Id is null ? 0 : broker.GetFailedAttempts(envelope.Id);
+                    var attempts = envelope.Id is null ? 0 : broker.GetFailedAttempts(delivery.Endpoint, envelope.Id);
                     TryLog(() => BusLogs.DeadLettered(
                         logger, outcome.Error, envelope.Id, envelope.Type, attempts, outcome.Reason));
                 }
@@ -143,7 +202,7 @@ internal sealed class InMemoryTransportWorker(
                 return true;
 
             case DeliveryVerdict.Transient:
-                var failed = broker.RecordFailedAttempt(envelope);
+                var failed = broker.RecordFailedAttempt(delivery.Endpoint, envelope);
                 if (failed >= broker.MaxDeliveryAttempts)
                 {
                     delivery.DeadLetter();
@@ -211,11 +270,13 @@ internal sealed class InMemoryTransportWorker(
     /// One envelope's settlement, applied at most once: the first requeue or dead-letter wins and
     /// every later one is a no-op.
     /// </summary>
-    private sealed class Delivery(MessageEnvelope envelope, InMemoryBroker broker)
+    private sealed class Delivery(MessageEnvelope envelope, InMemoryBroker broker, string endpoint)
     {
         private string? _disposition;
 
         public MessageEnvelope Envelope { get; } = envelope;
+
+        public string Endpoint { get; } = endpoint;
 
         /// <summary>Gets what happened to the envelope, for the unexpected-fault log.</summary>
         public string Disposition => _disposition ?? "left unsettled";
@@ -228,7 +289,7 @@ internal sealed class InMemoryTransportWorker(
             }
 
             _disposition = "requeued for redelivery";
-            broker.Requeue(Envelope);
+            broker.Requeue(Endpoint, Envelope);
         }
 
         public void DeadLetter()
@@ -239,7 +300,7 @@ internal sealed class InMemoryTransportWorker(
             }
 
             _disposition = "dead-lettered";
-            broker.DeadLetter(Envelope);
+            broker.DeadLetter(Endpoint, Envelope);
         }
     }
 }

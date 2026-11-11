@@ -17,8 +17,8 @@ public sealed class SafetyNetTests
             "MicroKit.Messaging.", StringComparison.Ordinal));
         await using var host = await BusTestHost.StartAsync(
             bus => bus
-                .AddMessageHandler<FlakyOrderPlacedHandler, OrderPlaced>()
-                .AddMessageHandler<OrderShippedHandler, OrderShipped>(),
+                .AddHandler<FlakyOrderPlacedHandler>()
+                .AddHandler<OrderShippedHandler>(),
             services: services => services
                 .AddSingleton<ILoggerProvider>(logs)
                 .AddSingleton(new FlakyScript
@@ -28,7 +28,7 @@ public sealed class SafetyNetTests
                 }));
 
         var faulted = await host.PublishAsync(new OrderPlaced(Guid.NewGuid()));
-        await Eventually.HoldsAsync(() => host.Broker.DeadLetters.Count >= 1, "dead-lettered");
+        await Eventually.HoldsAsync(() => host.DeadLetters.Count >= 1, "dead-lettered");
 
         // A later message is consumed: the loop survived its own failing logger.
         await host.PublishAsync(new OrderShipped(Guid.NewGuid()));
@@ -36,7 +36,7 @@ public sealed class SafetyNetTests
             () => host.Recorder.Deliveries.Any(d => d.Handler == nameof(OrderShippedHandler)),
             "the next message is consumed");
 
-        host.Broker.DeadLetters.ShouldHaveSingleItem("dead-lettered exactly once")
+        host.DeadLetters.ShouldHaveSingleItem("dead-lettered exactly once")
             .Id.ShouldBe(faulted.ToString());
         logs.Thrown.ShouldBeGreaterThan(0, "CONTROL: the logger really did throw");
         Worker(host).ExecuteTask.ShouldNotBeNull().IsCompleted
@@ -50,7 +50,7 @@ public sealed class SafetyNetTests
         var logs = new ThrowingLoggerProvider(e => e.EventId == 3012);
         var broker = new InMemoryBroker { DependencyUnavailableBackoff = TimeSpan.FromMilliseconds(20) };
         await using var host = await BusTestHost.StartAsync(
-            bus => bus.AddMessageHandler<FlakyOrderPlacedHandler, OrderPlaced>(),
+            bus => bus.AddHandler<FlakyOrderPlacedHandler>(),
             broker,
             services => services
                 .AddSingleton<ILoggerProvider>(logs)
@@ -66,7 +66,7 @@ public sealed class SafetyNetTests
         await Eventually.HoldsAsync(() => script.Succeeded, "redelivered once the dependency is back");
 
         logs.Thrown.ShouldBe(1, "CONTROL: the log after the requeue threw");
-        broker.DeadLetters.ShouldBeEmpty("a requeued message is not dead-lettered as well");
+        broker.GetDeadLetters(BusTestHost.Source).ShouldBeEmpty("a requeued message is not dead-lettered as well");
         script.Attempts.ShouldBe(2, "delivered twice: once failing, once from the single requeue");
     }
 
@@ -78,15 +78,15 @@ public sealed class SafetyNetTests
         var broker = new InMemoryBroker { MaxDeliveryAttempts = 1 };
         await using var host = await BusTestHost.StartAsync(
             bus => bus
-                .AddMessageHandler<FlakyOrderPlacedHandler, OrderPlaced>()
-                .AddMessageHandler<OrderShippedHandler, OrderShipped>(),
+                .AddHandler<FlakyOrderPlacedHandler>()
+                .AddHandler<OrderShippedHandler>(),
             broker,
             services => services
                 .AddSingleton<ILoggerProvider>(logs)
                 .AddSingleton(new FlakyScript { FailuresBeforeSuccess = int.MaxValue }));
 
         await host.PublishAsync(new OrderPlaced(Guid.NewGuid()));
-        await Eventually.HoldsAsync(() => broker.DeadLetters.Count >= 1, "dead-lettered at the limit");
+        await Eventually.HoldsAsync(() => broker.GetDeadLetters(BusTestHost.Source).Count >= 1, "dead-lettered at the limit");
 
         // A barrier: once the next message is consumed, the first one is fully settled.
         await host.PublishAsync(new OrderShipped(Guid.NewGuid()));
@@ -95,7 +95,7 @@ public sealed class SafetyNetTests
             "the next message is consumed");
 
         logs.Thrown.ShouldBe(1, "CONTROL: the log after the dead-letter threw");
-        broker.DeadLetters.Count.ShouldBe(1, "dead-lettered exactly once");
+        broker.GetDeadLetters(BusTestHost.Source).Count.ShouldBe(1, "dead-lettered exactly once");
     }
 
     private static BackgroundService Worker(BusTestHost host)

@@ -1,105 +1,24 @@
 namespace MicroKit.Messaging.UnitTests.Publishing;
 
 using MicroKit.Messaging.Publishing;
-using Microsoft.Extensions.Hosting;
+using static MicroKit.Messaging.UnitTests.Publishing.IntegrationEventContractFixtures;
 
-/// <summary>Registry composition — the contract surface of the whole application.</summary>
+/// <summary>
+/// Registry composition — the contract surface of the service, built from <c>bus.Publishes</c> and
+/// the handlers (#187). The registry applies the contract rules itself, so these run without a host.
+/// </summary>
 public sealed class IntegrationEventRegistryTests
 {
-    /// <summary>
-    /// The defect this shape exists to fix. With a per-application <c>Source</c> registered from a
-    /// per-module call site, the last module to register overwrote every other module's identity —
-    /// silently, and visible only as a wrong source on the wire.
-    /// </summary>
-    [Fact]
-    public void Registry_KeepsEachModulesOwnSource()
-    {
-        var registry = IntegrationEventContractFixtures.Registry(
-            ("/saasbtp/safety", e => e.Publishes<ConstatRecorded>()),
-            ("/saasbtp/access", e => e.Publishes<WorkspaceCreated>()));
-
-        registry.ResolveContract(typeof(ConstatRecorded)).Source.ShouldBe("/saasbtp/safety");
-        registry.ResolveContract(typeof(WorkspaceCreated)).Source.ShouldBe("/saasbtp/access");
-    }
-
-    /// <summary>
-    /// Detectable only because every module composes into one registry. Per-module registries — the
-    /// shape a per-module options object would have produced — could not see this at all, and two
-    /// payloads would go out under one name until a consumer failed to deserialize.
-    /// </summary>
-    [Fact]
-    public void Registry_WhenTwoModulesClaimOneContractName_IsRejected()
-    {
-        var exception = Should.Throw<IntegrationEventConfigurationException>(
-            () => IntegrationEventContractFixtures.Registry(
-                ("/saasbtp/safety", e => e.Publishes<ConstatRecorded>()),
-                ("/saasbtp/access", e => e.Publishes<ImpostorEvent>())));
-
-        exception.Message.ShouldContain("saasbtp.safety.constat-recorded.v1");
-        exception.Message.ShouldContain(nameof(ImpostorEvent));
-
-        // Both modules are named. A type name alone leaves an operator grepping a monolith for the
-        // registration; the source is the half that says which composition root to open.
-        exception.Message.ShouldContain("/saasbtp/safety");
-        exception.Message.ShouldContain("/saasbtp/access");
-    }
+    // ---------------------------------------------------------------------------------------
+    // The source and the published surface.
+    // ---------------------------------------------------------------------------------------
 
     [Fact]
-    public void Registry_WhenOneTypeIsDeclaredTwice_IsRejected()
+    public void Registry_UsesTheServiceNameAsTheSourceOfEveryPublication()
     {
-        var exception = Should.Throw<IntegrationEventConfigurationException>(
-            () => IntegrationEventContractFixtures.Registry(
-                ("/saasbtp/safety", e => e.Publishes<ConstatRecorded>()),
-                ("/saasbtp/safety-again", e => e.Publishes<ConstatRecorded>())));
+        var registry = Registry(bus => bus.Publishes<ConstatRecorded>().Publishes<WorkspaceCreated>());
 
-        exception.Message.ShouldContain("declared twice");
-    }
-
-    [Fact]
-    public void Publishes_WhenEventHasNoAttribute_IsRejectedAtRegistration()
-    {
-        var services = new ServiceCollection();
-
-        var exception = Should.Throw<IntegrationEventConfigurationException>(
-            () => services.AddIntegrationEventContracts(
-                "/saasbtp/safety", e => e.Publishes<NeverRegistered>()));
-
-        exception.Message.ShouldContain(nameof(NeverRegistered));
-    }
-
-    /// <summary>
-    /// A blank contract name is rejected the moment the attribute is read — and it is the empty
-    /// case, not the null one, that this guard is for.
-    /// </summary>
-    /// <remarks>
-    /// Null fails somewhere regardless; an empty string is a perfectly serviceable dictionary key.
-    /// Unguarded it binds, resolves, and goes out on the wire as an event published under no
-    /// identity at all — matchable only by a consumer that made the same mistake. The guard lives on
-    /// <c>MessageContractAttribute</c> rather than in either builder, so one check covers both
-    /// directions; these two tests are what say so, one per builder.
-    /// </remarks>
-    [Fact]
-    public void Publishes_WhenContractNameIsEmpty_IsRejectedAtRegistration()
-    {
-        var services = new ServiceCollection();
-
-        var exception = Should.Throw<ArgumentException>(
-            () => services.AddIntegrationEventContracts(
-                "/saasbtp/safety", e => e.Publishes<BlankContractName>()));
-
-        exception.ParamName.ShouldBe("name");
-    }
-
-    [Fact]
-    public void Consumes_WhenContractNameIsWhitespace_IsRejectedAtRegistration()
-    {
-        var services = new ServiceCollection();
-
-        var exception = Should.Throw<ArgumentException>(
-            () => services.AddIntegrationEventSubscriptions(
-                e => e.Consumes<WhitespaceContractName>()));
-
-        exception.ParamName.ShouldBe("name");
+        registry.Source.ShouldBe(ServiceName);
     }
 
     /// <summary>
@@ -109,9 +28,7 @@ public sealed class IntegrationEventRegistryTests
     [Fact]
     public void Registry_ContractSurface_MatchesTheSnapshot()
     {
-        var registry = IntegrationEventContractFixtures.Registry(
-            ("/saasbtp/safety", e => e.Publishes<ConstatRecorded>()),
-            ("/saasbtp/access", e => e.Publishes<WorkspaceCreated>()));
+        var registry = Registry(bus => bus.Publishes<ConstatRecorded>().Publishes<WorkspaceCreated>());
 
         registry.ContractNames.ShouldBe([
             "saasbtp.access.workspace-created.v1",
@@ -120,505 +37,328 @@ public sealed class IntegrationEventRegistryTests
         registry.Count.ShouldBe(2);
     }
 
-    /// <summary>
-    /// The registry's composition is validated <b>at startup</b>, not on first publication.
-    /// </summary>
-    /// <remarks>
-    /// <para>
-    /// What it guards against is subtle. A factory-built singleton is constructed on first resolve,
-    /// which on this path is the first publication — inside a notification handler, inside a
-    /// transaction. The exception would roll that transaction back and be classified as a transient
-    /// failure, retrying forever against a duplicate contract name no retry can fix.
-    /// </para>
-    /// <para>
-    /// Asserted by driving the hosted service directly rather than by starting a host. Starting one
-    /// would also start the four messaging workers <c>AddMicroKitMessaging</c> registers, which
-    /// need stores this test has no reason to wire — so the assertion would fail for reasons
-    /// unrelated to what it claims. An assertion that cannot run is worse than none.
-    /// </para>
-    /// </remarks>
     [Fact]
-    public async Task RegistryValidator_OnStart_FailsOnADuplicatedContractName()
+    public void Publishes_SameTypeTwice_IsANoOp()
     {
-        await using var provider = BuildPublishingProvider(
-            ("/saasbtp/safety", e => e.Publishes<ConstatRecorded>()),
-            ("/saasbtp/access", e => e.Publishes<ImpostorEvent>()));
+        var registry = Registry(bus => bus.Publishes<ConstatRecorded>().Publishes<ConstatRecorded>());
 
-        var validator = provider.GetServices<IHostedService>()
-            .OfType<IntegrationEventRegistryValidator>()
-            .ShouldHaveSingleItem();
-
-        var exception = await Should.ThrowAsync<IntegrationEventConfigurationException>(
-            async () => await validator.StartAsync(CancellationToken.None));
-
-        exception.Message.ShouldContain("saasbtp.safety.constat-recorded.v1");
+        registry.Count.ShouldBe(1);
     }
 
-    /// <summary>
-    /// The companion to the test above: eager validation only happens if the validator is actually
-    /// registered as a hosted service, and nothing else in the suite would notice its removal.
-    /// </summary>
+    /// <summary>Repeated calls add to one composition: one module each, one registry.</summary>
     [Fact]
-    public async Task AddIntegrationEventPublishing_RegistersTheValidatorAsAHostedService()
+    public void Registry_AcrossTwoAddMicroKitMessagingCalls_ComposesBothModules()
     {
-        await using var provider = BuildPublishingProvider(
-            ("/saasbtp/safety", e => e.Publishes<ConstatRecorded>()));
+        var registry = Registry([
+            bus => bus.Publishes<ConstatRecorded>(),
+            bus => bus.Publishes<WorkspaceCreated>().AddHandler<InvoiceSettledHandler>(),
+        ]);
 
-        provider.GetServices<IHostedService>()
-            .OfType<IntegrationEventRegistryValidator>()
-            .ShouldHaveSingleItem();
-    }
-
-    [Fact]
-    public async Task RegistryValidator_OnStart_SucceedsWhenCompositionIsValid()
-    {
-        await using var provider = BuildPublishingProvider(
-            ("/saasbtp/safety", e => e.Publishes<ConstatRecorded>()),
-            ("/saasbtp/access", e => e.Publishes<WorkspaceCreated>()));
-
-        var validator = provider.GetServices<IHostedService>()
-            .OfType<IntegrationEventRegistryValidator>()
-            .ShouldHaveSingleItem();
-
-        await Should.NotThrowAsync(async () => await validator.StartAsync(CancellationToken.None));
-    }
-
-    // ---------------------------------------------------------------------------------------
-    // The reverse direction: ContractName -> local CLR type.
-    // ---------------------------------------------------------------------------------------
-
-    /// <summary>
-    /// The property step 3 rests on. A consumer holds a name and a payload and nothing else; it
-    /// does not have the producer's assembly, so <c>Type.GetType(assemblyQualifiedName)</c> cannot
-    /// give it something to deserialize into.
-    /// </summary>
-    [Fact]
-    public void Registry_ResolvesAContractNameBackToItsLocalType()
-    {
-        var registry = IntegrationEventContractFixtures.Registry(
-            ("/saasbtp/safety", e => e.Publishes<ConstatRecorded>()));
-
-        var contractName = registry.ResolveContract(typeof(ConstatRecorded)).ContractName;
-
-        registry.TryResolveLocalType(contractName, out var eventType).ShouldBeTrue();
-        eventType.ShouldBe(typeof(ConstatRecorded));
-        registry.ResolveLocalType(contractName).ShouldBe(typeof(ConstatRecorded));
-    }
-
-    /// <summary>
-    /// Publishing a contract binds its name, so a modular monolith routes its own contracts without
-    /// a second declaration. Deleting the producer-side write to the name index must fail here.
-    /// </summary>
-    [Fact]
-    public void Registry_PublishingAContractMakesItResolvable()
-    {
-        var registry = IntegrationEventContractFixtures.Registry(
-            ("/saasbtp/access", e => e.Publishes<WorkspaceCreated>()));
-
-        registry
-            .TryResolveLocalType("saasbtp.access.workspace-created.v1", out var eventType)
-            .ShouldBeTrue();
-        eventType.ShouldBe(typeof(WorkspaceCreated));
-    }
-
-    /// <summary>
-    /// The remote-consumer case, and the load-bearing test for keeping the two registrations apart:
-    /// a consumed contract resolves by name yet never enters the <b>published</b> surface. It has
-    /// no source — this process did not emit it — so offering to publish it would be a lie the
-    /// wire would carry.
-    /// </summary>
-    [Fact]
-    public void Registry_ResolvesAConsumedContractThatIsNotPublishedHere()
-    {
-        var registry = IntegrationEventContractFixtures.ConsumingRegistry(
-            e => e.Consumes<InvoiceSettled>());
-
-        registry.ResolveLocalType("partner.billing.invoice-settled.v1")
-            .ShouldBe(typeof(InvoiceSettled));
-
-        registry.ContractNames.ShouldBeEmpty();
-        registry.Count.ShouldBe(0);
-        Should.Throw<IntegrationEventConfigurationException>(
-            () => registry.ResolveContract(typeof(InvoiceSettled)));
-    }
-
-    /// <summary>
-    /// The consumer-side counterpart to the publish snapshot. In a service that only consumes,
-    /// nothing else catches a renamed <c>[MessageContract]</c> on a local type: the old name
-    /// simply stops arriving.
-    /// </summary>
-    [Fact]
-    public void Registry_SubscriptionSurface_MatchesTheSnapshot()
-    {
-        var registry = IntegrationEventContractFixtures.ConsumingRegistry(
-            e => e.Consumes<InvoiceSettled>(),
-            e => e.Consumes<WorkspaceCreated>());
-
-        registry.SubscribedContractNames.ShouldBe([
-            "partner.billing.invoice-settled.v1",
+        registry.ContractNames.ShouldBe([
             "saasbtp.access.workspace-created.v1",
+            "saasbtp.safety.constat-recorded.v1",
+        ]);
+        registry.SubscribedContractNames.ShouldBe(["partner.billing.invoice-settled.v1"]);
+    }
+
+    [Fact]
+    public void Registry_CarriesTheContractNameAndVersion_ReadAtRegistration()
+    {
+        var registry = Registry(bus => bus.Publishes<ConstatRecordedV2>());
+
+        registry.TryGetContract(typeof(ConstatRecordedV2), out var contract).ShouldBeTrue();
+        contract.Name.ShouldBe("saasbtp.safety.constat-recorded");
+        contract.Version.ShouldBe(2);
+        contract.ContractName.ShouldBe("saasbtp.safety.constat-recorded.v2");
+    }
+
+    // ---------------------------------------------------------------------------------------
+    // Contract rules — the analysis the registry applies.
+    // ---------------------------------------------------------------------------------------
+
+    [Fact]
+    public void Registry_WhenTwoPublicationsClaimOneWireType_IsRejected()
+    {
+        var ex = Should.Throw<IntegrationEventConfigurationException>(
+            () => Registry(bus => bus.Publishes<ConstatRecorded>().Publishes<ImpostorEvent>()));
+
+        ex.Message.ShouldContain("saasbtp.safety.constat-recorded.v1");
+        ex.Message.ShouldContain(typeof(ConstatRecorded).FullName!);
+        ex.Message.ShouldContain(typeof(ImpostorEvent).FullName!);
+    }
+
+    /// <summary>A collision across two modules is visible only to one composed registry.</summary>
+    [Fact]
+    public void Registry_WhenTwoModulesClaimOneWireType_IsRejected()
+    {
+        Should.Throw<IntegrationEventConfigurationException>(() => Registry([
+            bus => bus.Publishes<ConstatRecorded>(),
+            bus => bus.Publishes<ImpostorEvent>(),
+        ]));
+    }
+
+    /// <summary>Collisions are judged on the wire type: two versions of one name are two contracts.</summary>
+    [Fact]
+    public void Registry_TwoVersionsOfOneNameOnTwoTypes_AreAccepted()
+    {
+        var registry = Registry(bus => bus.Publishes<ConstatRecorded>().Publishes<ConstatRecordedV2>());
+
+        registry.ContractNames.ShouldBe([
+            "saasbtp.safety.constat-recorded.v1",
+            "saasbtp.safety.constat-recorded.v2",
         ]);
     }
 
     /// <summary>
-    /// A contract made resolvable by publishing it is not a declared subscription. Keeping the two
-    /// surfaces separate is what lets each be snapshot-tested for what it actually claims.
+    /// One CLR type maps to exactly one contract — structurally: the attribute allows one usage per
+    /// type and is not inherited, so a type cannot carry two and a subtype cannot borrow one.
     /// </summary>
+    [Fact]
+    public void MessageContractAttribute_AllowsOneContractPerType_AndIsNotInherited()
+    {
+        var usage = (AttributeUsageAttribute)Attribute.GetCustomAttribute(
+            typeof(MessageContractAttribute), typeof(AttributeUsageAttribute))!;
+
+        usage.AllowMultiple.ShouldBeFalse();
+        usage.Inherited.ShouldBeFalse();
+    }
+
+    [Fact]
+    public void Registry_WhenAPublicationHasNoContract_IsRejectedAndNamesTheFix()
+    {
+        var ex = Should.Throw<IntegrationEventConfigurationException>(
+            () => Registry(bus => bus.Publishes<NeverRegistered>()));
+
+        ex.Message.ShouldContain(typeof(NeverRegistered).FullName!);
+        ex.Message.ShouldContain("[MessageContract(");
+    }
+
+    [Fact]
+    public void Registry_WhenAHandledTypeHasNoContract_IsRejectedAndNamesTheHandler()
+    {
+        var ex = Should.Throw<IntegrationEventConfigurationException>(
+            () => Registry(bus => bus.AddHandler<NeverRegisteredHandler>()));
+
+        ex.Message.ShouldContain(typeof(NeverRegistered).FullName!);
+        ex.Message.ShouldContain(typeof(NeverRegisteredHandler).FullName!);
+    }
+
+    /// <summary>
+    /// A blank name is not a missing contract but a broken attribute: it cannot be materialized.
+    /// It is reported with every other problem rather than thrown at the declaration, so one bad
+    /// type neither hides the others nor makes an assembly scan throw.
+    /// </summary>
+    [Fact]
+    public void Publishes_WhenContractNameIsEmpty_IsRejectedAndNamesTheAttributesError()
+    {
+        var ex = Should.Throw<IntegrationEventConfigurationException>(
+            () => Registry(bus => bus.Publishes<BlankContractName>()));
+
+        ex.Message.ShouldContain($"'{typeof(BlankContractName).FullName}' carries a [MessageContract] that cannot be read");
+    }
+
+    [Fact]
+    public void AddHandler_WhenTheHandledContractNameIsWhitespace_IsRejectedAndNamesTheAttributesError()
+    {
+        var ex = Should.Throw<IntegrationEventConfigurationException>(
+            () => Registry(bus => bus.AddHandler<WhitespaceContractNameHandler>()));
+
+        ex.Message.ShouldContain($"'{typeof(WhitespaceContractName).FullName}' carries a [MessageContract] that cannot be read");
+        ex.Message.ShouldNotContain("has no [MessageContract]", Case.Sensitive);
+    }
+
+    [Fact]
+    public void Publishes_WhenTheVersionIsBelowOne_IsRejectedAtStartRatherThanThrownAtTheDeclaration()
+    {
+        var services = new ServiceCollection();
+        services.AddMicroKitMessaging(bus =>
+        {
+            bus.ServiceName = ServiceName;
+            bus.Publishes<BadVersionContract>();   // does not throw here
+        });
+        using var provider = services.BuildServiceProvider();
+
+        var ex = Should.Throw<IntegrationEventConfigurationException>(
+            () => provider.GetRequiredService<IntegrationEventRegistry>());
+
+        ex.Message.ShouldContain($"'{typeof(BadVersionContract).FullName}' carries a [MessageContract] that cannot be read");
+        ex.Message.ShouldContain("must be greater than or equal to '1'");
+    }
+
+    /// <summary>Every problem is listed in one exception, numbered, rather than the first alone.</summary>
+    [Fact]
+    public void Registry_ListsEveryProblemInOneException()
+    {
+        var ex = Should.Throw<IntegrationEventConfigurationException>(() => Registry(bus => bus
+            .Publishes<NeverRegistered>()
+            .Publishes<ConstatRecorded>()
+            .Publishes<ImpostorEvent>()));
+
+        ex.Message.ShouldContain("(2 problems)");
+        ex.Message.ShouldContain("1. ");
+        ex.Message.ShouldContain("2. ");
+        ex.Message.ShouldContain(typeof(NeverRegistered).FullName!);
+        ex.Message.ShouldContain(typeof(ImpostorEvent).FullName!);
+    }
+
+    [Fact]
+    public void Registry_WhenTwoCallsSetDifferentServiceNames_IsRejected()
+    {
+        var ex = Should.Throw<IntegrationEventConfigurationException>(() => Registry([
+            bus => bus.ServiceName = "shop.orders",
+            bus => bus.ServiceName = "shop.billing",
+        ]));
+
+        ex.Message.ShouldContain("'shop.orders'");
+        ex.Message.ShouldContain("'shop.billing'");
+    }
+
+    [Fact]
+    public void Registry_WhenTwoCallsSetTheSameServiceName_IsAccepted()
+    {
+        var registry = Registry([
+            bus => bus.ServiceName = "shop.orders",
+            bus => bus.ServiceName = "shop.orders",
+        ]);
+
+        registry.Source.ShouldBe("shop.orders");
+    }
+
+    // ---------------------------------------------------------------------------------------
+    // The reverse direction: a wire type to this process's own type. A handler is its subscription.
+    // ---------------------------------------------------------------------------------------
+
+    [Fact]
+    public void Registry_PublishingAContractMakesItResolvable()
+    {
+        var registry = Registry(bus => bus.Publishes<ConstatRecorded>());
+
+        registry.ResolveLocalType("saasbtp.safety.constat-recorded.v1").ShouldBe(typeof(ConstatRecorded));
+    }
+
+    [Fact]
+    public void Registry_ResolvesAHandledContractThatIsNotPublishedHere()
+    {
+        var registry = Registry(bus => bus.AddHandler<InvoiceSettledHandler>());
+
+        registry.ResolveLocalType("partner.billing.invoice-settled.v1").ShouldBe(typeof(InvoiceSettled));
+        registry.ContractNames.ShouldBeEmpty();
+    }
+
+    /// <summary>The subscription snapshot: what this service's endpoint is bound to.</summary>
+    [Fact]
+    public void Registry_SubscriptionSurface_MatchesTheSnapshot()
+    {
+        var registry = Registry(bus => bus
+            .AddHandler<InvoiceSettledHandler>()
+            .AddHandler<ConstatRecordedHandler>());
+
+        registry.SubscribedContractNames.ShouldBe([
+            "partner.billing.invoice-settled.v1",
+            "saasbtp.safety.constat-recorded.v1",
+        ]);
+    }
+
     [Fact]
     public void Registry_PublishedContractsAreNotCountedAsSubscriptions()
     {
-        var registry = IntegrationEventContractFixtures.Registry(
-            ("/saasbtp/safety", e => e.Publishes<ConstatRecorded>()));
+        var registry = Registry(bus => bus.Publishes<ConstatRecorded>().AddHandler<InvoiceSettledHandler>());
 
-        registry.SubscribedContractNames.ShouldBeEmpty();
-    }
-
-    // ---------------------------------------------------------------------------------------
-    // Collisions across the two registrations.
-    // ---------------------------------------------------------------------------------------
-
-    /// <summary>
-    /// The monolith case: module A publishes a contract and module B, in the same process,
-    /// declares it consumes it. Rejecting that would force B to know whether its producer happens
-    /// to be in-process — the exact knowledge a stable contract name exists to remove.
-    /// </summary>
-    [Fact]
-    public void Registry_WhenAPublisherAndAConsumerDeclareTheSameType_IsAccepted()
-    {
-        var registry = IntegrationEventContractFixtures.MixedRegistry(
-            [("/saasbtp/safety", e => e.Publishes<ConstatRecorded>())],
-            e => e.Consumes<ConstatRecorded>());
-
-        registry.ResolveLocalType("saasbtp.safety.constat-recorded.v1")
-            .ShouldBe(typeof(ConstatRecorded));
-        registry.ResolveContract(typeof(ConstatRecorded)).Source.ShouldBe("/saasbtp/safety");
-        registry.Count.ShouldBe(1);
-    }
-
-    /// <summary>
-    /// The collision a separate consumer-side registry could not see at all. A name resolves to one
-    /// local type: a message is deserialized once, before any fan-out, so a rival claimant could
-    /// only be honoured by picking arbitrarily — and structurally-compatible JSON would produce a
-    /// plausible wrong object rather than an error.
-    /// </summary>
-    [Fact]
-    public void Registry_WhenAConsumerMirrorTypeClaimsAPublishedName_IsRejected()
-    {
-        var exception = Should.Throw<IntegrationEventConfigurationException>(
-            () => IntegrationEventContractFixtures.MixedRegistry(
-                [("/saasbtp/safety", e => e.Publishes<ConstatRecorded>())],
-                e => e.Consumes<ImpostorEvent>()));
-
-        exception.Message.ShouldContain("saasbtp.safety.constat-recorded.v1");
-        exception.Message.ShouldContain(nameof(ConstatRecorded));
-        exception.Message.ShouldContain(nameof(ImpostorEvent));
-
-        // The incumbent publishes, so it has a module to name.
-        exception.Message.ShouldContain("/saasbtp/safety");
-    }
-
-    /// <summary>
-    /// The same collision between two consumers, where <b>neither</b> claimant has a module to
-    /// name — and the message invents nothing.
-    /// </summary>
-    /// <remarks>
-    /// A subscription carries no <c>Source</c> by construction, so this message is two type names
-    /// and no module. That is the asymmetry working as designed, not a gap: the alternative is a
-    /// nominal source, which is a false value in the one field that has to stay true. Asserted
-    /// rather than assumed, so a later "improvement" that fabricates one fails here.
-    /// </remarks>
-    [Fact]
-    public void Registry_WhenTwoConsumersClaimOneNameWithDifferentTypes_IsRejected()
-    {
-        var exception = Should.Throw<IntegrationEventConfigurationException>(
-            () => IntegrationEventContractFixtures.ConsumingRegistry(
-                e => e.Consumes<ConstatRecorded>(),
-                e => e.Consumes<ImpostorEvent>()));
-
-        exception.Message.ShouldContain("saasbtp.safety.constat-recorded.v1");
-        exception.Message.ShouldContain(nameof(ImpostorEvent));
-        exception.Message.ShouldNotContain("from '");
-    }
-
-    /// <summary>Two modules consuming one contract through the same type is nominal.</summary>
-    [Fact]
-    public void Registry_WhenTwoConsumersShareOneType_IsAccepted()
-    {
-        var registry = IntegrationEventContractFixtures.ConsumingRegistry(
-            e => e.Consumes<InvoiceSettled>(),
-            e => e.Consumes<InvoiceSettled>());
-
-        registry.ResolveLocalType("partner.billing.invoice-settled.v1")
-            .ShouldBe(typeof(InvoiceSettled));
         registry.SubscribedContractNames.ShouldBe(["partner.billing.invoice-settled.v1"]);
     }
 
+    /// <summary>A service handling its own publication declares nothing twice.</summary>
     [Fact]
-    public void Consumes_WhenEventHasNoAttribute_IsRejectedAtRegistration()
+    public void Registry_WhenAPublicationIsAlsoHandled_IsAccepted()
     {
-        var services = new ServiceCollection();
+        var registry = Registry(bus => bus.Publishes<ConstatRecorded>().AddHandler<ConstatRecordedHandler>());
 
-        var exception = Should.Throw<IntegrationEventConfigurationException>(
-            () => services.AddIntegrationEventSubscriptions(e => e.Consumes<NeverRegistered>()));
-
-        exception.Message.ShouldContain(nameof(NeverRegistered));
+        registry.ContractNames.ShouldBe(["saasbtp.safety.constat-recorded.v1"]);
+        registry.SubscribedContractNames.ShouldBe(["saasbtp.safety.constat-recorded.v1"]);
     }
 
-    // ---------------------------------------------------------------------------------------
-    // An unknown contract name.
-    // ---------------------------------------------------------------------------------------
+    [Fact]
+    public void Registry_WhenAHandledMirrorTypeClaimsAPublishedName_IsRejected()
+    {
+        var ex = Should.Throw<IntegrationEventConfigurationException>(
+            () => Registry(bus => bus.Publishes<ConstatRecorded>().AddHandler<ImpostorHandler>()));
+
+        ex.Message.ShouldContain(typeof(ImpostorEvent).FullName!);
+    }
+
+    [Fact]
+    public void Registry_WhenTwoHandlersOfOneTypeAreRegistered_TheContractIsSubscribedOnce()
+    {
+        var registry = Registry(bus => bus
+            .AddHandler<ConstatRecordedHandler>()
+            .AddHandler<SecondConstatRecordedHandler>());
+
+        registry.SubscribedContractNames.ShouldBe(["saasbtp.safety.constat-recorded.v1"]);
+    }
 
     [Fact]
     public void TryResolveLocalType_WhenContractNameIsUnknown_ReturnsFalse()
     {
-        var registry = IntegrationEventContractFixtures.Registry(
-            ("/saasbtp/safety", e => e.Publishes<ConstatRecorded>()));
+        var registry = Registry(bus => bus.Publishes<ConstatRecorded>());
 
-        registry.TryResolveLocalType("nobody.knows.this.v1", out var eventType).ShouldBeFalse();
+        registry.TryResolveLocalType("saasbtp.safety.unknown.v1", out var eventType).ShouldBeFalse();
         eventType.ShouldBeNull();
     }
 
-    /// <summary>
-    /// Permanent, not transient: an unbound name cannot become bound without a redeploy. The
-    /// message has to name both the contract and the call that fixes it, because the operator
-    /// reading it is holding a dead-lettered row and nothing else.
-    /// </summary>
     [Fact]
     public void ResolveLocalType_WhenContractNameIsUnknown_ThrowsAndNamesTheContractName()
     {
-        var registry = IntegrationEventContractFixtures.Registry(
-            ("/saasbtp/safety", e => e.Publishes<ConstatRecorded>()));
+        var registry = Registry(bus => bus.Publishes<ConstatRecorded>());
 
-        var exception = Should.Throw<IntegrationEventConfigurationException>(
-            () => registry.ResolveLocalType("nobody.knows.this.v1"));
+        var ex = Should.Throw<IntegrationEventConfigurationException>(
+            () => registry.ResolveLocalType("saasbtp.safety.unknown.v1"));
 
-        exception.Message.ShouldContain("nobody.knows.this.v1");
-        exception.Message.ShouldContain("Consumes");
+        ex.Message.ShouldContain("saasbtp.safety.unknown.v1");
+        ex.Message.ShouldContain("bus.AddHandler<THandler>()");
+    }
+
+    [Fact]
+    public void ResolveContract_WhenTheTypeIsNotPublished_ThrowsAndNamesTheDeclaration()
+    {
+        var registry = Registry(bus => bus.AddHandler<ConstatRecordedHandler>());
+
+        var ex = Should.Throw<IntegrationEventConfigurationException>(
+            () => registry.ResolveContract(typeof(ConstatRecorded)));
+
+        ex.Message.ShouldContain("bus.Publishes<ConstatRecorded>()");
     }
 
     /// <summary>
-    /// A contract name is a wire identity, not display text. A case-insensitive or
-    /// culture-sensitive match would collapse two distinct contracts onto one local type and
-    /// deserialize the wrong shape without raising anything.
+    /// A wire type is an identity, not display text. The soft hyphen separates Ordinal from
+    /// InvariantCulture / CurrentCulture, which the case variants alone cannot.
     /// </summary>
-    /// <remarks>
-    /// <b>Two candidates, because one does not pin the comparer.</b> Case alone separates
-    /// <c>Ordinal</c> from <c>OrdinalIgnoreCase</c> and from nothing else —
-    /// <c>StringComparer.InvariantCulture</c> is case-sensitive and passes a case-only assertion
-    /// unchanged, so a switch to it would go unnoticed. The second candidate is the one that
-    /// catches it: U+00AD SOFT HYPHEN is <i>collation-ignorable</i>, so a culture-sensitive
-    /// dictionary finds the registered entry through it and an ordinal one does not. It is also the
-    /// realistic corruption rather than an exotic one — these names are full of real hyphens, and a
-    /// soft hyphen arrives by copy-paste out of anything that renders justified text.
-    /// </remarks>
     [Fact]
     public void ResolveLocalType_IsOrdinal_AndDoesNotMatchOnCaseOrCulture()
     {
-        var registry = IntegrationEventContractFixtures.Registry(
-            ("/saasbtp/safety", e => e.Publishes<ConstatRecorded>()));
+        var registry = Registry(bus => bus.Publishes<ConstatRecorded>());
 
-        // Separates Ordinal from OrdinalIgnoreCase.
-        registry
-            .TryResolveLocalType("SAASBTP.SAFETY.CONSTAT-RECORDED.V1", out _)
-            .ShouldBeFalse();
-        registry
-            .TryResolveLocalType("saasbtp.safety.Constat-Recorded.v1", out _)
-            .ShouldBeFalse();
-
-        // Separates Ordinal from InvariantCulture / CurrentCulture, which the two above cannot:
-        // both of those resolve this name to ConstatRecorded.
-        registry
-            .TryResolveLocalType("saasbtp.safety.constat-\u00ADrecorded.v1", out _)
-            .ShouldBeFalse();
+        registry.TryResolveLocalType("SAASBTP.SAFETY.CONSTAT-RECORDED.V1", out _).ShouldBeFalse();
+        registry.TryResolveLocalType("saasbtp.safety.Constat-Recorded.v1", out _).ShouldBeFalse();
+        registry.TryResolveLocalType("saasbtp.safety.constat-­recorded.v1", out _).ShouldBeFalse();
     }
 
-    /// <summary>
-    /// Pins the deferral: the registry hands back a <see cref="Type"/>, and the serializer takes an
-    /// assembly-qualified name, so the bridge step 3 will use is a string round trip. It is lossless
-    /// only because the assembly is loaded by the time we hold the type — assert it rather than
-    /// assume it, since the alternative is an additive overload nobody has needed yet.
-    /// </summary>
     [Fact]
     public void ResolvedLocalType_RoundTripsThroughTheSerializer()
     {
-        var registry = IntegrationEventContractFixtures.Registry(
-            ("/saasbtp/safety", e => e.Publishes<ConstatRecorded>()));
-        var serializer = BuildSerializer();
+        var services = new ServiceCollection();
+        services.AddLogging();
+        services.AddMicroKitMessaging(bus =>
+        {
+            bus.ServiceName = ServiceName;
+            bus.Publishes<ConstatRecorded>();
+        });
+        using var provider = services.BuildServiceProvider();
+        var registry = provider.GetRequiredService<IntegrationEventRegistry>();
+        var serializer = provider.GetRequiredService<IMessageSerializer>();
         var payload = serializer.Serialize(new ConstatRecorded(Guid.NewGuid()), typeof(ConstatRecorded));
 
         var eventType = registry.ResolveLocalType("saasbtp.safety.constat-recorded.v1");
-        var deserialized = serializer.Deserialize(payload, eventType);
 
-        deserialized.ShouldBeOfType<ConstatRecorded>();
-    }
-
-    // ---------------------------------------------------------------------------------------
-    // Composition: the boot-time guarantee reaches a service that only consumes.
-    // ---------------------------------------------------------------------------------------
-
-    /// <summary>
-    /// The collision the validator must catch on the consuming side, in a service composed the way
-    /// a publishing one is.
-    /// </summary>
-    [Fact]
-    public async Task RegistryValidator_OnStart_FailsOnASubscriptionCollision()
-    {
-        await using var provider = BuildPublishingProvider(
-            [("/saasbtp/safety", e => e.Publishes<ConstatRecorded>())],
-            [e => e.Consumes<ImpostorEvent>()]);
-
-        var validator = provider.GetServices<IHostedService>()
-            .OfType<IntegrationEventRegistryValidator>()
-            .ShouldHaveSingleItem();
-
-        var exception = await Should.ThrowAsync<IntegrationEventConfigurationException>(
-            async () => await validator.StartAsync(CancellationToken.None));
-
-        exception.Message.ShouldContain("saasbtp.safety.constat-recorded.v1");
-    }
-
-    /// <summary>
-    /// A service that only consumes gets the same boot-time guarantee as one that publishes.
-    /// </summary>
-    /// <remarks>
-    /// Without <c>AddIntegrationEventConsumption()</c> this test cannot even find a validator to
-    /// drive: the registry would be composed lazily on first resolve, which on a drain path is
-    /// inside a handler, inside a transaction, where a collision is misclassified as transient and
-    /// retried forever against something no retry can fix. That is exactly what the validator
-    /// exists to prevent, and a consumer needs it as much as a producer.
-    /// </remarks>
-    [Fact]
-    public async Task ConsumerOnlyComposition_OnStart_FailsOnASubscriptionCollision()
-    {
-        await using var provider = BuildConsumingProvider(
-            e => e.Consumes<ConstatRecorded>(),
-            e => e.Consumes<ImpostorEvent>());
-
-        var validator = provider.GetServices<IHostedService>()
-            .OfType<IntegrationEventRegistryValidator>()
-            .ShouldHaveSingleItem();
-
-        var exception = await Should.ThrowAsync<IntegrationEventConfigurationException>(
-            async () => await validator.StartAsync(CancellationToken.None));
-
-        exception.Message.ShouldContain("saasbtp.safety.constat-recorded.v1");
-        exception.Message.ShouldContain(nameof(ImpostorEvent));
-    }
-
-    [Fact]
-    public async Task ConsumerOnlyComposition_OnStart_SucceedsWhenCompositionIsValid()
-    {
-        await using var provider = BuildConsumingProvider(e => e.Consumes<InvoiceSettled>());
-
-        var registry = provider.GetRequiredService<IntegrationEventRegistry>();
-        registry.ResolveLocalType("partner.billing.invoice-settled.v1")
-            .ShouldBe(typeof(InvoiceSettled));
-
-        var validator = provider.GetServices<IHostedService>()
-            .OfType<IntegrationEventRegistryValidator>()
-            .ShouldHaveSingleItem();
-
-        await Should.NotThrowAsync(async () => await validator.StartAsync(CancellationToken.None));
-    }
-
-    /// <summary>
-    /// A service that both publishes and consumes calls both entry points and must get ONE registry
-    /// and ONE validator, whichever order they are written in.
-    /// </summary>
-    /// <remarks>
-    /// Both orders, because a single order proves nothing about the failure this guards: under a
-    /// plain <c>Add</c> the second caller appends a rival descriptor, Microsoft DI resolves the
-    /// last one, and which registry the boot validation ran against would depend on the order the
-    /// two lines happened to be typed in.
-    /// </remarks>
-    [Theory]
-    [InlineData(true)]
-    [InlineData(false)]
-    public async Task PublishingAndConsumption_Together_RegisterOneRegistryAndOneValidator(
-        bool publishingFirst)
-    {
-        var services = new ServiceCollection();
-        services.AddLogging();
-        services.AddIntegrationEventContracts(
-            "/saasbtp/safety", e => e.Publishes<ConstatRecorded>());
-        services.AddIntegrationEventSubscriptions(e => e.Consumes<InvoiceSettled>());
-
-        var messaging = services.AddMicroKitMessaging();
-        if (publishingFirst)
-        {
-            messaging.AddIntegrationEventPublishing().AddIntegrationEventConsumption();
-        }
-        else
-        {
-            messaging.AddIntegrationEventConsumption().AddIntegrationEventPublishing();
-        }
-
-        await using var provider = services.BuildServiceProvider(
-            new ServiceProviderOptions { ValidateScopes = true });
-
-        provider.GetServices<IHostedService>()
-            .OfType<IntegrationEventRegistryValidator>()
-            .ShouldHaveSingleItem();
-
-        var registry = provider.GetServices<IntegrationEventRegistry>().ShouldHaveSingleItem();
-        provider.GetRequiredService<IntegrationEventRegistry>().ShouldBeSameAs(registry);
-
-        registry.ContractNames.ShouldBe(["saasbtp.safety.constat-recorded.v1"]);
-        registry.SubscribedContractNames.ShouldBe(["partner.billing.invoice-settled.v1"]);
-    }
-
-    private static IMessageSerializer BuildSerializer()
-    {
-        var services = new ServiceCollection();
-        services.AddLogging();
-        // AddMicroKitMessaging() is where the IMessageSerializer default lives now that
-        // AddInProcessTransport() is gone (ADR-MSG-019) — NOT AddIntegrationEventPublishing(),
-        // which registers none of its own. The publishing call is here only because this helper
-        // serializes contract payloads; see MessagingSerializerDefaultTests for the ownership.
-        services.AddMicroKitMessaging().AddIntegrationEventPublishing();
-
-        return services.BuildServiceProvider().GetRequiredService<IMessageSerializer>();
-    }
-
-    private static ServiceProvider BuildConsumingProvider(
-        params Action<IntegrationEventSubscriptionBuilder>[] consumers)
-    {
-        var services = new ServiceCollection();
-        services.AddLogging();
-
-        foreach (var configure in consumers)
-        {
-            services.AddIntegrationEventSubscriptions(configure);
-        }
-
-        services.AddMicroKitMessaging().AddIntegrationEventConsumption();
-
-        return services.BuildServiceProvider(new ServiceProviderOptions { ValidateScopes = true });
-    }
-
-    private static ServiceProvider BuildPublishingProvider(
-        params (string Source, Action<IntegrationEventContractBuilder> Configure)[] modules)
-        => BuildPublishingProvider(modules, subscriptions: []);
-
-    private static ServiceProvider BuildPublishingProvider(
-        (string Source, Action<IntegrationEventContractBuilder> Configure)[] modules,
-        Action<IntegrationEventSubscriptionBuilder>[] subscriptions)
-    {
-        var services = new ServiceCollection();
-        services.AddLogging();
-
-        foreach (var (source, configure) in modules)
-        {
-            services.AddIntegrationEventContracts(source, configure);
-        }
-
-        foreach (var configure in subscriptions)
-        {
-            services.AddIntegrationEventSubscriptions(configure);
-        }
-
-        services.AddMicroKitMessaging().AddIntegrationEventPublishing();
-
-        return services.BuildServiceProvider(new ServiceProviderOptions { ValidateScopes = true });
+        serializer.Deserialize(payload, eventType).ShouldBeOfType<ConstatRecorded>();
     }
 }

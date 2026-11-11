@@ -440,8 +440,8 @@ internal sealed class OutboxProcessor : IOutboxProcessor
         return dispatcher
             ?? throw new OutboxConfigurationException(
                 $"{nameof(IOutboxDispatcher)} is not registered, so no outbox row can be dispatched. " +
-                "Call AddTransportDispatcher() on the MessagingBuilder — a broker provider's " +
-                "Add{Provider}Transport() calls it — or AddMediatRDomainEvents() for domain-event " +
+                "Register a transport — bus.UseInMemoryTransport(), or a broker provider's " +
+                "Add{Provider}Transport() — or AddMediatRDomainEvents() for domain-event " +
                 "notifications. Retrying will not help.");
     }
 

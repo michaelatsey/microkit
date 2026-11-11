@@ -13,15 +13,15 @@ public sealed class InMemoryTransportTests
     {
         var broker = new InMemoryBroker { MaxDeliveryAttempts = 3 };
         await using var host = await BusTestHost.StartAsync(
-            bus => bus.AddMessageHandler<FlakyOrderPlacedHandler, OrderPlaced>(),
+            bus => bus.AddHandler<FlakyOrderPlacedHandler>(),
             broker,
             services => services.AddSingleton(new FlakyScript { FailuresBeforeSuccess = int.MaxValue }));
 
         var id = await host.PublishAsync(new OrderPlaced(Guid.NewGuid()));
 
-        await Eventually.HoldsAsync(() => broker.DeadLetters.Count == 1, "dead-lettered at the bound");
+        await Eventually.HoldsAsync(() => broker.GetDeadLetters(BusTestHost.Source).Count == 1, "dead-lettered at the bound");
 
-        broker.GetFailedAttempts(id.ToString()).ShouldBe(3);
+        broker.GetFailedAttempts(BusTestHost.Source, id.ToString()).ShouldBe(3);
         host.Provider.GetRequiredService<FlakyScript>().Attempts.ShouldBe(3);
     }
 
@@ -30,7 +30,7 @@ public sealed class InMemoryTransportTests
     {
         var broker = new InMemoryBroker { MaxDeliveryAttempts = 3 };
         await using var host = await BusTestHost.StartAsync(
-            bus => bus.AddMessageHandler<FlakyOrderPlacedHandler, OrderPlaced>(),
+            bus => bus.AddHandler<FlakyOrderPlacedHandler>(),
             broker,
             services => services.AddSingleton(new FlakyScript { FailuresBeforeSuccess = 1 }));
 
@@ -39,8 +39,8 @@ public sealed class InMemoryTransportTests
         var script = host.Provider.GetRequiredService<FlakyScript>();
         await Eventually.HoldsAsync(() => script.Succeeded, "the redelivery succeeds");
 
-        broker.GetFailedAttempts(id.ToString()).ShouldBe(1);
-        broker.DeadLetters.ShouldBeEmpty();
+        broker.GetFailedAttempts(BusTestHost.Source, id.ToString()).ShouldBe(1);
+        broker.GetDeadLetters(BusTestHost.Source).ShouldBeEmpty();
     }
 
     [Fact]
@@ -52,7 +52,7 @@ public sealed class InMemoryTransportTests
             DependencyUnavailableBackoff = TimeSpan.FromMilliseconds(50),
         };
         await using var host = await BusTestHost.StartAsync(
-            bus => bus.AddMessageHandler<FlakyOrderPlacedHandler, OrderPlaced>(),
+            bus => bus.AddHandler<FlakyOrderPlacedHandler>(),
             broker,
             services => services.AddSingleton(new FlakyScript
             {
@@ -66,8 +66,8 @@ public sealed class InMemoryTransportTests
         await Eventually.HoldsAsync(() => script.Succeeded, "delivered once the dependency is back");
 
         // MaxDeliveryAttempts = 1: had either outage counted, the message would be dead.
-        broker.GetFailedAttempts(id.ToString()).ShouldBe(0);
-        broker.DeadLetters.ShouldBeEmpty();
+        broker.GetFailedAttempts(BusTestHost.Source, id.ToString()).ShouldBe(0);
+        broker.GetDeadLetters(BusTestHost.Source).ShouldBeEmpty();
         script.Attempts.ShouldBe(3);
     }
 
@@ -75,7 +75,7 @@ public sealed class InMemoryTransportTests
     public async Task APermanentFailure_IsDeadLetteredOnTheFirstAttempt()
     {
         await using var host = await BusTestHost.StartAsync(
-            bus => bus.AddMessageHandler<FlakyOrderPlacedHandler, OrderPlaced>(),
+            bus => bus.AddHandler<FlakyOrderPlacedHandler>(),
             services: services => services.AddSingleton(new FlakyScript
             {
                 FailuresBeforeSuccess = int.MaxValue,
@@ -84,10 +84,10 @@ public sealed class InMemoryTransportTests
 
         var id = await host.PublishAsync(new OrderPlaced(Guid.NewGuid()));
 
-        await Eventually.HoldsAsync(() => host.Broker.DeadLetters.Count == 1, "dead-lettered");
+        await Eventually.HoldsAsync(() => host.DeadLetters.Count == 1, "dead-lettered");
 
         host.Provider.GetRequiredService<FlakyScript>().Attempts.ShouldBe(1);
-        host.Broker.GetFailedAttempts(id.ToString()).ShouldBe(0);
+        host.FailedAttempts(id.ToString()).ShouldBe(0);
     }
 
     [Fact]
@@ -96,8 +96,8 @@ public sealed class InMemoryTransportTests
         var broker = new InMemoryBroker { MaxDeliveryAttempts = 2 };
         await using var host = await BusTestHost.StartAsync(
             bus => bus
-                .AddMessageHandler<FlakyOrderPlacedHandler, OrderPlaced>()
-                .AddMessageHandler<OrderShippedHandler, OrderShipped>(),
+                .AddHandler<FlakyOrderPlacedHandler>()
+                .AddHandler<OrderShippedHandler>(),
             broker,
             services => services.AddSingleton(new FlakyScript
             {
@@ -106,8 +106,8 @@ public sealed class InMemoryTransportTests
             }));
 
         var id = await host.PublishAsync(new OrderPlaced(Guid.NewGuid()));
-        await Eventually.HoldsAsync(() => broker.DeadLetters.Count == 1, "bounded, then dead-lettered");
-        broker.GetFailedAttempts(id.ToString()).ShouldBe(2);
+        await Eventually.HoldsAsync(() => broker.GetDeadLetters(BusTestHost.Source).Count == 1, "bounded, then dead-lettered");
+        broker.GetFailedAttempts(BusTestHost.Source, id.ToString()).ShouldBe(2);
 
         // The loop is still alive: a later message is delivered.
         await host.PublishAsync(new OrderShipped(Guid.NewGuid()));
@@ -117,13 +117,14 @@ public sealed class InMemoryTransportTests
     }
 
     [Fact]
-    public void AddMicroKitMessaging_RegistersNoHostedService()
+    public void AddMicroKitMessaging_RegistersNoHostedServiceButItsValidator()
     {
         var services = new ServiceCollection();
 
-        services.AddMicroKitMessaging();
+        services.AddMicroKitMessaging(_ => { });
 
-        services.ShouldNotContain(d => d.ServiceType == typeof(IHostedService));
+        services.Where(d => d.ServiceType == typeof(IHostedService))
+            .ShouldHaveSingleItem().ImplementationType!.Name.ShouldBe("MessagingCompositionValidator");
     }
 
     [Fact]
@@ -131,10 +132,11 @@ public sealed class InMemoryTransportTests
     {
         var services = new ServiceCollection();
 
-        services.AddMicroKitMessaging().UseInMemoryTransport().UseInMemoryTransport();
+        services.AddMicroKitMessaging(bus => bus.UseInMemoryTransport().UseInMemoryTransport());
 
         services.Where(d => d.ServiceType == typeof(IHostedService))
-            .ShouldHaveSingleItem().ImplementationType!.Name.ShouldBe("InMemoryTransportWorker");
+            .Select(d => d.ImplementationType!.Name)
+            .ShouldBe(["MessagingCompositionValidator", "InMemoryTransportWorker"]);
         services.Count(d => d.ServiceType == typeof(IMessageTransport)).ShouldBe(1);
     }
 
@@ -144,7 +146,7 @@ public sealed class InMemoryTransportTests
         var broker = new InMemoryBroker();
         var services = new ServiceCollection();
 
-        services.AddMicroKitMessaging().UseInMemoryTransport().UseInMemoryTransport(broker);
+        services.AddMicroKitMessaging(bus => bus.UseInMemoryTransport().UseInMemoryTransport(broker));
 
         using var provider = services.BuildServiceProvider();
         provider.GetRequiredService<InMemoryBroker>().ShouldBeSameAs(broker);
@@ -157,7 +159,7 @@ public sealed class InMemoryTransportTests
         services.AddSingleton<IMessageTransport, RecordingMessageTransport>();
 
         var ex = Should.Throw<InvalidOperationException>(
-            () => services.AddMicroKitMessaging().UseInMemoryTransport());
+            () => services.AddMicroKitMessaging(bus => bus.UseInMemoryTransport()));
 
         ex.Message.ShouldContain(nameof(RecordingMessageTransport));
     }
@@ -167,12 +169,12 @@ public sealed class InMemoryTransportTests
     {
         var services = new ServiceCollection();
 
-        services.AddMicroKitMessaging().AddOutboxInboxProcessing().AddOutboxInboxProcessing();
+        services.AddMicroKitMessaging(bus => bus.AddOutboxInboxProcessing().AddOutboxInboxProcessing());
 
         services.Where(d => d.ServiceType == typeof(IHostedService))
             .Select(d => d.ImplementationType!.Name)
             .ShouldBe(
-                ["OutboxWorker", "OutboxRetentionWorker", "InboxWorker", "InboxRetentionWorker"],
+                ["MessagingCompositionValidator", "OutboxWorker", "OutboxRetentionWorker", "InboxWorker", "InboxRetentionWorker"],
                 ignoreOrder: true);
         services.Count(d => d.ServiceType == typeof(IOutboxProcessor)).ShouldBe(1);
         services.Count(d => d.ServiceType == typeof(IInboxCoordinator)).ShouldBe(1);

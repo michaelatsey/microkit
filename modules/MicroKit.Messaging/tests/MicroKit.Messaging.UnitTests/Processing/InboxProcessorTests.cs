@@ -270,8 +270,8 @@ public sealed class InboxProcessorTests
         context.CausationId.ShouldBe(causation.Value.ToString());
         context.OccurredOnUtc.ShouldBe(message.OccurredOnUtc);
 
-        // The row records neither source nor headers (#188 replaces this path), and the fixture
-        // type carries no [MessageContract].
+        // The row records neither source nor headers (#188 replaces this path), and the contract
+        // registry does not know the fixture type, which carries no [MessageContract].
         context.Source.ShouldBeEmpty();
         context.Headers.ShouldBeEmpty();
         context.ContractName.ShouldBeEmpty();
@@ -834,6 +834,7 @@ public sealed class InboxProcessorTests
         return new InboxProcessor(
             store,
             registry,
+            Publishing.IntegrationEventContractFixtures.Registry(_ => { }),
             serializer ?? RoundTripSerializer(),
             new TestExecutionScopeFactory(provider.GetRequiredService<IServiceScopeFactory>()),
             options ?? DefaultOptions,
@@ -864,6 +865,7 @@ public sealed class InboxProcessorTests
         return new InboxProcessor(
             store,
             registry,
+            Publishing.IntegrationEventContractFixtures.Registry(_ => { }),
             RoundTripSerializer(),
             scopes,
             DefaultOptions,

@@ -30,7 +30,7 @@ internal static partial class InboxIngestionLogs
     /// <remarks>
     /// <b>Warning, and the level is the whole point.</b> Writing no row is the correct behaviour
     /// for a contract nothing here consumes, and it is also exactly what a broken composition
-    /// produces — <c>Consumes&lt;T&gt;()</c> declared, <c>AddMessageHandler&lt;,&gt;()</c>
+    /// produces — a published type whose <c>bus.AddHandler&lt;THandler&gt;()</c> was
     /// forgotten. The two are indistinguishable from the outside: no row is written, the drain
     /// claims nothing, and the queue looks healthy and idle. Silent success is forbidden in this
     /// module, so the honest signal is emitted at the only moment anything knows the difference
@@ -44,8 +44,8 @@ internal static partial class InboxIngestionLogs
         Message = "Contract '{ContractName}' from '{Source}' resolves to '{EventType}', but no " +
                   "message handler is registered for it. No inbox row was written and the " +
                   "message will not be delivered anywhere in this process. Register a handler " +
-                  "with AddMessageHandler<THandler, TEvent>(), or stop subscribing to the " +
-                  "contract.")]
+                  "with bus.AddHandler<THandler>(), or stop routing the contract to this " +
+                  "service.")]
     public static partial void NoConsumer(
         ILogger logger, string contractName, string source, string eventType);
 }

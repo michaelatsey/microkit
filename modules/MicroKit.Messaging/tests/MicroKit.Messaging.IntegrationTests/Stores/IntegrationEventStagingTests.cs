@@ -269,11 +269,12 @@ public sealed class IntegrationEventStagingTests
             services.AddSingleton<TimeProvider>(new FakeTimeProvider(Now));
             services.AddDbContext<TestMessagingDbContext>(o => o.UseSqlite(connection));
 
-            services.AddIntegrationEventContracts(Source, e => e.Publishes<StagingTestEvent>());
-
-            services.AddMicroKitMessaging()
-                .AddIntegrationEventPublishing()
-                .AddEfCoreIntegrationEvents<TestMessagingDbContext>();
+            services.AddMicroKitMessaging(bus =>
+            {
+                bus.ServiceName = Source;
+                bus.Publishes<StagingTestEvent>();
+                bus.AddEfCoreIntegrationEvents<TestMessagingDbContext>();
+            });
 
             var provider = services.BuildServiceProvider(
                 new ServiceProviderOptions { ValidateScopes = true });

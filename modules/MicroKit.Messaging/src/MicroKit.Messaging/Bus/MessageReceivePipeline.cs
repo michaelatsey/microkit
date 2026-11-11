@@ -257,11 +257,12 @@ internal sealed class MessageReceivePipeline(
         _ => DeliveryVerdict.Transient,
     };
 
-    private static MessageContext BuildContext(
+    private MessageContext BuildContext(
         MessageEnvelope envelope, Type eventType, MessageId messageId)
     {
-        // Every type the registry resolves carries the attribute: both builders reject its absence.
-        var contract = MessageContracts.Find(eventType);
+        // The registry carries the contract read at registration (#187): no reflection per
+        // delivery. Every type it resolves a wire type to is known to it.
+        contracts.TryGetContract(eventType, out var contract);
         var headers = envelope.Headers;
 
         return new MessageContext

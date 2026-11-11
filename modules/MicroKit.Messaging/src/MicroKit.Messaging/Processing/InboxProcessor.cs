@@ -1,5 +1,5 @@
 using System.Text;
-using MicroKit.Messaging.Bus;
+using MicroKit.Messaging.Publishing;
 using MicroKit.Messaging.Serialization;
 using MicroKit.Messaging.Registry;
 
@@ -72,6 +72,7 @@ internal sealed class InboxProcessor : IInboxProcessor
     // PerTenantInboxCoordinator's responsibility, not the processor's.
     private readonly IInboxProcessorStore _store;
     private readonly MessageHandlerRegistry _registry;
+    private readonly IntegrationEventRegistry _contracts;
     private readonly IMessageSerializer _serializer;
     private readonly IExecutionScopeFactory _executionScopeFactory;
     private readonly InboxProcessorOptions _options;
@@ -81,7 +82,8 @@ internal sealed class InboxProcessor : IInboxProcessor
 
     /// <summary>Initializes a new <see cref="InboxProcessor"/>.</summary>
     /// <param name="store">Claim and deferred settlement, batch-scoped.</param>
-    /// <param name="registry">Maps a consumer type to its handler and invoker.</param>
+    /// <param name="registry">Maps a consumer type and a message type to its handler and invoker.</param>
+    /// <param name="contracts">Carries each message type's contract name and version (#187).</param>
     /// <param name="serializer">Deserializes the persisted payload.</param>
     /// <param name="executionScopeFactory">Creates the per-message execution scope.</param>
     /// <param name="options">Batch size, lease, retry policy.</param>
@@ -91,6 +93,7 @@ internal sealed class InboxProcessor : IInboxProcessor
     public InboxProcessor(
         IInboxProcessorStore store,
         MessageHandlerRegistry registry,
+        IntegrationEventRegistry contracts,
         IMessageSerializer serializer,
         IExecutionScopeFactory executionScopeFactory,
         InboxProcessorOptions options,
@@ -100,6 +103,7 @@ internal sealed class InboxProcessor : IInboxProcessor
     {
         _store = store;
         _registry = registry;
+        _contracts = contracts;
         _serializer = serializer;
         _executionScopeFactory = executionScopeFactory;
         _options = options;
@@ -243,13 +247,16 @@ internal sealed class InboxProcessor : IInboxProcessor
         CancellationToken cancellationToken)
     {
         // Registry lookup first: an unregistered consumer is permanent by construction, and
-        // there is no point paying for an execution scope to discover it.
-        if (!_registry.TryGetInvoker(message.ConsumerType, out var entry))
+        // there is no point paying for an execution scope to discover it. The key is the PAIR
+        // (#187): one handler may handle several message types, each with its own invoker, so the
+        // consumer type alone would hand this row to the invoker of another type.
+        var eventType = ResolveEventType(message);
+        if (!_registry.TryGetInvoker(message.ConsumerType, eventType, out var entry))
         {
             throw new InboxPayloadException(
-                $"Unknown consumer type '{message.ConsumerType}'. It is absent from the handler " +
-                "registry, so no number of retries will resolve it. Call " +
-                "AddMessageHandler<THandler, TEvent>() at startup, then requeue.");
+                $"Unknown consumer type '{message.ConsumerType}' for '{eventType.FullName}'. It is " +
+                "absent from the handler registry, so no number of retries will resolve it. Call " +
+                "bus.AddHandler<THandler>() inside AddMicroKitMessaging, then requeue.");
         }
 
         var ctx = new MessageCtx
@@ -273,7 +280,7 @@ internal sealed class InboxProcessor : IInboxProcessor
             .CreateScopeAsync(ctx, cancellationToken)
             .ConfigureAwait(false);
 
-        var (evt, eventType) = Deserialize(message);
+        var evt = Deserialize(message, eventType);
         var context = BuildContext(message, eventType);
 
         var handler = Resolve(scope.ServiceProvider, entry.HandlerType);
@@ -355,16 +362,8 @@ internal sealed class InboxProcessor : IInboxProcessor
     /// <see cref="IMessageSerializer"/>; until that contract changes, wrapping here is the
     /// honest fix.
     /// </remarks>
-    private (IIntegrationEvent Event, Type EventType) Deserialize(InboxMessage message)
+    private IIntegrationEvent Deserialize(InboxMessage message, Type eventType)
     {
-        // The row records the local type by assembly-qualified name; the serializer is type-based
-        // since #186, so the name is resolved here. A name that no longer resolves is as permanent
-        // as an unreadable payload: the row must change before it can succeed.
-        var eventType = RowEventTypes.Resolve(message.EventType)
-            ?? throw new InboxPayloadException(
-                $"EventType '{message.EventType}' does not resolve to a type in this process. " +
-                "The persisted row must change before this can succeed.");
-
         object? deserialized;
 
         try
@@ -387,8 +386,18 @@ internal sealed class InboxProcessor : IInboxProcessor
                 "that is not an IIntegrationEvent. The persisted row must change before this " +
                 "can succeed.");
 
-        return (evt, eventType);
+        return evt;
     }
+
+    /// <summary>
+    /// Resolves the row's local message type. The row records it by assembly-qualified name; a name
+    /// that no longer resolves is as permanent as an unreadable payload.
+    /// </summary>
+    private static Type ResolveEventType(InboxMessage message)
+        => RowEventTypes.Resolve(message.EventType)
+            ?? throw new InboxPayloadException(
+                $"EventType '{message.EventType}' does not resolve to a type in this process. " +
+                "The persisted row must change before this can succeed.");
 
     /// <summary>
     /// Builds the handler's <see cref="MessageContext"/> from the row, so the transitional inbox
@@ -397,13 +406,14 @@ internal sealed class InboxProcessor : IInboxProcessor
     /// <remarks>
     /// The row records neither the producer's source nor its headers, so
     /// <see cref="MessageContext.Source"/> is empty and <see cref="MessageContext.Headers"/> has
-    /// none; #188 replaces this path. The contract name and version come from the local type's
-    /// <see cref="MessageContractAttribute"/>; a type without one — reachable only through a row
-    /// written outside <c>EnvelopeReceiver</c> — reports an empty name and version 0.
+    /// none; #188 replaces this path. The contract name and version come from the registry, which
+    /// read them at registration (#187) — never from the attribute on each delivery. A type the
+    /// registry does not know — reachable only through a row written outside
+    /// <c>EnvelopeReceiver</c> — reports an empty name and version 0.
     /// </remarks>
-    private static MessageContext BuildContext(InboxMessage message, Type eventType)
+    private MessageContext BuildContext(InboxMessage message, Type eventType)
     {
-        var contract = MessageContracts.Find(eventType);
+        _contracts.TryGetContract(eventType, out var contract);
 
         return new MessageContext
         {

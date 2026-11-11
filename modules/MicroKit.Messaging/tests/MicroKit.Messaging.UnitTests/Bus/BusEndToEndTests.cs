@@ -17,12 +17,13 @@ public sealed class BusEndToEndTests
     public async Task PublishAsync_WithNoDbContextAndTheInMemoryTransport_ReachesBothHandlersWithAFullyPopulatedContext()
     {
         await using var host = await BusTestHost.StartAsync(bus => bus
-            .AddMessageHandler<FirstOrderPlacedHandler, OrderPlaced>()
-            .AddMessageHandler<SecondOrderPlacedHandler, OrderPlaced>());
+            .AddHandler<FirstOrderPlacedHandler>()
+            .AddHandler<SecondOrderPlacedHandler>());
 
-        // The bus owns the only hosted service: AddMicroKitMessaging() registers none (#186).
-        host.Provider.GetServices<IHostedService>().ShouldHaveSingleItem()
-            .GetType().Name.ShouldBe("InMemoryTransportWorker");
+        // The bus owns the only worker: AddMicroKitMessaging() registers no hosted service but
+        // its composition validator (#186, #187).
+        host.Provider.GetServices<IHostedService>().Select(s => s.GetType().Name)
+            .ShouldBe(["MessagingCompositionValidator", "InMemoryTransportWorker"]);
         host.Provider.GetService<IOutboxWriter>().ShouldBeNull("no store is composed");
         host.Provider.GetService<IInboxWriter>().ShouldBeNull("no store is composed");
 
@@ -75,7 +76,7 @@ public sealed class BusEndToEndTests
     public async Task Receive_WhenTheBodyCannotBeDeserialized_DeadLettersOnFirstDeliveryAndNeverReachesAHandler()
     {
         await using var host = await BusTestHost.StartAsync(bus => bus
-            .AddMessageHandler<FirstOrderPlacedHandler, OrderPlaced>()
+            .AddHandler<FirstOrderPlacedHandler>()
             .AddReceiveMiddleware<RecordingReceiveMiddleware>());
 
         var poison = new MessageEnvelope
@@ -90,10 +91,10 @@ public sealed class BusEndToEndTests
 
         await host.Provider.GetRequiredService<IMessageTransport>().SendAsync(poison);
 
-        await Eventually.HoldsAsync(() => host.Broker.DeadLetters.Count == 1, "the body is dead-lettered");
+        await Eventually.HoldsAsync(() => host.DeadLetters.Count == 1, "the body is dead-lettered");
 
-        host.Broker.DeadLetters.ShouldHaveSingleItem().Id.ShouldBe(poison.Id);
-        host.Broker.GetFailedAttempts(poison.Id)
+        host.DeadLetters.ShouldHaveSingleItem().Id.ShouldBe(poison.Id);
+        host.FailedAttempts(poison.Id)
             .ShouldBe(0, "dead-lettered on the FIRST delivery, not after exhausting retries");
         host.Recorder.Deliveries.ShouldBeEmpty("no handler is reached");
         host.Recorder.Steps.ShouldBeEmpty("not even a message scope is created for it");
@@ -107,7 +108,7 @@ public sealed class BusEndToEndTests
         var converter = new CountingMoneyConverter();
         await using var host = await BusTestHost.StartAsync(bus => bus
             .ConfigureJson(json => json.Converters.Add(converter))
-            .AddMessageHandler<InvoiceIssuedHandler, InvoiceIssued>());
+            .AddHandler<InvoiceIssuedHandler>());
 
         await host.PublishAsync(new InvoiceIssued(new Money(12)));
 
@@ -126,7 +127,7 @@ public sealed class BusEndToEndTests
         await using var host = await BusTestHost.StartAsync(bus => bus
             .AddSendMiddleware<RecordingSendMiddleware>()
             .AddReceiveMiddleware<RecordingReceiveMiddleware>()
-            .AddMessageHandler<FirstOrderPlacedHandler, OrderPlaced>());
+            .AddHandler<FirstOrderPlacedHandler>());
 
         await host.PublishAsync(new OrderPlaced(Guid.NewGuid()));
 
@@ -150,7 +151,7 @@ public sealed class BusEndToEndTests
 
         MessageId id;
         await using (var first = await BusTestHost.StartAsync(
-            bus => bus.AddMessageHandler<BlockingOrderPlacedHandler, OrderPlaced>(),
+            bus => bus.AddHandler<BlockingOrderPlacedHandler>(),
             broker,
             services => services.AddSingleton(started)))
         {
@@ -161,19 +162,19 @@ public sealed class BusEndToEndTests
             await first.StopAsync();
         }
 
-        broker.GetFailedAttempts(id.ToString()).ShouldBe(0, "shutdown is not a failed attempt");
-        broker.DeadLetters.ShouldBeEmpty();
+        broker.GetFailedAttempts(BusTestHost.Source, id.ToString()).ShouldBe(0, "shutdown is not a failed attempt");
+        broker.GetDeadLetters(BusTestHost.Source).ShouldBeEmpty();
 
         await using var second = await BusTestHost.StartAsync(
-            bus => bus.AddMessageHandler<FirstOrderPlacedHandler, OrderPlaced>(),
+            bus => bus.AddHandler<FirstOrderPlacedHandler>(),
             broker);
 
         await Eventually.HoldsAsync(
             () => second.Recorder.Deliveries.Count == 1, "the next host on the broker delivers it");
 
         second.Recorder.Deliveries.Single().Context.MessageId.ShouldBe(id);
-        broker.GetFailedAttempts(id.ToString()).ShouldBe(0);
-        broker.DeadLetters.ShouldBeEmpty();
+        broker.GetFailedAttempts(BusTestHost.Source, id.ToString()).ShouldBe(0);
+        broker.GetDeadLetters(BusTestHost.Source).ShouldBeEmpty();
     }
 
     // ── Verification 6 ─────────────────────────────────────────────────────────────────────────
@@ -182,8 +183,8 @@ public sealed class BusEndToEndTests
     public async Task PublishAsync_WithATenant_PropagatesTenantCorrelationAndCausationThroughAHandlersPublication()
     {
         await using var host = await BusTestHost.StartAsync(bus => bus
-            .AddMessageHandler<ShippingOrderPlacedHandler, OrderPlaced>()
-            .AddMessageHandler<OrderShippedHandler, OrderShipped>());
+            .AddHandler<ShippingOrderPlacedHandler>()
+            .AddHandler<OrderShippedHandler>());
 
         var placedId = await host.PublishAsync(
             new OrderPlaced(Guid.NewGuid()), new PublishOptions { TenantId = "tenant-a" });
@@ -210,7 +211,7 @@ public sealed class BusEndToEndTests
         await using var host = await BusTestHost.StartAsync(
             bus => bus
                 .AddScopeInitializer<TenantScopeInitializer>()
-                .AddMessageHandler<GatedOrderPlacedHandler, OrderPlaced>(),
+                .AddHandler<GatedOrderPlacedHandler>(),
             services: services => services
                 .AddScoped<TenantSlot>()
                 .AddScoped<TenantGate>());

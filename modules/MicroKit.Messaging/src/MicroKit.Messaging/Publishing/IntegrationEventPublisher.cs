@@ -102,7 +102,7 @@ internal sealed class IntegrationEventPublisher : IIntegrationEventPublisher
         var message = _factory.CreateContract(
             integrationEvent,
             registration.ContractName,
-            registration.Source,
+            _registry.Source,
             origin,
             occurredOnUtc,
             _executionContext);
@@ -129,7 +129,7 @@ internal sealed class IntegrationEventPublisher : IIntegrationEventPublisher
             _logger,
             result.Id.Value,
             registration.ContractName,
-            registration.Source,
+            _registry.Source,
             message.TenantId,
             message.OriginMessageId?.Value);
 

@@ -10,9 +10,9 @@ namespace MicroKit.Messaging.Options;
 /// <see cref="MaxRetries"/> 10 to 5. Both bind unchanged but halve the retry budget.
 /// </para>
 /// <para>
-/// The accessors are <c>{ get; set; }</c> rather than <c>init</c>. With <c>init</c>, the
-/// <c>Action&lt;OutboxProcessorOptions&gt;</c> callback taken by <c>AddMicroKitMessaging</c> could
-/// not assign anything, so every outbox configuration callback was silently a no-op.
+/// The accessors are <c>{ get; set; }</c> rather than <c>init</c>: the configuration binding and
+/// <c>bus.Configure(o =&gt; o.Outbox...)</c> assign them after construction (#187). With
+/// <c>init</c>, nothing could, and every outbox setting would silently keep its default.
 /// </para>
 /// </remarks>
 public sealed record OutboxProcessorOptions

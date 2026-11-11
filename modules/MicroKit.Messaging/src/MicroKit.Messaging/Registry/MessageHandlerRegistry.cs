@@ -11,9 +11,10 @@ using System.Reflection;
 /// Two lookup directions are maintained, and they are at different stages of their life:
 /// <list type="bullet">
 /// <item><description>
-/// <strong>By consumer type name</strong> (<see cref="TryGetInvoker"/>) — used by
-/// <c>InboxProcessor</c> to find the invoker for a specific <c>InboxMessage.ConsumerType</c>
-/// during drain. Live.
+/// <strong>By consumer type name and message type</strong> (<see cref="TryGetInvoker"/>) — used
+/// by <c>InboxProcessor</c> to find the invoker for a row's <c>ConsumerType</c> and
+/// <c>EventType</c> during drain. The pair, not the consumer alone (#187): one handler may
+/// implement <c>IMessageHandler&lt;T&gt;</c> for several types, and each type has its own invoker.
 /// </description></item>
 /// <item><description>
 /// <strong>By event type</strong> (<see cref="GetHandlers"/>) — discovers which consumers should
@@ -27,13 +28,14 @@ using System.Reflection;
 /// </para>
 /// <para>
 /// The registry is designed to be registered as a singleton and populated at startup
-/// via <c>MessagingBuilder.AddMessageHandler&lt;THandler, TEvent&gt;()</c>.
+/// via <c>bus.AddHandler&lt;THandler&gt;()</c> and <c>bus.AddHandlersFromAssemblyContaining&lt;T&gt;()</c>,
+/// which register one entry per closed <c>IMessageHandler&lt;T&gt;</c> the handler implements.
 /// </para>
 /// </remarks>
 internal sealed class MessageHandlerRegistry
 {
     private readonly Dictionary<Type, List<HandlerEntry>> _byEventType = new();
-    private readonly Dictionary<string, HandlerEntry> _byConsumerType = new();
+    private readonly Dictionary<(string ConsumerType, Type EventType), HandlerEntry> _byConsumer = new();
 
     /// <summary>
     /// Entry stored in the handler registry. Contains the consumer type name,
@@ -46,18 +48,20 @@ internal sealed class MessageHandlerRegistry
 
     /// <summary>
     /// Registers a handler using an invoker closed over <typeparamref name="TEvent"/> at
-    /// compile time. Called by <c>MessagingBuilder.AddMessageHandler&lt;THandler, TEvent&gt;()</c>.
+    /// compile time.
     /// </summary>
     /// <remarks>
     /// <para>
-    /// Preferred over <see cref="Register"/>: the cast to <c>IMessageHandler&lt;TEvent&gt;</c> is
-    /// resolved by the compiler rather than through reflection at registration time.
+    /// For a message type known at compile time — the tests' fixtures. Production registration
+    /// goes through <see cref="Register"/> since #187: handler discovery learns each handled type
+    /// from the handler's interfaces at run time. Both build the same invoker and share one
+    /// insertion path.
     /// </para>
     /// <para>
-    /// <b>Idempotent in <paramref name="consumerType"/>.</b> Registering the same consumer twice
-    /// contributes one consumer, not two, and the later registration replaces the earlier — see
-    /// <see cref="GetHandlers"/> for why appending would misreport a first delivery as a
-    /// redelivery.
+    /// <b>Idempotent in (<paramref name="consumerType"/>, <typeparamref name="TEvent"/>).</b>
+    /// Registering the same consumer twice for one type contributes one consumer, not two, and the
+    /// later registration replaces the earlier — see <see cref="GetHandlers"/> for why appending
+    /// would misreport a first delivery as a redelivery.
     /// </para>
     /// </remarks>
     public void RegisterGeneric<TEvent>(string consumerType, Type handlerType)
@@ -72,11 +76,18 @@ internal sealed class MessageHandlerRegistry
     }
 
     /// <summary>
-    /// Registers a handler using a reflection-based invoker. Intended for test helpers
-    /// that cannot supply a generic type parameter at compile time.
+    /// Registers a handler using a reflection-based invoker, for a message type known only at run
+    /// time — the handler discovery of <c>bus.AddHandler&lt;THandler&gt;()</c> (#187).
     /// </summary>
     /// <remarks>
-    /// <b>Idempotent in <paramref name="consumerType"/></b>, exactly as
+    /// <para>
+    /// The invoker is built once, at registration, by closing a generic method over the message
+    /// type (<c>MakeGenericMethod</c>); the delivery path then calls a typed delegate, with no
+    /// reflection. That closing is trim-safe — the generic parameter carries no
+    /// <c>DynamicallyAccessedMembers</c> requirement — but it needs dynamic code, so it is not
+    /// Native AOT-safe; the module claims trimmability (<c>IsTrimmable</c>), not AOT compatibility.
+    /// </para>
+    /// <b>Idempotent in (<paramref name="consumerType"/>, <paramref name="eventType"/>)</b>, exactly as
     /// <see cref="RegisterGeneric{TEvent}"/> is — the two share one insertion path. A repeated
     /// registration replaces the earlier entry rather than appending a second; see
     /// <see cref="GetHandlers"/>.
@@ -96,8 +107,9 @@ internal sealed class MessageHandlerRegistry
         => (h, e, c, ct) => ((IMessageHandler<TEvent>)h).HandleAsync((TEvent)e, c, ct);
 
     /// <summary>
-    /// Adds one entry, idempotently in <c>ConsumerType</c>. A repeated registration of the same
-    /// handler replaces its entry rather than appending a second.
+    /// Adds one entry, idempotently in (<c>ConsumerType</c>, message type). A repeated registration
+    /// of the same handler for the same type replaces its entry rather than appending a second; a
+    /// registration of the same handler for ANOTHER type is a different entry and replaces nothing.
     /// </summary>
     /// <remarks>
     /// <para>
@@ -111,7 +123,7 @@ internal sealed class MessageHandlerRegistry
     /// </para>
     /// <para>
     /// Replace rather than ignore, so the two dictionaries cannot disagree:
-    /// <see cref="_byConsumerType"/> has always overwritten, and a re-registration carries a
+    /// <see cref="_byConsumer"/> has always overwritten, and a re-registration carries a
     /// freshly built invoker that must be the one both lookups return.
     /// </para>
     /// </remarks>
@@ -135,7 +147,7 @@ internal sealed class MessageHandlerRegistry
             list.Add(entry);
         }
 
-        _byConsumerType[entry.ConsumerType] = entry;
+        _byConsumer[(entry.ConsumerType, eventType)] = entry;
     }
 
     /// <summary>
@@ -169,11 +181,15 @@ internal sealed class MessageHandlerRegistry
             : Array.Empty<HandlerEntry>();
 
     /// <summary>
-    /// Attempts to locate the handler entry for a specific consumer type name
-    /// (as stored in <c>InboxMessage.ConsumerType</c>).
+    /// Attempts to locate the handler entry for a consumer type name and a message type (as stored
+    /// in <c>InboxMessage.ConsumerType</c> and resolved from <c>InboxMessage.EventType</c>).
     /// </summary>
-    public bool TryGetInvoker(string consumerType, out HandlerEntry entry)
-        => _byConsumerType.TryGetValue(consumerType, out entry);
+    /// <param name="consumerType">The consumer type name.</param>
+    /// <param name="eventType">The local message type.</param>
+    /// <param name="entry">The entry, when one is registered for the pair.</param>
+    /// <returns><see langword="true"/> when the pair is registered.</returns>
+    public bool TryGetInvoker(string consumerType, Type eventType, out HandlerEntry entry)
+        => _byConsumer.TryGetValue((consumerType, eventType), out entry);
 
     /// <summary>
     /// Every distinct consumer type name registered so far. Unordered — it is a dictionary key
@@ -181,9 +197,9 @@ internal sealed class MessageHandlerRegistry
     /// </summary>
     /// <remarks>
     /// <para>
-    /// <b>Distinct by construction, not by filtering.</b> Registration deduplicates on
-    /// <c>ConsumerType</c>, so a handler registered twice appears once here and the count is the
-    /// number of consumers this host will actually fan out to — see <see cref="GetHandlers"/>.
+    /// <b>Distinct by consumer type.</b> Entries are keyed on (<c>ConsumerType</c>, message type)
+    /// since #187, so a handler of two message types holds two entries; this set names it once.
+    /// A handler registered twice for one type appears once too — see <see cref="GetHandlers"/>.
     /// </para>
     /// It was written for <c>InboxIngestionValidator</c>, which named the registered consumers in
     /// its boot failure — and that validator was deleted with the receiving seam, so this property
@@ -194,5 +210,6 @@ internal sealed class MessageHandlerRegistry
     /// directly by <c>MessageHandlerRegistryTests</c>, so it is an uncalled seam rather than
     /// untested code. Worth revisiting at 1.0.0, not before.
     /// </remarks>
-    public IReadOnlyCollection<string> RegisteredConsumerTypes => _byConsumerType.Keys;
+    public IReadOnlyCollection<string> RegisteredConsumerTypes =>
+        [.. _byConsumer.Keys.Select(k => k.ConsumerType).Distinct(StringComparer.Ordinal)];
 }

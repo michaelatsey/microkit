@@ -171,7 +171,7 @@ public sealed class MediatROutboxDispatcherTests
         var ex = await Should.ThrowAsync<OutboxConfigurationException>(
             async () => await Build(withInner: false).DispatchAsync(MakeOutboxMessage(MessageKind.Contract)));
 
-        ex.Message.ShouldContain("AddTransportDispatcher()");
+        ex.Message.ShouldContain("bus.UseInMemoryTransport()");
     }
 
     [Fact]
