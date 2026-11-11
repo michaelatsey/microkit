@@ -22,7 +22,8 @@
     <PackageReference Include="Microsoft.EntityFrameworkCore.Sqlite" />
     <!-- Second provider for the SAME store. EfOutboxStore is provider-agnostic by design,
          so the PostgreSQL suite is the same contract under a real database, not a second
-         implementation. Testcontainers-backed tests are skipped when Docker is absent. -->
+         implementation. Testcontainers-backed tests are skipped when no Docker daemon answers,
+         except under CI (CI=true or CI=1), where they run and fail without Docker. -->
     <PackageReference Include="Npgsql.EntityFrameworkCore.PostgreSQL" />
     <PackageReference Include="Testcontainers.PostgreSql" />
     <!-- FakeTimeProvider: pins claim/lease instants so nothing depends on a wall clock. -->
