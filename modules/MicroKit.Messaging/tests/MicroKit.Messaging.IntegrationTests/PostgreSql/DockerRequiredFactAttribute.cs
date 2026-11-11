@@ -25,7 +25,8 @@ public sealed class DockerRequiredFactAttribute : FactAttribute
     {
         if (!DockerEndpoint.ShouldRun)
         {
-            Skip = "Docker is not available — skipping the PostgreSQL suite. " +
+            Skip = "No Docker daemon answered Testcontainers' discovery within " +
+                   $"{DockerEndpoint.DiscoveryDeadlineSeconds} seconds — skipping the PostgreSQL suite. " +
                    "Start Docker to run the outbox and inbox concurrency tests against a real " +
                    "database. CI never skips: with CI=true or CI=1 these tests run, and fail " +
                    "without Docker.";
@@ -41,17 +42,30 @@ public sealed class DockerRequiredFactAttribute : FactAttribute
 /// its own discovery — <c>DOCKER_HOST</c>, <c>~/.testcontainers.properties</c>, the
 /// <c>TESTCONTAINERS_*</c> variables, the default sockets and pipes — and leaves null when no
 /// candidate's daemon answers a ping. A socket file with no daemon behind it is therefore
-/// unavailable (#173), and the probe cannot disagree with the container start it guards.
+/// unavailable (#173). Within the bound below, the probe agrees with the container start it
+/// guards; a discovery that would only succeed after the bound reads as unavailable, and the
+/// suite skips.
 /// </para>
 /// <para>
-/// That discovery talks to the daemon, so it is not free: the probe runs once per process and is
-/// cached, and its connection timeouts are paid once rather than per test. It never throws — any
-/// exception, a <see cref="TypeInitializationException"/> from Testcontainers' static settings
-/// included, reads as "unavailable".
+/// That discovery talks to the daemon, so it is not free. The probe runs once per process, is
+/// cached, and is bounded at <see cref="DiscoveryDeadlineSeconds"/> seconds: it runs at test
+/// discovery, for every run of the assembly, filtered runs included, and Testcontainers' own
+/// connection timeouts are far longer — a black-holed <c>DOCKER_HOST</c> stalled it for over two
+/// minutes. It never throws: an exception, a <see cref="TypeInitializationException"/> from
+/// Testcontainers' static settings included, or a timeout reads as "unavailable".
+/// </para>
+/// <para>
+/// A discovery that outlives the bound keeps running in the background, and a late fault is
+/// observed so it never surfaces as an unobserved task exception. Under CI the bound changes
+/// nothing: <see cref="ShouldRun"/> is true regardless, and the fixture's container start waits
+/// for Testcontainers' settings and then succeeds or fails on its own.
 /// </para>
 /// </remarks>
 internal static class DockerEndpoint
 {
+    /// <summary>The bound on Testcontainers' discovery, in seconds.</summary>
+    internal const int DiscoveryDeadlineSeconds = 10;
+
     private static readonly Lazy<bool> Probe = new(Detect, LazyThreadSafetyMode.ExecutionAndPublication);
 
     /// <summary>Gets a value indicating whether the Docker endpoint Testcontainers would use answers.</summary>
@@ -73,11 +87,37 @@ internal static class DockerEndpoint
         || string.Equals(ci, "true", StringComparison.OrdinalIgnoreCase)
         || string.Equals(ci, "1", StringComparison.Ordinal);
 
-    private static bool Detect()
+    /// <summary>
+    /// Runs <paramref name="discover"/> on its own background thread, not a thread-pool thread,
+    /// and returns its answer if it arrives within <paramref name="deadline"/>; a fault or a
+    /// timeout returns <see langword="false"/>. Never throws.
+    /// </summary>
+    /// <remarks>
+    /// A dedicated thread means a busy pool cannot spend the deadline before discovery has even
+    /// started, and an abandoned discovery holds no pool thread for Testcontainers' own timeouts.
+    /// </remarks>
+    internal static bool DiscoverWithin(Func<bool> discover, TimeSpan deadline)
     {
         try
         {
-            return TestcontainersSettings.OS.DockerEndpointAuthConfig is not null;
+            var discovery = Task.Factory.StartNew(
+                discover,
+                CancellationToken.None,
+                TaskCreationOptions.LongRunning,
+                TaskScheduler.Default);
+            if (discovery.Wait(deadline))
+            {
+                return discovery.Result;
+            }
+
+            // Abandoned, not cancelled: it keeps running. Observe a late fault so it never
+            // surfaces as an unobserved task exception.
+            _ = discovery.ContinueWith(
+                static t => _ = t.Exception,
+                CancellationToken.None,
+                TaskContinuationOptions.OnlyOnFaulted,
+                TaskScheduler.Default);
+            return false;
         }
         catch (Exception)
         {
@@ -85,4 +125,9 @@ internal static class DockerEndpoint
             return false;
         }
     }
+
+    private static bool Detect() =>
+        DiscoverWithin(
+            static () => TestcontainersSettings.OS.DockerEndpointAuthConfig is not null,
+            TimeSpan.FromSeconds(DiscoveryDeadlineSeconds));
 }
