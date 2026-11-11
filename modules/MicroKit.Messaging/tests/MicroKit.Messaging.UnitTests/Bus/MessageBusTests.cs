@@ -208,9 +208,12 @@ public sealed class MessageBusTests
             services.AddSingleton<IMessageTransport>(transport);
         }
 
-        services.AddIntegrationEventContracts(BusTestHost.Source, c => c.Publishes<OrderPlaced>());
-        var bus = services.AddMicroKitMessaging();
-        compose?.Invoke(bus);
+        services.AddMicroKitMessaging(bus =>
+        {
+            bus.ServiceName = BusTestHost.Source;
+            bus.Publishes<OrderPlaced>();
+            compose?.Invoke(bus);
+        });
 
         return (services.BuildServiceProvider(new ServiceProviderOptions { ValidateScopes = true }), transport);
     }

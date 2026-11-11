@@ -44,7 +44,11 @@ public sealed class MessagingSerializerDefaultTests
         var services = new ServiceCollection();
         services.AddSingleton(typeof(ILogger<>), typeof(NullLogger<>));
 
-        compose(services.AddMicroKitMessaging());
+        services.AddMicroKitMessaging(bus =>
+        {
+            bus.ServiceName = "tests.serializer";
+            compose(bus);
+        });
 
         return services.BuildServiceProvider(new ServiceProviderOptions { ValidateScopes = true });
     }
@@ -53,8 +57,7 @@ public sealed class MessagingSerializerDefaultTests
     {
         { "outbox only", _ => { } },
         { "outbox + transport", b => b.AddTransportDispatcher() },
-        { "outbox + publishing", b => b.AddIntegrationEventPublishing() },
-        { "outbox + consumption", b => b.AddIntegrationEventConsumption() },
+        { "outbox + in-memory transport", b => b.UseInMemoryTransport() },
     };
 
     [Theory]
@@ -89,26 +92,11 @@ public sealed class MessagingSerializerDefaultTests
         // back onto an optional builder extension, this is the test that says so.
         var services = new ServiceCollection();
 
-        services.AddMicroKitMessaging();
+        services.AddMicroKitMessaging(_ => { });
 
         services.Where(d => d.ServiceType == typeof(IMessageSerializer))
             .ShouldHaveSingleItem()
             .ImplementationType.ShouldBe(typeof(SystemTextJsonMessageSerializer));
-    }
-
-    [Fact]
-    public void AddIntegrationEventPublishing_AddsNoSerializerOfItsOwn()
-    {
-        // A DELTA, not an absence: AddMicroKitMessaging() has already supplied one, so asserting
-        // "no serializer in the collection" would fail for the wrong reason. This method used to
-        // TryAdd a second, which is unreachable code that reads like a safeguard (ADR-MSG-019).
-        var services = new ServiceCollection();
-        var builder = services.AddMicroKitMessaging();
-        var before = services.Count(d => d.ServiceType == typeof(IMessageSerializer));
-
-        builder.AddIntegrationEventPublishing();
-
-        services.Count(d => d.ServiceType == typeof(IMessageSerializer)).ShouldBe(before);
     }
 
     [Fact]
@@ -120,7 +108,7 @@ public sealed class MessagingSerializerDefaultTests
         var services = new ServiceCollection();
         services.AddSingleton<IMessageSerializer, RecordingSerializer>();
 
-        services.AddMicroKitMessaging();
+        services.AddMicroKitMessaging(_ => { });
 
         using var provider = services.BuildServiceProvider();
         provider.GetRequiredService<IMessageSerializer>().ShouldBeOfType<RecordingSerializer>();
@@ -133,7 +121,7 @@ public sealed class MessagingSerializerDefaultTests
         // other order silently keep the default. Pinned so nobody "fixes" the docs back.
         var services = new ServiceCollection();
 
-        services.AddMicroKitMessaging();
+        services.AddMicroKitMessaging(_ => { });
         services.TryAddSingleton<IMessageSerializer, RecordingSerializer>();
 
         using var provider = services.BuildServiceProvider();

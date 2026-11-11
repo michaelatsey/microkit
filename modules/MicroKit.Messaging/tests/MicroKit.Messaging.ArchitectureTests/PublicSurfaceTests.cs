@@ -67,6 +67,10 @@ public sealed class PublicSurfaceTests
     /// <c>PermanentMessageException</c> — so a handler never references the SPI — and, from
     /// Core, the <c>InMemoryBroker</c> a host may supply.
     /// </para>
+    /// <para>
+    /// #187 narrowed it: one entry point, so <c>IntegrationEventServiceCollectionExtensions</c> and
+    /// its two fluent builders are gone; <c>MessagingOptions</c> joins the options namespace.
+    /// </para>
     /// </remarks>
     [Fact]
     public void TheApplicationSurface_MatchesTheSnapshot()
@@ -96,7 +100,6 @@ public sealed class PublicSurfaceTests
             "PublishOptions",
             // Core — composition, diagnostics, and the in-memory broker a host may supply.
             "InMemoryBroker",
-            "IntegrationEventServiceCollectionExtensions",
             "MessagingBuilder",
             "MessagingDiagnostics",
             "ServiceCollectionExtensions",
@@ -186,20 +189,15 @@ public sealed class PublicSurfaceTests
     public void Core_ExposesCompositionOnly()
     {
         VisibleNamespacesIn(CoreAssembly).ShouldBe(
-            ["MicroKit.Messaging", "MicroKit.Messaging.Options", "MicroKit.Messaging.Publishing",
-             "MicroKit.Messaging.Spi"],
+            ["MicroKit.Messaging", "MicroKit.Messaging.Options", "MicroKit.Messaging.Spi"],
             "Core publishes composition and options only (#185), plus one SPI registration seam " +
-            "for store providers (#186). MicroKit.Messaging.Processing and " +
-            "MicroKit.Messaging.Registry must expose NOTHING — a name appearing there means a " +
-            "processor, coordinator, batch result, metric or registry went public again");
+            "for store providers (#186). MicroKit.Messaging.Processing, MicroKit.Messaging.Registry " +
+            "and, since #187, MicroKit.Messaging.Publishing must expose NOTHING — a name appearing " +
+            "there means a processor, coordinator, batch result, metric, registry or contract " +
+            "builder went public again");
 
         VisibleTypeNamesIn("MicroKit.Messaging.Options", CoreAssembly).ShouldBe(
-            ["InboxProcessorOptions", "OutboxProcessorOptions"]);
-
-        VisibleTypeNamesIn("MicroKit.Messaging.Publishing", CoreAssembly).ShouldBe(
-            ["IntegrationEventContractBuilder", "IntegrationEventSubscriptionBuilder"],
-            "only the two fluent builders are public here; the registry, the registrations and the " +
-            "subscription collections became internal with #185");
+            ["InboxProcessorOptions", "MessagingOptions", "OutboxProcessorOptions"]);
     }
 
     /// <summary>The two optional integration packages, pinned in full.</summary>

@@ -25,7 +25,7 @@ using Microsoft.Extensions.Logging;
 public sealed class MessagingBuilderTransportTests
 {
     private static MessagingBuilder Builder(IServiceCollection services)
-        => services.AddMicroKitMessaging();
+        => services.AddMicroKitMessaging(_ => { });
 
     private static ServiceDescriptor KeyedDispatcher(IServiceCollection services)
         => services

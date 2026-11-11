@@ -261,8 +261,11 @@ public sealed class IntegrationEventPublisherTests
         MessageId? origin = null)
         => new IntegrationEventPublisher(
             writer,
-            IntegrationEventContractFixtures.Registry(
-                ("/saasbtp/safety", e => e.Publishes<ConstatRecorded>())),
+            IntegrationEventContractFixtures.Registry(bus =>
+            {
+                bus.ServiceName = "/saasbtp/safety";
+                bus.Publishes<ConstatRecorded>();
+            }),
             new OutboxMessageFactory(
                 new SystemTextJsonMessageSerializer(), new FakeTimeProvider(Now)),
             new OriginMessageHolder { OriginMessageId = origin },

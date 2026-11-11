@@ -53,11 +53,15 @@ namespace MicroKit.Messaging.Spi;
 /// envelope through the receive pipeline. A send that returns is a message the transport holds, and
 /// the guarantee goes no further than the transport's own durability: while the process runs, the
 /// in-memory broker hands every message it holds to the pipeline, which handles or dead-letters it,
-/// but it is not durable and loses the messages still queued when the process exits. A broker
-/// provider supplies its own implementation from
-/// its <c>Add{Provider}Transport()</c> extension. With no transport registered at all, a
-/// <see cref="MessageKind.Contract"/> row fails loudly and reversibly — see
-/// <c>MessagingBuilder.AddTransportDispatcher</c> — and a bus publication throws.
+/// but it is not durable and loses the messages still queued when the process exits. On that
+/// broker a message is copied to every endpoint bound to its type, and a type no endpoint is bound
+/// to reaches no one: the send returns, and the transport logs a <c>Warning</c>. A broker
+/// provider supplies its own implementation from its <c>Add{Provider}Transport()</c> extension.
+/// <b>With no transport registered</b>, a declared publication — on the bus, or staged in the
+/// outbox through <c>IIntegrationEventPublisher</c> — fails at host start, and a bus publication
+/// throws. The outbox's transport dispatcher is registered with the transport (#187), so a
+/// <see cref="MessageKind.Contract"/> row that still reaches a host without one is a missing
+/// registration: the batch is released, no retry is consumed, and the worker stops.
 /// </para>
 /// <para>
 /// <b>Lifetime.</b> <c>UseInMemoryTransport()</c> registers the in-memory transport as a

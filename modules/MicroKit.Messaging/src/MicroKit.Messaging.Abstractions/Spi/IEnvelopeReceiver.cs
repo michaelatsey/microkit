@@ -82,20 +82,16 @@ namespace MicroKit.Messaging.Spi;
 /// resolves it rather than writing one.
 /// </para>
 /// <para>
-/// <b>Registered by <c>AddIntegrationEventConsumption()</c> or
-/// <c>AddIntegrationEventPublishing()</c></b> — either is enough, in any order, and there is no
-/// builder method of its own because there is nothing to configure. Both of those are where the
-/// contract registry this seam resolves a wire name through is composed, which is why the receiver
-/// belongs with them and not in <c>AddMicroKitMessaging()</c>.
+/// <b>Registered by <c>AddMicroKitMessaging(bus =&gt; ...)</c></b> (#187), next to the contract
+/// registry this seam resolves a wire name through, and with no builder method of its own because
+/// there is nothing to configure. The wire names it resolves are those of the types the service's
+/// handlers handle and the types it publishes.
 /// <para>
-/// A provider's <c>Add{Provider}Transport()</c> may assume the receiver is present, but that is a
-/// convention rather than a guarantee the container enforces: a host that called
-/// <c>AddMicroKitMessaging()</c> and <c>AddTransportDispatcher()</c> and neither
-/// integration-event entry point declares no contracts, so a wire name could not resolve to a
-/// local type even if the seam were registered. A provider resolving it then gets the container's
-/// own "no service for type" message, which names the interface but not the call that supplies it
-/// — so a provider is better off resolving it eagerly at startup and saying which method is
-/// missing than discovering it on the first delivery.
+/// A provider's <c>Add{Provider}Transport()</c> may assume the receiver is present: it is an
+/// extension on the builder <c>AddMicroKitMessaging</c> hands out, so the receiver is registered
+/// before it runs. A host that registers no handler declares no subscription, so a wire name it
+/// does not publish resolves to no local type and the receiver reports it as permanent
+/// (<see cref="InboxPayloadException"/>): dead-letter it rather than retry it.
 /// </para>
 /// </para>
 /// <para>

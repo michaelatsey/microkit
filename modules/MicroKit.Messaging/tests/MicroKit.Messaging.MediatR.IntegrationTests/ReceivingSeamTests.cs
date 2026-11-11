@@ -233,17 +233,15 @@ public sealed class ReceivingSeamTests
 
             // Publishes<T>() binds the contract name in BOTH directions, so a modular monolith
             // routes its own contracts back to itself with no second declaration. A service that
-            // only consumed would call AddIntegrationEventSubscriptions(e => e.Consumes<T>())
-            // instead and reach the same registry.
-            messaging.Services.AddIntegrationEventContracts(
-                Source, e => e.Publishes<WidgetShipped>());
+            // only consumed would register its handlers alone: a handler is its subscription.
+            messaging.ServiceName = Source;
+            messaging.Publishes<WidgetShipped>();
 
             messaging
-                .AddIntegrationEventPublishing()
                 .AddEfCoreIntegrationEvents<E2EDbContext>()
                 .AddTransportDispatcher()
-                .AddMessageHandler<FirstWidgetShippedConsumer, WidgetShipped>()
-                .AddMessageHandler<SecondWidgetShippedConsumer, WidgetShipped>();
+                .AddHandler<FirstWidgetShippedConsumer>()
+                .AddHandler<SecondWidgetShippedConsumer>();
         });
 
     private static async Task ShipAWidgetAsync(IServiceProvider provider)

@@ -26,6 +26,9 @@
          domain-event -> outbox -> notification path end to end. -->
     <PackageReference Include="Microsoft.EntityFrameworkCore" />
     <PackageReference Include="Microsoft.EntityFrameworkCore.Sqlite" />
+    <!-- Compile-only: the README's durable composition names UseNpgsql (#187). Nothing here
+         connects to a PostgreSQL server. -->
+    <PackageReference Include="Npgsql.EntityFrameworkCore.PostgreSQL" />
     <PackageReference Include="coverlet.collector" />
   </ItemGroup>
   <ItemGroup>

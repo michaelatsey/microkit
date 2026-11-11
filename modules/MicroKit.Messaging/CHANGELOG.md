@@ -1,5 +1,96 @@
 # Changelog — MicroKit.Messaging
 
+## [Unreleased] — one configuration entry point, handler discovery and validated options (#187)
+
+### Breaking
+
+- **One entry point: `services.AddMicroKitMessaging(bus => { ... })`**, returning the builder for
+  chaining. Removed outright: the `AddMicroKitMessaging(Action<OutboxProcessorOptions>?,
+  Action<InboxProcessorOptions>?)` overload, `AddIntegrationEventContracts`,
+  `AddIntegrationEventSubscriptions`, `AddIntegrationEventPublishing`,
+  `AddIntegrationEventConsumption`, `MessagingBuilder.AddMessageHandler<THandler, TEvent>()`,
+  `IntegrationEventContractBuilder`, `IntegrationEventSubscriptionBuilder` and
+  `IntegrationEventServiceCollectionExtensions`. `MessagingBuilder.AddTransportDispatcher()` is
+  internal: `UseInMemoryTransport()` registers it.
+- **The source of a publication is the service name.** The per-module `source` argument is gone:
+  `bus.ServiceName` names the service, its endpoint and the `Source` of everything it publishes.
+  Precedence, lowest first: `IHostEnvironment.ApplicationName`, `MicroKit:Messaging:ServiceName`,
+  `bus.Configure(...)`, `bus.ServiceName`. Missing everywhere, the host fails to start.
+  `bus.ServiceName = ""` or whitespace throws `ArgumentException`.
+- **A handler is its subscription.** `Consumes<T>()` is gone: `bus.AddHandler<THandler>()`
+  registers one subscription per closed `IMessageHandler<T>` the handler implements, and the type's
+  `[MessageContract]` binds the wire name.
+- **Options are `IOptions<MessagingOptions>`** — `ServiceName`, `Outbox`, `Inbox` — bound from
+  `MicroKit:Messaging`, validated at start, configured in code with `bus.Configure(...)`.
+  `OutboxProcessorOptions` and `InboxProcessorOptions` keep their properties and are resolved as
+  forwards of `MessagingOptions.Outbox` and `.Inbox`. Values that were accepted silently now fail at
+  start: a size below 1, an interval of zero or less, `PollingInterval` above `MaxPollingInterval`,
+  a delay above 4294967294 ms, an `OutcomeFlushTimeout` above `int.MaxValue` ms.
+- **The composition is validated at host start**, by a hosted service `AddMicroKitMessaging`
+  registers before anything else, replacing the registry validator. One
+  `IntegrationEventConfigurationException` lists every problem: a published or handled type without
+  (or with an unreadable) `[MessageContract]`, two types claiming one wire type, two
+  `AddMicroKitMessaging` calls with different service names, a publication with no transport, and an
+  outbox or inbox store registered without `AddOutboxInboxProcessing()`. `[MessageContract]` on a
+  published type is no longer checked inside `Publishes<T>()`; it is reported at start with the rest.
+- **`InMemoryBroker` is publish/subscribe by endpoint.** A host binds its `ServiceName` endpoint to
+  the contracts its handlers handle; a send copies the envelope to every endpoint bound to its type.
+  Hosts sharing a `ServiceName` compete for one endpoint. A type no endpoint is bound to reaches no
+  one and is logged at `Warning` (event 3014). `GetFailedAttempts(endpoint, messageId)` and
+  `GetDeadLetters(endpoint)` replace `GetFailedAttempts(messageId)` and `DeadLetters`.
+  InMemoryBroker binds a host's endpoint on first transport use or at host start, whichever comes
+  first; across hosts sharing one broker, start consumers before producers.
+- **`IIntegrationEventPublisher` is registered by `AddEfCoreIntegrationEvents<TContext>()`**, next
+  to the writer it requires. `IEnvelopeReceiver` is registered by `AddMicroKitMessaging`.
+
+### Added
+
+- `bus.Publishes<T>()`, `bus.AddHandler<THandler>()`,
+  `bus.AddHandlersFromAssemblyContaining<T>()` (`[RequiresUnreferencedCode]`: it scans by
+  reflection), `bus.ServiceName`, `bus.Configure(Action<MessagingOptions>)`, `MessagingOptions`.
+- Calling `AddMicroKitMessaging` more than once adds to one composition, so each module of a
+  monolith may make its own call.
+
+### Fixed
+
+- A handler implementing `IMessageHandler<T>` for two types is invoked through the right method on
+  the inbox path. The handler registry was keyed on the consumer alone, so the second type's
+  registration replaced the first and the inbox dead-lettered the other type's rows.
+- The receive paths read a message's contract name and version from the registry, which read the
+  attribute once at registration, instead of reflecting on every delivery.
+- A host that registers its own outbox or inbox store without `AddOutboxInboxProcessing()` fails at
+  start instead of staging rows nothing drains.
+
+### Migration
+
+```csharp
+// Before
+services.AddIntegrationEventContracts("/shop/orders", e => e.Publishes<OrderPlaced>());
+services.AddIntegrationEventSubscriptions(e => e.Consumes<InvoiceSettled>());
+services.AddMicroKitMessaging(o => o.BatchSize = 200)
+    .AddEfCoreOutbox<AppDbContext>()
+    .AddTransportDispatcher()
+    .AddIntegrationEventPublishing()
+    .AddIntegrationEventConsumption()
+    .AddEfCoreIntegrationEvents<AppDbContext>()
+    .AddMessageHandler<InvoiceSettledHandler, InvoiceSettled>();
+
+// After
+services.AddMicroKitMessaging(bus =>
+{
+    bus.ServiceName = "/shop/orders";
+    bus.Publishes<OrderPlaced>();
+    bus.AddHandler<InvoiceSettledHandler>();
+    bus.Configure(o => o.Outbox.BatchSize = 200);
+    bus.AddEfCoreOutbox<AppDbContext>();
+    bus.AddEfCoreIntegrationEvents<AppDbContext>();
+    bus.UseInMemoryTransport();   // or a broker provider's transport
+});
+```
+
+A test reading `InMemoryBroker.DeadLetters` or `GetFailedAttempts(id)` passes the endpoint — the
+host's service name — first.
+
 ## [Unreleased] — the bus publishes and consumes without persistence (#186)
 
 ### Added — a message bus that needs no database

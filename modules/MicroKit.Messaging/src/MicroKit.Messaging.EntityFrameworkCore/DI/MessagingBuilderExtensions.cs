@@ -1,5 +1,8 @@
 namespace MicroKit.Messaging.EntityFrameworkCore;
 
+using MicroKit.Messaging.Publishing;
+using Microsoft.Extensions.DependencyInjection.Extensions;
+
 /// <summary>
 /// Extension methods on <see cref="MessagingBuilder"/> for wiring EF Core outbox/inbox stores.
 /// </summary>
@@ -13,8 +16,8 @@ public static class MessagingBuilderExtensions
     /// <see cref="ModelBuilderExtensions.ApplyMessagingConfiguration"/> called in
     /// <c>OnModelCreating</c>.
     /// </typeparam>
-    /// <param name="builder">The <see cref="MessagingBuilder"/> returned by
-    /// <c>AddMicroKitMessaging()</c>.</param>
+    /// <param name="builder">The <see cref="MessagingBuilder"/> handed to
+    /// <c>AddMicroKitMessaging(bus => ...)</c>.</param>
     /// <returns>The same <paramref name="builder"/> for chaining.</returns>
     /// <remarks>
     /// <para>
@@ -38,8 +41,8 @@ public static class MessagingBuilderExtensions
     /// <b>It also switches on the outbox and inbox engine</b> — the four hosted workers, the
     /// processors and the coordinators — through
     /// <see cref="OutboxInboxProcessingExtensions.AddOutboxInboxProcessing"/>. Since #186
-    /// <c>AddMicroKitMessaging()</c> registers no hosted service, so a host without this call runs
-    /// no worker at all. Transitional: #188 replaces it with opt-in durability on the bus.
+    /// <c>AddMicroKitMessaging()</c> registers no worker — its only hosted service is the
+    /// composition validator — so a host without this call runs no outbox or inbox worker at all. Transitional: #188 replaces it with opt-in durability on the bus.
     /// </para>
     /// </remarks>
     public static MessagingBuilder AddEfCoreOutbox<TContext>(this MessagingBuilder builder)
@@ -87,21 +90,24 @@ public static class MessagingBuilderExtensions
     }
 
     /// <summary>
-    /// Registers the EF Core staging writer for integration events.
+    /// Registers integration-event publishing through the outbox: the EF Core staging writer and
+    /// the <see cref="IIntegrationEventPublisher"/> that writes through it.
     /// </summary>
     /// <typeparam name="TContext">
     /// The application's <see cref="DbContext"/> type. Must have
     /// <see cref="ModelBuilderExtensions.ApplyMessagingConfiguration"/> called in
     /// <c>OnModelCreating</c>.
     /// </typeparam>
-    /// <param name="builder">The <see cref="MessagingBuilder"/> returned by
-    /// <c>AddMicroKitMessaging()</c>.</param>
+    /// <param name="builder">The <see cref="MessagingBuilder"/> handed to
+    /// <c>AddMicroKitMessaging(bus => ...)</c>.</param>
     /// <returns>The same <paramref name="builder"/> for chaining.</returns>
     /// <remarks>
     /// <para>
-    /// Separate from <c>AddIntegrationEventPublishing()</c> because that call lives in
-    /// <c>MicroKit.Messaging</c>, which has no EF Core dependency and must not acquire one. Pair
-    /// the two: the publisher cannot be activated without a writer.
+    /// <b>The publisher is registered here (#187)</b>, not by <c>AddMicroKitMessaging</c>: it
+    /// cannot be activated without the <see cref="IIntegrationEventWriter"/> this call provides.
+    /// The types it publishes are declared with <c>bus.Publishes&lt;T&gt;()</c>, like any
+    /// publication. The publisher is scoped: it is resolved from the per-message execution scope,
+    /// and a singleton would capture one execution context and one writer.
     /// </para>
     /// <para>
     /// <b>Scoped, and it is load-bearing.</b> The writer's <c>HasOpenTransaction</c> guard reads
@@ -126,6 +132,7 @@ public static class MessagingBuilderExtensions
         ArgumentNullException.ThrowIfNull(builder);
 
         builder.Services.AddScoped<IIntegrationEventWriter, EfIntegrationEventWriter<TContext>>();
+        builder.Services.TryAddScoped<IIntegrationEventPublisher, IntegrationEventPublisher>();
         return builder;
     }
 }

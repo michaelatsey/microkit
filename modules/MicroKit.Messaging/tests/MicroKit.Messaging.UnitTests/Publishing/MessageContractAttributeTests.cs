@@ -43,8 +43,7 @@ public sealed class MessageContractAttributeTests
     [Fact]
     public void TheRegistry_KeysOnTheWireType()
     {
-        var registry = IntegrationEventContractFixtures.Registry(
-            ("/saasbtp/safety", e => e.Publishes<VersionedTwice>()));
+        var registry = IntegrationEventContractFixtures.Registry(bus => bus.Publishes<VersionedTwice>());
 
         registry.ResolveContract(typeof(VersionedTwice)).ContractName
             .ShouldBe("saasbtp.safety.constat-amended.v2");

@@ -43,7 +43,7 @@ public sealed class EnvelopeReceiverTests
             async () => await harness.Receiver.ReceiveAsync(Envelope()));
 
         ex.Message.ShouldContain(ContractName);
-        ex.Message.ShouldContain("Consumes<TEvent>()");
+        ex.Message.ShouldContain("bus.AddHandler<THandler>()");
         ex.Message.ShouldContain("dead-letter");
 
         // The assertion that matters is not that it threw — it is that nothing was recorded, so a
@@ -475,8 +475,8 @@ public sealed class EnvelopeReceiverTests
                 provider.GetRequiredService<IServiceScopeFactory>());
 
             var contracts = bindContract
-                ? IntegrationEventContractFixtures.ConsumingRegistry(e => e.Consumes<InvoiceSettled>())
-                : IntegrationEventContractFixtures.ConsumingRegistry();
+                ? IntegrationEventContractFixtures.Registry(bus => bus.AddHandler<InvoiceSettledHandler>())
+                : IntegrationEventContractFixtures.Registry(_ => { });
 
             var handlers = new MessageHandlerRegistry();
             if (consumers >= 1)

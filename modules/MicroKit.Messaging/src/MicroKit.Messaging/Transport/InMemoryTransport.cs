@@ -1,16 +1,35 @@
 namespace MicroKit.Messaging.Transport;
 
 /// <summary>
-/// The in-memory <see cref="IMessageTransport"/>: enqueues on the <see cref="InMemoryBroker"/>.
+/// The in-memory <see cref="IMessageTransport"/>: publishes on the <see cref="InMemoryBroker"/>,
+/// which copies the envelope to every endpoint bound to its type.
 /// </summary>
 /// <remarks>
-/// Returning means the broker accepted the envelope — the queue holds it, and
-/// <see cref="InMemoryTransportWorker"/> delivers it. Unlike a transport with no receiver, this
-/// one is never a silent success: the consume loop is registered by the same call that registers
-/// it, <see cref="MessagingBuilder.UseInMemoryTransport"/>.
+/// Returning means the broker accepted the envelope — every bound endpoint's queue holds a copy,
+/// and the <see cref="InMemoryTransportWorker"/> of each endpoint delivers it. A type no endpoint is
+/// bound to reaches no one, and that is logged at <c>Warning</c> (event 3014) rather than returned
+/// as silence: a publisher need not know its subscribers, but nobody receiving is worth seeing.
 /// </remarks>
-internal sealed class InMemoryTransport(InMemoryBroker broker) : IMessageTransport
+internal sealed class InMemoryTransport : IMessageTransport
 {
+    private readonly InMemoryBroker _broker;
+    private readonly ILogger<InMemoryTransport> _logger;
+
+    /// <summary>Initializes the transport, binding this service's endpoint if it is not yet bound.</summary>
+    /// <param name="broker">The broker.</param>
+    /// <param name="binder">Binds the endpoint on first use — so a publication made before the host
+    /// starts is held for this service's handlers.</param>
+    /// <param name="logger">Logger.</param>
+    /// <exception cref="IntegrationEventConfigurationException">The composition is invalid.</exception>
+    public InMemoryTransport(
+        InMemoryBroker broker, InMemoryEndpointBinder binder, ILogger<InMemoryTransport> logger)
+    {
+        ArgumentNullException.ThrowIfNull(binder);
+        binder.EnsureBound();
+        _broker = broker;
+        _logger = logger;
+    }
+
     /// <inheritdoc />
     /// <exception cref="ArgumentException">
     /// A required member of the envelope — <c>Id</c>, <c>Source</c>, <c>Type</c>,
@@ -21,7 +40,14 @@ internal sealed class InMemoryTransport(InMemoryBroker broker) : IMessageTranspo
     {
         ArgumentNullException.ThrowIfNull(envelope);
         Validate(envelope);
-        return broker.EnqueueAsync(envelope, ct);
+        ct.ThrowIfCancellationRequested();
+
+        if (_broker.Publish(envelope) == 0)
+        {
+            Bus.BusLogs.NoEndpointBound(_logger, envelope.Id, envelope.Type, envelope.Source);
+        }
+
+        return ValueTask.CompletedTask;
     }
 
     private static void Validate(MessageEnvelope envelope)

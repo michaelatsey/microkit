@@ -118,15 +118,16 @@ internal static class E2EHarness
         // contributes an IDomainEventsSink to the single core dispatcher rather than registering a
         // rival one (ADR-MEDIATR-014).
         //
-        // AddHostedService<OutboxWorker> is registered by AddMicroKitMessaging and starts nothing
-        // without an IHost. It is left alone; every drain goes through DrainOnceAsync or
-        // DrainInboxOnceAsync. The same is true of IntegrationEventRegistryValidator — no host, so
-        // no startup check runs, which is why a suite may compose freely and assert on the drain.
-        var messaging = services.AddMicroKitMessaging()
-            .AddEfCoreOutbox<E2EDbContext>()
-            .AddMediatRDomainEvents();
-
-        configureMessaging?.Invoke(messaging);
+        // The hosted services — the workers and MessagingCompositionValidator — start nothing
+        // without an IHost. They are left alone; every drain goes through DrainOnceAsync or
+        // DrainInboxOnceAsync. The contract rules still apply: the registry checks them itself
+        // when it is first resolved.
+        services.AddMicroKitMessaging(messaging =>
+        {
+            messaging.ServiceName = "/tests/e2e";
+            messaging.AddEfCoreOutbox<E2EDbContext>().AddMediatRDomainEvents();
+            configureMessaging?.Invoke(messaging);
+        });
 
         // ValidateScopes, but NOT ValidateOnBuild: everything under test is scoped, so scope
         // validation is a real guard — whereas ValidateOnBuild would eagerly validate every handler

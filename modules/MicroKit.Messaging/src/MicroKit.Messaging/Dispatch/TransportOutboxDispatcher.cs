@@ -46,7 +46,7 @@ using MicroKit.Messaging.Serialization;
 /// it. Wrapping or re-typing anything here would destroy the only signal the engine has.
 /// </para>
 /// <para>
-/// Registered as <b>scoped</b> by <c>MessagingBuilder.AddTransportDispatcher()</c>; the processor
+/// Registered as <b>scoped</b> with the transport, by <c>UseInMemoryTransport()</c>; the processor
 /// resolves it from the per-message execution scope.
 /// </para>
 /// </remarks>

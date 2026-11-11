@@ -37,7 +37,8 @@ public static class MessagingMediatRExtensions
     /// <strong>Call order does not matter, and it used to.</strong> The standard dispatcher lives in
     /// a keyed slot that only <c>MicroKit.Messaging</c> writes, so this method never competes for it
     /// (see <see cref="OutboxDispatcherKeys"/>). Called <em>after</em>
-    /// <see cref="MessagingBuilder.AddTransportDispatcher"/>, it removes that method's unkeyed
+    /// <see cref="MessagingBuilder.UseInMemoryTransport"/>, which registers the transport
+    /// dispatcher, it removes that registration's unkeyed
     /// forwarder and takes the seam. Called <em>before</em> it, there is no forwarder to remove and
     /// the later <c>TryAdd</c> correctly abstains — where previously this method threw because it
     /// had nothing to wrap. The sink is contributed with <c>TryAddEnumerable</c> and is likewise
@@ -102,7 +103,7 @@ public static class MessagingMediatRExtensions
     /// <para>
     /// The removal targets <b>unkeyed</b> descriptors only, and the predicate says so explicitly
     /// rather than relying on <c>RemoveAll&lt;T&gt;()</c>'s treatment of keyed registrations. The
-    /// keyed descriptor written by <c>AddTransportDispatcher()</c> is the inner this decorator is
+    /// keyed descriptor the transport registration writes is the inner this decorator is
     /// about to resolve — removing it would disconnect the very thing being wrapped, and no
     /// compile error or startup failure would report it.
     /// </para>

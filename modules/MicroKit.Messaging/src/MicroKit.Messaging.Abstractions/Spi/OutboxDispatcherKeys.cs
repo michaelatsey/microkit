@@ -39,7 +39,7 @@ public static class OutboxDispatcherKeys
     /// <summary>
     /// The key for the standard dispatcher — the one that serves
     /// <see cref="MessageKind.Contract"/> rows by handing a <see cref="MessageEnvelope"/> to
-    /// <see cref="IMessageTransport"/>. Registered by <c>MessagingBuilder.AddTransportDispatcher()</c>.
+    /// <see cref="IMessageTransport"/>. Registered with the transport, by <c>UseInMemoryTransport()</c>.
     /// </summary>
     /// <remarks>
     /// Resolve it with <c>GetKeyedService</c> rather than <c>GetRequiredKeyedService</c> when a

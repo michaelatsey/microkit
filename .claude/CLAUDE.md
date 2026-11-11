@@ -97,7 +97,7 @@ Runtime invariants:
 
 - `BackgroundService`: only `IServiceScopeFactory` in the constructor, never a scoped service
 - Batch processing: one `IAsyncServiceScope` per message, never shared across messages
-- Publishers never succeed silently: with no transport, throw `InvalidOperationException`
+- Publishers never succeed silently: a publication with no route fails at host start, and a publish with no transport throws `IntegrationEventConfigurationException`
 - `IApplicationEvent` is rejected (YAGNI); do not introduce it until a real need exists
 
 ## Build and packaging

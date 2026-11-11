@@ -14,10 +14,16 @@
          IL2026/IL2057: SystemTextJsonMessageSerializer uses reflection-based serialization — v2 will use source generators.
          IL2091: AddTransient<THandler> is covered by DynamicallyAccessedMembers on the type param. -->
     <NoWarn>$(NoWarn);CA1848;CA1873;IL2026;IL2057</NoWarn>
+    <!-- MessagingOptions is bound from configuration (#187): the source generator replaces the
+         reflection-based binder, which the module could not otherwise use (IsTrimmable). -->
+    <EnableConfigurationBindingGenerator>true</EnableConfigurationBindingGenerator>
   </PropertyGroup>
   <ItemGroup>
     <InternalsVisibleTo Include="MicroKit.Messaging.UnitTests" />
     <InternalsVisibleTo Include="MicroKit.Messaging.MediatR" />
+    <!-- AddEfCoreIntegrationEvents<TContext>() registers the internal IntegrationEventPublisher
+         next to the writer it requires (#187); the publisher stays internal to Core. -->
+    <InternalsVisibleTo Include="MicroKit.Messaging.EntityFrameworkCore" />
     <!-- OutboxDomainEventSinkTests constructs the internal OutboxMessageFactory as a collaborator:
          ADR-MSG-008 §2 defers an IOutboxMessageMapper until a second implementation exists, so the
          sealed class cannot be doubled. -->
@@ -57,5 +63,7 @@
     <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" />
     <!-- ConfigureJson(Action<JsonSerializerOptions>) is backed by IOptions (#186). -->
     <PackageReference Include="Microsoft.Extensions.Options" />
+    <!-- MessagingOptions binds the "MicroKit:Messaging" section (#187). -->
+    <PackageReference Include="Microsoft.Extensions.Options.ConfigurationExtensions" />
   </ItemGroup>
 </Project>

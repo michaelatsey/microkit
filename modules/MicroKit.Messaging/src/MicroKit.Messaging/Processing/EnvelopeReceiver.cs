@@ -108,9 +108,9 @@ internal sealed class EnvelopeReceiver(
         {
             throw new InboxPayloadException(
                 $"Contract name '{envelope.Type}' (from '{envelope.Source}') resolves to " +
-                "no local type, so this message cannot be recorded for any consumer. Add " +
-                "events.Consumes<TEvent>() to the module's composition root, with " +
-                "a [MessageContract] whose wire type is that name on the type. This is permanent " +
+                "no local type, so this message cannot be recorded for any consumer. Register " +
+                "a handler with bus.AddHandler<THandler>() for a type carrying " +
+                "a [MessageContract] whose wire type is that name. This is permanent " +
                 "until the process is redeployed — dead-letter the message rather than nacking it " +
                 "for retry.");
         }
@@ -143,9 +143,9 @@ internal sealed class EnvelopeReceiver(
             // A resolvable name with nothing to consume it. Legitimate — a service may understand a
             // contract it does not handle — so zero rows is the correct outcome and nothing throws.
             // But zero rows is otherwise indistinguishable from a healthy delivery, and silent
-            // success is forbidden in this module, so it is said out loud and counted. The
-            // composition this catches is real: Consumes<T>() declared, AddMessageHandler<,>()
-            // forgotten.
+            // success is forbidden in this module, so it is said out loud and counted. Since #187
+            // a handled type is bound by its handler, so this is a type the service publishes and
+            // does not itself handle.
             InboxIngestionLogs.NoConsumer(
                 logger, envelope.Type, envelope.Source, eventType.FullName!);
             metrics.RecordUnconsumed(envelope.Type);

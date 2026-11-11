@@ -18,7 +18,7 @@ namespace MicroKit.Messaging.Spi;
 /// </para>
 /// <para>
 /// Core ships one implementation: <c>TransportOutboxDispatcher</c>
-/// (<c>MessagingBuilder.AddTransportDispatcher()</c>), which turns a
+/// (registered with the transport, by <c>UseInMemoryTransport()</c>), which turns a
 /// <see cref="MessageKind.Contract"/> row into a <see cref="MessageEnvelope"/> and hands it to
 /// <see cref="IMessageTransport"/>. It does not deserialize: the payload travels opaque.
 /// <c>MicroKit.Messaging.MediatR</c> adds a decorator that serves

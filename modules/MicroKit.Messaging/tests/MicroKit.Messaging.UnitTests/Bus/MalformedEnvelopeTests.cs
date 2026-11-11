@@ -14,7 +14,7 @@ public sealed class MalformedEnvelopeTests
     public async Task AnEnvelopeWithNullHeaders_IsDeadLettered_AndTheNextMessageIsStillConsumed()
     {
         await using var host = await BusTestHost.StartAsync(
-            bus => bus.AddMessageHandler<FirstOrderPlacedHandler, OrderPlaced>());
+            bus => bus.AddHandler<FirstOrderPlacedHandler>());
 
         // Hand-built and enqueued past the sender's validation, as an envelope mapped by a
         // provider could arrive: `required` is a compile-time promise only.
@@ -29,10 +29,10 @@ public sealed class MalformedEnvelopeTests
             Headers = null!,
             Body = valid.Body,
         };
-        await host.Broker.EnqueueAsync(malformed, CancellationToken.None);
+        host.Broker.Deposit(host.ServiceName, malformed);
 
-        await Eventually.HoldsAsync(() => host.Broker.DeadLetters.Count == 1, "dead-lettered");
-        host.Broker.DeadLetters.Single().Id.ShouldBe(malformed.Id);
+        await Eventually.HoldsAsync(() => host.DeadLetters.Count == 1, "dead-lettered");
+        host.DeadLetters.Single().Id.ShouldBe(malformed.Id);
 
         await host.PublishAsync(new OrderPlaced(Guid.NewGuid()));
         await Eventually.HoldsAsync(
@@ -44,14 +44,14 @@ public sealed class MalformedEnvelopeTests
     {
         var serializer = new ScriptedDeserializer { CancelOnce = true };
         await using var host = await BusTestHost.StartAsync(
-            bus => bus.AddMessageHandler<FirstOrderPlacedHandler, OrderPlaced>(),
+            bus => bus.AddHandler<FirstOrderPlacedHandler>(),
             services: services => services.AddSingleton<IMessageSerializer>(serializer));
 
         var poisoned = await host.PublishAsync(new OrderPlaced(Guid.NewGuid()));
 
-        await Eventually.HoldsAsync(() => host.Broker.DeadLetters.Count == 1, "dead-lettered");
-        host.Broker.DeadLetters.Single().Id.ShouldBe(poisoned.ToString());
-        host.Broker.GetFailedAttempts(poisoned.ToString()).ShouldBe(0, "permanent, not retried");
+        await Eventually.HoldsAsync(() => host.DeadLetters.Count == 1, "dead-lettered");
+        host.DeadLetters.Single().Id.ShouldBe(poisoned.ToString());
+        host.FailedAttempts(poisoned.ToString()).ShouldBe(0, "permanent, not retried");
 
         await host.PublishAsync(new OrderPlaced(Guid.NewGuid()));
         await Eventually.HoldsAsync(
@@ -66,7 +66,7 @@ public sealed class MalformedEnvelopeTests
 
         MessageId id;
         await using (var first = await BusTestHost.StartAsync(
-            bus => bus.AddMessageHandler<FirstOrderPlacedHandler, OrderPlaced>(),
+            bus => bus.AddHandler<FirstOrderPlacedHandler>(),
             broker,
             services => services.AddSingleton<IMessageSerializer>(serializer)))
         {
@@ -82,16 +82,16 @@ public sealed class MalformedEnvelopeTests
             first.Recorder.Deliveries.ShouldBeEmpty();
         }
 
-        broker.DeadLetters.ShouldBeEmpty("shutdown is never classified");
-        broker.GetFailedAttempts(id.ToString()).ShouldBe(0, "shutdown is not a failed attempt");
+        broker.GetDeadLetters(BusTestHost.Source).ShouldBeEmpty("shutdown is never classified");
+        broker.GetFailedAttempts(BusTestHost.Source, id.ToString()).ShouldBe(0, "shutdown is not a failed attempt");
 
         await using var second = await BusTestHost.StartAsync(
-            bus => bus.AddMessageHandler<FirstOrderPlacedHandler, OrderPlaced>(), broker);
+            bus => bus.AddHandler<FirstOrderPlacedHandler>(), broker);
 
         await Eventually.HoldsAsync(
             () => second.Recorder.Deliveries.Count == 1, "the requeued message reaches the next host");
         second.Recorder.Deliveries.Single().Context.MessageId.ShouldBe(id);
-        broker.GetFailedAttempts(id.ToString()).ShouldBe(0);
+        broker.GetFailedAttempts(BusTestHost.Source, id.ToString()).ShouldBe(0);
     }
 
     public static TheoryData<string> RequiredMembers =>
@@ -102,8 +102,15 @@ public sealed class MalformedEnvelopeTests
     [MemberData(nameof(RequiredMembers))]
     public async Task SendAsync_RejectsAnEnvelopeMissingARequiredMember(string member)
     {
-        var broker = new InMemoryBroker();
-        var transport = new InMemoryTransport(broker);
+        var services = new ServiceCollection();
+        services.AddLogging();
+        services.AddMicroKitMessaging(bus =>
+        {
+            bus.ServiceName = BusTestHost.Source;
+            bus.UseInMemoryTransport();
+        });
+        using var provider = services.BuildServiceProvider();
+        var transport = provider.GetRequiredService<IMessageTransport>();
         var valid = Envelope();
 
         var malformed = new MessageEnvelope

@@ -159,16 +159,18 @@ public sealed class MessageReceivePipelineTests
         services.AddLogging();
         services.AddSingleton<BusRecorder>();
         services.AddSingleton(scripted);
-        services.AddIntegrationEventContracts(BusTestHost.Source, c => c.Publishes<OrderPlaced>());
-
-        var bus = services.AddMicroKitMessaging();
-        if (registerHandlers)
+        services.AddMicroKitMessaging(bus =>
         {
-            bus.AddMessageHandler<FirstScriptedHandler, OrderPlaced>()
-               .AddMessageHandler<SecondScriptedHandler, OrderPlaced>();
-        }
+            bus.ServiceName = BusTestHost.Source;
+            bus.Publishes<OrderPlaced>();
+            if (registerHandlers)
+            {
+                bus.AddHandler<FirstScriptedHandler>()
+                   .AddHandler<SecondScriptedHandler>();
+            }
 
-        compose?.Invoke(bus);
+            compose?.Invoke(bus);
+        });
         return services.BuildServiceProvider(new ServiceProviderOptions { ValidateScopes = true });
     }
 
