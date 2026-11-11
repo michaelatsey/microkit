@@ -93,4 +93,13 @@ internal static partial class BusLogs
         Message = "In-memory endpoint '{Endpoint}' is bound to {Count} wire type(s): {WireTypes}.")]
     public static partial void EndpointBound(
         ILogger logger, string endpoint, int count, string wireTypes);
+
+    [LoggerMessage(
+        EventId = 3016,
+        Level = LogLevel.Warning,
+        Message = "Handler discovery could not load {Count} type(s) of assembly '{Assembly}' " +
+                  "({TypeNames}); the types that loaded were registered. A handler among those " +
+                  "that failed is not registered. First loader error: {FirstError}")]
+    public static partial void TypesNotLoaded(
+        ILogger logger, string assembly, int count, string typeNames, string firstError);
 }

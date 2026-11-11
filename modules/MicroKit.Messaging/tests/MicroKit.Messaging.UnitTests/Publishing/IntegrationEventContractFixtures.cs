@@ -70,6 +70,13 @@ internal sealed record NeverRegistered : IIntegrationEvent;
 [MessageContract("")]
 internal sealed record BlankContractName : IIntegrationEvent;
 
+/// <summary>
+/// A rejected PROPERTY rather than a constructor argument: reflection wraps the setter's exception
+/// in a <c>CustomAttributeFormatException</c> when the attribute is materialized.
+/// </summary>
+[MessageContract("saasbtp.safety.bad-version", Version = 0)]
+internal sealed record BadVersionContract : IIntegrationEvent;
+
 /// <summary>Whitespace is the same defect wearing a disguise the compiler will not strip.</summary>
 [MessageContract("   ")]
 internal sealed record WhitespaceContractName : IIntegrationEvent;

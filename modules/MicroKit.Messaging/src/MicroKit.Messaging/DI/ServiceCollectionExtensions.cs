@@ -91,7 +91,6 @@ public static class ServiceCollectionExtensions
         }
 
         var builder = new MessagingBuilder(services, composition);
-        composition.Attach(builder);
         configure(builder);
         return builder;
     }

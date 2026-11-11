@@ -40,7 +40,8 @@ namespace MicroKit.Messaging;
 /// </remarks>
 internal sealed class MessagingCompositionValidator(
     MessagingComposition composition,
-    IServiceProviderIsService isService)
+    IServiceProviderIsService isService,
+    ILogger<MessagingCompositionValidator> logger)
     : IHostedLifecycleService
 {
     /// <inheritdoc />
@@ -48,7 +49,25 @@ internal sealed class MessagingCompositionValidator(
     public Task StartingAsync(CancellationToken cancellationToken)
     {
         Validate();
+        ReportWarnings();
         return Task.CompletedTask;
+    }
+
+    /// <summary>
+    /// Logs what is worth knowing but is no failure: one <c>Warning</c> per assembly a handler
+    /// scan could load only in part (event 3016).
+    /// </summary>
+    internal void ReportWarnings()
+    {
+        foreach (var unloaded in composition.Unloaded)
+        {
+            Bus.BusLogs.TypesNotLoaded(
+                logger,
+                unloaded.Assembly,
+                unloaded.Count,
+                unloaded.TypeNames.Count > 0 ? string.Join(", ", unloaded.TypeNames) : "names not reported",
+                unloaded.FirstError);
+        }
     }
 
     /// <summary>Runs every check and throws once, listing every problem found.</summary>

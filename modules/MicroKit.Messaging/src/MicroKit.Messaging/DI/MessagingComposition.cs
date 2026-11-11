@@ -1,5 +1,6 @@
 namespace MicroKit.Messaging;
 
+using System.Reflection;
 using MicroKit.Messaging.Bus;
 using MicroKit.Messaging.Registry;
 
@@ -20,7 +21,10 @@ internal sealed class MessagingComposition
     private readonly List<HandledType> _handled = [];
     private readonly Dictionary<Type, MessageContractAttribute?> _contracts = [];
     private readonly Dictionary<Type, string> _unreadable = [];
-    private readonly List<MessagingBuilder> _builders = [];
+    // One slot per AddMicroKitMessaging call, holding that call's bus.ServiceName. The names, not
+    // the builders: a builder holds the IServiceCollection, and this singleton outlives it.
+    private readonly List<string?> _serviceNames = [];
+    private readonly List<UnloadedTypes> _unloaded = [];
 
     /// <summary>Gets the handler registry the declared handlers are written into.</summary>
     public MessageHandlerRegistry Handlers { get; } = new();
@@ -32,11 +36,11 @@ internal sealed class MessagingComposition
     public IReadOnlyList<HandledType> Handled => _handled;
 
     /// <summary>
-    /// Gets the distinct non-null <c>bus.ServiceName</c> values set by the builders, in the order
-    /// the builders were created. More than one is a composition error.
+    /// Gets the distinct non-null <c>bus.ServiceName</c> values set by the
+    /// <c>AddMicroKitMessaging</c> calls, in call order. More than one is a composition error.
     /// </summary>
     public IReadOnlyList<string> ServiceNames =>
-        [.. _builders.Select(b => b.ServiceName).OfType<string>().Distinct(StringComparer.Ordinal)];
+        [.. _serviceNames.OfType<string>().Distinct(StringComparer.Ordinal)];
 
     /// <summary>Gets the contract a declared type carries, or null when it carries none.</summary>
     /// <param name="type">A type declared as a publication or handled by a handler.</param>
@@ -51,9 +55,49 @@ internal sealed class MessagingComposition
     /// <returns>The attribute's own error, or <see langword="null"/>.</returns>
     public string? UnreadableContractOf(Type type) => _unreadable.GetValueOrDefault(type);
 
-    /// <summary>Records a builder, so its <c>ServiceName</c> is read when the options are built.</summary>
-    /// <param name="builder">The builder of one <c>AddMicroKitMessaging</c> call.</param>
-    public void Attach(MessagingBuilder builder) => _builders.Add(builder);
+    /// <summary>
+    /// Gets the assemblies a handler scan could load only in part, with what failed. Reported at
+    /// start as one <c>Warning</c> per assembly; never a failure, since a type that did not load
+    /// is not necessarily a handler.
+    /// </summary>
+    public IReadOnlyList<UnloadedTypes> Unloaded => _unloaded;
+
+    /// <summary>Records that a handler scan of <paramref name="assembly"/> could not load every type.</summary>
+    /// <param name="assembly">The assembly's name.</param>
+    /// <param name="exception">What <c>GetTypes()</c> threw.</param>
+    public void RecordUnloadedTypes(string assembly, ReflectionTypeLoadException exception)
+    {
+        ArgumentNullException.ThrowIfNull(exception);
+        var loaderExceptions = exception.LoaderExceptions.OfType<Exception>().ToList();
+        var failed = exception.Types.Count(t => t is null);
+        var names = loaderExceptions.OfType<TypeLoadException>()
+            .Select(e => e.TypeName)
+            .Where(n => !string.IsNullOrEmpty(n))
+            .Distinct(StringComparer.Ordinal)
+            .ToList();
+
+        _unloaded.Add(new UnloadedTypes(
+            assembly,
+            failed,
+            names,
+            loaderExceptions.Count > 0 ? loaderExceptions[0].Message : exception.Message));
+    }
+
+    /// <summary>Opens the service-name slot of one <c>AddMicroKitMessaging</c> call.</summary>
+    /// <returns>The slot, for <see cref="SetServiceName"/>.</returns>
+    public int OpenServiceNameSlot()
+    {
+        _serviceNames.Add(null);
+        return _serviceNames.Count - 1;
+    }
+
+    /// <summary>
+    /// Records one call's <c>bus.ServiceName</c>. Read when the options are first built, so a name
+    /// set on a builder after <c>AddMicroKitMessaging</c> returned still counts.
+    /// </summary>
+    /// <param name="slot">The call's slot.</param>
+    /// <param name="serviceName">The name, or null to leave it unset.</param>
+    public void SetServiceName(int slot, string? serviceName) => _serviceNames[slot] = serviceName;
 
     /// <summary>Declares a publication. Declaring one type twice is a no-op.</summary>
     /// <param name="messageType">The published type.</param>
@@ -92,19 +136,38 @@ internal sealed class MessagingComposition
             return;
         }
 
-        // An attribute whose arguments its constructor rejects throws when it is materialized.
-        // Recorded and reported at start with every other problem, so one bad type neither hides
-        // the rest nor makes an assembly scan throw.
+        // An attribute whose arguments it rejects throws when it is materialized: its constructor
+        // throws ArgumentException directly (a blank name, a version suffix in the name), while a
+        // rejected PROPERTY — Version below 1 — reaches us wrapped by reflection in a
+        // CustomAttributeFormatException. Both are recorded and reported at start with every other
+        // problem, so one bad type neither hides the rest nor makes an assembly scan throw.
         try
         {
             _contracts[messageType] = MessageContracts.Find(messageType);
         }
-        catch (ArgumentException ex)
+        catch (Exception ex) when (ex is ArgumentException or CustomAttributeFormatException)
         {
             _contracts[messageType] = null;
-            _unreadable[messageType] = ex.Message;
+            _unreadable[messageType] = Innermost(ex).Message;
         }
     }
+
+    private static Exception Innermost(Exception exception)
+    {
+        while (exception.InnerException is { } inner)
+        {
+            exception = inner;
+        }
+
+        return exception;
+    }
+
+    /// <summary>What a handler scan could not load from one assembly.</summary>
+    /// <param name="Assembly">The assembly's name.</param>
+    /// <param name="Count">How many types failed to load.</param>
+    /// <param name="TypeNames">The names the loader reported, when it reported any.</param>
+    /// <param name="FirstError">The first loader exception's message.</param>
+    internal sealed record UnloadedTypes(string Assembly, int Count, IReadOnlyList<string> TypeNames, string FirstError);
 
     /// <summary>One handler and one message type it handles.</summary>
     /// <param name="HandlerType">The handler type.</param>

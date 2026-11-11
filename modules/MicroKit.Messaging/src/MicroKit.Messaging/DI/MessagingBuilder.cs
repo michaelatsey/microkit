@@ -15,12 +15,14 @@ namespace MicroKit.Messaging;
 public sealed class MessagingBuilder
 {
     private readonly MessagingComposition _composition;
+    private readonly int _serviceNameSlot;
     private string? _serviceName;
 
     internal MessagingBuilder(IServiceCollection services, MessagingComposition composition)
     {
         Services = services;
         _composition = composition;
+        _serviceNameSlot = composition.OpenServiceNameSlot();
     }
 
     /// <summary>
@@ -59,6 +61,7 @@ public sealed class MessagingBuilder
             }
 
             _serviceName = value;
+            _composition.SetServiceName(_serviceNameSlot, value);
         }
     }
 
@@ -131,16 +134,39 @@ public sealed class MessagingBuilder
     /// <typeparam name="TMarker">Any type of the assembly to scan.</typeparam>
     /// <returns>The same builder, for chaining.</returns>
     /// <remarks>
+    /// <para>
     /// Scanning reads the assembly's types by reflection, which trimming can break: a handler the
     /// trimmer removed is silently not registered. In a trimmed application, register handlers
     /// with <see cref="AddHandler{THandler}"/>.
+    /// </para>
+    /// <para>
+    /// A type that fails to load — one whose own dependency is not deployed — does not fail the
+    /// scan: the types that loaded are registered, and the host logs one <c>Warning</c> at start
+    /// naming the assembly and the types that failed (event 3016). It does not fail the start
+    /// either, since a type that failed to load is not necessarily a handler.
+    /// </para>
     /// </remarks>
     [RequiresUnreferencedCode(
         "Scans the assembly for IMessageHandler<T> implementations; trimming can remove a handler " +
         "that nothing else references. Use AddHandler<THandler>() in a trimmed application.")]
     public MessagingBuilder AddHandlersFromAssemblyContaining<TMarker>()
     {
-        foreach (var type in typeof(TMarker).Assembly.GetTypes())
+        var assembly = typeof(TMarker).Assembly;
+        return AddHandlersFrom(assembly.GetName().Name ?? assembly.FullName ?? "?", assembly.GetTypes);
+    }
+
+    /// <summary>
+    /// The scan of <see cref="AddHandlersFromAssemblyContaining{TMarker}"/>, over a type source a
+    /// test can make fail.
+    /// </summary>
+    /// <param name="assembly">The scanned assembly's name, for the start-up warning.</param>
+    /// <param name="getTypes">The assembly's <c>GetTypes</c>.</param>
+    /// <returns>The same builder, for chaining.</returns>
+    [RequiresUnreferencedCode("Registers handler types discovered at run time.")]
+    internal MessagingBuilder AddHandlersFrom(string assembly, Func<Type[]> getTypes)
+    {
+        var types = LoadableTypes(getTypes, ex => _composition.RecordUnloadedTypes(assembly, ex));
+        foreach (var type in types)
         {
             if (type.IsClass && !type.IsAbstract && !type.ContainsGenericParameters
                 && HandledTypes(type).Count > 0)
@@ -150,6 +176,30 @@ public sealed class MessagingBuilder
         }
 
         return this;
+    }
+
+    /// <summary>
+    /// The types an assembly can load. A type whose own dependency is not deployed makes
+    /// <c>GetTypes()</c> throw <see cref="System.Reflection.ReflectionTypeLoadException"/> for the
+    /// whole assembly; the types that did load are still scanned, and the failure is handed to
+    /// <paramref name="onPartialLoad"/> — recorded, then logged once at start, never skipped
+    /// silently.
+    /// </summary>
+    /// <param name="getTypes">The assembly's <c>GetTypes</c>.</param>
+    /// <param name="onPartialLoad">Receives the exception when some types failed to load.</param>
+    /// <returns>Every type that loaded.</returns>
+    internal static IEnumerable<Type> LoadableTypes(
+        Func<Type[]> getTypes, Action<System.Reflection.ReflectionTypeLoadException> onPartialLoad)
+    {
+        try
+        {
+            return getTypes();
+        }
+        catch (System.Reflection.ReflectionTypeLoadException ex)
+        {
+            onPartialLoad(ex);
+            return [.. ex.Types.OfType<Type>()];
+        }
     }
 
     /// <summary>

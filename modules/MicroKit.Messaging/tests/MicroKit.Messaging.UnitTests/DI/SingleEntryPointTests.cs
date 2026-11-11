@@ -440,6 +440,56 @@ public sealed class SingleEntryPointTests
         ex.Message.ShouldContain("implements no IMessageHandler<T>");
     }
 
+    /// <summary>
+    /// A partial type load neither fails the scan nor the start, and is not silent: the types that
+    /// loaded are registered, and the start logs ONE Warning naming the assembly, the type that
+    /// failed and the first loader error. Driven through the scan's internal type source — an
+    /// assembly whose <c>GetTypes()</c> genuinely fails cannot be produced cheaply here — with a
+    /// real <see cref="TypeLoadException"/>.
+    /// </summary>
+    [Fact]
+    public async Task HandlerDiscovery_WhenSomeTypesCannotLoad_RegistersTheRest_AndWarnsOnceAtStart()
+    {
+        var loadFailure = Should.Throw<TypeLoadException>(
+            () => Type.GetType("Missing.Handler, MicroKit.Messaging.UnitTests", throwOnError: true));
+        var logs = new Readme.CapturingLoggerProvider();
+        var builder = Host.CreateApplicationBuilder(new HostApplicationBuilderSettings { DisableDefaults = true });
+        builder.Logging.AddProvider(logs);
+        builder.Services.AddSingleton<BusRecorder>().AddScoped<ScopeMarker>();
+        builder.Services.AddMicroKitMessaging(bus =>
+        {
+            bus.ServiceName = "svc.partial";
+#pragma warning disable IL2026 // the scan is the subject under test; this assembly is not trimmed
+            bus.AddHandlersFrom("Partial.Assembly", () => throw new System.Reflection.ReflectionTypeLoadException(
+                [typeof(FirstOrderPlacedHandler), null], [loadFailure]));
+#pragma warning restore IL2026
+            bus.UseInMemoryTransport();
+        });
+        using var host = builder.Build();
+
+        await host.StartAsync();
+
+        host.Services.GetRequiredService<MessageHandlerRegistry>().GetHandlers(typeof(OrderPlaced))
+            .ShouldHaveSingleItem().HandlerType.ShouldBe(typeof(FirstOrderPlacedHandler));
+        var warning = logs.Entries.Where(e => e.Id.Id == 3016).ShouldHaveSingleItem();
+        warning.Level.ShouldBe(LogLevel.Warning);
+        warning.Message.ShouldContain("'Partial.Assembly'");
+        warning.Message.ShouldContain("Missing.Handler");
+        warning.Message.ShouldContain(loadFailure.Message);
+        await host.StopAsync();
+    }
+
+    [Fact]
+    public void ServiceName_SetOnTheBuilderAfterTheCallReturned_StillCounts()
+    {
+        var services = new ServiceCollection();
+        var bus = services.AddMicroKitMessaging(_ => { });
+        bus.ServiceName = "shop.late";
+        using var provider = services.BuildServiceProvider();
+
+        provider.GetRequiredService<IOptions<MessagingOptions>>().Value.ServiceName.ShouldBe("shop.late");
+    }
+
     [Fact]
     public void AddHandlersFromAssemblyContaining_RegistersEveryHandlerOfTheAssembly_LikeAddHandler()
     {

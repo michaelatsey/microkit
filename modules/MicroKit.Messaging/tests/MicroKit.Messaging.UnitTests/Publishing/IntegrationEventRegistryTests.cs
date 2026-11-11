@@ -167,6 +167,24 @@ public sealed class IntegrationEventRegistryTests
         ex.Message.ShouldNotContain("has no [MessageContract]", Case.Sensitive);
     }
 
+    [Fact]
+    public void Publishes_WhenTheVersionIsBelowOne_IsRejectedAtStartRatherThanThrownAtTheDeclaration()
+    {
+        var services = new ServiceCollection();
+        services.AddMicroKitMessaging(bus =>
+        {
+            bus.ServiceName = ServiceName;
+            bus.Publishes<BadVersionContract>();   // does not throw here
+        });
+        using var provider = services.BuildServiceProvider();
+
+        var ex = Should.Throw<IntegrationEventConfigurationException>(
+            () => provider.GetRequiredService<IntegrationEventRegistry>());
+
+        ex.Message.ShouldContain($"'{typeof(BadVersionContract).FullName}' carries a [MessageContract] that cannot be read");
+        ex.Message.ShouldContain("must be greater than or equal to '1'");
+    }
+
     /// <summary>Every problem is listed in one exception, numbered, rather than the first alone.</summary>
     [Fact]
     public void Registry_ListsEveryProblemInOneException()

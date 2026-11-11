@@ -55,9 +55,11 @@ internal sealed class InMemoryEndpointBinder(
                 return raced;
             }
 
+            // Validation only: the start-up warnings are the hosted validator's to log, once.
             new MessagingCompositionValidator(
                 services.GetRequiredService<MessagingComposition>(),
-                services.GetRequiredService<IServiceProviderIsService>()).Validate();
+                services.GetRequiredService<IServiceProviderIsService>(),
+                Microsoft.Extensions.Logging.Abstractions.NullLogger<MessagingCompositionValidator>.Instance).Validate();
 
             var registry = services.GetRequiredService<IntegrationEventRegistry>();
             var endpoint = services.GetRequiredService<IOptions<MessagingOptions>>().Value.ServiceName!;

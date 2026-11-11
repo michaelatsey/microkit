@@ -32,7 +32,6 @@ using MicroKit.Messaging.Bus;
 /// </remarks>
 internal sealed class InMemoryTransportWorker(
     InMemoryBroker broker,
-    InMemoryEndpointBinder binder,
     IServiceScopeFactory scopeFactory,
     TimeProvider timeProvider,
     ILogger<InMemoryTransportWorker> logger)
@@ -47,7 +46,7 @@ internal sealed class InMemoryTransportWorker(
     /// <exception cref="IntegrationEventConfigurationException">The composition is invalid.</exception>
     public Task StartingAsync(CancellationToken cancellationToken)
     {
-        binder.EnsureBound();
+        EnsureBound();
         return Task.CompletedTask;
     }
 
@@ -64,7 +63,7 @@ internal sealed class InMemoryTransportWorker(
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
         // A host that drives StartAsync without the lifecycle callbacks still gets its binding.
-        var endpoint = binder.EnsureBound();
+        var endpoint = EnsureBound();
 
         // A singleton, resolved through a scope only because a hosted service takes the scope
         // factory and nothing narrower; the scope owns none of it.
@@ -91,6 +90,17 @@ internal sealed class InMemoryTransportWorker(
                 return;
             }
         }
+    }
+
+    /// <summary>
+    /// Binds the endpoint through the singleton <see cref="InMemoryEndpointBinder"/>, resolved through
+    /// the scope factory — the only constructor dependency a background worker takes for services
+    /// it resolves; the scope owns none of them.
+    /// </summary>
+    private string EnsureBound()
+    {
+        using var scope = scopeFactory.CreateScope();
+        return scope.ServiceProvider.GetRequiredService<InMemoryEndpointBinder>().EnsureBound();
     }
 
     /// <summary>Delivers and settles one envelope. Never throws.</summary>
