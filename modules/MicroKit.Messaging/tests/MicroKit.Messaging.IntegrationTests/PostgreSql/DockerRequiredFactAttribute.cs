@@ -1,8 +1,10 @@
+using DotNet.Testcontainers.Configurations;
+
 namespace MicroKit.Messaging.IntegrationTests.PostgreSql;
 
 /// <summary>
-/// A <see cref="FactAttribute"/> that skips — rather than fails — when no Docker endpoint is
-/// reachable.
+/// A <see cref="FactAttribute"/> that skips — rather than fails — when no Docker daemon answers,
+/// except under CI, where it never skips.
 /// </summary>
 /// <remarks>
 /// <para>
@@ -11,61 +13,121 @@ namespace MicroKit.Messaging.IntegrationTests.PostgreSql;
 /// attribute is the xunit v2 idiom for a conditional test and needs no extra package.
 /// </para>
 /// <para>
-/// The probe deliberately launches no process and throws nothing: it runs at discovery time, for
-/// every test, so it must be cheap and total. It checks the same places a Docker client would.
+/// A CI run is the opposite case: a suite skipped there is a suite that silently stopped running,
+/// with a green build to show for it. With the <c>CI</c> environment variable set to <c>true</c>
+/// (any case) or <c>1</c> the attribute never skips, so a CI job without Docker fails loudly. See
+/// <see cref="DockerEndpoint"/> for what "available" means.
 /// </para>
 /// </remarks>
 public sealed class DockerRequiredFactAttribute : FactAttribute
 {
     public DockerRequiredFactAttribute()
     {
-        if (!DockerEndpoint.IsAvailable)
+        if (!DockerEndpoint.ShouldRun)
         {
-            Skip = "Docker is not available — skipping the PostgreSQL suite. " +
+            Skip = "No Docker daemon answered Testcontainers' discovery within " +
+                   $"{DockerEndpoint.DiscoveryDeadlineSeconds} seconds — skipping the PostgreSQL suite. " +
                    "Start Docker to run the outbox and inbox concurrency tests against a real " +
-                   "database.";
+                   "database. CI never skips: with CI=true or CI=1 these tests run, and fail " +
+                   "without Docker.";
         }
     }
 }
 
-/// <summary>Cheap, total, side-effect-free detection of a usable Docker endpoint.</summary>
+/// <summary>Decides whether the Docker-backed tests run: a daemon answers, or CI forbids skipping.</summary>
+/// <remarks>
+/// <para>
+/// "Available" means the endpoint Testcontainers itself would use answers. The probe reads
+/// <c>TestcontainersSettings.OS.DockerEndpointAuthConfig</c>, which Testcontainers resolves from
+/// its own discovery — <c>DOCKER_HOST</c>, <c>~/.testcontainers.properties</c>, the
+/// <c>TESTCONTAINERS_*</c> variables, the default sockets and pipes — and leaves null when no
+/// candidate's daemon answers a ping. A socket file with no daemon behind it is therefore
+/// unavailable (#173). Within the bound below, the probe agrees with the container start it
+/// guards; a discovery that would only succeed after the bound reads as unavailable, and the
+/// suite skips.
+/// </para>
+/// <para>
+/// That discovery talks to the daemon, so it is not free. The probe runs once per process, is
+/// cached, and is bounded at <see cref="DiscoveryDeadlineSeconds"/> seconds: it runs at test
+/// discovery, for every run of the assembly, filtered runs included, and Testcontainers' own
+/// connection timeouts are far longer — a black-holed <c>DOCKER_HOST</c> stalled it for over two
+/// minutes. It never throws: an exception, a <see cref="TypeInitializationException"/> from
+/// Testcontainers' static settings included, or a timeout reads as "unavailable".
+/// </para>
+/// <para>
+/// A discovery that outlives the bound keeps running in the background, and a late fault is
+/// observed so it never surfaces as an unobserved task exception. Under CI the bound changes
+/// nothing: <see cref="ShouldRun"/> is true regardless, and the fixture's container start waits
+/// for Testcontainers' settings and then succeeds or fails on its own.
+/// </para>
+/// </remarks>
 internal static class DockerEndpoint
 {
+    /// <summary>The bound on Testcontainers' discovery, in seconds.</summary>
+    internal const int DiscoveryDeadlineSeconds = 10;
+
     private static readonly Lazy<bool> Probe = new(Detect, LazyThreadSafetyMode.ExecutionAndPublication);
 
-    /// <summary>Gets a value indicating whether a Docker endpoint looks reachable.</summary>
+    /// <summary>Gets a value indicating whether the Docker endpoint Testcontainers would use answers.</summary>
     internal static bool IsAvailable => Probe.Value;
 
-    private static bool Detect()
+    /// <summary>
+    /// Gets a value indicating whether the Docker-backed tests run in this process: Docker is
+    /// available, or the <c>CI</c> environment variable forbids skipping them.
+    /// </summary>
+    internal static bool ShouldRun => ShouldRunFor(IsAvailable, Environment.GetEnvironmentVariable("CI"));
+
+    /// <summary>
+    /// The decision behind <see cref="ShouldRun"/>, free of any environment access: run when
+    /// <paramref name="available"/>, or when <paramref name="ci"/> is <c>true</c> (any case) or
+    /// <c>1</c>.
+    /// </summary>
+    internal static bool ShouldRunFor(bool available, string? ci) =>
+        available
+        || string.Equals(ci, "true", StringComparison.OrdinalIgnoreCase)
+        || string.Equals(ci, "1", StringComparison.Ordinal);
+
+    /// <summary>
+    /// Runs <paramref name="discover"/> on its own background thread, not a thread-pool thread,
+    /// and returns its answer if it arrives within <paramref name="deadline"/>; a fault or a
+    /// timeout returns <see langword="false"/>. Never throws.
+    /// </summary>
+    /// <remarks>
+    /// A dedicated thread means a busy pool cannot spend the deadline before discovery has even
+    /// started, and an abandoned discovery holds no pool thread for Testcontainers' own timeouts.
+    /// </remarks>
+    internal static bool DiscoverWithin(Func<bool> discover, TimeSpan deadline)
     {
         try
         {
-            // An explicit endpoint always wins — including remote and rootless setups.
-            if (!string.IsNullOrWhiteSpace(Environment.GetEnvironmentVariable("DOCKER_HOST")))
+            var discovery = Task.Factory.StartNew(
+                discover,
+                CancellationToken.None,
+                TaskCreationOptions.LongRunning,
+                TaskScheduler.Default);
+            if (discovery.Wait(deadline))
             {
-                return true;
+                return discovery.Result;
             }
 
-            // Linux, WSL2 and macOS.
-            if (File.Exists("/var/run/docker.sock"))
-            {
-                return true;
-            }
-
-            // Rootless Linux: $XDG_RUNTIME_DIR/docker.sock.
-            var xdg = Environment.GetEnvironmentVariable("XDG_RUNTIME_DIR");
-            if (!string.IsNullOrWhiteSpace(xdg) && File.Exists(Path.Combine(xdg, "docker.sock")))
-            {
-                return true;
-            }
-
-            // Windows named pipe.
-            return OperatingSystem.IsWindows() && File.Exists(@"\\.\pipe\docker_engine");
+            // Abandoned, not cancelled: it keeps running. Observe a late fault so it never
+            // surfaces as an unobserved task exception.
+            _ = discovery.ContinueWith(
+                static t => _ = t.Exception,
+                CancellationToken.None,
+                TaskContinuationOptions.OnlyOnFaulted,
+                TaskScheduler.Default);
+            return false;
         }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException)
+        catch (Exception)
         {
             // A probe that cannot answer must report "no Docker", never take the suite down.
             return false;
         }
     }
+
+    private static bool Detect() =>
+        DiscoverWithin(
+            static () => TestcontainersSettings.OS.DockerEndpointAuthConfig is not null,
+            TimeSpan.FromSeconds(DiscoveryDeadlineSeconds));
 }
