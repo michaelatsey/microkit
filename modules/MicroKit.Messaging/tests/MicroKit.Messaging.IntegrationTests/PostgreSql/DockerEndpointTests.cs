@@ -35,6 +35,13 @@ public sealed class DockerEndpointTests
     }
 
     [Fact]
+    public void DiscoverWithin_WhenDiscoveryAnswersFalseInTime_ReturnsFalse()
+    {
+        // The #173 path: a dead socket makes discovery answer "no daemon" quickly, not time out.
+        DockerEndpoint.DiscoverWithin(() => false, TimeSpan.FromSeconds(5)).ShouldBeFalse();
+    }
+
+    [Fact]
     public void DiscoverWithin_WhenDiscoveryThrows_ReturnsFalse()
     {
         DockerEndpoint.DiscoverWithin(
@@ -46,8 +53,9 @@ public sealed class DockerEndpointTests
     [Fact]
     public void DiscoverWithin_WhenDiscoveryOutlivesTheDeadline_ReturnsFalseWithoutWaitingForIt()
     {
-        using var gate = new ManualResetEventSlim(initialState: false);
-        using var exited = new ManualResetEventSlim(initialState: false);
+        var gate = new ManualResetEventSlim(initialState: false);
+        var exited = new ManualResetEventSlim(initialState: false);
+        bool exitedInTime;
         var clock = Stopwatch.StartNew();
         try
         {
@@ -74,9 +82,18 @@ public sealed class DockerEndpointTests
         }
         finally
         {
-            // Release the abandoned discovery and let it leave the gate before both are disposed.
+            // Release the abandoned discovery and let it leave the gate. Dispose both only once it
+            // has: disposing under a delegate still inside them would throw on its thread. No
+            // assertion here — a failing one would replace an exception from the try block.
             gate.Set();
-            exited.Wait(TimeSpan.FromSeconds(5));
+            exitedInTime = exited.Wait(TimeSpan.FromSeconds(5));
+            if (exitedInTime)
+            {
+                gate.Dispose();
+                exited.Dispose();
+            }
         }
+
+        exitedInTime.ShouldBeTrue();
     }
 }

@@ -27,7 +27,7 @@ public sealed class PostgreSqlFixture : IAsyncLifetime
         _container?.GetConnectionString()
         ?? throw new InvalidOperationException(
             "The PostgreSQL container is not running. Tests using it must be marked " +
-            "[DockerRequiredFact] so they are skipped when Docker is absent.");
+            "[DockerRequiredFact] so they are skipped when no Docker daemon answers (outside CI).");
 
     public async Task InitializeAsync()
     {
