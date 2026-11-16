@@ -14,11 +14,9 @@ namespace MicroKit.Messaging.Spi;
 /// allocation per row.
 /// </para>
 /// <para>
-/// Only failures and releases are buffered. A row handled successfully settles itself inside
-/// the handler's own transaction through <see cref="IInboxSettlementStore"/> and produces no
-/// outcome at all — the one exception being
-/// <see cref="InboxOutcomeKind.Processed"/>, written when the handler committed no unit of work
-/// and the staged mark therefore never reached the database.
+/// Only failures and releases are buffered. A retry that succeeds writes its row
+/// <see cref="InboxMessageStatus.Processed"/> in the handler's own transaction and produces no
+/// outcome at all.
 /// </para>
 /// </remarks>
 /// <param name="Key">The row this outcome applies to.</param>

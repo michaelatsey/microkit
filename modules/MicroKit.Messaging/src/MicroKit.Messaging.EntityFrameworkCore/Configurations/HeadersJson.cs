@@ -1,11 +1,26 @@
 using System.Text.Json;
 using System.Text.Json.Serialization;
 
+using Microsoft.EntityFrameworkCore.ChangeTracking;
+
 namespace MicroKit.Messaging.EntityFrameworkCore;
 
-/// <summary>Converts <see cref="OutboxMessage.Headers"/> to and from its JSON column, trim-safely.</summary>
+/// <summary>
+/// Converts the headers of <see cref="OutboxMessage.Headers"/> and <see cref="InboxMessage.Headers"/>
+/// to and from their JSON column, trim-safely.
+/// </summary>
 internal static class HeadersJson
 {
+    /// <summary>
+    /// The value comparer of a headers column. Required: without it EF compares the dictionary by
+    /// reference and would never see a change to its contents. Order-independent, both ways: a
+    /// dictionary read back from JSON and one built in another order are equal and hash alike.
+    /// </summary>
+    public static ValueComparer<IReadOnlyDictionary<string, string>?> Comparer { get; } = new(
+        (a, b) => a == null ? b == null : b != null && a.Count == b.Count && !a.Except(b).Any(),
+        v => v == null ? 0 : v.Aggregate(0, (h, kv) => h ^ HashCode.Combine(kv.Key, kv.Value)),
+        v => v == null ? null : new Dictionary<string, string>(v, StringComparer.Ordinal));
+
     /// <summary>The headers as one JSON object, or null when there are none.</summary>
     /// <param name="headers">The headers.</param>
     /// <returns>The JSON text, or <see langword="null"/>.</returns>

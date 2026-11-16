@@ -27,9 +27,13 @@ public static class MessageStoreRegistrationExtensions
     /// <para>
     /// The services the engine resolves keyed by <paramref name="key"/> are validated at host
     /// start: <see cref="IOutboxWriter"/>, <see cref="IOutboxProcessorStore"/>,
-    /// <see cref="IOutboxRetentionStore"/>, <see cref="IInboxWriter"/>,
-    /// <see cref="IInboxProcessorStore"/>, <see cref="IInboxSettlementStore"/> and
-    /// <see cref="IInboxRetentionStore"/>.
+    /// <see cref="IOutboxRetentionStore"/>, <see cref="IInboxGuardStore"/>,
+    /// <see cref="IInboxProcessorStore"/> and <see cref="IInboxRetentionStore"/>.
+    /// </para>
+    /// <para>
+    /// With a store, each handler bound to it is guarded by its inbox row
+    /// (<see cref="IInboxGuardStore"/>): it runs at most once per message, in a transaction that
+    /// commits its work with its row.
     /// </para>
     /// </remarks>
     public static MessagingBuilder AddMessageStore(

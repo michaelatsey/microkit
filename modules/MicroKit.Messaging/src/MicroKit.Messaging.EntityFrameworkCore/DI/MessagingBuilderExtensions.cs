@@ -73,9 +73,8 @@ public static class MessagingBuilderExtensions
             services.TryAddKeyedScoped<IOutboxRetentionStore>(key, static (sp, _) => sp.GetRequiredService<EfOutboxStore<TContext>>());
 
             services.TryAddScoped<EfInboxStore<TContext>>();
-            services.TryAddKeyedScoped<IInboxWriter>(key, static (sp, _) => sp.GetRequiredService<EfInboxStore<TContext>>());
+            services.TryAddKeyedScoped<IInboxGuardStore>(key, static (sp, _) => sp.GetRequiredService<EfInboxStore<TContext>>());
             services.TryAddKeyedScoped<IInboxProcessorStore>(key, static (sp, _) => sp.GetRequiredService<EfInboxStore<TContext>>());
-            services.TryAddKeyedScoped<IInboxSettlementStore>(key, static (sp, _) => sp.GetRequiredService<EfInboxStore<TContext>>());
             services.TryAddKeyedScoped<IInboxAdminStore>(key, static (sp, _) => sp.GetRequiredService<EfInboxStore<TContext>>());
             services.TryAddKeyedScoped<IInboxRetentionStore>(key, static (sp, _) => sp.GetRequiredService<EfInboxStore<TContext>>());
 

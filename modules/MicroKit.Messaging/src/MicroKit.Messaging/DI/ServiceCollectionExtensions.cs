@@ -165,11 +165,17 @@ public static class ServiceCollectionExtensions
             composition,
             sp.GetRequiredService<IOptions<MessagingOptions>>().Value.ServiceName!));
 
-        // The receiving seam a transport provider hands arriving envelopes to, and the counters it
-        // records (#187: here rather than on a separate consumption call). Singleton: it creates
-        // its own execution scope per envelope.
+        // The receiving seam a transport provider hands arriving envelopes to — a thin adapter over
+        // the receive pipeline (#188) — and the inbox counters. Singletons: every scope they need
+        // is created per handler.
         services.TryAddSingleton<IEnvelopeReceiver, EnvelopeReceiver>();
         services.TryAddSingleton<InboxMetrics>();
+
+        // The inbox retry policy, shared by a failed delivery and a store's retry loop (#188).
+        services.TryAddSingleton(sp => new InboxRetryPolicy(
+            sp.GetRequiredService<InboxProcessorOptions>(),
+            sp.GetRequiredService<TimeProvider>(),
+            sp.GetRequiredService<Random>()));
 
         // The bus (#186). Scoped, because it reads the ambient tenant, correlation and causation
         // from the scope's IExecutionContext — never from an AsyncLocal. IMessageBus and

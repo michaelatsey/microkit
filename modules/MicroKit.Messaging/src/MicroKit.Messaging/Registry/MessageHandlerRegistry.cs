@@ -18,8 +18,8 @@ using System.Reflection;
 /// </description></item>
 /// <item><description>
 /// <strong>By event type</strong> (<see cref="GetHandlers"/>) — discovers which consumers should
-/// receive a message. Used by <c>EnvelopeReceiver</c> to fan one arriving
-/// <c>MessageEnvelope</c> out into one inbox row per consumer. ADR-MSG-019 kept this direction
+/// receive a message. Used by the receive pipeline to run one arriving
+/// <c>MessageEnvelope</c> through each of its consumers. ADR-MSG-019 kept this direction
 /// alive through the step that had no caller for it, on the argument that the receiving side
 /// would need it; it does, and this is it. A wire name resolves to a local type through
 /// <c>IntegrationEventRegistry</c>, and that type resolves to its consumers here.
@@ -115,9 +115,9 @@ internal sealed class MessageHandlerRegistry
     /// <para>
     /// <b>Registering the same handler twice must contribute one consumer, not two.</b> It is an
     /// ordinary mistake in a composition root assembled from several module registrations, and
-    /// appending would make <c>EnvelopeReceiver</c> fan one envelope out to the same consumer
-    /// twice: the second write hits the dedup index, so a <i>first</i> delivery reports
-    /// <c>Duplicates = 1</c> and increments <c>microkit.inbox.messages.deduplicated</c> — the
+    /// appending would make the receive pipeline run one message through the same consumer
+    /// twice: with a store, the second run finds the first one's row, so a <i>first</i> delivery
+    /// increments <c>microkit.inbox.messages.deduplicated</c> — the
     /// counter whose documented use is spotting a lease set too short or a broker replaying. A
     /// composition typo would read as a broker fault, permanently, at a steady rate.
     /// </para>
@@ -158,10 +158,10 @@ internal sealed class MessageHandlerRegistry
     /// <para>
     /// <b>At most one entry per <c>ConsumerType</c>.</b> Registration deduplicates on it, so a
     /// handler registered twice appears once here. That is not a convenience — it is what keeps
-    /// the fan-out honest. <c>EnvelopeReceiver</c> writes one inbox row per entry returned, so a
-    /// doubled entry would send the same consumer two writes for one envelope: the second hits the
-    /// <c>(MessageId, ConsumerType)</c> unique index, so a <b>first</b> delivery would report
-    /// <c>Duplicates = 1</c> and increment <c>microkit.inbox.messages.deduplicated</c> — the
+    /// the fan-out honest. The receive pipeline runs the handler once per entry returned, so a
+    /// doubled entry would run the same consumer twice for one message: with a store the second
+    /// run finds the <c>(MessageId, ConsumerType)</c> row of the first, so a <b>first</b> delivery
+    /// would increment <c>microkit.inbox.messages.deduplicated</c> — the
     /// counter whose documented use is spotting a lease set too short or a broker replaying. A
     /// composition typo would read as a broker fault, permanently, at a steady rate.
     /// </para>
@@ -206,7 +206,7 @@ internal sealed class MessageHandlerRegistry
     /// now has no production caller. Kept rather than removed, for diagnostics and for the same
     /// reason ADR-MSG-019 kept <see cref="GetHandlers"/> through the step that had no caller for
     /// it: a member that answers "which consumers did this host actually register" is what an
-    /// operator needs when <c>EnvelopeReceiver</c> reports a contract nothing consumes. Covered
+    /// operator needs when the receive pipeline reports a contract nothing consumes. Covered
     /// directly by <c>MessageHandlerRegistryTests</c>, so it is an uncalled seam rather than
     /// untested code. Worth revisiting at 1.0.0, not before.
     /// </remarks>

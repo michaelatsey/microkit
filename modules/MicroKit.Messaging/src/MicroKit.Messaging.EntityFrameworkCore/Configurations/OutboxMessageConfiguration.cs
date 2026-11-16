@@ -53,18 +53,12 @@ public sealed class OutboxMessageConfiguration : IEntityTypeConfiguration<Outbox
         builder.Property(m => m.Source)
             .HasMaxLength(256);
 
-        // The publication's own headers, as one JSON object. A value comparer is required: without
-        // it EF compares the dictionary by reference and would never see a change to its contents.
+        // The publication's own headers, as one JSON object, with the shared value comparer.
         builder.Property(m => m.Headers)
             .HasConversion(
                 v => HeadersJson.Write(v),
                 v => HeadersJson.Read(v),
-                new ValueComparer<IReadOnlyDictionary<string, string>?>(
-                    (a, b) => a == null ? b == null : b != null && a.Count == b.Count && !a.Except(b).Any(),
-                    // Order-independent, like the equality: a dictionary read back from JSON and
-                    // one built in another order are equal and must hash alike.
-                    v => v == null ? 0 : v.Aggregate(0, (h, kv) => h ^ HashCode.Combine(kv.Key, kv.Value)),
-                    v => v == null ? null : new Dictionary<string, string>(v, StringComparer.Ordinal)));
+                HeadersJson.Comparer);
 
         builder.Property(m => m.EventType)
             .IsRequired()

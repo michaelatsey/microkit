@@ -17,9 +17,8 @@ internal static class StoreEngineRegistration
         typeof(IOutboxWriter),
         typeof(IOutboxProcessorStore),
         typeof(IOutboxRetentionStore),
-        typeof(IInboxWriter),
+        typeof(IInboxGuardStore),
         typeof(IInboxProcessorStore),
-        typeof(IInboxSettlementStore),
         typeof(IInboxRetentionStore),
     ];
 
@@ -48,10 +47,9 @@ internal static class StoreEngineRegistration
             sp.GetRequiredService<Registry.MessageHandlerRegistry>(),
             sp.GetRequiredService<Publishing.IntegrationEventRegistry>(),
             sp.GetRequiredService<IMessageSerializer>(),
-            sp.GetRequiredService<IExecutionScopeFactory>(),
+            sp.GetRequiredService<Bus.MessageReceivePipeline>(),
             sp.GetRequiredService<InboxProcessorOptions>(),
-            sp.GetRequiredService<TimeProvider>(),
-            sp.GetRequiredService<Random>(),
+            sp.GetRequiredService<InboxRetryPolicy>(),
             sp.GetRequiredService<ILogger<InboxProcessor>>(),
             (MessageStoreKey)key!));
     }

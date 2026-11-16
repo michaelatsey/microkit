@@ -130,24 +130,21 @@ public sealed class PublicSurfaceTests
             // Transport and the wire form. MessageHeaders names the envelope's reserved
             // extensions (#186).
             "IMessageTransport", "MessageEnvelope", "MessageHeaders", "IEnvelopeReceiver",
-            "EnvelopeReceiveResult", "IMessageSerializer",
-            // The seam a store provider calls to switch on the outbox and inbox engine — Core,
-            // transitional until #188.
+            "EnvelopeReceiveResult", "ReceiveDisposition", "IMessageSerializer",
+            // The seam a store provider calls to add a store to the engine (#188).
             "IMessageStoreSet", "MessageStoreBuilder", "MessageStoreRegistrationExtensions",
             // Dispatch.
             "IOutboxDispatcher", "OutboxDispatcherKeys",
             // Stores, split by consumer (ISP).
             "IOutboxWriter", "IOutboxProcessorStore", "IOutboxAdminStore", "IOutboxRetentionStore",
-            "IInboxWriter", "IInboxProcessorStore", "IInboxSettlementStore", "IInboxAdminStore",
-            "IInboxRetentionStore",
-            // The staging writer.
+            "IInboxGuardStore", "IInboxProcessorStore", "IInboxAdminStore", "IInboxRetentionStore",
             // The rows and the types the stores exchange.
             "OutboxMessage", "InboxMessage", "OutboxClaim", "InboxClaim", "OutboxOutcome",
-            "InboxOutcome", "InboxMessageKey",
+            "InboxOutcome", "InboxMessageKey", "InboxRowState",
             // Value objects carried on a row.
             "CorrelationId", "CausationId",
             // Row and outcome state.
-            "MessageKind", "InboxWriteResult", "OutboxMessageStatus", "InboxMessageStatus",
+            "MessageKind", "OutboxMessageStatus", "InboxMessageStatus",
             "OutboxOutcomeKind", "InboxOutcomeKind",
             // The exceptions a provider raises across the seam, for the engine to classify.
             "OutboxPayloadException", "OutboxTransportUnavailableException",

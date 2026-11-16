@@ -1,112 +1,75 @@
-using Microsoft.Extensions.Time.Testing;
-
 namespace MicroKit.Messaging.UnitTests.Processing;
 
 using System.Diagnostics.Metrics;
 
 using MicroKit.Messaging.Publishing;
-using MicroKit.Messaging.Serialization;
 using MicroKit.Messaging.UnitTests.Publishing;
 
 /// <summary>
-/// <see cref="EnvelopeReceiver"/> — the receiving seam. Turns one <see cref="MessageEnvelope"/>
-/// into one <see cref="InboxMessage"/> per registered consumer.
+/// <see cref="EnvelopeReceiver"/> — the receiving seam (#188): one envelope through the receive
+/// pipeline, each handler guarded by its inbox row when it has a store, and a disposition for the
+/// transport.
 /// </summary>
 /// <remarks>
-/// The three columns worth their own tests are the ones the envelope does <b>not</b> carry:
-/// <c>EventType</c>, which must name a type <i>this</i> process can load; <c>ReceivedAtUtc</c>,
-/// which must come from the clock and not from a caller-supplied business timestamp; and
-/// <c>ConsumerType</c>, which comes from the handler registry. Everything else is a copy, and a
-/// copy that is wrong shows up immediately downstream.
+/// The row columns worth their own tests are the ones the envelope does <b>not</b> carry:
+/// <c>EventType</c>, which must name a type <i>this</i> process can load; <c>ReceivedAtUtc</c>, which
+/// must come from the clock and not from a caller-supplied business timestamp; and
+/// <c>ConsumerType</c>, which comes from the handler registry.
 /// </remarks>
 public sealed class EnvelopeReceiverTests
 {
-    private static readonly MessageStoreKey Store = new("tests:inbox-store");
-
     private const string ContractName = "partner.billing.invoice-settled.v1";
     private const string Source = "/partner/billing";
-    private const string ConsumerA = "MicroKit.Messaging.UnitTests.Processing.EnvelopeReceiverTests+FirstConsumer";
-    private const string ConsumerB = "MicroKit.Messaging.UnitTests.Processing.EnvelopeReceiverTests+SecondConsumer";
+    private static readonly string ConsumerA = typeof(FirstConsumer).AssemblyQualifiedName!;
+    private static readonly string ConsumerB = typeof(SecondConsumer).AssemblyQualifiedName!;
 
-    private static readonly DateTimeOffset ReceivedAt =
-        new(2026, 9, 5, 12, 0, 0, TimeSpan.Zero);
-
-    // Deliberately far from ReceivedAt, and in the past: OccurredOnUtc is the business fact's time
-    // and a receiver that reached for it would order the inbox claim on a producer's clock.
-    private static readonly DateTimeOffset OccurredOn =
-        new(2020, 1, 1, 0, 0, 0, TimeSpan.Zero);
+    // Deliberately far from the clock, and in the past: OccurredOnUtc is the business fact's time
+    // and a receiver that reached for it would order the retry claim on a producer's clock.
+    private static readonly DateTimeOffset OccurredOn = new(2020, 1, 1, 0, 0, 0, TimeSpan.Zero);
 
     [Fact]
-    public async Task ReceiveAsync_WhenContractNameIsUnbound_ThrowsPermanentlyAndWritesNothing()
+    public async Task ReceiveAsync_WhenContractNameIsUnbound_DeadLettersAndRunsNothing()
     {
         var harness = Harness.Build(consumers: 0, bindContract: false);
 
-        var ex = await Should.ThrowAsync<InboxPayloadException>(
-            async () => await harness.Receiver.ReceiveAsync(Envelope()));
+        var result = await harness.Receiver.ReceiveAsync(Envelope());
 
-        ex.Message.ShouldContain(ContractName);
-        ex.Message.ShouldContain("bus.AddHandler<THandler>()");
-        ex.Message.ShouldContain("dead-letter");
-
-        // The assertion that matters is not that it threw — it is that nothing was recorded, so a
-        // provider dead-lettering the message discards nothing this process was holding.
-        harness.Writer.Written.ShouldBeEmpty();
-        harness.Scopes.Contexts.ShouldBeEmpty("resolution fails before any scope is paid for");
+        result.Disposition.ShouldBe(ReceiveDisposition.DeadLetter);
+        result.Reason!.ShouldContain(ContractName);
+        harness.Guard.Database.Rows.ShouldBeEmpty();
+        harness.Guard.Scopes.Contexts.ShouldBeEmpty("resolution fails before any scope is paid for");
     }
 
     [Fact]
-    public async Task ReceiveAsync_WritesOneRowPerRegisteredConsumer()
+    public async Task ReceiveAsync_WritesOneProcessedRowPerHandler_AndAcknowledges()
     {
         var harness = Harness.Build(consumers: 2);
 
         var result = await harness.Receiver.ReceiveAsync(Envelope());
 
-        result.RowsAdded.ShouldBe(2);
-        result.Duplicates.ShouldBe(0);
-        result.ConsumersMatched.ShouldBe(2);
-
-        harness.Writer.Written.Count.ShouldBe(2);
-        harness.Writer.Written.Select(m => m.ConsumerType)
-            .ShouldBe([ConsumerA, ConsumerB], ignoreOrder: true);
-
-        // Distinct rows, not one instance written twice: RowId is the surrogate primary key and a
-        // shared one would collide on the second insert.
-        harness.Writer.Written.Select(m => m.RowId).Distinct().Count().ShouldBe(2);
+        result.Disposition.ShouldBe(ReceiveDisposition.Acknowledge);
+        harness.Probe.Calls(ConsumerA).ShouldBe(1);
+        harness.Probe.Calls(ConsumerB).ShouldBe(1);
+        harness.Guard.Database.Rows.Values.Select(r => r.ConsumerType).ShouldBe([ConsumerA, ConsumerB], ignoreOrder: true);
+        harness.Guard.Database.Rows.Values.ShouldAllBe(r => r.Status == InboxMessageStatus.Processed);
     }
 
     [Fact]
-    public async Task ReceiveAsync_CopiesTheEnvelopeOntoEveryRow()
+    public async Task ReceiveAsync_CopiesTheEnvelopeOntoTheRow()
     {
-        var harness = Harness.Build(consumers: 2);
-        var envelope = Envelope();
+        var harness = Harness.Build(consumers: 1);
 
-        await harness.Receiver.ReceiveAsync(envelope);
+        await harness.Receiver.ReceiveAsync(Envelope());
 
-        foreach (var row in harness.Writer.Written)
-        {
-            row.MessageId.Value.ToString().ShouldBe(
-                envelope.Id, "the consumer deduplicates on the producing row's id");
-            row.TenantId.ShouldBe(Tenant);
-            row.Payload.ShouldBe(Payload, "the UTF-8 body lands on the row as its text");
-            row.CorrelationId!.Value.ToString().ShouldBe(Correlation);
-
-            // COPIED, not derived. The row records who caused the MESSAGE, which the producer
-            // assigned. Deriving here would overwrite the producer's link with this message's own
-            // id and lose the hop the envelope carried.
-            row.CausationId!.Value.ToString().ShouldBe(Causation);
-
-            // The producer's business clock, carried whole. Since ADR-MSG-018 made
-            // IIntegrationEvent a bare marker the payload need carry no timestamp of its own, so
-            // dropping this would leave the business time nowhere on the receiving side.
-            row.OccurredOnUtc.ShouldBe(envelope.Time);
-
-            row.Status.ShouldBe(InboxMessageStatus.Received);
-            row.RetryCount.ShouldBe(0);
-            row.DeadLettered.ShouldBeFalse();
-            row.ProcessedAtUtc.ShouldBeNull();
-            row.LockedUntilUtc.ShouldBeNull();
-            row.ClaimToken.ShouldBeNull();
-        }
+        var row = harness.Guard.Database.Rows.Values.ShouldHaveSingleItem();
+        row.MessageId.ShouldBe(MessageId.From(Guid.Parse(EnvelopeId)));
+        row.TenantId.ShouldBe(Tenant);
+        row.CorrelationId.ShouldBe(CorrelationId.From(Guid.Parse(Correlation)));
+        row.CausationId.ShouldBe(CausationId.From(Guid.Parse(Causation)), "the row COPIES the producer's causation");
+        row.OccurredOnUtc.ShouldBe(OccurredOn);
+        row.Source.ShouldBe(Source);
+        row.Headers![MessageHeaders.TenantId].ShouldBe(Tenant);
+        row.Payload.ShouldBe(Payload);
     }
 
     [Fact]
@@ -116,19 +79,12 @@ public sealed class EnvelopeReceiverTests
 
         await harness.Receiver.ReceiveAsync(Envelope());
 
-        var eventType = harness.Writer.Written.ShouldHaveSingleItem().EventType;
+        var row = harness.Guard.Database.Rows.Values.ShouldHaveSingleItem();
+        row.EventType.ShouldBe(typeof(InvoiceSettled).AssemblyQualifiedName);
 
-        eventType.ShouldBe(typeof(InvoiceSettled).AssemblyQualifiedName);
-        eventType.ShouldNotBe(ContractName, "a wire name resolves no CLR type");
-
-        // Asserted through the REAL serializer rather than through Type.GetType, because that is
-        // the path the drain takes: InboxProcessor hands this exact column to
-        // IMessageSerializer.Deserialize. A column that merely looks right but does not round-trip
-        // dead-letters every row on its first claim, with a payload that was perfectly well-formed.
-        new SystemTextJsonMessageSerializer()
-            .Deserialize(
-                System.Text.Encoding.UTF8.GetBytes(harness.Writer.Written[0].Payload),
-                RowEventTypes.Resolve(eventType!)!)
+        // Through the real serializer, the path a retry takes.
+        new MicroKit.Messaging.Serialization.SystemTextJsonMessageSerializer()
+            .Deserialize(System.Text.Encoding.UTF8.GetBytes(row.Payload), typeof(InvoiceSettled))
             .ShouldBeOfType<InvoiceSettled>();
     }
 
@@ -139,134 +95,169 @@ public sealed class EnvelopeReceiverTests
 
         await harness.Receiver.ReceiveAsync(Envelope());
 
-        var row = harness.Writer.Written.ShouldHaveSingleItem();
-
-        // ReceivedAtUtc is the inbox claim's ordering key. Seeded six years apart so copying the
-        // wrong one cannot pass by coincidence.
-        row.ReceivedAtUtc.ShouldBe(ReceivedAt);
-        row.ReceivedAtUtc.ShouldNotBe(OccurredOn);
-
-        // And the other direction, which only matters now that BOTH clocks are recorded: a row
-        // stamping the receipt instant into the business column reads as a fact that occurred on
-        // arrival. Neither assertion alone catches a swap of the two.
+        var row = harness.Guard.Database.Rows.Values.ShouldHaveSingleItem();
+        row.ReceivedAtUtc.ShouldBe(GuardHarness.Now);
         row.OccurredOnUtc.ShouldBe(OccurredOn);
-        row.OccurredOnUtc.ShouldNotBe(ReceivedAt);
     }
 
-    /// <summary>
-    /// An envelope with no correlation gets ONE minted at the seam, shared by the whole fan-out.
-    /// </summary>
-    /// <remarks>
-    /// This seam is the last point at which a single id still covers every consumer.
-    /// <c>OutboxMessageFactory.ResolveCorrelation</c> substitutes a fresh id per staging call, so
-    /// leaving null here would put N consumers of one delivery on N unrelated chains, none of them
-    /// reaching back to the delivery that caused all of them. Two consumers, because the shared-ness
-    /// is invisible with one.
-    /// </remarks>
     [Fact]
-    public async Task ReceiveAsync_WhenTheEnvelopeCarriesNoCorrelation_MintsOneForTheWholeFanOut()
+    public async Task ReceiveAsync_WhenTheEnvelopeCarriesNoCorrelation_MintsOneForEveryHandler()
     {
         var harness = Harness.Build(consumers: 2);
-        var envelope = Envelope(withCorrelation: false);
 
-        await harness.Receiver.ReceiveAsync(envelope);
+        await harness.Receiver.ReceiveAsync(Envelope(withCorrelation: false));
 
-        var correlations = harness.Writer.Written
-            .Select(r => r.CorrelationId.ShouldNotBeNull().Value)
-            .ToList();
-
-        correlations.Count.ShouldBe(2);
-        correlations.Distinct().Count().ShouldBe(
-            1, "one chain for one delivery — a per-row id would correlate nothing");
-        correlations[0].ShouldNotBe(Guid.Empty);
-
-        // The scope carries the same one, so anything a handler stages downstream joins the chain
-        // rather than starting its own.
-        harness.Scopes.Contexts.ShouldHaveSingleItem()
-            .CorrelationId.ShouldBe(correlations[0].ToString());
+        var correlations = harness.Guard.Database.Rows.Values.Select(r => r.CorrelationId).Distinct().ToList();
+        correlations.ShouldHaveSingleItem().ShouldNotBeNull("one id, minted once, for the whole fan-out");
+        harness.Probe.Seen.Select(s => s.Context.CorrelationId).Distinct().ShouldHaveSingleItem()
+            .ShouldBe(correlations[0]!.Value.ToString());
     }
 
     [Fact]
     public async Task ReceiveAsync_WhenTheEnvelopeCarriesACorrelation_CopiesItRatherThanMinting()
     {
+        var harness = Harness.Build(consumers: 1);
+
+        await harness.Receiver.ReceiveAsync(Envelope());
+
+        harness.Probe.Seen.ShouldHaveSingleItem().Context.CorrelationId.ShouldBe(Correlation);
+    }
+
+    [Fact]
+    public async Task ReceiveAsync_WhenOneHandlersRowExists_SkipsItAndStillRunsTheOthers()
+    {
         var harness = Harness.Build(consumers: 2);
-        var envelope = Envelope();
-
-        await harness.Receiver.ReceiveAsync(envelope);
-
-        harness.Writer.Written.ShouldAllBe(r => r.CorrelationId!.Value.ToString() == Correlation);
-    }
-
-    [Fact]
-    public async Task ReceiveAsync_WhenOneConsumerIsADuplicate_StillWritesTheOthers()
-    {
-        // The property the retired InboxRedeliveryTests carried as its fourth, and the defect
-        // ADR-MSG-017 §6 exists to prevent: an early return here made a partial redelivery
-        // permanent loss for every consumer after the duplicated one.
-        var harness = Harness.Build(
-            consumers: 2,
-            write: row => row.ConsumerType == ConsumerA
-                ? InboxWriteResult.AlreadyPresent
-                : InboxWriteResult.Added);
+        harness.Guard.Database.Add(Row(ConsumerA, InboxMessageStatus.Processed));
 
         var result = await harness.Receiver.ReceiveAsync(Envelope());
 
-        result.RowsAdded.ShouldBe(1);
-        result.Duplicates.ShouldBe(1);
-        result.ConsumersMatched.ShouldBe(2);
-
-        harness.Writer.Written.Select(m => m.ConsumerType)
-            .ShouldContain(ConsumerB, "the duplicate must not cost the next consumer its row");
+        result.Disposition.ShouldBe(ReceiveDisposition.Acknowledge);
+        harness.Probe.Calls(ConsumerA).ShouldBe(0, "its row says it already ran");
+        harness.Probe.Calls(ConsumerB).ShouldBe(1, "a skipped handler must not cost the next one its run");
+        harness.Guard.Logs.Records.ShouldContain(r => r.EventId == 2200 && r.Level == LogLevel.Debug);
     }
 
-    [Fact]
-    public async Task ReceiveAsync_WhenEveryConsumerIsADuplicate_ReportsItAndDoesNotThrow()
+    [Theory]
+    [InlineData(InboxMessageStatus.Failed)]
+    [InlineData(InboxMessageStatus.Processing)]
+    [InlineData(InboxMessageStatus.Received)]
+    public async Task ReceiveAsync_WhenTheRowExistsInAnyState_NeverStartsASecondAttempt(InboxMessageStatus status)
     {
-        var harness = Harness.Build(consumers: 2, write: _ => InboxWriteResult.AlreadyPresent);
+        var harness = Harness.Build(consumers: 1);
+        harness.Guard.Database.Add(Row(ConsumerA, status));
 
         var result = await harness.Receiver.ReceiveAsync(Envelope());
 
-        result.RowsAdded.ShouldBe(0);
-        result.Duplicates.ShouldBe(2);
-
-        // A redelivery is the nominal path under at-least-once delivery. Debug, never Warning:
-        // one expired lease after a crash produces a burst of these.
-        harness.Logs.Records
-            .Where(r => r.EventId == 2101)
-            .ShouldAllBe(r => r.Level == LogLevel.Debug);
-
-        harness.Logs.Records.ShouldNotContain(r => r.Level >= LogLevel.Warning);
+        result.Disposition.ShouldBe(ReceiveDisposition.Acknowledge);
+        harness.Probe.Calls(ConsumerA).ShouldBe(0, "the store's retry loop owns the row");
     }
 
     [Fact]
-    public async Task ReceiveAsync_WhenNoHandlerIsRegistered_WritesNothingAndWarns()
+    public async Task ReceiveAsync_WhenAHandlerFails_WritesItsRowFailed_RunsTheOthers_AndAcknowledges()
     {
-        // The composition a consuming service actually gets wrong: Consumes<T>() declared,
-        // AddMessageHandler<,>() forgotten. Zero rows is correct — but a silent zero is
-        // indistinguishable from a healthy delivery, which is the failure this module blocks on.
+        var harness = Harness.Build(consumers: 2);
+        harness.Probe.Throw[ConsumerA] = new InvalidOperationException("the handler failed");
+
+        var result = await harness.Receiver.ReceiveAsync(Envelope());
+
+        result.Disposition.ShouldBe(ReceiveDisposition.Acknowledge, "the Failed row is committed: the store retries it");
+        var failed = harness.Guard.Database.Find(new InboxMessageKey(MessageId.From(Guid.Parse(EnvelopeId)), ConsumerA))!;
+        failed.Status.ShouldBe(InboxMessageStatus.Failed);
+        failed.RetryCount.ShouldBe(1);
+        failed.DeadLettered.ShouldBeFalse();
+        failed.NextRetryAtUtc.ShouldBe(GuardHarness.Now + TimeSpan.FromSeconds(2), "2^1 s, no jitter");
+        failed.ErrorMessage.ShouldBe("the handler failed");
+        harness.Probe.Calls(ConsumerB).ShouldBe(1);
+    }
+
+    [Fact]
+    public async Task ReceiveAsync_WhenTheFailedRowCannotBeWritten_AsksForARedelivery()
+    {
+        var harness = Harness.Build(consumers: 1);
+        harness.Probe.Throw[ConsumerA] = new InvalidOperationException("the handler failed");
+        harness.Guard.Database.FailInsertFailed = new TimeoutException("the database is gone");
+
+        var result = await harness.Receiver.ReceiveAsync(Envelope());
+
+        result.Disposition.ShouldBe(ReceiveDisposition.Redeliver, "nothing records the failure, so the transport must keep the message");
+        harness.Guard.Database.Rows.ShouldBeEmpty();
+        harness.Guard.Logs.Records.ShouldContain(r => r.EventId == 2204 && r.Level == LogLevel.Error);
+    }
+
+    [Fact]
+    public async Task ReceiveAsync_WhenAHandlerThrowsPermanently_DeadLettersItsRow_AndAcknowledges()
+    {
+        var harness = Harness.Build(consumers: 1);
+        harness.Probe.Throw[ConsumerA] = new PermanentMessageException("never deliverable");
+
+        var result = await harness.Receiver.ReceiveAsync(Envelope());
+
+        result.Disposition.ShouldBe(ReceiveDisposition.Acknowledge);
+        var row = harness.Guard.Database.Rows.Values.ShouldHaveSingleItem();
+        row.Status.ShouldBe(InboxMessageStatus.Failed);
+        row.DeadLettered.ShouldBeTrue();
+        row.NextRetryAtUtc.ShouldBeNull();
+    }
+
+    [Fact]
+    public async Task ReceiveAsync_WhenADependencyIsDown_WritesNoRow_AndAsksToPauseAndRedeliver()
+    {
+        var harness = Harness.Build(consumers: 1);
+        harness.Probe.Throw[ConsumerA] = new InboxDependencyUnavailableException("the partner API is down");
+
+        var result = await harness.Receiver.ReceiveAsync(Envelope());
+
+        result.Disposition.ShouldBe(ReceiveDisposition.PauseAndRedeliver);
+        harness.Guard.Database.Rows.ShouldBeEmpty("an outage counts no attempt");
+    }
+
+    [Fact]
+    public async Task ReceiveAsync_WithNoStore_AHandlerFailureAsksForARedelivery()
+    {
+        var harness = Harness.Build(consumers: 1, withStore: false);
+        harness.Probe.Throw[ConsumerA] = new InvalidOperationException("the handler failed");
+
+        var result = await harness.Receiver.ReceiveAsync(Envelope());
+
+        result.Disposition.ShouldBe(ReceiveDisposition.Redeliver, "without a store the transport owns the retries (#186)");
+        result.Error.ShouldBeOfType<InvalidOperationException>();
+    }
+
+    [Fact]
+    public async Task ReceiveAsync_WhenTheHostIsStopping_LeavesTheMessageUnsettled()
+    {
+        var harness = Harness.Build(consumers: 1);
+        using var stopping = new CancellationTokenSource();
+        harness.Probe.Throw[ConsumerA] = new OperationCanceledException(stopping.Token);
+        await stopping.CancelAsync();
+
+        var result = await harness.Receiver.ReceiveAsync(Envelope(), stopping.Token);
+
+        result.Disposition.ShouldBe(ReceiveDisposition.Unsettled);
+        harness.Guard.Database.Rows.ShouldBeEmpty("a stop is never a failure");
+    }
+
+    [Fact]
+    public async Task ReceiveAsync_WhenNoHandlerIsRegistered_AcknowledgesAndWarns()
+    {
         var harness = Harness.Build(consumers: 0);
 
         var result = await harness.Receiver.ReceiveAsync(Envelope());
 
-        result.ConsumersMatched.ShouldBe(0);
-        result.RowsAdded.ShouldBe(0);
-        harness.Writer.Written.ShouldBeEmpty();
-
-        var warning = harness.Logs.Records.ShouldHaveSingleItem();
+        result.Disposition.ShouldBe(ReceiveDisposition.Acknowledge);
+        harness.Guard.Database.Rows.ShouldBeEmpty();
+        var warning = harness.Guard.Logs.Records.ShouldHaveSingleItem();
+        warning.EventId.ShouldBe(3001);
         warning.Level.ShouldBe(LogLevel.Warning);
-        warning.EventId.ShouldBe(2102);
-        warning.Message.ShouldContain(ContractName);
-        warning.Message.ShouldContain(nameof(InvoiceSettled));
     }
 
     [Fact]
     public async Task ReceiveAsync_WhenNoHandlerIsRegistered_CountsIt()
     {
+        // A log carries an event; a counter carries the rate.
         var harness = Harness.Build(consumers: 0);
-
-        var unconsumed = 0L;
+        var counted = new List<string>();
         using var listener = new MeterListener();
-
         listener.InstrumentPublished = (instrument, l) =>
         {
             if (instrument.Meter.Name == MessagingDiagnostics.InboxMeterName
@@ -275,105 +266,75 @@ public sealed class EnvelopeReceiverTests
                 l.EnableMeasurementEvents(instrument);
             }
         };
-
-        listener.SetMeasurementEventCallback<long>(
-            (_, measurement, _, _) => Interlocked.Add(ref unconsumed, measurement));
-
+        listener.SetMeasurementEventCallback<long>((_, _, tags, _) =>
+        {
+            foreach (var tag in tags)
+            {
+                if (tag.Key == "contract.name")
+                {
+                    counted.Add((string)tag.Value!);
+                }
+            }
+        });
         listener.Start();
 
         await harness.Receiver.ReceiveAsync(Envelope());
 
-        // A log line carries an event; a counter carries a rate, and the rate is what an operator
-        // alerts on. The plural of "one warning nobody read" is still zero.
-        unconsumed.ShouldBe(1);
+        counted.ShouldContain(ContractName);
     }
 
     [Fact]
-    public async Task ReceiveAsync_BuildsOneScopeCarryingTheTenantCorrelationAndDerivedCausation()
+    public async Task ReceiveAsync_BuildsEachScopeWithTheTenantCorrelationAndDerivedCausation()
     {
-        var harness = Harness.Build(consumers: 2);
-        var envelope = Envelope();
-
-        await harness.Receiver.ReceiveAsync(envelope);
-
-        // ONE scope for the whole fan-out, not one per consumer: every row carries the same payload
-        // and the same tenant, so there is nothing to isolate between them.
-        var context = harness.Scopes.Contexts.ShouldHaveSingleItem();
-
-        context.TenantId.ShouldBe(Tenant, "a tenant-aware factory resolves the database from this");
-        context.CorrelationId.ShouldBe(Correlation, "correlation is copied");
-
-        // DERIVED from the envelope's own MessageId — everything recorded in this scope was caused
-        // by delivering THIS message. Copying the causationid header would name the grandparent, and
-        // the envelope seeds the two differently so that copy-through cannot pass.
-        context.CausationId.ShouldBe(envelope.Id);
-        context.CausationId.ShouldNotBe(Causation);
-    }
-
-    [Fact]
-    public async Task ReceiveAsync_WhenTheInboxWriterIsNotRegistered_FailsAsAConfigurationFault()
-    {
-        // A store whose inbox writer is missing. Typed, so a provider does not nack forever against
-        // a defect no redelivery can fix.
-        var harness = Harness.Build(consumers: 1, registerWriter: false);
-
-        var ex = await Should.ThrowAsync<InboxConfigurationException>(
-            async () => await harness.Receiver.ReceiveAsync(Envelope()));
-
-        ex.Message.ShouldContain(nameof(IInboxWriter));
-        ex.Message.ShouldContain("UseEntityFrameworkOutbox");
-    }
-
-    /// <summary>
-    /// A writer that is registered but cannot be activated is NOT a configuration fault.
-    /// </summary>
-    /// <remarks>
-    /// <para>
-    /// The distinction this pins is the whole of the fix. <c>IInboxWriter</c> resolves through a
-    /// factory that activates <c>EfInboxStore&lt;TContext&gt;</c> and, with it, the consumer's
-    /// <c>DbContext</c> — so a <c>catch (InvalidOperationException)</c> around the resolution
-    /// spans that entire graph while reading as a registration lookup. Under a tenant-aware
-    /// <see cref="IExecutionScopeFactory"/> an envelope naming an unknown tenant throws exactly
-    /// that from the connection resolution, and catching it would report a present registration
-    /// as missing and stop the consume loop for every tenant over one message's data.
-    /// </para>
-    /// <para>
-    /// The exception type below is <see cref="InvalidOperationException"/> on purpose: it is the
-    /// one a catch-based implementation would swallow, so any other type here would leave the
-    /// regression free to come back. Asserting <c>ShouldNotBeOfType</c> as well as the identity
-    /// says which half failed when it does.
-    /// </para>
-    /// </remarks>
-    [Fact]
-    public async Task ReceiveAsync_WhenTheWriterCannotBeActivated_PropagatesRatherThanClassifying()
-    {
-        var activationFailure = new InvalidOperationException(
-            "No connection string is configured for tenant 'tenant-a'.");
-
-        var harness = Harness.Build(consumers: 1, writerActivationFailure: activationFailure);
-
-        var ex = await Should.ThrowAsync<InvalidOperationException>(
-            async () => await harness.Receiver.ReceiveAsync(Envelope()));
-
-        ex.ShouldNotBeOfType<InboxConfigurationException>(
-            "a registered writer that fails to activate is one message's fault — most likely a " +
-            "tenant whose connection cannot be resolved — and must not stop the consume loop");
-
-        ex.ShouldBeSameAs(activationFailure, "it propagates unchanged, so a provider can nack");
-    }
-
-    [Fact]
-    public async Task ReceiveAsync_WhenTheBodyIsNotJson_ThrowsPermanentlyAndWritesNothing()
-    {
-        // The inbox row stores the body as JSON text (#186 boundary): any other content type
-        // cannot be recorded, and no redelivery will change that.
         var harness = Harness.Build(consumers: 1);
 
-        var ex = await Should.ThrowAsync<InboxPayloadException>(
-            async () => await harness.Receiver.ReceiveAsync(Envelope(contentType: "application/avro")));
+        await harness.Receiver.ReceiveAsync(Envelope());
 
-        ex.Message.ShouldContain("application/avro");
-        harness.Writer.Written.ShouldBeEmpty();
+        harness.Guard.Scopes.Contexts.ShouldNotBeEmpty();
+        harness.Guard.Scopes.Contexts.ShouldAllBe(c =>
+            c.TenantId == Tenant
+            && c.CorrelationId == Correlation
+            // DERIVED: the envelope's id, never its own causation — that names the grandparent.
+            && c.CausationId == EnvelopeId);
+    }
+
+    [Fact]
+    public async Task ReceiveAsync_WhenTheStoreRegistersNoGuard_AsksForARedelivery()
+    {
+        var harness = Harness.Build(consumers: 1, registerGuard: false);
+
+        var result = await harness.Receiver.ReceiveAsync(Envelope());
+
+        result.Disposition.ShouldBe(ReceiveDisposition.Redeliver);
+        result.Error.ShouldBeOfType<InboxConfigurationException>();
+        harness.Probe.Calls(ConsumerA).ShouldBe(0);
+        harness.Guard.Logs.Records.ShouldContain(r => r.EventId == 2207);
+    }
+
+    [Fact]
+    public async Task ReceiveAsync_WhenTheGuardCannotBeActivated_AsksForARedelivery_RatherThanAConfigurationVerdict()
+    {
+        // Registered but unactivatable is one tenant's connection failing, not a composition fault.
+        var harness = Harness.Build(
+            consumers: 1, guardActivationFailure: new InvalidOperationException("no connection for tenant-a"));
+
+        var result = await harness.Receiver.ReceiveAsync(Envelope());
+
+        result.Disposition.ShouldBe(ReceiveDisposition.Redeliver);
+        result.Error.ShouldBeOfType<InvalidOperationException>();
+        harness.Probe.Calls(ConsumerA).ShouldBe(0);
+    }
+
+    [Fact]
+    public async Task ReceiveAsync_WhenTheBodyIsNotJson_DeadLettersAndRunsNothing()
+    {
+        var harness = Harness.Build(consumers: 1);
+
+        var result = await harness.Receiver.ReceiveAsync(Envelope(contentType: "application/avro"));
+
+        result.Disposition.ShouldBe(ReceiveDisposition.DeadLetter);
+        result.Reason!.ShouldContain("application/avro");
+        harness.Probe.Calls(ConsumerA).ShouldBe(0);
     }
 
     [Fact]
@@ -381,21 +342,22 @@ public sealed class EnvelopeReceiverTests
     {
         var harness = Harness.Build(consumers: 1);
 
-        await harness.Receiver.ReceiveAsync(Envelope(contentType: "application/json; charset=utf-8"));
+        var result = await harness.Receiver.ReceiveAsync(Envelope(contentType: "application/json; charset=utf-8"));
 
-        harness.Writer.Written.ShouldHaveSingleItem();
+        result.Disposition.ShouldBe(ReceiveDisposition.Acknowledge);
+        harness.Probe.Calls(ConsumerA).ShouldBe(1);
     }
 
     [Fact]
-    public async Task ReceiveAsync_WhenTheIdIsNotAGuid_ThrowsPermanentlyAndWritesNothing()
+    public async Task ReceiveAsync_WhenTheIdIsNotAGuid_DeadLettersAndRunsNothing()
     {
         var harness = Harness.Build(consumers: 1);
 
-        var ex = await Should.ThrowAsync<InboxPayloadException>(
-            async () => await harness.Receiver.ReceiveAsync(Envelope(id: "order-42")));
+        var result = await harness.Receiver.ReceiveAsync(Envelope(id: "not-a-guid"));
 
-        ex.Message.ShouldContain("order-42");
-        harness.Writer.Written.ShouldBeEmpty();
+        result.Disposition.ShouldBe(ReceiveDisposition.DeadLetter);
+        harness.Probe.Calls(ConsumerA).ShouldBe(0);
+        harness.Guard.Database.Rows.ShouldBeEmpty();
     }
 
     [Fact]
@@ -407,6 +369,65 @@ public sealed class EnvelopeReceiverTests
             async () => await harness.Receiver.ReceiveAsync(null!));
     }
 
+    /// <summary>
+    /// An initializer configures the scope the store's <c>DbContext</c> is built from — a tenant's
+    /// connection, say — so it runs before the guard is built, in every scope the guard uses: the
+    /// read, each attempt, and the write of a Failed row.
+    /// </summary>
+    [Fact]
+    public async Task ReceiveAsync_RunsTheScopeInitializersBeforeTheStoreIsBuilt_InEveryScope()
+    {
+        var seen = new List<string?>();
+        var harness = Harness.Build(
+            consumers: 1,
+            services: s =>
+            {
+                s.AddScoped<TenantSlot>();
+                s.AddSingleton<IMessageScopeInitializer, TenantSlotInitializer>();
+            },
+            onGuardBuilt: sp =>
+            {
+                lock (seen)
+                {
+                    seen.Add(sp.GetRequiredService<TenantSlot>().Tenant);
+                }
+            });
+        harness.Probe.Throw[ConsumerA] = new InvalidOperationException("fails, so the Failed row's scope is used too");
+
+        await harness.Receiver.ReceiveAsync(Envelope());
+
+        seen.Count.ShouldBeGreaterThanOrEqualTo(3, "the read, the attempt and the Failed row");
+        seen.ShouldAllBe(t => t == Tenant, "every guard was built after the initializer filled its scope");
+    }
+
+    [Fact]
+    public async Task ReceiveAsync_WhenADependencyIsDownAndTheDatabaseToo_StillAsksToPause()
+    {
+        // The duplicate read after the failure would fail as well: it must not hide the verdict.
+        var harness = Harness.Build(consumers: 1);
+        harness.Probe.Throw[ConsumerA] = new InboxDependencyUnavailableException("down");
+        harness.Probe.OnHit = () => harness.Guard.Database.FailReads = true;
+
+        var result = await harness.Receiver.ReceiveAsync(Envelope());
+
+        result.Disposition.ShouldBe(ReceiveDisposition.PauseAndRedeliver);
+    }
+
+    [Fact]
+    public async Task ReceiveAsync_WhenItsOwnCommitLandedAndThenFaulted_IsNotCountedAsAConcurrentDuplicate()
+    {
+        // No retrying strategy, so nothing verifies the commit: the engine recognises its own row.
+        var harness = Harness.Build(consumers: 1);
+        harness.Guard.Database.FailAfterNextCommit = new TimeoutException("the connection dropped after COMMIT");
+
+        var result = await harness.Receiver.ReceiveAsync(Envelope());
+
+        result.Disposition.ShouldBe(ReceiveDisposition.Acknowledge);
+        harness.Guard.Logs.Records.ShouldContain(r => r.EventId == 2206);
+        harness.Guard.Logs.Records.ShouldNotContain(r => r.EventId == 2201, "no other delivery was involved");
+        harness.Guard.Database.Rows.Values.ShouldHaveSingleItem().Status.ShouldBe(InboxMessageStatus.Processed);
+    }
+
     private const string EnvelopeId = "11111111-1111-4111-8111-111111111111";
     private const string Payload = """{"invoiceId":"22222222-2222-4222-8222-222222222222"}""";
     private const string Tenant = "tenant-a";
@@ -415,6 +436,15 @@ public sealed class EnvelopeReceiverTests
     // Different from the id on purpose: the row must COPY this one while the execution context
     // DERIVES from the id. A shared value would let either bug pass.
     private const string Causation = "44444444-4444-4444-8444-444444444444";
+
+    private static InboxMessage Row(string consumer, InboxMessageStatus status) => new()
+    {
+        MessageId = MessageId.From(Guid.Parse(EnvelopeId)),
+        ConsumerType = consumer,
+        EventType = typeof(InvoiceSettled).AssemblyQualifiedName!,
+        Payload = Payload,
+        Status = status,
+    };
 
     private static MessageEnvelope Envelope(
         bool withCorrelation = true,
@@ -444,37 +474,18 @@ public sealed class EnvelopeReceiverTests
         };
     }
 
-    private sealed record Harness(
-        EnvelopeReceiver Receiver,
-        RecordingInboxWriter Writer,
-        TestExecutionScopeFactory Scopes,
-        CapturingLogger<EnvelopeReceiver> Logs)
+    private sealed record Harness(EnvelopeReceiver Receiver, GuardHarness Guard, HandlerProbe Probe)
     {
         internal static Harness Build(
             int consumers,
             bool bindContract = true,
-            bool registerWriter = true,
-            Func<InboxMessage, InboxWriteResult>? write = null,
-            Exception? writerActivationFailure = null)
+            bool withStore = true,
+            bool registerGuard = true,
+            Exception? guardActivationFailure = null,
+            Action<IServiceCollection>? services = null,
+            Action<IServiceProvider>? onGuardBuilt = null)
         {
-            var writer = new RecordingInboxWriter(write);
-
-            var services = new ServiceCollection();
-            if (writerActivationFailure is not null)
-            {
-                // REGISTERED, and unactivatable — the shape a tenant-aware scope produces when it
-                // cannot resolve a connection for the envelope's tenant. Distinct from
-                // registerWriter: false, which is the absent-registration case.
-                services.AddKeyedScoped<IInboxWriter>(Store, (_, _) => throw writerActivationFailure);
-            }
-            else if (registerWriter)
-            {
-                services.AddKeyedScoped<IInboxWriter>(Store, (_, _) => writer);
-            }
-
-            var provider = services.BuildServiceProvider();
-            var scopes = new TestExecutionScopeFactory(
-                provider.GetRequiredService<IServiceScopeFactory>());
+            var probe = new HandlerProbe();
 
             var contracts = bindContract
                 ? IntegrationEventContractFixtures.Registry(bus => bus.AddHandler<InvoiceSettledHandler>())
@@ -491,34 +502,54 @@ public sealed class EnvelopeReceiverTests
                 handlers.RegisterGeneric<InvoiceSettled>(ConsumerB, typeof(SecondConsumer));
             }
 
-            var logs = new CapturingLogger<EnvelopeReceiver>();
-
-            // One store, so every consumer's row goes to it (#188).
-            var composition = new MessagingComposition();
-            composition.GetOrAddStore(Store, out _);
-
-            var receiver = new EnvelopeReceiver(
-                contracts,
+            var guard = GuardHarness.Build(
+                collection =>
+                {
+                    collection.AddSingleton(probe);
+                    collection.AddScoped<FirstConsumer>();
+                    collection.AddScoped<SecondConsumer>();
+                    services?.Invoke(collection);
+                },
                 handlers,
-                new MicroKit.Messaging.Stores.MessageStoreResolver(composition, new MicroKit.Messaging.Stores.StaticMessageStoreSet(composition)),
-                scopes,
-                new FakeTimeProvider(ReceivedAt),
-                new InboxMetrics(),
-                logs);
+                contracts,
+                withStore,
+                registerGuard,
+                guardActivationFailure,
+                onGuardBuilt: onGuardBuilt);
 
-            return new Harness(receiver, writer, scopes, logs);
+            return new Harness(new EnvelopeReceiver(guard.Pipeline), guard, probe);
         }
     }
 
-    private sealed class FirstConsumer : IMessageHandler<InvoiceSettled>
+    private sealed class TenantSlot
     {
-        public ValueTask HandleAsync(InvoiceSettled message, MessageContext context, CancellationToken ct = default)
-            => ValueTask.CompletedTask;
+        public string? Tenant { get; set; }
     }
 
-    private sealed class SecondConsumer : IMessageHandler<InvoiceSettled>
+    private sealed class TenantSlotInitializer : IMessageScopeInitializer
+    {
+        public ValueTask InitializeAsync(MessageContext context, IServiceProvider services, CancellationToken ct = default)
+        {
+            services.GetRequiredService<TenantSlot>().Tenant = context.TenantId;
+            return ValueTask.CompletedTask;
+        }
+    }
+
+    private sealed class FirstConsumer(HandlerProbe probe, IServiceProvider services) : IMessageHandler<InvoiceSettled>
     {
         public ValueTask HandleAsync(InvoiceSettled message, MessageContext context, CancellationToken ct = default)
-            => ValueTask.CompletedTask;
+        {
+            probe.Hit(ConsumerA, context, services);
+            return ValueTask.CompletedTask;
+        }
+    }
+
+    private sealed class SecondConsumer(HandlerProbe probe, IServiceProvider services) : IMessageHandler<InvoiceSettled>
+    {
+        public ValueTask HandleAsync(InvoiceSettled message, MessageContext context, CancellationToken ct = default)
+        {
+            probe.Hit(ConsumerB, context, services);
+            return ValueTask.CompletedTask;
+        }
     }
 }

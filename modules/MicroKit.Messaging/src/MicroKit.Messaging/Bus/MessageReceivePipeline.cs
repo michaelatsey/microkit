@@ -1,13 +1,17 @@
 namespace MicroKit.Messaging.Bus;
 
+using System.Text;
 using MicroKit.Messaging.Execution;
+using MicroKit.Messaging.Processing;
 using MicroKit.Messaging.Publishing;
 using MicroKit.Messaging.Registry;
+using MicroKit.Messaging.Stores;
 using MessageCtx = MicroKit.Messaging.Execution.ExecutionContext;
 
 /// <summary>
-/// The receive pipeline: from one envelope to every handler of its contract, inline, with a
-/// verdict for the transport.
+/// The receive pipeline: from one message to every handler of its contract, with a verdict for the
+/// transport. The one pipeline for a transport delivery, an <see cref="IEnvelopeReceiver"/> delivery
+/// and a store's retry (#188 D6).
 /// </summary>
 /// <remarks>
 /// <para>
@@ -22,20 +26,37 @@ using MessageCtx = MicroKit.Messaging.Execution.ExecutionContext;
 /// resolved last.
 /// </para>
 /// <para>
+/// <b>With a store, each handler is guarded by its inbox row</b> (<see cref="IInboxGuardStore"/>),
+/// in the store the handler resolves to (D3):
+/// <list type="bullet">
+///   <item>a row already there — whatever its state — skips the handler: a redelivery never starts
+///         a second attempt;</item>
+///   <item>otherwise the handler runs as one operation of the store's execution strategy, each
+///         attempt in a <b>fresh scope</b> with its own transaction: the row, enlisted
+///         <c>Processed</c>, the handler's own saves, its publications and the engine's save commit
+///         together. An attempt whose commit outcome is unknown is verified by reading the row,
+///         never replayed blindly;</item>
+///   <item>a concurrent delivery that commits the row first makes this one a duplicate: rolled
+///         back, and a success;</item>
+///   <item>a handler that fails rolls back everything it did; its row is then written
+///         <c>Failed</c> in a scope of its own, and only once that row is committed is the
+///         delivery acknowledged. The store's retry loop owns it from there.</item>
+/// </list>
+/// Exactly-once covers what the handler writes through the store's <c>DbContext</c>; anything else
+/// it does is at-least-once, because a replayed attempt reruns the handler.
+/// </para>
+/// <para>
 /// <b>Verdicts.</b> <see cref="PermanentMessageException"/> and <see cref="InboxPayloadException"/>
 /// are permanent; <see cref="InboxDependencyUnavailableException"/> is dependency-unavailable; any
 /// other exception is transient. Several handlers yield the most redeliverable of their verdicts.
+/// A guarded handler whose failure is recorded yields success: the store retries it, not the
+/// transport.
 /// </para>
 /// <para>
 /// <b>Shutdown is not a failure.</b> An <see cref="OperationCanceledException"/> while the host
 /// token is cancelled, or an <see cref="ObjectDisposedException"/> from a disposed scope or
-/// provider (or raised while the host token is cancelled), stops the delivery at once with <see cref="DeliveryVerdict.Unsettled"/>: never
-/// classified, never counted.
-/// </para>
-/// <para>
-/// <b>At-least-once, and handlers may rerun.</b> With no inbox, a message redelivered because one
-/// handler failed runs every handler again, including those that had already succeeded. #188 adds
-/// the per-handler guard.
+/// provider (or raised while the host token is cancelled), stops the delivery at once with
+/// <see cref="DeliveryVerdict.Unsettled"/>: never classified, never counted.
 /// </para>
 /// </remarks>
 internal sealed class MessageReceivePipeline(
@@ -43,6 +64,9 @@ internal sealed class MessageReceivePipeline(
     MessageHandlerRegistry handlers,
     IMessageSerializer serializer,
     IExecutionScopeFactory scopeFactory,
+    MessageStoreResolver stores,
+    InboxRetryPolicy retryPolicy,
+    InboxMetrics metrics,
     ILogger<MessageReceivePipeline> logger)
 {
     /// <summary>Delivers one envelope to every handler of its contract.</summary>
@@ -80,13 +104,15 @@ internal sealed class MessageReceivePipeline(
                 ex);
         }
 
-        var (message, context, entries) = prepared;
         var outcome = DeliveryOutcome.Success;
 
-        foreach (var entry in entries)
+        foreach (var entry in prepared.Entries)
         {
-            var handlerOutcome = await DeliverToHandlerAsync(entry, message, context, envelope, ct)
-                .ConfigureAwait(false);
+            var store = stores.ForHandler(entry.HandlerType);
+            var handlerOutcome = store is null
+                ? await DeliverToHandlerAsync(entry, prepared.Message, prepared.Context, envelope, ct)
+                    .ConfigureAwait(false)
+                : await DeliverGuardedAsync(entry, prepared, envelope, store, ct).ConfigureAwait(false);
 
             if (handlerOutcome.Verdict is DeliveryVerdict.Unsettled)
             {
@@ -97,6 +123,87 @@ internal sealed class MessageReceivePipeline(
         }
 
         return outcome;
+    }
+
+    /// <summary>
+    /// Runs one retry of a handler from its claimed inbox row, guarded like a delivery: one operation
+    /// of the store's execution strategy, a fresh scope and transaction per attempt, the row marked
+    /// <c>Processed</c> in the handler's transaction, conditioned on the claim.
+    /// </summary>
+    /// <param name="row">The claimed row.</param>
+    /// <param name="entry">The handler.</param>
+    /// <param name="message">The message, read back from the row.</param>
+    /// <param name="context">The handler's context, rebuilt from the row.</param>
+    /// <param name="claimToken">The token of the claim that owns the row.</param>
+    /// <param name="store">The store the row lives in.</param>
+    /// <param name="ct">The host's token; its cancellation means shutdown.</param>
+    /// <returns>What happened to the row; the caller settles failures through the claim.</returns>
+    /// <remarks>
+    /// The row exists by construction, so nothing here is a duplicate (C1): a lost claim — the
+    /// conditioned write matching no row — is <see cref="RetryResult.LeaseLost"/>, and every other
+    /// exception is the handler's failure, a business unique violation included.
+    /// </remarks>
+    public async ValueTask<RetryOutcome> RetryAsync(
+        InboxMessage row,
+        MessageHandlerRegistry.HandlerEntry entry,
+        IIntegrationEvent message,
+        MessageContext context,
+        Guid claimToken,
+        MessageStoreKey store,
+        CancellationToken ct)
+    {
+        ArgumentNullException.ThrowIfNull(row);
+        ArgumentNullException.ThrowIfNull(message);
+        ArgumentNullException.ThrowIfNull(context);
+        ArgumentNullException.ThrowIfNull(store);
+
+        var key = new InboxMessageKey(row.MessageId, row.ConsumerType);
+        var attempt = new GuardedAttempt(entry, message, context, ExecutionContextOf(context), store, key)
+        {
+            ClaimToken = claimToken,
+        };
+
+        IInboxGuardStore? guard = null;
+        try
+        {
+            var outer = await OpenScopeAsync(attempt.ExecutionContext, store, context, ct).ConfigureAwait(false);
+            await using (outer.ConfigureAwait(false))
+            {
+                guard = ResolveGuard(outer.ServiceProvider, store) ?? throw Unregistered(store);
+
+                var result = await RunGuardedAsync(guard, attempt, ct).ConfigureAwait(false);
+                if (result is AttemptResult.LeaseLost)
+                {
+                    InboxGuardLogs.LeaseLost(logger, null, entry.HandlerType.FullName!, key.MessageId.Value, store.Value);
+                    return new RetryOutcome(RetryResult.LeaseLost);
+                }
+
+                return new RetryOutcome(RetryResult.Processed);
+            }
+        }
+        catch (Exception ex) when (IsShutdown(ex, ct))
+        {
+            return new RetryOutcome(RetryResult.Unsettled, Error: ex);
+        }
+        catch (Exception ex) when (attempt.Committed)
+        {
+            InboxGuardLogs.FaultAfterCommit(logger, ex, entry.HandlerType.FullName!, key.MessageId.Value, store.Value);
+            return new RetryOutcome(RetryResult.Processed);
+        }
+        catch (InboxConfigurationException)
+        {
+            // A store without its guard: the retry loop settles its batch and stops.
+            throw;
+        }
+        catch (Exception ex) when (guard is not null && guard.IsLeaseLost(ex))
+        {
+            InboxGuardLogs.LeaseLost(logger, ex, entry.HandlerType.FullName!, key.MessageId.Value, store.Value);
+            return new RetryOutcome(RetryResult.LeaseLost, Error: ex);
+        }
+        catch (Exception ex)
+        {
+            return new RetryOutcome(RetryResult.Failed, Classify(ex), ex);
+        }
     }
 
     /// <summary>
@@ -142,19 +249,22 @@ internal sealed class MessageReceivePipeline(
         if (entries.Count == 0)
         {
             BusLogs.NoHandler(logger, envelope.Id, envelope.Type, envelope.Source, eventType.FullName!);
+            metrics.RecordUnconsumed(envelope.Type);
             return (DeliveryOutcome.Success, null);
         }
 
         var context = BuildContext(envelope, eventType, MessageId.From(id));
-        return (null, new Prepared(message, context, entries));
+        return (null, new Prepared(message, context, entries, eventType));
     }
 
     /// <summary>What the per-handler stage needs, resolved once per delivery.</summary>
     private readonly record struct Prepared(
         IIntegrationEvent Message,
         MessageContext Context,
-        IReadOnlyList<MessageHandlerRegistry.HandlerEntry> Entries);
+        IReadOnlyList<MessageHandlerRegistry.HandlerEntry> Entries,
+        Type EventType);
 
+    /// <summary>One handler, with no store: the #186 path, unchanged.</summary>
     private async ValueTask<DeliveryOutcome> DeliverToHandlerAsync(
         MessageHandlerRegistry.HandlerEntry entry,
         IIntegrationEvent message,
@@ -164,55 +274,12 @@ internal sealed class MessageReceivePipeline(
     {
         try
         {
-            var executionContext = new MessageCtx
-            {
-                TenantId = context.TenantId,
-                CorrelationId = context.CorrelationId,
-                CausationId = context.MessageId.ToString(),
-            };
+            var executionContext = ExecutionContextOf(context);
 
-            var scope = await scopeFactory.CreateScopeAsync(executionContext, ct).ConfigureAwait(false);
+            var scope = await OpenScopeAsync(executionContext, store: null, context, ct).ConfigureAwait(false);
             await using (scope.ConfigureAwait(false))
             {
-                var services = scope.ServiceProvider;
-
-                // The single ambient source (decision 1). A scope factory a host substitutes may
-                // not fill the holder itself; the pipeline does, before any initializer runs.
-                if (services.GetService<ExecutionContextHolder>() is { } holder)
-                {
-                    holder.Context = executionContext;
-                }
-
-                foreach (var initializer in services.GetServices<IMessageScopeInitializer>())
-                {
-                    await initializer.InitializeAsync(context, services, ct).ConfigureAwait(false);
-                }
-
-                var middlewares = services.GetServices<IMessageReceiveMiddleware>().ToArray();
-                var receiveContext = new MessageReceiveContext
-                {
-                    Context = context,
-                    Message = message,
-                    HandlerType = entry.HandlerType,
-                    Services = services,
-                };
-
-                await RunAsync(0).ConfigureAwait(false);
-
-                ValueTask RunAsync(int index) =>
-                    index < middlewares.Length
-                        ? middlewares[index].InvokeAsync(receiveContext, () => RunAsync(index + 1), ct)
-                        : InvokeHandlerAsync();
-
-                ValueTask InvokeHandlerAsync()
-                {
-                    var handler = services.GetService(entry.HandlerType)
-                        ?? throw new InvalidOperationException(
-                            $"Handler '{entry.HandlerType.FullName}' is in the handler registry but " +
-                            "not in the service provider.");
-
-                    return entry.Invoker(handler, message, context, ct);
-                }
+                await RunHandlerAsync(scope.ServiceProvider, entry, message, context, ct).ConfigureAwait(false);
             }
 
             return DeliveryOutcome.Success;
@@ -230,6 +297,321 @@ internal sealed class MessageReceivePipeline(
             return new DeliveryOutcome(verdict, ex, ex.Message);
         }
     }
+
+    /// <summary>One handler of a new delivery, guarded by its inbox row in <paramref name="store"/>.</summary>
+    private async ValueTask<DeliveryOutcome> DeliverGuardedAsync(
+        MessageHandlerRegistry.HandlerEntry entry,
+        Prepared prepared,
+        MessageEnvelope envelope,
+        MessageStoreKey store,
+        CancellationToken ct)
+    {
+        var context = prepared.Context;
+        var key = new InboxMessageKey(context.MessageId, entry.ConsumerType);
+        var rows = new RowFactory(prepared, envelope, entry.ConsumerType, retryPolicy.Clock);
+        var attempt = new GuardedAttempt(entry, prepared.Message, context, ExecutionContextOf(context), store, key)
+        {
+            NewRow = rows,
+        };
+
+        try
+        {
+            var outer = await OpenScopeAsync(attempt.ExecutionContext, store, context, ct).ConfigureAwait(false);
+            await using (outer.ConfigureAwait(false))
+            {
+                var guard = ResolveGuard(outer.ServiceProvider, store);
+                if (guard is null)
+                {
+                    InboxGuardLogs.GuardUnregistered(logger, entry.HandlerType.FullName!, key.MessageId.Value, store.Value);
+                    return new DeliveryOutcome(DeliveryVerdict.Transient, Unregistered(store));
+                }
+
+                // D6a/b: a row in any state means another delivery owns this pair.
+                if (await guard.FindAsync(key, ct).ConfigureAwait(false) is { } existing)
+                {
+                    InboxGuardLogs.Skipped(logger, entry.HandlerType.FullName!, key.MessageId.Value, store.Value, existing.Status);
+                    metrics.RecordDeduplicated(entry.ConsumerType);
+                    return DeliveryOutcome.Success;
+                }
+
+                try
+                {
+                    await RunGuardedAsync(guard, attempt, ct).ConfigureAwait(false);
+                }
+                catch (Exception ex) when (!IsShutdown(ex, ct))
+                {
+                    if (attempt.Committed)
+                    {
+                        InboxGuardLogs.FaultAfterCommit(logger, ex, entry.HandlerType.FullName!, key.MessageId.Value, store.Value);
+                        metrics.RecordAdded(entry.ConsumerType);
+                        return DeliveryOutcome.Success;
+                    }
+
+                    // An outage is not a race: no read, which would fail too and hide the verdict.
+                    var found = Classify(ex) is DeliveryVerdict.DependencyUnavailable
+                        ? null
+                        : await guard.FindAsync(key, ct).ConfigureAwait(false);
+
+                    // This attempt's own row: the commit landed, then the fault — with no retrying
+                    // strategy nothing verified it.
+                    if (found is { } own && own.RowId == attempt.LastRowId)
+                    {
+                        InboxGuardLogs.FaultAfterCommit(logger, ex, entry.HandlerType.FullName!, key.MessageId.Value, store.Value);
+                        metrics.RecordAdded(entry.ConsumerType);
+                        return DeliveryOutcome.Success;
+                    }
+
+                    // D6d, a new delivery only (C1): the row is there now, so a concurrent delivery
+                    // committed it first and this attempt's save hit the unique index.
+                    if (found is not null)
+                    {
+                        InboxGuardLogs.ConcurrentDuplicate(logger, entry.HandlerType.FullName!, key.MessageId.Value, store.Value);
+                        metrics.RecordDeduplicated(entry.ConsumerType);
+                        return DeliveryOutcome.Success;
+                    }
+
+                    return await RecordFailureAsync(attempt, rows, ex, ct).ConfigureAwait(false);
+                }
+
+                metrics.RecordAdded(entry.ConsumerType);
+                return DeliveryOutcome.Success;
+            }
+        }
+        catch (Exception ex) when (IsShutdown(ex, ct))
+        {
+            BusLogs.Unsettled(logger, ex, envelope.Id, envelope.Type, entry.HandlerType.FullName!);
+            return new DeliveryOutcome(DeliveryVerdict.Unsettled, ex);
+        }
+        catch (Exception ex)
+        {
+            // Outside any attempt — the scope, the guard's read: nothing was recorded, so the
+            // transport redelivers.
+            BusLogs.HandlerFailed(
+                logger, ex, entry.HandlerType.FullName!, envelope.Id, envelope.Type, DeliveryVerdict.Transient);
+            return new DeliveryOutcome(DeliveryVerdict.Transient, ex, ex.Message);
+        }
+    }
+
+    /// <summary>
+    /// Runs the attempts of one guarded handler through the store's execution strategy. The commit
+    /// outcome of a failed attempt is verified by reading the row: committed means
+    /// <c>Processed</c>.
+    /// </summary>
+    private async ValueTask<AttemptResult> RunGuardedAsync(
+        IInboxGuardStore guard, GuardedAttempt attempt, CancellationToken ct)
+        => await guard.ExecuteAsync(
+            token => AttemptAsync(attempt, token),
+            async token => await guard.FindAsync(attempt.Key, token).ConfigureAwait(false)
+                is { Status: InboxMessageStatus.Processed },
+            AttemptResult.Committed,
+            ct).ConfigureAwait(false);
+
+    /// <summary>
+    /// One attempt, from a clean state: a fresh scope with its initializers run, its own transaction,
+    /// the row, then the middlewares and the handler, then the engine's save and the commit.
+    /// </summary>
+    /// <remarks>
+    /// The initializers run before the transaction is begun because they configure the scope the
+    /// store's <c>DbContext</c> is built from — a tenant's connection, say — and that context begins
+    /// the transaction. Everything that writes — the middlewares and the handler — runs inside it.
+    /// </remarks>
+    /// <remarks>
+    /// The store holder and the execution context are written on <b>this</b> scope (C2): a replayed
+    /// attempt is a new scope, and the handler's publications must land in the delivery's store on
+    /// every attempt, not only the first.
+    /// </remarks>
+    private async ValueTask<AttemptResult> AttemptAsync(GuardedAttempt attempt, CancellationToken ct)
+    {
+        var scope = await OpenScopeAsync(attempt.ExecutionContext, attempt.Store, attempt.Context, ct).ConfigureAwait(false);
+        await using (scope.ConfigureAwait(false))
+        {
+            var services = scope.ServiceProvider;
+            var guard = ResolveGuard(services, attempt.Store) ?? throw Unregistered(attempt.Store);
+            await guard.BeginAsync(ct).ConfigureAwait(false);
+
+            if (attempt.ClaimToken is { } token)
+            {
+                if (!await guard.MarkClaimedProcessedAsync(attempt.Key, token, ct).ConfigureAwait(false))
+                {
+                    return AttemptResult.LeaseLost;
+                }
+            }
+            else
+            {
+                var row = attempt.NewRow!.Create(InboxMessageStatus.Processed);
+                attempt.LastRowId = row.RowId;
+                await guard.EnlistProcessedAsync(row, ct).ConfigureAwait(false);
+            }
+
+            await RunHandlerAsync(services, attempt.Entry, attempt.Message, attempt.Context, ct)
+                .ConfigureAwait(false);
+
+            await guard.CommitAsync(ct).ConfigureAwait(false);
+            attempt.Committed = true;
+        }
+
+        return AttemptResult.Committed;
+    }
+
+    /// <summary>
+    /// D6e: the handler of a new delivery failed and its transaction rolled back. Writes its row
+    /// <c>Failed</c> in a scope of its own; only once that row is committed is the delivery a
+    /// success for the transport.
+    /// </summary>
+    private async ValueTask<DeliveryOutcome> RecordFailureAsync(
+        GuardedAttempt attempt, RowFactory rows, Exception failure, CancellationToken ct)
+    {
+        var handlerType = attempt.Entry.HandlerType.FullName!;
+        var messageId = attempt.Key.MessageId.Value;
+        var verdict = Classify(failure);
+
+        if (verdict is DeliveryVerdict.DependencyUnavailable)
+        {
+            // No row: the dependency is down for every message, so the transport pauses and
+            // redelivers this one rather than the store counting an attempt it never really had.
+            BusLogs.HandlerFailed(logger, failure, handlerType, messageId.ToString(), attempt.Context.ContractName, verdict);
+            return new DeliveryOutcome(verdict, failure, failure.Message);
+        }
+
+        // A permanent verdict counts no attempt: no number of attempts would change it.
+        var permanent = verdict is DeliveryVerdict.Permanent;
+        var attempts = permanent ? 0 : 1;
+        var deadLettered = permanent || retryPolicy.IsExhausted(attempts);
+        var row = rows.Create(InboxMessageStatus.Failed);
+        row.RetryCount = attempts;
+        row.DeadLettered = deadLettered;
+        row.ErrorMessage = retryPolicy.Truncate(failure.Message);
+        row.NextRetryAtUtc = deadLettered ? null : retryPolicy.NextAttemptAt(attempts);
+        row.ProcessedAtUtc = deadLettered ? retryPolicy.Clock.GetUtcNow() : null;
+
+        try
+        {
+            var scope = await OpenScopeAsync(attempt.ExecutionContext, attempt.Store, attempt.Context, ct).ConfigureAwait(false);
+            await using (scope.ConfigureAwait(false))
+            {
+                var guard = ResolveGuard(scope.ServiceProvider, attempt.Store) ?? throw Unregistered(attempt.Store);
+                if (!await guard.TryInsertFailedAsync(row, ct).ConfigureAwait(false))
+                {
+                    // Another delivery owns the row now — Processed or Failed: acknowledged.
+                    InboxGuardLogs.FailureAlreadyOwned(logger, failure, handlerType, messageId, attempt.Store.Value);
+                    metrics.RecordDeduplicated(attempt.Entry.ConsumerType);
+                    return DeliveryOutcome.Success;
+                }
+            }
+        }
+        catch (Exception ex) when (!IsShutdown(ex, ct))
+        {
+            InboxGuardLogs.FailedRowUnwritable(logger, ex, handlerType, messageId, attempt.Store.Value);
+            return new DeliveryOutcome(DeliveryVerdict.Transient, ex, ex.Message);
+        }
+
+        if (deadLettered)
+        {
+            InboxGuardLogs.DeadLettered(logger, failure, handlerType, messageId, attempt.Store.Value, attempts);
+        }
+        else
+        {
+            InboxGuardLogs.FailedRowWritten(
+                logger, failure, handlerType, messageId, attempt.Store.Value, attempts, row.NextRetryAtUtc!.Value);
+        }
+
+        metrics.RecordAdded(attempt.Entry.ConsumerType);
+        return DeliveryOutcome.Success;
+    }
+
+    /// <summary>
+    /// Opens a message scope ready for anything to be resolved from it: its execution context and,
+    /// for a guarded handler, its store written, then the <see cref="IMessageScopeInitializer"/>
+    /// instances run — before any service of the scope, the store's <c>DbContext</c> included, is
+    /// built. A tenant-aware context reads what the initializers set.
+    /// </summary>
+    private async ValueTask<IExecutionScope> OpenScopeAsync(
+        MessageCtx executionContext, MessageStoreKey? store, MessageContext context, CancellationToken ct)
+    {
+        var scope = await scopeFactory.CreateScopeAsync(executionContext, ct).ConfigureAwait(false);
+        try
+        {
+            var services = scope.ServiceProvider;
+            PrepareScope(services, executionContext, store);
+            foreach (var initializer in services.GetServices<IMessageScopeInitializer>())
+            {
+                await initializer.InitializeAsync(context, services, ct).ConfigureAwait(false);
+            }
+
+            return scope;
+        }
+        catch
+        {
+            await scope.DisposeAsync().ConfigureAwait(false);
+            throw;
+        }
+    }
+
+    /// <summary>Fills a message scope: its execution context and, for a guarded handler, its store.</summary>
+    private static void PrepareScope(IServiceProvider services, MessageCtx executionContext, MessageStoreKey? store)
+    {
+        // The single ambient source (decision 1). A scope factory a host substitutes may not fill
+        // the holder itself; the pipeline does, before any initializer runs.
+        if (services.GetService<ExecutionContextHolder>() is { } holder)
+        {
+            holder.Context = executionContext;
+        }
+
+        // The delivery's store (D3 rule 2): a publication of the handler is enlisted there.
+        if (store is not null && services.GetService<DeliveryStoreHolder>() is { } delivery)
+        {
+            delivery.Store = store;
+        }
+    }
+
+    /// <summary>The receive middlewares, then the handler, on a scope <see cref="OpenScopeAsync"/> opened.</summary>
+    private static async ValueTask RunHandlerAsync(
+        IServiceProvider services,
+        MessageHandlerRegistry.HandlerEntry entry,
+        IIntegrationEvent message,
+        MessageContext context,
+        CancellationToken ct)
+    {
+        var middlewares = services.GetServices<IMessageReceiveMiddleware>().ToArray();
+        var receiveContext = new MessageReceiveContext
+        {
+            Context = context,
+            Message = message,
+            HandlerType = entry.HandlerType,
+            Services = services,
+        };
+
+        await RunAsync(0).ConfigureAwait(false);
+
+        ValueTask RunAsync(int index) =>
+            index < middlewares.Length
+                ? middlewares[index].InvokeAsync(receiveContext, () => RunAsync(index + 1), ct)
+                : InvokeHandlerAsync();
+
+        ValueTask InvokeHandlerAsync()
+        {
+            var handler = services.GetService(entry.HandlerType)
+                ?? throw new InvalidOperationException(
+                    $"Handler '{entry.HandlerType.FullName}' is in the handler registry but " +
+                    "not in the service provider.");
+
+            return entry.Invoker(handler, message, context, ct);
+        }
+    }
+
+    private static IInboxGuardStore? ResolveGuard(IServiceProvider services, MessageStoreKey store)
+        => services.GetKeyedService<IInboxGuardStore>(store);
+
+    private static InboxConfigurationException Unregistered(MessageStoreKey store)
+        => new($"Store '{store}' registers no {nameof(IInboxGuardStore)} under its key, so no " +
+               "handler of that store can be guarded. Host start rejects this composition.");
+
+    private static MessageCtx ExecutionContextOf(MessageContext context) => new()
+    {
+        TenantId = context.TenantId,
+        CorrelationId = context.CorrelationId,
+        CausationId = context.MessageId.ToString(),
+    };
 
     /// <summary>
     /// Whether <paramref name="exception"/> is the host shutting down rather than a failure.
@@ -250,7 +632,10 @@ internal sealed class MessageReceivePipeline(
         _ => false,
     };
 
-    private static DeliveryVerdict Classify(Exception exception) => exception switch
+    /// <summary>The verdict of a handler's exception.</summary>
+    /// <param name="exception">The exception.</param>
+    /// <returns>Permanent, dependency-unavailable, or transient.</returns>
+    internal static DeliveryVerdict Classify(Exception exception) => exception switch
     {
         PermanentMessageException or InboxPayloadException => DeliveryVerdict.Permanent,
         InboxDependencyUnavailableException => DeliveryVerdict.DependencyUnavailable,
@@ -281,4 +666,109 @@ internal sealed class MessageReceivePipeline(
             Headers = headers,
         };
     }
+
+    /// <summary>The state of one guarded handler across its attempts.</summary>
+    private sealed class GuardedAttempt(
+        MessageHandlerRegistry.HandlerEntry entry,
+        IIntegrationEvent message,
+        MessageContext context,
+        MessageCtx executionContext,
+        MessageStoreKey store,
+        InboxMessageKey key)
+    {
+        public MessageHandlerRegistry.HandlerEntry Entry { get; } = entry;
+
+        public IIntegrationEvent Message { get; } = message;
+
+        public MessageContext Context { get; } = context;
+
+        public MessageCtx ExecutionContext { get; } = executionContext;
+
+        public MessageStoreKey Store { get; } = store;
+
+        public InboxMessageKey Key { get; } = key;
+
+        /// <summary>Gets the claim of a retry; <see langword="null"/> for a new delivery.</summary>
+        public Guid? ClaimToken { get; init; }
+
+        /// <summary>Gets the row builder of a new delivery; <see langword="null"/> for a retry.</summary>
+        public RowFactory? NewRow { get; init; }
+
+        /// <summary>Gets or sets the row id of the last attempt's enlisted row, to recognise it in the database.</summary>
+        public Guid? LastRowId { get; set; }
+
+        /// <summary>Gets or sets whether an attempt committed: what escapes afterwards is not a failure.</summary>
+        public bool Committed { get; set; }
+    }
+
+    /// <summary>Builds the inbox row of a new delivery, a fresh instance per attempt.</summary>
+    private sealed class RowFactory(
+        Prepared prepared, MessageEnvelope envelope, string consumerType, TimeProvider clock)
+    {
+        // Decoded only when a row is written: a skipped redelivery never pays for it.
+        private string? _payload;
+
+        public InboxMessage Create(InboxMessageStatus status)
+        {
+            var context = prepared.Context;
+            var now = clock.GetUtcNow();
+
+            return new InboxMessage
+            {
+                MessageId = context.MessageId,
+                ConsumerType = consumerType,
+                TenantId = context.TenantId,
+                EventType = prepared.EventType.AssemblyQualifiedName!,
+                Payload = _payload ??= Encoding.UTF8.GetString(envelope.Body.Span),
+                Source = envelope.Source,
+                Headers = envelope.Headers.Count == 0
+                    ? null
+                    : new Dictionary<string, string>(envelope.Headers, StringComparer.Ordinal),
+                Status = status,
+                ReceivedAtUtc = now,
+                OccurredOnUtc = envelope.Time,
+                ProcessedAtUtc = status is InboxMessageStatus.Processed ? now : null,
+                // The columns are GUIDs; a correlation that is not one is not recorded (#206).
+                CorrelationId = Guid.TryParse(context.CorrelationId, out var correlation)
+                    ? CorrelationId.From(correlation)
+                    : null,
+                CausationId = Guid.TryParse(context.CausationId, out var causation)
+                    ? CausationId.From(causation)
+                    : null,
+            };
+        }
+    }
 }
+
+/// <summary>What one attempt of a guarded handler produced.</summary>
+internal enum AttemptResult
+{
+    /// <summary>The row and the handler's work committed.</summary>
+    Committed,
+
+    /// <summary>A retry's claim was lost before the handler ran; nothing ran.</summary>
+    LeaseLost,
+}
+
+/// <summary>What a retry did with its claimed row.</summary>
+internal enum RetryResult
+{
+    /// <summary>Handled: the row is Processed, committed with the handler's work.</summary>
+    Processed,
+
+    /// <summary>The claim was lost: another loop owns the row; nothing is written or counted.</summary>
+    LeaseLost,
+
+    /// <summary>The handler failed and rolled back; the caller writes the failure through the claim.</summary>
+    Failed,
+
+    /// <summary>The host stopped; the caller releases the row with nothing counted.</summary>
+    Unsettled,
+}
+
+/// <summary>The outcome of <see cref="MessageReceivePipeline.RetryAsync"/>.</summary>
+/// <param name="Result">What happened to the row.</param>
+/// <param name="Verdict">The failure's verdict, for <see cref="RetryResult.Failed"/>.</param>
+/// <param name="Error">The exception behind it, if any.</param>
+internal readonly record struct RetryOutcome(
+    RetryResult Result, DeliveryVerdict Verdict = DeliveryVerdict.Succeeded, Exception? Error = null);

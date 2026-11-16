@@ -154,8 +154,8 @@ public sealed class SingleEntryPointTests
 
         ex.Message.ShouldContain(
             "Store 'tests:incomplete' is configured, but IOutboxWriter, IOutboxProcessorStore, " +
-            "IOutboxRetentionStore, IInboxWriter, IInboxProcessorStore, IInboxSettlementStore, " +
-            "IInboxRetentionStore are not registered under its key");
+            "IOutboxRetentionStore, IInboxGuardStore, IInboxProcessorStore, IInboxRetentionStore " +
+            "are not registered under its key");
     }
 
     [Fact]

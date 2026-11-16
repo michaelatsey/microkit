@@ -59,8 +59,8 @@ public interface IInboxProcessorStore
     /// <remarks>
     /// One <i>call</i>, not one statement — see the equivalent remark on
     /// <see cref="IOutboxProcessorStore.ApplyOutcomesAsync"/>. In normal operation this list is
-    /// empty, because a successful handler settles its own row through
-    /// <see cref="IInboxSettlementStore"/>.
+    /// empty, because a retry that succeeds writes its own row in the handler's transaction
+    /// (<see cref="IInboxGuardStore.MarkClaimedProcessedAsync"/>).
     /// </remarks>
     /// <param name="claimToken">
     /// The token from the originating <see cref="InboxClaim"/>. Every write filters on it, so a

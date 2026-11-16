@@ -6,8 +6,8 @@ using MicroKit.Execution.Abstractions;
 namespace MicroKit.Messaging.IntegrationTests.Stores;
 
 /// <summary>
-/// The guarantee ADR-MSG-017 exists to provide: the processed mark and the handler's database
-/// side effects commit together, through the handler's own unit of work.
+/// The guarantee the inbox guard exists to provide (#188 D6): the handler's row and its database
+/// side effects commit together, in the handler's own unit of work.
 /// </summary>
 /// <remarks>
 /// <para>
@@ -29,57 +29,51 @@ public sealed class InboxSettlementGuaranteeTests
     private static readonly DateTimeOffset Now = new(2026, 8, 21, 12, 0, 0, TimeSpan.Zero);
     private static readonly TimeSpan Lease = TimeSpan.FromMinutes(5);
 
+    private static readonly MessageStoreKey Store = EntityFrameworkOutbox.KeyOf<TestMessagingDbContext>();
+
     /// <summary>
-    /// The settlement store and the handler must resolve the <b>same</b> <c>DbContext</c> from the
-    /// per-message execution scope — otherwise the handler's commit does not carry the staged
-    /// mark, and the transactional guarantee degrades to at-least-once.
+    /// The guard and the handler must resolve the <b>same</b> <c>DbContext</c> from an attempt's
+    /// scope — otherwise the attempt's commit does not carry the handler's writes, and the row and
+    /// the work no longer commit together.
     /// </summary>
     /// <remarks>
-    /// Asserted behaviourally rather than by comparing references: staging through
-    /// <see cref="IInboxSettlementStore"/> and then saving through the <b>handler's</b> context
-    /// must persist the mark. If the two contexts differed, the save would write zero rows — which
-    /// is precisely the degradation, and is what this asserts against.
+    /// Asserted behaviourally rather than by comparing references: a write through the handler's
+    /// context, then the guard's commit, must persist both the row and the write.
     /// </remarks>
     [Fact]
-    public Task TheSettlementStoreAndTheHandlerScopeShareOneUnitOfWork()
+    public Task TheGuardAndTheHandlerScopeShareOneUnitOfWork()
         => Task.Run(async () =>
         {
             await using var fixture = await ComposedFixture.CreateAsync();
             var key = await fixture.SeedAsync();
             var token = await fixture.ClaimAsync();
 
-            // The per-message scope, created exactly as InboxProcessor creates it.
             await using var scope = await fixture.CreateMessageScopeAsync();
+            var guard = scope.ServiceProvider.GetRequiredKeyedService<IInboxGuardStore>(Store);
+            var handlerContext = scope.ServiceProvider.GetRequiredService<TestMessagingDbContext>();
 
-            var settlement = scope.ServiceProvider.GetRequiredKeyedService<IInboxSettlementStore>(EntityFrameworkOutbox.KeyOf<TestMessagingDbContext>());
-            var handlerContext = scope.ServiceProvider
-                .GetRequiredService<TestMessagingDbContext>();
-
-            (await settlement.StageProcessedAsync(key, token)).ShouldBeTrue();
-            settlement.IsMarkUncommitted(key).ShouldBeTrue("staged, not yet committed");
-
-            var affected = await handlerContext.SaveChangesAsync();
-
-            affected.ShouldBe(1, "the handler's unit of work must carry the staged mark");
-            settlement.IsMarkUncommitted(key).ShouldBeFalse();
+            await guard.BeginAsync();
+            (await guard.MarkClaimedProcessedAsync(key, token)).ShouldBeTrue();
+            handlerContext.BusinessRecords.Add(new BusinessRecord { Id = Guid.NewGuid(), Value = "the handler's work" });
+            await guard.CommitAsync();
 
             var row = await fixture.ReadRowAsync();
             row.Status.ShouldBe(InboxMessageStatus.Processed);
             row.ClaimToken.ShouldBeNull("a committed success clears the token");
+            (await fixture.CountBusinessRecordsAsync()).ShouldBe(1, "the handler's write committed with the row");
         });
 
     /// <summary>
-    /// The guarantee must not depend on a setting the library cannot control.
-    /// <c>QueryTrackingBehavior.NoTracking</c> is an ordinary, widely recommended default on a
-    /// read-heavy application's <c>DbContext</c> — and this store runs on the consumer's context.
+    /// C6, kept from the deleted settlement store: the guarantee must not depend on a setting the
+    /// library cannot control. <c>QueryTrackingBehavior.NoTracking</c> is an ordinary default on a
+    /// read-heavy application's <c>DbContext</c> — and the guard runs on the consumer's context.
     /// </summary>
     /// <remarks>
-    /// Confirmed by observation before the fix: the row came back untracked, the mutations reached
-    /// nothing, <c>SaveChanges</c> affected 0 rows, and <c>IsMarkUncommitted</c> returned
-    /// <see langword="false"/> — reporting a mark that had never been written as committed.
+    /// Confirmed by observation when the settlement store had it: the row came back untracked, the
+    /// mutations reached nothing, the save affected 0 rows, and the row replayed forever.
     /// </remarks>
     [Fact]
-    public Task StageProcessedAsync_PersistsTheMark_WhenTheContextDefaultsToNoTracking()
+    public Task MarkClaimedProcessedAsync_PersistsTheMark_WhenTheContextDefaultsToNoTracking()
         => Task.Run(async () =>
         {
             await using var fixture = await ComposedFixture.CreateAsync(noTracking: true);
@@ -87,14 +81,11 @@ public sealed class InboxSettlementGuaranteeTests
             var token = await fixture.ClaimAsync();
 
             await using var scope = await fixture.CreateMessageScopeAsync();
-            var settlement = scope.ServiceProvider.GetRequiredKeyedService<IInboxSettlementStore>(EntityFrameworkOutbox.KeyOf<TestMessagingDbContext>());
-            var handlerContext = scope.ServiceProvider
-                .GetRequiredService<TestMessagingDbContext>();
+            var guard = scope.ServiceProvider.GetRequiredKeyedService<IInboxGuardStore>(Store);
 
-            (await settlement.StageProcessedAsync(key, token)).ShouldBeTrue();
-            settlement.IsMarkUncommitted(key).ShouldBeTrue();
-
-            (await handlerContext.SaveChangesAsync()).ShouldBe(1);
+            await guard.BeginAsync();
+            (await guard.MarkClaimedProcessedAsync(key, token)).ShouldBeTrue();
+            await guard.CommitAsync();
 
             var row = await fixture.ReadRowAsync();
             row.Status.ShouldBe(InboxMessageStatus.Processed);
@@ -102,9 +93,8 @@ public sealed class InboxSettlementGuaranteeTests
         });
 
     /// <summary>
-    /// The same contract end to end, through the store's processor as its loop resolves it. Before the fix this pass reported
-    /// <c>Processed = 1</c> while leaving the row <c>Processing</c> with its claim token intact —
-    /// success reported over an infinite replay.
+    /// The same contract end to end, through the store's processor as its loop resolves it: what
+    /// the batch REPORTS must match what persisted, under a NoTracking default.
     /// </summary>
     [Fact]
     public Task ProcessBatch_SettlesTheRow_WhenTheContextDefaultsToNoTracking()
@@ -115,14 +105,13 @@ public sealed class InboxSettlementGuaranteeTests
 
             await using var batchScope = fixture.Provider.CreateAsyncScope();
             var result = await batchScope.ServiceProvider
-                .GetRequiredKeyedService<IInboxProcessor>(EntityFrameworkOutbox.KeyOf<TestMessagingDbContext>())
+                .GetRequiredKeyedService<IInboxProcessor>(Store)
                 .ProcessBatchAsync(100);
 
             result.Claimed.ShouldBe(1);
             result.Processed.ShouldBe(1);
             fixture.Handled.Count.ShouldBe(1);
 
-            // The half that was false before: what the batch REPORTS must match what persisted.
             var row = await fixture.ReadRowAsync();
             row.Status.ShouldBe(InboxMessageStatus.Processed);
             row.ClaimToken.ShouldBeNull();
@@ -130,16 +119,12 @@ public sealed class InboxSettlementGuaranteeTests
         });
 
     /// <summary>
-    /// A discarded staged mark must be reported as <b>uncommitted</b>. Absent means unknown, and
-    /// unknown has to fail toward a redundant deferred write rather than toward a lost mark.
+    /// A handler that clears the tracker mid-run — ordinary in a batch-processing handler — throws
+    /// the staged row away. The commit must still write it, or the attempt reports success over a
+    /// row that stays claimed and replays on every lease expiry.
     /// </summary>
-    /// <remarks>
-    /// A handler that calls <c>ChangeTracker.Clear()</c> mid-run — ordinary in batch-processing
-    /// handlers — throws the staged mark away. Nothing is pending afterwards, which is exactly why
-    /// "nothing pending" cannot be read as "committed": the write was discarded, not saved.
-    /// </remarks>
     [Fact]
-    public Task IsMarkUncommitted_ReportsUncommitted_WhenTheStagedMarkWasDiscarded()
+    public Task CommitAsync_WritesTheRow_WhenTheHandlerClearedTheTracker()
         => Task.Run(async () =>
         {
             await using var fixture = await ComposedFixture.CreateAsync();
@@ -147,18 +132,42 @@ public sealed class InboxSettlementGuaranteeTests
             var token = await fixture.ClaimAsync();
 
             await using var scope = await fixture.CreateMessageScopeAsync();
-            var settlement = scope.ServiceProvider.GetRequiredKeyedService<IInboxSettlementStore>(EntityFrameworkOutbox.KeyOf<TestMessagingDbContext>());
-            var handlerContext = scope.ServiceProvider
-                .GetRequiredService<TestMessagingDbContext>();
+            var guard = scope.ServiceProvider.GetRequiredKeyedService<IInboxGuardStore>(Store);
+            var handlerContext = scope.ServiceProvider.GetRequiredService<TestMessagingDbContext>();
 
-            await settlement.StageProcessedAsync(key, token);
+            await guard.BeginAsync();
+            await guard.MarkClaimedProcessedAsync(key, token);
             handlerContext.ChangeTracker.Clear();
-
-            settlement.IsMarkUncommitted(key).ShouldBeTrue(
-                "the mark was thrown away, not saved — reporting it committed strands the row");
+            await guard.CommitAsync();
 
             var row = await fixture.ReadRowAsync();
-            row.Status.ShouldBe(InboxMessageStatus.Processing, "nothing was persisted");
+            row.Status.ShouldBe(InboxMessageStatus.Processed, "the discarded mark was put back");
+            row.ClaimToken.ShouldBeNull();
+        });
+
+    /// <summary>
+    /// The other half: a handler that saved, then cleared the tracker, already wrote the row in the
+    /// attempt's transaction — writing it a second time would fail the claim it just satisfied.
+    /// </summary>
+    [Fact]
+    public Task CommitAsync_DoesNotWriteTheRowTwice_WhenTheHandlerSavedThenClearedTheTracker()
+        => Task.Run(async () =>
+        {
+            await using var fixture = await ComposedFixture.CreateAsync();
+            var key = await fixture.SeedAsync();
+            var token = await fixture.ClaimAsync();
+
+            await using var scope = await fixture.CreateMessageScopeAsync();
+            var guard = scope.ServiceProvider.GetRequiredKeyedService<IInboxGuardStore>(Store);
+            var handlerContext = scope.ServiceProvider.GetRequiredService<TestMessagingDbContext>();
+
+            await guard.BeginAsync();
+            await guard.MarkClaimedProcessedAsync(key, token);
+            await handlerContext.SaveChangesAsync();
+            handlerContext.ChangeTracker.Clear();
+            await guard.CommitAsync();
+
+            (await fixture.ReadRowAsync()).Status.ShouldBe(InboxMessageStatus.Processed);
         });
 
     /// <summary>One composed container over one isolated SQLite connection.</summary>
@@ -234,7 +243,7 @@ public sealed class InboxSettlementGuaranteeTests
                 TenantId = "tenant-a",
                 EventType = typeof(SettlementTestEvent).AssemblyQualifiedName!,
                 Payload = """{"MessageId":{"Value":"8a1d0f7e-1111-2222-3333-444455556666"},"TenantId":"tenant-a","OccurredOnUtc":"2026-08-21T12:00:00+00:00"}""",
-                Status = InboxMessageStatus.Received,
+                Status = InboxMessageStatus.Failed,
                 ReceivedAtUtc = Now,
             };
 
@@ -266,6 +275,15 @@ public sealed class InboxSettlementGuaranteeTests
                     .UseSqlite(_connection).Options);
 
             return await probe.InboxMessages.AsNoTracking().SingleAsync();
+        }
+
+        public async Task<int> CountBusinessRecordsAsync()
+        {
+            await using var probe = new TestMessagingDbContext(
+                new DbContextOptionsBuilder<TestMessagingDbContext>()
+                    .UseSqlite(_connection).Options);
+
+            return await probe.BusinessRecords.AsNoTracking().CountAsync();
         }
 
         public async ValueTask DisposeAsync()

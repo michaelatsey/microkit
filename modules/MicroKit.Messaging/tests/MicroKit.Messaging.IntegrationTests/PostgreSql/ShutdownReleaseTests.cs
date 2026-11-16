@@ -69,7 +69,7 @@ public sealed class ShutdownReleaseTests(PostgreSqlFixture fixture)
                     ConsumerType = typeof(BlockingShutdownHandler).AssemblyQualifiedName!,
                     EventType = typeof(ShutdownEvent).AssemblyQualifiedName!,
                     Payload = $"{{\"id\":\"{Guid.NewGuid()}\"}}",
-                    Status = InboxMessageStatus.Received,
+                    Status = InboxMessageStatus.Failed,
                     RetryCount = 1,
                     ReceivedAtUtc = DateTimeOffset.UtcNow.AddSeconds(-i),
                     OccurredOnUtc = DateTimeOffset.UtcNow,
@@ -87,7 +87,7 @@ public sealed class ShutdownReleaseTests(PostgreSqlFixture fixture)
 
         var rows = await ReadInboxAsync(db);
         rows.Count.ShouldBe(3);
-        rows.ShouldAllBe(r => r.Status == InboxMessageStatus.Received, "released, not retried");
+        rows.ShouldAllBe(r => r.Status == InboxMessageStatus.Failed, "released back to the retry loop, not retried");
         rows.ShouldAllBe(r => r.RetryCount == 1, "the attempt count is the one the rows had");
         rows.ShouldAllBe(r => r.ClaimToken == null && r.LockedUntilUtc == null && r.NextRetryAtUtc == null);
         rows.ShouldAllBe(r => !r.DeadLettered);

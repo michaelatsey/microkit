@@ -1,6 +1,8 @@
 using System.Linq.Expressions;
+using System.Runtime.ExceptionServices;
 
 using Microsoft.EntityFrameworkCore.Query;
+using Microsoft.EntityFrameworkCore.Storage;
 
 namespace MicroKit.Messaging.EntityFrameworkCore;
 
@@ -27,13 +29,12 @@ namespace MicroKit.Messaging.EntityFrameworkCore;
 /// now carries <c>AND ClaimToken == token</c>.
 /// </para>
 /// <para>
-/// <b>Two lifetimes, on purpose.</b> Resolved from the batch scope, this type serves
-/// <see cref="IInboxProcessorStore"/> for claim and deferred settlement. Resolved from the
-/// per-message execution scope, it serves <see cref="IInboxSettlementStore"/> and stages the
-/// processed mark on the handler's own <c>DbContext</c>, so it commits in the handler's
-/// transaction. One scoped registration gives both: scope identity does the separation, and the
-/// settlement instance necessarily shares its <typeparamref name="TContext"/> with the handler
-/// resolved from the same scope.
+/// <b>Two lifetimes, on purpose.</b> Resolved from a loop's scope, this type serves
+/// <see cref="IInboxProcessorStore"/> for the claim and the settlement of failures. Resolved from a
+/// delivery attempt's scope, it serves <see cref="IInboxGuardStore"/>: it begins the attempt's
+/// transaction on the handler's own <c>DbContext</c>, writes the row there and commits it with the
+/// handler's work. One scoped registration gives both: the guard necessarily shares its
+/// <typeparamref name="TContext"/> with the handler resolved from the same scope.
 /// </para>
 /// <para>
 /// <b>Schema.</b> Requires the surrogate primary key <c>RowId</c>, the unique index on
@@ -43,145 +44,259 @@ namespace MicroKit.Messaging.EntityFrameworkCore;
 /// </remarks>
 /// <typeparam name="TContext">The application's <see cref="DbContext"/> type.</typeparam>
 internal sealed class EfInboxStore<TContext>(TContext context, TimeProvider timeProvider)
-    : IInboxWriter, IInboxProcessorStore, IInboxSettlementStore, IInboxAdminStore, IInboxRetentionStore
+    : IInboxGuardStore, IInboxProcessorStore, IInboxAdminStore, IInboxRetentionStore, IAsyncDisposable
     where TContext : DbContext
 {
     // Logical key -> surrogate key, built from the rows this batch claimed. Scoped lifetime, so
     // it lives exactly as long as the claim it describes.
     private readonly Dictionary<InboxMessageKey, Guid> _rowIdsByKey = [];
 
-    // ---------- IInboxWriter ----------
+    // ---------- IInboxGuardStore ----------
+
+    // The attempt's transaction, begun by BeginAsync on this scope's context.
+    private IDbContextTransaction? _transaction;
+
+    // The row this attempt staged, so CommitAsync can write it even if the handler cleared the
+    // tracker: a new delivery's enlisted row, or a retry's claimed row with the claim's token.
+    private InboxMessage? _enlisted;
+    private (InboxMessage Row, Guid Token)? _marked;
 
     /// <inheritdoc/>
-    public async ValueTask<bool> ExistsAsync(
-        MessageId messageId, string consumerType, CancellationToken ct = default)
+    public async ValueTask<InboxRowState?> FindAsync(InboxMessageKey key, CancellationToken ct = default)
     {
-        return await context.Set<InboxMessage>()
+        var id = key.MessageId;
+        var consumer = key.ConsumerType;
+
+        var state = await context.Set<InboxMessage>()
             .AsNoTracking()
-            .AnyAsync(m => m.MessageId == messageId && m.ConsumerType == consumerType, ct)
+            .Where(m => m.MessageId == id && m.ConsumerType == consumer)
+            .Select(m => new { m.Status, m.DeadLettered, m.RowId })
+            .FirstOrDefaultAsync(ct)
             .ConfigureAwait(false);
+
+        return state is null ? null : new InboxRowState(state.Status, state.DeadLettered, state.RowId);
+    }
+
+    /// <inheritdoc/>
+    /// <remarks>
+    /// The strategy is the context's own (<c>EnableRetryOnFailure</c> or a custom one), created
+    /// from this scope's context, which never opens a transaction itself: each attempt opens its own
+    /// scope, context and transaction. EF refuses to run a retrying strategy over a context that
+    /// already has a transaction, and accepts a transaction begun inside the strategy's operation —
+    /// the shape the #188 spike proved on PostgreSQL.
+    /// </remarks>
+    public async ValueTask<TResult> ExecuteAsync<TResult>(
+        Func<CancellationToken, ValueTask<TResult>> operation,
+        Func<CancellationToken, ValueTask<bool>> verifySucceeded,
+        TResult verifiedResult,
+        CancellationToken ct = default)
+    {
+        ArgumentNullException.ThrowIfNull(operation);
+        ArgumentNullException.ThrowIfNull(verifySucceeded);
+
+        var strategy = context.Database.CreateExecutionStrategy();
+        try
+        {
+            return await strategy.ExecuteAsync(
+                (operation, verifySucceeded, verifiedResult),
+                static async (_, state, token) => await state.operation(token).ConfigureAwait(false),
+                static async (_, state, token) => await state.verifySucceeded(token).ConfigureAwait(false)
+                    ? new ExecutionResult<TResult>(true, state.verifiedResult)
+                    : new ExecutionResult<TResult>(false, default!),
+                ct).ConfigureAwait(false);
+        }
+        catch (RetryLimitExceededException exhausted) when (exhausted.InnerException is { } last)
+        {
+            // The contract hands the engine the fault itself, not the strategy's wrapper.
+            ExceptionDispatchInfo.Capture(last).Throw();
+            throw;
+        }
+    }
+
+    /// <inheritdoc/>
+    public async ValueTask BeginAsync(CancellationToken ct = default)
+    {
+        if (_transaction is not null || context.Database.CurrentTransaction is not null)
+        {
+            throw new InvalidOperationException(
+                "An inbox attempt was begun on a DbContext that already has a transaction. Each " +
+                "attempt runs in a scope of its own, and a handler must not begin a transaction " +
+                "on the store's DbContext.");
+        }
+
+        _transaction = await context.Database.BeginTransactionAsync(ct).ConfigureAwait(false);
+    }
+
+    /// <inheritdoc/>
+    public ValueTask EnlistProcessedAsync(InboxMessage row, CancellationToken ct = default)
+    {
+        ArgumentNullException.ThrowIfNull(row);
+        context.Set<InboxMessage>().Add(row);
+        _enlisted = row;
+        return ValueTask.CompletedTask;
     }
 
     /// <inheritdoc/>
     /// <remarks>
     /// <para>
-    /// <b>How the duplicate is recognised.</b> Not by decoding a provider error code. The insert
-    /// is attempted, and if it fails the row is queried: if it is there now, the gate held and
-    /// this is a redelivery. That asks the question the decision actually depends on — "is the
-    /// message recorded?" — rather than the syntactic one a detector answers, "was that error a
-    /// unique violation?". It costs nothing in provider knowledge and keeps working on providers
-    /// that do not exist yet. It is a check <i>after</i> the failed insert, never a guard before
-    /// it, so the unique index remains the sole authority and there is no
-    /// time-of-check-to-time-of-use window.
+    /// Uses the tracked change pipeline rather than <c>ExecuteUpdateAsync</c>, because the write
+    /// must be part of the attempt's unit of work and commit with the handler's own writes.
     /// </para>
     /// <para>
-    /// The alternatives were weighed and rejected. EF Core 10 still wraps every database fault in
-    /// <see cref="DbUpdateException"/> and exposes no typed constraint exception. The
-    /// <c>EntityFramework.Exceptions</c> package supplies one, but it activates through
-    /// <c>UseExceptionProcessor</c> on the <b>consumer's</b> <c>DbContext</c>, which a library
-    /// cannot configure — a consumer who forgets it would silently reproduce the defect. A
-    /// hand-written per-provider detector reads <c>SqlState</c>, which does not survive a
-    /// <c>DEFERRABLE INITIALLY DEFERRED</c> unique constraint on PostgreSQL, where the inner
-    /// exception is not a provider exception at all.
+    /// <b><c>AsTracking()</c> is not decoration.</b> The store runs on the consumer's context, and
+    /// <c>UseQueryTrackingBehavior(QueryTrackingBehavior.NoTracking)</c> is an ordinary setting
+    /// there. Under it an untracked row would take none of the changes below, the save would write
+    /// nothing, and the row would keep its claim and replay on every lease expiry.
     /// </para>
     /// <para>
-    /// <b>Why the savepoint.</b> On PostgreSQL a constraint violation aborts the entire
-    /// transaction; every later statement on that connection fails until a rollback. Without an
-    /// ambient transaction the implicit one EF opens absorbs this. Under an ambient transaction —
-    /// a broker adapter ingesting several messages atomically, or a persistence behaviour that
-    /// opened one — nothing would work afterwards, <b>including the verification query in this
-    /// very catch block</b>. Note a per-provider detector would not have helped either: it
-    /// classifies the exception correctly and then returns into a transaction that is already
-    /// dead.
-    /// </para>
-    /// <para>
-    /// EF Core creates its own automatic savepoint around <c>SaveChanges</c> inside a
-    /// manually-started transaction, so in the default configuration this one is belt and braces.
-    /// It becomes load-bearing when a consumer sets
-    /// <c>Database.AutoSavepointsEnabled = false</c>, and making the guarantee independent of a
-    /// consumer setting is the point.
-    /// </para>
-    /// <para>
-    /// <b>Provider limits.</b> The savepoint name is kept to 24 characters because SQL Server
-    /// caps savepoint identifiers at 32 and rejects longer ones; where a name is truncated rather
-    /// than rejected, two savepoints can end up sharing a name and a rollback then unwinds to the
-    /// wrong one without complaint. SQL Server also rejects savepoints inside a distributed
-    /// transaction — ingest outside one.
-    /// </para>
-    /// <para>
-    /// <b>Known gap.</b> If a retention job deletes the row between the failed insert and the
-    /// verification, the duplicate is rethrown as a fault. Vanishingly rare, and it fails in the
-    /// safe direction: a visible error rather than a silent loss.
+    /// <b>Ownership is enforced by the concurrency token, not by this read.</b> With
+    /// <c>ClaimToken</c> mapped as a concurrency token, EF puts the original value in the
+    /// <c>WHERE</c> clause, so a claim lost after this read matches zero rows at the save and raises
+    /// <see cref="DbUpdateConcurrencyException"/> (<see cref="IsLeaseLost"/>). The original value is
+    /// set from the token explicitly: the claim stamped it through <c>ExecuteUpdateAsync</c>, which
+    /// bypasses the tracker.
     /// </para>
     /// </remarks>
-    public async ValueTask<InboxWriteResult> AddAsync(
-        InboxMessage message, CancellationToken ct = default)
+    public async ValueTask<bool> MarkClaimedProcessedAsync(
+        InboxMessageKey key, Guid claimToken, CancellationToken ct = default)
     {
-        var ambient = context.Database.CurrentTransaction;
+        var id = key.MessageId;
+        var consumer = key.ConsumerType;
 
-        // 24 characters. SQL Server limits savepoint identifiers to 32 and rejects longer ones
-        // outright; a full "N"-formatted Guid with any prefix exceeds that. PostgreSQL tolerates
-        // 63, so a Testcontainers suite would never catch it — the exact provider blind spot this
-        // package claims to avoid. 17 hex characters is ample entropy for a name that only has to
-        // be unique inside one transaction.
-        var savepoint = ambient is null
-            ? null
-            : $"mk_ibx_{Guid.NewGuid():N}"[..24];
+        var row = await context.Set<InboxMessage>()
+            .AsTracking()
+            .FirstOrDefaultAsync(
+                m => m.MessageId == id && m.ConsumerType == consumer && m.ClaimToken == claimToken,
+                ct)
+            .ConfigureAwait(false);
 
-        if (savepoint is not null)
+        if (row is null)
         {
-            if (!ambient!.SupportsSavepoints)
-            {
-                // Proceeding would leave the caller's transaction unusable after a duplicate,
-                // and a duplicate is the nominal path here. Refusing loudly beats corrupting a
-                // transaction the caller believes is healthy.
-                throw new InboxConfigurationException(
-                    "Inbox ingestion is running inside an ambient transaction on a provider that " +
-                    "does not support savepoints. A duplicate would abort that transaction with " +
-                    "no way to recover. Ingest outside the transaction, or use a provider with " +
-                    "savepoint support.");
-            }
-
-            await ambient.CreateSavepointAsync(savepoint, ct).ConfigureAwait(false);
+            return false;
         }
 
-        var entry = context.Set<InboxMessage>().Add(message);
+        context.Entry(row).Property(m => m.ClaimToken).OriginalValue = claimToken;
 
+        row.Status = InboxMessageStatus.Processed;
+        row.ProcessedAtUtc = timeProvider.GetUtcNow();
+        row.LockedUntilUtc = null;
+        row.ClaimToken = null;
+        row.NextRetryAtUtc = null;
+
+        _marked = (row, claimToken);
+        return true;
+    }
+
+    /// <inheritdoc/>
+    public async ValueTask CommitAsync(CancellationToken ct = default)
+    {
+        var transaction = _transaction
+            ?? throw new InvalidOperationException("An inbox attempt was committed before it was begun.");
+
+        await RestageIfDiscardedAsync(ct).ConfigureAwait(false);
+
+        await context.SaveChangesAsync(ct).ConfigureAwait(false);
+        await transaction.CommitAsync(ct).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// Puts the staged row back on the tracker when the handler discarded it — a
+    /// <c>ChangeTracker.Clear()</c> mid-run is ordinary in a batch-processing handler. Without this
+    /// the save would write nothing for the row, the attempt would commit, and the row would stay
+    /// claimed: reported handled while it replays on every lease expiry.
+    /// </summary>
+    /// <remarks>
+    /// A handler that saved before clearing already wrote the row inside this transaction, so the
+    /// database — read in the same transaction — decides; the tracker no longer can. A retry's row
+    /// is recognised by the <c>ProcessedAtUtc</c> this attempt stamped: a row another loop
+    /// committed carries its own.
+    /// </remarks>
+    private async ValueTask RestageIfDiscardedAsync(CancellationToken ct)
+    {
+        // Read inside the attempt's transaction, so the handler's own save is visible. The test is
+        // whether THIS attempt wrote the row, not whether a row is there: one a concurrent delivery
+        // or loop committed must still fail this attempt (the unique index, the claim token).
+        if (_enlisted is { } enlisted && context.Entry(enlisted).State is EntityState.Detached)
+        {
+            var rowId = enlisted.RowId;
+            var written = await context.Set<InboxMessage>().AsNoTracking()
+                .AnyAsync(m => m.RowId == rowId, ct).ConfigureAwait(false);
+
+            if (!written)
+            {
+                context.Set<InboxMessage>().Add(enlisted);
+            }
+        }
+
+        if (_marked is { } marked && context.Entry(marked.Row).State is EntityState.Detached)
+        {
+            var rowId = marked.Row.RowId;
+            var stamped = marked.Row.ProcessedAtUtc;
+
+            // Compared in SQL, against the stamp as a parameter — never in memory against a value
+            // read back. PostgreSQL keeps whole microseconds, so the stored stamp can differ from
+            // the one in memory; the parameter goes through the same conversion as the write did.
+            var written = await context.Set<InboxMessage>().AsNoTracking()
+                .AnyAsync(
+                    m => m.RowId == rowId && m.Status == InboxMessageStatus.Processed && m.ProcessedAtUtc == stamped,
+                    ct)
+                .ConfigureAwait(false);
+
+            if (!written)
+            {
+                var entry = context.Set<InboxMessage>().Attach(marked.Row);
+                entry.Property(m => m.ClaimToken).OriginalValue = marked.Token;
+                entry.Property(m => m.Status).IsModified = true;
+                entry.Property(m => m.ProcessedAtUtc).IsModified = true;
+                entry.Property(m => m.LockedUntilUtc).IsModified = true;
+                entry.Property(m => m.ClaimToken).IsModified = true;
+                entry.Property(m => m.NextRetryAtUtc).IsModified = true;
+            }
+        }
+    }
+
+    /// <inheritdoc/>
+    public bool IsLeaseLost(Exception exception) =>
+        exception is DbUpdateConcurrencyException concurrency
+        && concurrency.Entries.Any(e => e.Entity is InboxMessage);
+
+    /// <inheritdoc/>
+    /// <remarks>
+    /// The duplicate is recognised by finding the row after the failed insert, never by decoding a
+    /// provider error code: the question is "is the row there?", which needs no provider knowledge.
+    /// No transaction is open here, so the failed insert leaves nothing to unwind.
+    /// </remarks>
+    public async ValueTask<bool> TryInsertFailedAsync(InboxMessage row, CancellationToken ct = default)
+    {
+        ArgumentNullException.ThrowIfNull(row);
+
+        var entry = context.Set<InboxMessage>().Add(row);
         try
         {
             await context.SaveChangesAsync(ct).ConfigureAwait(false);
-
-            if (savepoint is not null)
-            {
-                // Released on success so a long ingestion loop does not accumulate one
-                // subtransaction per message.
-                await ambient!.ReleaseSavepointAsync(savepoint, ct).ConfigureAwait(false);
-            }
-
-            return InboxWriteResult.Added;
+            return true;
         }
         catch (DbUpdateException)
         {
-            // Detach first: the rejected entity would otherwise stay tracked as added, and the
-            // next SaveChangesAsync on this context would retry the same failing insert — so one
-            // duplicate would break every later write on that context rather than just its own.
             entry.State = EntityState.Detached;
 
-            if (savepoint is not null)
+            if (await FindAsync(new InboxMessageKey(row.MessageId, row.ConsumerType), ct).ConfigureAwait(false) is not null)
             {
-                // Must precede any other statement: on PostgreSQL the connection refuses
-                // everything until the aborted transaction is unwound.
-                await ambient!.RollbackToSavepointAsync(savepoint, ct).ConfigureAwait(false);
+                return false;
             }
 
-            if (await ExistsAsync(message.MessageId, message.ConsumerType, ct).ConfigureAwait(false))
-            {
-                return InboxWriteResult.AlreadyPresent;
-            }
-
-            // The row is not there, so whatever failed was not the dedup gate. Absorbing this
-            // would trade a spurious dead-letter for silent data loss, which is worse.
             throw;
+        }
+    }
+
+    /// <inheritdoc/>
+    public async ValueTask DisposeAsync()
+    {
+        if (_transaction is not null)
+        {
+            // Not committed: rolled back with the transaction.
+            await _transaction.DisposeAsync().ConfigureAwait(false);
+            _transaction = null;
         }
     }
 
@@ -267,28 +382,53 @@ internal sealed class EfInboxStore<TContext>(TContext context, TimeProvider time
 
     /// <inheritdoc/>
     /// <remarks>
+    /// <para>
     /// Wrapped in an explicit transaction. Each <c>ExecuteUpdateAsync</c> otherwise runs in its
     /// own implicit transaction, so a database fault partway through would leave some rows
     /// settled and others still leased.
+    /// </para>
+    /// <para>
+    /// <b>Run as one operation of the context's execution strategy</b>
+    /// (<see cref="SettlementTransaction"/>). A retrying strategy (<c>EnableRetryOnFailure</c>)
+    /// refuses a transaction begun outside it, which would leave every failed retry unsettled —
+    /// re-claimed on lease expiry with no attempt ever counted, so it never dead-letters. A commit
+    /// whose outcome is unknown is verified by the claim token, which the commit clears.
+    /// </para>
     /// </remarks>
-    public async ValueTask<int> ApplyOutcomesAsync(
+    public ValueTask<int> ApplyOutcomesAsync(
         Guid claimToken, IReadOnlyList<InboxOutcome> outcomes, CancellationToken ct = default)
+        => SettlementTransaction.RunAsync(
+            context,
+            (store: this, claimToken, outcomes),
+            static (s, token) => s.store.ApplyOutcomesCoreAsync(s.claimToken, s.outcomes, token),
+            static (s, token) => s.store.IsSettledAsync(s.claimToken, s.outcomes, token),
+            ct);
+
+    /// <summary>Whether no row of <paramref name="outcomes"/> still carries the claim token.</summary>
+    private async ValueTask<bool> IsSettledAsync(
+        Guid claimToken, IReadOnlyList<InboxOutcome> outcomes, CancellationToken ct)
+    {
+        var stillClaimed = await context.Set<InboxMessage>()
+            .AsNoTracking()
+            .Where(m => m.ClaimToken == claimToken)
+            .Select(m => new InboxMessageKey(m.MessageId, m.ConsumerType))
+            .ToListAsync(ct)
+            .ConfigureAwait(false);
+
+        return !outcomes.Any(o => stillClaimed.Contains(o.Key));
+    }
+
+    private async ValueTask<int> ApplyOutcomesCoreAsync(
+        Guid claimToken, IReadOnlyList<InboxOutcome> outcomes, CancellationToken ct)
     {
         var now = timeProvider.GetUtcNow();
         var written = 0;
 
-        // Respect an ambient transaction if the host started one; otherwise own the scope.
-        var ownsTransaction = context.Database.CurrentTransaction is null;
-        var transaction = ownsTransaction
-            ? await context.Database.BeginTransactionAsync(ct).ConfigureAwait(false)
-            : null;
-
-        try
         {
             // Released and Processed are set-based: one statement each, whatever the batch size.
             written += await SettleGroupAsync(
                 claimToken, outcomes, InboxOutcomeKind.Released,
-                s => s.SetProperty(m => m.Status, InboxMessageStatus.Received)
+                s => s.SetProperty(m => m.Status, InboxMessageStatus.Failed)
                       .SetProperty(m => m.LockedUntilUtc, (DateTimeOffset?)null)
                       .SetProperty(m => m.ClaimToken, (Guid?)null),
                 ct).ConfigureAwait(false);
@@ -319,7 +459,7 @@ internal sealed class EfInboxStore<TContext>(TContext context, TimeProvider time
                         written += await context.Set<InboxMessage>()
                             .Where(m => m.RowId == rowId && m.ClaimToken == claimToken)
                             .ExecuteUpdateAsync(s => s
-                                .SetProperty(m => m.Status, InboxMessageStatus.Received)
+                                .SetProperty(m => m.Status, InboxMessageStatus.Failed)
                                 .SetProperty(m => m.RetryCount, outcome.RetryCount)
                                 .SetProperty(m => m.NextRetryAtUtc, outcome.NextRetryAtUtc)
                                 .SetProperty(m => m.ErrorMessage, outcome.ErrorMessage)
@@ -349,134 +489,9 @@ internal sealed class EfInboxStore<TContext>(TContext context, TimeProvider time
                 }
             }
 
-            if (transaction is not null)
-            {
-                await transaction.CommitAsync(ct).ConfigureAwait(false);
-            }
-
             return written;
         }
-        finally
-        {
-            if (transaction is not null)
-            {
-                await transaction.DisposeAsync().ConfigureAwait(false);
-            }
-        }
     }
-
-    // ---------- IInboxSettlementStore ----------
-
-    /// <inheritdoc/>
-    /// <remarks>
-    /// <para>
-    /// Uses the tracked change pipeline rather than <c>ExecuteUpdateAsync</c>, precisely because
-    /// it must <b>not</b> execute immediately: the write has to be staged so the handler's
-    /// <c>SaveChangesAsync</c> commits it in the same transaction as the handler's own side
-    /// effects. <c>ExecuteUpdate</c> bypasses the change tracker and would commit on its own,
-    /// reopening the very gap this method exists to close.
-    /// </para>
-    /// <para>
-    /// <b>Ownership is enforced by the concurrency token, not by this read.</b> Filtering the
-    /// query on <c>ClaimToken</c> proves ownership at read time only; the <c>UPDATE</c> emitted
-    /// later by <c>SaveChanges</c> would otherwise carry the primary key alone, so a lease that
-    /// expired in between would be silently overwritten. With <c>ClaimToken</c> mapped as a
-    /// concurrency token, EF puts the original value in the <c>WHERE</c> clause, the update
-    /// matches zero rows, and <see cref="DbUpdateConcurrencyException"/> rolls the handler
-    /// transaction back with the mark. See <see cref="InboxMessageConfiguration"/>.
-    /// </para>
-    /// </remarks>
-    public async ValueTask<bool> StageProcessedAsync(
-        InboxMessageKey key, Guid claimToken, CancellationToken ct = default)
-    {
-        var id = key.MessageId;
-        var consumer = key.ConsumerType;
-
-        // AsTracking() is not decoration and not a default being restated. This is the ONE query
-        // in this file that requires tracking — the other four all say AsNoTracking() — and
-        // without it the whole guarantee is one consumer setting away from silently not existing:
-        //
-        //   optionsBuilder.UseQueryTrackingBehavior(QueryTrackingBehavior.NoTracking)
-        //
-        // is an ordinary, widely recommended setting on a read-heavy application's DbContext, and
-        // this store runs on the consumer's context. Under it the row comes back untracked, the
-        // mutations below reach nothing the change tracker will save, the handler's SaveChanges
-        // writes zero rows, and — because ChangeTracker.Entries<T>() excludes untracked entities —
-        // IsMarkUncommitted reports the mark as committed. The row keeps its ClaimToken, is
-        // re-claimed on every lease expiry, and replays forever while the batch reports it
-        // Processed. Verified empirically before this line existed, not inferred.
-        //
-        // Same reasoning that rejected EntityFramework.Exceptions for the dedup gate: a
-        // correctness guarantee must not depend on a consumer configuring something the library
-        // cannot control.
-        var row = await context.Set<InboxMessage>()
-            .AsTracking()
-            .FirstOrDefaultAsync(
-                m => m.MessageId == id && m.ConsumerType == consumer && m.ClaimToken == claimToken,
-                ct)
-            .ConfigureAwait(false);
-
-        if (row is null)
-        {
-            // No row under this token: the lease expired and another processor owns it.
-            // Reported rather than swallowed — the caller must not invoke the handler.
-            return false;
-        }
-
-        // The query above proved the database row carries this token, so state that as the
-        // version being updated from. Without it the concurrency check asserts whatever the
-        // change tracker happened to hold: ClaimBatchAsync stamps the token through
-        // ExecuteUpdateAsync, which bypasses the tracker entirely, so a context that had already
-        // materialised this row still believes ClaimToken is null. EF would then emit
-        // `WHERE ClaimToken IS NULL`, match zero rows, and report a lost lease on a row this
-        // processor demonstrably owns.
-        //
-        // In production the claim and the settlement run on different scopes and therefore
-        // different contexts, so the stale-tracker case does not arise — but a guarantee that
-        // holds only because two collaborators happen not to share a context is not a guarantee.
-        context.Entry(row).Property(m => m.ClaimToken).OriginalValue = claimToken;
-
-        row.Status = InboxMessageStatus.Processed;
-        row.ProcessedAtUtc = timeProvider.GetUtcNow();
-        row.LockedUntilUtc = null;
-        row.ClaimToken = null;
-
-        // Deliberately no SaveChangesAsync: the handler's unit of work owns the boundary.
-        return true;
-    }
-
-    /// <inheritdoc/>
-    public bool IsMarkUncommitted(InboxMessageKey key)
-    {
-        var entry = context.ChangeTracker
-            .Entries<InboxMessage>()
-            .FirstOrDefault(e =>
-                e.Entity.MessageId == key.MessageId && e.Entity.ConsumerType == key.ConsumerType);
-
-        // Three cases, and the third is the one that matters.
-        //
-        //   Unchanged  -> EF reset the entry after a successful save. The mark is durable.
-        //   Modified   -> SaveChanges was never called. The mark is in memory only.
-        //   absent or Detached -> UNKNOWN, and unknown must be reported as uncommitted.
-        //
-        // The previous version returned false for the third case, reasoning that no entry means
-        // nothing is left pending. That is literally true and operationally wrong: the question
-        // this method answers is "was the mark persisted?", not "is anything still queued". A
-        // handler that calls ChangeTracker.Clear() mid-run, or detaches the entity, discards the
-        // staged mark — nothing is pending precisely because the write was thrown away.
-        //
-        // Reporting that as committed makes the processor return Settled, buffer no outcome, and
-        // leave the row claimed: it replays on every pass, never increments RetryCount, and never
-        // dead-letters, while every batch reports it Processed. Reporting it as uncommitted costs
-        // at worst one redundant deferred write plus a warning. A redundant write is recoverable;
-        // a lost mark is a silent infinite replay, so the asymmetry decides the default.
-        return entry is not { State: EntityState.Unchanged };
-    }
-
-    /// <inheritdoc/>
-    public bool IsLeaseLost(Exception exception) =>
-        exception is DbUpdateConcurrencyException concurrency
-        && concurrency.Entries.Any(e => e.Entity is InboxMessage);
 
     // ---------- IInboxAdminStore ----------
 
@@ -505,7 +520,7 @@ internal sealed class EfInboxStore<TContext>(TContext context, TimeProvider time
         var rows = await context.Set<InboxMessage>()
             .Where(m => m.MessageId == id && m.ConsumerType == consumer && m.DeadLettered)
             .ExecuteUpdateAsync(s => s
-                .SetProperty(m => m.Status, InboxMessageStatus.Received)
+                .SetProperty(m => m.Status, InboxMessageStatus.Failed)
                 .SetProperty(m => m.DeadLettered, false)
                 .SetProperty(m => m.RetryCount, 0)
                 .SetProperty(m => m.NextRetryAtUtc, (DateTimeOffset?)null)
@@ -536,13 +551,14 @@ internal sealed class EfInboxStore<TContext>(TContext context, TimeProvider time
     // ---------- helpers ----------
 
     /// <summary>
-    /// A row is processable when it is received — or processing with an expired lease, which is
-    /// how a crashed processor's work is recovered — is not dead-lettered, and has reached its
-    /// back-off deadline.
+    /// A row is retryable when its last attempt failed (or it was received by an earlier version and
+    /// never handled) — or it is claimed with an expired lease, which is how a crashed loop's work is
+    /// recovered — is not dead-lettered, and has reached its back-off deadline.
     /// </summary>
     private static Expression<Func<InboxMessage, bool>> Processable(DateTimeOffset now) =>
         m => !m.DeadLettered
-             && (m.Status == InboxMessageStatus.Received
+             && (m.Status == InboxMessageStatus.Failed
+                 || m.Status == InboxMessageStatus.Received
                  || (m.Status == InboxMessageStatus.Processing && m.LockedUntilUtc <= now))
              && (m.NextRetryAtUtc == null || m.NextRetryAtUtc <= now);
 

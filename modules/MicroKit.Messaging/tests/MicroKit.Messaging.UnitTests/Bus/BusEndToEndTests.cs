@@ -25,7 +25,7 @@ public sealed class BusEndToEndTests
         host.Provider.GetServices<IHostedService>().Select(s => s.GetType().Name)
             .ShouldBe(["MessagingCompositionValidator", "InMemoryTransportWorker"]);
         host.Provider.GetService<IOutboxWriter>().ShouldBeNull("no store is composed");
-        host.Provider.GetService<IInboxWriter>().ShouldBeNull("no store is composed");
+        host.Provider.GetRequiredService<IMessageStoreSet>().GetStores().ShouldBeEmpty("no store is composed");
 
         var order = new OrderPlaced(Guid.NewGuid());
         MessageId id;

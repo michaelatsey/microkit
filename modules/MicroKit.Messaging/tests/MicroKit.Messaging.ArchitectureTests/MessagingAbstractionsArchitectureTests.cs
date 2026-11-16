@@ -169,7 +169,7 @@ public sealed class MessagingAbstractionsArchitectureTests
     }
 
     /// <summary>
-    /// No <see cref="IOutboxDispatcher"/> depends on <see cref="IInboxWriter"/> — nothing writes
+    /// No <see cref="IOutboxDispatcher"/> depends on <see cref="IInboxGuardStore"/> — nothing writes
     /// inbox rows on the <i>producing</i> side.
     /// </summary>
     /// <remarks>
@@ -177,12 +177,13 @@ public sealed class MessagingAbstractionsArchitectureTests
     /// <b>This replaces <c>Core_DoesNotDependOnIInboxWriter</c>, which ADR-MSG-019 predicted would
     /// fail at exactly this step.</b> It did, and deliberately: it was written so that whoever
     /// built the receiving seam had to come back to the ADR rather than quietly reinstate an
-    /// in-process producer. That has now happened — <c>EnvelopeReceiver</c> lives in Core and takes
-    /// <see cref="IInboxWriter"/> — so the old assertion is retired rather than deleted, and the
-    /// subject it was really guarding is stated here instead.
+    /// in-process producer. That has now happened — the receive pipeline lives in Core and writes
+    /// rows through <see cref="IInboxGuardStore"/> (#188; <c>IInboxWriter</c> before it) — so the old
+    /// assertion is retired rather than deleted, and the subject it was really guarding is stated
+    /// here instead.
     /// </para>
     /// <para>
-    /// <b>The subject was never "Core must not reference <see cref="IInboxWriter"/>".</b> It was
+    /// <b>The subject was never "Core must not write inbox rows".</b> It was
     /// "no dispatcher writes inbox rows": the defect ADR-MSG-018 and ADR-MSG-019 spent two rewrites
     /// removing was a fan-out that wrote a <i>consumer's</i> row inside the <i>producer</i>,
     /// bypassing the wire and the contract name that make a consumer's own type resolvable. A row
@@ -198,10 +199,10 @@ public sealed class MessagingAbstractionsArchitectureTests
         // CONTROL 1 — the dependency query. An emptiness assertion is worthless if the query can
         // never match anything: a misspelled name, or a matching rule that does not see interface
         // implementations, would make this permanently green and permanently useless. EfCoreAssembly
-        // is known to depend on IInboxWriter (EfInboxStore implements it).
+        // is known to depend on IInboxGuardStore (EfInboxStore implements it).
         Types.InAssembly(EfCoreAssembly)
             .That()
-            .HaveDependencyOn(typeof(IInboxWriter).FullName)
+            .HaveDependencyOn(typeof(IInboxGuardStore).FullName)
             .GetTypes()
             .ShouldNotBeEmpty(
                 "control assertion: if this is empty the dependency query below cannot detect " +
@@ -226,12 +227,12 @@ public sealed class MessagingAbstractionsArchitectureTests
                 .That()
                 .ImplementInterface(typeof(IOutboxDispatcher))
                 .And()
-                .HaveDependencyOn(typeof(IInboxWriter).FullName)
+                .HaveDependencyOn(typeof(IInboxGuardStore).FullName)
                 .GetTypes()
                 .ShouldBeEmpty(
                     $"{assembly.GetName().Name} must not write inbox rows from the dispatch path. " +
-                    "Inbox rows are written by IEnvelopeReceiver, on the RECEIVING side, from an " +
-                    "envelope that crossed a transport (ADR-MSG-019). A dispatcher that writes one " +
+                    "Inbox rows are written by the receive pipeline's guard, on the RECEIVING side " +
+                    "(#188 D6; ADR-MSG-019). A dispatcher that writes one " +
                     "is the in-process fan-out coming back. Update this test AND the ADR rather " +
                     "than deleting the assertion");
         }

@@ -28,8 +28,8 @@ public sealed class EfCoreOutboxRegistrationTests
         foreach (var contract in new[]
         {
             typeof(IOutboxWriter), typeof(IOutboxProcessorStore), typeof(IOutboxAdminStore),
-            typeof(IOutboxRetentionStore), typeof(IInboxWriter), typeof(IInboxProcessorStore),
-            typeof(IInboxSettlementStore), typeof(IInboxAdminStore), typeof(IInboxRetentionStore),
+            typeof(IOutboxRetentionStore), typeof(IInboxGuardStore), typeof(IInboxProcessorStore),
+            typeof(IInboxAdminStore), typeof(IInboxRetentionStore),
         })
         {
             services.Count(d => d.ServiceType == contract && d.IsKeyedService && Key.Equals(d.ServiceKey))

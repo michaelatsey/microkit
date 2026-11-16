@@ -34,17 +34,19 @@ public sealed class InboxMessageConfiguration : IEntityTypeConfiguration<InboxMe
         builder.Property(m => m.RowId)
             .ValueGeneratedNever();
 
-        // The dedup gate. Unique, and the sole authority on deduplication — EfInboxStore.AddAsync
-        // recognises a redelivery by the violation this raises, never by decoding an error code.
+        // The guard. Unique, and the sole authority: one row per (message, handler), written once
+        // (#188). A concurrent delivery of the same pair fails its save on this index, and the
+        // engine recognises the duplicate by finding the row afterwards, never by decoding an
+        // error code.
         builder.HasIndex(m => new { m.MessageId, m.ConsumerType })
             .IsUnique()
             .HasDatabaseName("UX_InboxMessages_MessageId_ConsumerType");
 
         // DECISION 2 — ClaimToken is a concurrency token.
         //
-        // This is what makes IInboxSettlementStore.StageProcessedAsync safe. Without it, the
-        // UPDATE that SaveChanges emits carries only the primary key, so a processor whose lease
-        // expired mid-handler would overwrite the processor that legitimately re-claimed the
+        // This is what makes IInboxGuardStore.MarkClaimedProcessedAsync safe. Without it, the
+        // UPDATE that SaveChanges emits carries only the primary key, so a retry whose lease
+        // expired mid-handler would overwrite the retry that legitimately re-claimed the
         // row. With it, EF puts the original token in the WHERE clause, the update matches zero
         // rows, and the resulting concurrency exception rolls back the handler transaction —
         // mark and side effects together.
@@ -74,6 +76,17 @@ public sealed class InboxMessageConfiguration : IEntityTypeConfiguration<InboxMe
 
         builder.Property(m => m.Payload)
             .IsRequired();
+
+        // What a retry needs to rebuild the handler's MessageContext (#188). Unbounded: it is the
+        // producer's CloudEvents source, copied from the wire, and a cap would fail the row of a
+        // valid message on every delivery — never written, never dead-lettered.
+        builder.Property(m => m.Source);
+
+        builder.Property(m => m.Headers)
+            .HasConversion(
+                v => HeadersJson.Write(v),
+                v => HeadersJson.Read(v),
+                HeadersJson.Comparer);
 
         builder.Property(m => m.Status)
             .IsRequired()

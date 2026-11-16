@@ -73,9 +73,9 @@ namespace MicroKit.Messaging.Processing;
 ///         (ADR-MSG-009): a replay re-runs every one of them and re-writes whatever they
 ///         wrote. A handler that projects into a table produces its rows a second time.</item>
 /// </list>
-/// The consumer side already solved this — <see cref="IInboxSettlementStore"/> stages the
-/// processed mark into the handler's own unit of work, so the mark and the side effects commit
-/// together. The outbox needs the counterpart: a settlement store that stages the
+/// The consumer side already solved this — the inbox guard (<see cref="IInboxGuardStore"/>)
+/// commits a handler's row in the handler's own transaction, so the row and the side effects commit
+/// together (#188). The outbox needs the counterpart: a settlement store that stages the
 /// <c>Published</c> mark into the transaction the dispatch target commits, instead of writing
 /// it in a separate one afterwards. That changes <see cref="IOutboxProcessorStore"/> and is
 /// deferred to its own lot; until then the mitigation is the documented one — <b>notification
@@ -380,11 +380,8 @@ internal sealed class OutboxProcessor : IOutboxProcessor
     /// <see cref="IMessageTransport"/> — a per-message verdict would charge N retry budgets for one
     /// cause and, at <c>MaxRetries</c>, dead-letter the queue over one line in a composition root. Not
     /// every cause is shared: a tenant-scoped one fails for some messages only, and releasing the batch
-    /// for it is the known defect above. <c>EnvelopeReceiver.ResolveWriter</c> lets the same container
-    /// verdict propagate, because the receiver holds one envelope and no batch to abandon.
-    /// <c>InboxProcessor.ResolveSettlement</c> retries the one row although the drain processor owns a
-    /// batch and a retry budget too, so ownership does not explain this method's difference from it.
-    /// ADR-MSG-019 records all three.
+    /// for it is the known defect above. The inbox does not copy it (#188): a guard that cannot be
+    /// activated fails that one delivery, redelivered, or that one retry, counted — never the batch.
     /// </para>
     /// </remarks>
     private static IOutboxDispatcher ResolveDispatcher(IServiceProvider serviceProvider)

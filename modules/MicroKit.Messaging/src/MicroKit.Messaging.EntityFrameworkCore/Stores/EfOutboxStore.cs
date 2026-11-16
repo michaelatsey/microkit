@@ -214,100 +214,111 @@ internal sealed class EfOutboxStore<TContext>(
 
     /// <inheritdoc/>
     /// <remarks>
+    /// <para>
     /// Wrapped in an explicit transaction. Each <c>ExecuteUpdateAsync</c> otherwise runs in
     /// its own implicit transaction, so a database fault partway through would leave some
     /// messages settled and others still leased — a partial settlement that at-least-once
     /// delivery recovers from, but that is worth not producing in the first place.
+    /// </para>
+    /// <para>
+    /// <b>Run as one operation of the context's execution strategy</b>
+    /// (<see cref="SettlementTransaction"/>). A retrying strategy (<c>EnableRetryOnFailure</c>)
+    /// refuses a transaction begun outside it, so every settlement would throw: no row would ever be
+    /// marked <c>Published</c> or counted, and each would be re-sent on every lease expiry. A commit
+    /// whose outcome is unknown is verified by the claim token, which the commit clears.
+    /// </para>
     /// </remarks>
-    public async ValueTask<int> ApplyOutcomesAsync(
+    public ValueTask<int> ApplyOutcomesAsync(
         Guid claimToken, IReadOnlyList<OutboxOutcome> outcomes, CancellationToken ct = default)
+        => SettlementTransaction.RunAsync(
+            context,
+            (store: this, claimToken, outcomes),
+            static (s, token) => s.store.ApplyOutcomesCoreAsync(s.claimToken, s.outcomes, token),
+            static (s, token) => s.store.IsSettledAsync(s.claimToken, s.outcomes, token),
+            ct);
+
+    /// <summary>Whether no message of <paramref name="outcomes"/> still carries the claim token.</summary>
+    private async ValueTask<bool> IsSettledAsync(
+        Guid claimToken, IReadOnlyList<OutboxOutcome> outcomes, CancellationToken ct)
+    {
+        var stillClaimed = await context.Set<OutboxMessage>()
+            .AsNoTracking()
+            .Where(m => m.ClaimToken == claimToken)
+            .Select(m => m.Id)
+            .ToListAsync(ct)
+            .ConfigureAwait(false);
+
+        return !outcomes.Any(o => stillClaimed.Contains(o.MessageId));
+    }
+
+    private async ValueTask<int> ApplyOutcomesCoreAsync(
+        Guid claimToken, IReadOnlyList<OutboxOutcome> outcomes, CancellationToken ct)
     {
         var now = timeProvider.GetUtcNow();
         var written = 0;
 
-        // Respect an ambient transaction if the host started one; otherwise own the scope.
-        var ownsTransaction = context.Database.CurrentTransaction is null;
-        var transaction = ownsTransaction
-            ? await context.Database.BeginTransactionAsync(ct).ConfigureAwait(false)
-            : null;
+        // Grouped by disposition: two set-based statements cover the bulk, whatever the batch
+        // size, instead of one statement per message. Every statement filters on the claim
+        // token, so a lost lease yields zero rows rather than a silent overwrite.
+        written += await SettleAsync(
+            claimToken, outcomes, OutboxOutcomeKind.Published,
+            s => s.SetProperty(m => m.Status, OutboxMessageStatus.Published)
+                  .SetProperty(m => m.ProcessedAtUtc, now)
+                  .SetProperty(m => m.LockedUntilUtc, (DateTimeOffset?)null)
+                  .SetProperty(m => m.ClaimToken, (Guid?)null),
+            ct).ConfigureAwait(false);
 
-        try
+        written += await SettleAsync(
+            claimToken, outcomes, OutboxOutcomeKind.Released,
+            s => s.SetProperty(m => m.Status, OutboxMessageStatus.Pending)
+                  .SetProperty(m => m.LockedUntilUtc, (DateTimeOffset?)null)
+                  .SetProperty(m => m.ClaimToken, (Guid?)null),
+            ct).ConfigureAwait(false);
+
+        // Retries and dead-letters carry per-message values (retry count, next attempt,
+        // error text), so they cannot collapse into one statement without a server-side join
+        // over a values list — which is provider-specific and would forfeit SQLite testing.
+        // The cost is bounded by the number of FAILED messages, not by batch size: in normal
+        // operation this loop does not execute at all.
+        foreach (var outcome in outcomes)
         {
-            // Grouped by disposition: two set-based statements cover the bulk, whatever the batch
-            // size, instead of one statement per message. Every statement filters on the claim
-            // token, so a lost lease yields zero rows rather than a silent overwrite.
-            written += await SettleAsync(
-                claimToken, outcomes, OutboxOutcomeKind.Published,
-                s => s.SetProperty(m => m.Status, OutboxMessageStatus.Published)
-                      .SetProperty(m => m.ProcessedAtUtc, now)
-                      .SetProperty(m => m.LockedUntilUtc, (DateTimeOffset?)null)
-                      .SetProperty(m => m.ClaimToken, (Guid?)null),
-                ct).ConfigureAwait(false);
-
-            written += await SettleAsync(
-                claimToken, outcomes, OutboxOutcomeKind.Released,
-                s => s.SetProperty(m => m.Status, OutboxMessageStatus.Pending)
-                      .SetProperty(m => m.LockedUntilUtc, (DateTimeOffset?)null)
-                      .SetProperty(m => m.ClaimToken, (Guid?)null),
-                ct).ConfigureAwait(false);
-
-            // Retries and dead-letters carry per-message values (retry count, next attempt,
-            // error text), so they cannot collapse into one statement without a server-side join
-            // over a values list — which is provider-specific and would forfeit SQLite testing.
-            // The cost is bounded by the number of FAILED messages, not by batch size: in normal
-            // operation this loop does not execute at all.
-            foreach (var outcome in outcomes)
+            switch (outcome.Kind)
             {
-                switch (outcome.Kind)
-                {
-                    case OutboxOutcomeKind.Retry:
-                        written += await context.Set<OutboxMessage>()
-                            .Where(m => m.Id == outcome.MessageId && m.ClaimToken == claimToken)
-                            .ExecuteUpdateAsync(s => s
-                                .SetProperty(m => m.Status, OutboxMessageStatus.Pending)
-                                .SetProperty(m => m.RetryCount, outcome.RetryCount)
-                                .SetProperty(m => m.NextRetryAtUtc, outcome.NextRetryAtUtc)
-                                .SetProperty(m => m.ErrorMessage, outcome.ErrorMessage)
-                                .SetProperty(m => m.LockedUntilUtc, (DateTimeOffset?)null)
-                                .SetProperty(m => m.ClaimToken, (Guid?)null),
-                                ct)
-                            .ConfigureAwait(false);
-                        break;
+                case OutboxOutcomeKind.Retry:
+                    written += await context.Set<OutboxMessage>()
+                        .Where(m => m.Id == outcome.MessageId && m.ClaimToken == claimToken)
+                        .ExecuteUpdateAsync(s => s
+                            .SetProperty(m => m.Status, OutboxMessageStatus.Pending)
+                            .SetProperty(m => m.RetryCount, outcome.RetryCount)
+                            .SetProperty(m => m.NextRetryAtUtc, outcome.NextRetryAtUtc)
+                            .SetProperty(m => m.ErrorMessage, outcome.ErrorMessage)
+                            .SetProperty(m => m.LockedUntilUtc, (DateTimeOffset?)null)
+                            .SetProperty(m => m.ClaimToken, (Guid?)null),
+                            ct)
+                        .ConfigureAwait(false);
+                    break;
 
-                    case OutboxOutcomeKind.DeadLetter:
-                        written += await context.Set<OutboxMessage>()
-                            .Where(m => m.Id == outcome.MessageId && m.ClaimToken == claimToken)
-                            .ExecuteUpdateAsync(s => s
-                                .SetProperty(m => m.Status, OutboxMessageStatus.Failed)
-                                .SetProperty(m => m.DeadLettered, true)
-                                .SetProperty(m => m.RetryCount, outcome.RetryCount)
-                                .SetProperty(m => m.ProcessedAtUtc, now)
-                                .SetProperty(m => m.ErrorMessage, outcome.ErrorMessage)
-                                .SetProperty(m => m.LockedUntilUtc, (DateTimeOffset?)null)
-                                .SetProperty(m => m.ClaimToken, (Guid?)null),
-                                ct)
-                            .ConfigureAwait(false);
-                        break;
+                case OutboxOutcomeKind.DeadLetter:
+                    written += await context.Set<OutboxMessage>()
+                        .Where(m => m.Id == outcome.MessageId && m.ClaimToken == claimToken)
+                        .ExecuteUpdateAsync(s => s
+                            .SetProperty(m => m.Status, OutboxMessageStatus.Failed)
+                            .SetProperty(m => m.DeadLettered, true)
+                            .SetProperty(m => m.RetryCount, outcome.RetryCount)
+                            .SetProperty(m => m.ProcessedAtUtc, now)
+                            .SetProperty(m => m.ErrorMessage, outcome.ErrorMessage)
+                            .SetProperty(m => m.LockedUntilUtc, (DateTimeOffset?)null)
+                            .SetProperty(m => m.ClaimToken, (Guid?)null),
+                            ct)
+                        .ConfigureAwait(false);
+                    break;
 
-                    default:
-                        break;
-                }
-            }
-
-            if (transaction is not null)
-            {
-                await transaction.CommitAsync(ct).ConfigureAwait(false);
-            }
-
-            return written;
-        }
-        finally
-        {
-            if (transaction is not null)
-            {
-                await transaction.DisposeAsync().ConfigureAwait(false);
+                default:
+                    break;
             }
         }
+
+        return written;
     }
 
     // ---------- IOutboxAdminStore ----------

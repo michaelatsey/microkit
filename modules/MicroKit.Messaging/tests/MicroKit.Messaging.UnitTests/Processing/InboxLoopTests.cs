@@ -223,7 +223,7 @@ public sealed class InboxLoopTests
             {
                 Interlocked.Increment(ref callCount);
                 return ValueTask.FromException<InboxBatchResult>(
-                    new InboxConfigurationException("IInboxSettlementStore is not registered"));
+                    new InboxConfigurationException("IInboxGuardStore is not registered"));
             });
 
         var sut = BuildWorker(

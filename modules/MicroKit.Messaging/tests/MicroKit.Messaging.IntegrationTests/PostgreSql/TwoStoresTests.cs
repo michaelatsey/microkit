@@ -90,6 +90,28 @@ public sealed class TwoStoresTests(PostgreSqlFixture fixture)
     }
 
     /// <summary>Inside a delivery, an explicit store may only name the delivery's own.</summary>
+    /// <summary>
+    /// C2: a replayed attempt is a fresh scope, and the delivery's store is written on that one too —
+    /// so the publication of the attempt that commits lands in the delivery's store (B), not in the
+    /// store its type is bound to (A). The commit fault makes store B's retrying strategy replay.
+    /// </summary>
+    [DockerRequiredFact]
+    public async Task InsideADelivery_OnAReplayedAttempt_APublicationStillLandsInTheDeliverysStore()
+    {
+        await using var host = await TwoStoreHost.CreateAsync(fixture.ConnectionString, retryingB: true);
+        var message = new StoreBEvent(Guid.NewGuid());
+        await host.SeedInboxOfBAsync<PublishingStoreBHandler>(message);
+
+        host.FaultsOfB.Arm(CommitFaultPoint.BeforeCommit);
+        await host.DrainInboxOfBAsync();
+
+        host.FaultsOfB.Fired.ShouldBeTrue();
+        host.Recorder.Handled.Count.ShouldBe(2, "the first attempt never committed and was replayed");
+        (await host.OutboxOfBAsync()).ShouldHaveSingleItem("the committed attempt published once, in the delivery's store")
+            .EventType.ShouldBe(typeof(SecondModuleEvent).AssemblyQualifiedName);
+        (await host.OutboxOfAAsync()).ShouldBeEmpty();
+    }
+
     [DockerRequiredFact]
     public async Task InsideADelivery_PublishOptionsStoreNamingAnotherStore_IsRefusedAndNothingIsEnlisted()
     {
@@ -161,11 +183,14 @@ public sealed class TwoStoresTests(PostgreSqlFixture fixture)
 
         public TwoStoresRecorder Recorder => Provider.GetRequiredService<TwoStoresRecorder>();
 
+        public CommitFaultInjector FaultsOfB => Provider.GetRequiredService<CommitFaultInjector>();
+
         public static async Task<TwoStoreHost> CreateAsync(
             string server,
             bool bindSecondModule = true,
             bool handleSecondModule = false,
-            bool bindThisAssemblyToBoth = false)
+            bool bindThisAssemblyToBoth = false,
+            bool retryingB = false)
         {
             var a = await StoreDatabase.CreateAsync<TestMessagingDbContext>(server, o => new(o));
             var b = await StoreDatabase.CreateAsync<SecondMessagingDbContext>(server, o => new(o));
@@ -174,7 +199,16 @@ public sealed class TwoStoresTests(PostgreSqlFixture fixture)
             builder.Services.AddSingleton<TwoStoresRecorder>();
             builder.Services.AddSingleton<SecondModuleRecorder>();
             builder.Services.AddDbContext<TestMessagingDbContext>(o => o.UseNpgsql(a.ConnectionString));
-            builder.Services.AddDbContext<SecondMessagingDbContext>(o => o.UseNpgsql(b.ConnectionString));
+            builder.Services.AddSingleton<CommitFaultInjector>();
+            builder.Services.AddDbContext<SecondMessagingDbContext>((sp, o) => o
+                .UseNpgsql(b.ConnectionString, npgsql =>
+                {
+                    if (retryingB)
+                    {
+                        npgsql.ExecutionStrategy(d => new FaultRetryingStrategy(d));
+                    }
+                })
+                .AddInterceptors(sp.GetRequiredService<CommitFaultInjector>()));
             builder.Services.AddMicroKitMessaging(bus =>
             {
                 bus.ServiceName = "tests.two-stores";
