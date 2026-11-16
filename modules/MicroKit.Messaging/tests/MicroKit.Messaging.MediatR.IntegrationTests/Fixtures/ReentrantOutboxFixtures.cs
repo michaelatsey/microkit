@@ -27,40 +27,27 @@ internal sealed record WidgetShipped(Guid WidgetId) : IIntegrationEvent
 
 /// <summary>
 /// The reentrant hop: a notification handler on the post-commit outbox path publishes an
-/// integration event, which is staged as a <see cref="MessageKind.Contract"/> row and makes a
+/// integration event, which is enlisted as a <see cref="MessageKind.Contract"/> row and makes a
 /// second pass through the same queue.
 /// </summary>
 /// <remarks>
-/// It opens its own transaction through <c>ITransactionalContext.ExecuteAsync</c>, which is the
-/// documented call site: <c>IUnitOfWork.CommitAsync</c> alone runs under the provider's implicit
-/// per-call transaction and would be refused by the publisher's guard.
+/// Outbox by enlistment (#188): the bus adds the row to the dispatch scope's <c>DbContext</c>, and
+/// <c>IUnitOfWork.CommitAsync</c> — a plain save, with no transaction of its own — commits it.
 /// </remarks>
 internal sealed class PublishWidgetShippedHandler(
-    IIntegrationEventPublisher publisher,
-    ITransactionalContext transaction,
+    IMessageBus bus,
     IUnitOfWork unitOfWork,
     HandlerInvocationRecorder recorder)
     : INotificationHandler<WidgetShippedNotification>
 {
-    public Task Handle(WidgetShippedNotification notification, CancellationToken cancellationToken)
+    public async Task Handle(WidgetShippedNotification notification, CancellationToken cancellationToken)
     {
         recorder.Record(
             nameof(PublishWidgetShippedHandler),
             notification.DomainEvent.EventId.ToString());
 
-        return transaction.ExecuteAsync(
-            static async (state, token) =>
-            {
-                await state.Publisher.PublishAsync(
-                    new WidgetShipped(state.WidgetId), state.OccurredAt, token);
-
-                await state.UnitOfWork.CommitAsync(token);
-            },
-            (Publisher: publisher,
-             UnitOfWork: unitOfWork,
-             notification.DomainEvent.WidgetId,
-             notification.DomainEvent.OccurredAt),
-            cancellationToken);
+        await bus.PublishAsync(new WidgetShipped(notification.DomainEvent.WidgetId), ct: cancellationToken);
+        await unitOfWork.CommitAsync(cancellationToken);
     }
 }
 

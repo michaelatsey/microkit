@@ -2,6 +2,7 @@ using System.Text;
 using MicroKit.Messaging.Publishing;
 using MicroKit.Messaging.Serialization;
 using MicroKit.Messaging.Registry;
+using MicroKit.Messaging.Stores;
 
 using MessageCtx = MicroKit.Messaging.Execution.ExecutionContext;
 
@@ -88,6 +89,7 @@ namespace MicroKit.Messaging.Processing;
 internal sealed class EnvelopeReceiver(
     IntegrationEventRegistry contracts,
     MessageHandlerRegistry handlers,
+    MessageStoreResolver stores,
     IExecutionScopeFactory executionScopeFactory,
     TimeProvider timeProvider,
     InboxMetrics metrics,
@@ -188,8 +190,6 @@ internal sealed class EnvelopeReceiver(
             .CreateScopeAsync(context, ct)
             .ConfigureAwait(false);
 
-        var writer = ResolveWriter(scope.ServiceProvider);
-
         var added = 0;
         var duplicates = 0;
 
@@ -216,6 +216,8 @@ internal sealed class EnvelopeReceiver(
                 CausationId = causationId,
             };
 
+            // Each consumer's row goes to the store guarding that consumer (#188).
+            var writer = ResolveWriter(scope.ServiceProvider, stores.ForHandler(consumer.HandlerType));
             var result = await writer.AddAsync(row, ct).ConfigureAwait(false);
             metrics.Record(result, consumer.ConsumerType);
 
@@ -285,10 +287,10 @@ internal sealed class EnvelopeReceiver(
     /// simply not reproduce.
     /// </para>
     /// </remarks>
-    private static IInboxWriter ResolveWriter(IServiceProvider serviceProvider)
-        => serviceProvider.GetService<IInboxWriter>()
+    private static IInboxWriter ResolveWriter(IServiceProvider serviceProvider, MessageStoreKey? store)
+        => (store is null ? null : serviceProvider.GetKeyedService<IInboxWriter>(store))
             ?? throw new InboxConfigurationException(
                 $"{nameof(IInboxWriter)} is not registered, so an arriving message cannot be " +
-                "recorded at all. Call AddEfCoreOutbox<TContext>() on the MessagingBuilder — it " +
-                "wires the inbox as well as the outbox. Retrying will not help.");
+                "recorded at all. Configure a store — bus.UseEntityFrameworkOutbox<TContext>() — " +
+                "which is the outbox and the inbox of that DbContext. Retrying will not help.");
 }

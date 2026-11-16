@@ -1,4 +1,5 @@
 using Microsoft.EntityFrameworkCore.Metadata.Builders;
+using Microsoft.EntityFrameworkCore.ChangeTracking;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 
 namespace MicroKit.Messaging.EntityFrameworkCore;
@@ -9,18 +10,8 @@ namespace MicroKit.Messaging.EntityFrameworkCore;
 /// </summary>
 /// <remarks>
 /// <para>
-/// One decision here is a support declaration rather than a mapping preference, and it is stated
-/// on the type for that reason: <c>UX_OutboxMessages_Origin_ContractName</c>, unique over
-/// (<see cref="OutboxMessage.OriginMessageId"/>, <see cref="OutboxMessage.ContractName"/>), is
-/// <b>supported on PostgreSQL and SQLite and NOT supported on SQL Server</b>.
-/// </para>
-/// <para>
-/// Every <see cref="MessageKind.Notification"/> row carries <see langword="null"/> in both columns.
-/// PostgreSQL and SQLite treat nulls as distinct in a unique index, so unlimited such rows coexist;
-/// SQL Server treats them as equal, so the <b>second</b> notification row ever written is rejected
-/// — in production, on the second insert, never at DDL time. The index carries a model invariant
-/// rather than a performance hint, so it cannot be dropped to make an unsupported provider work.
-/// See <see cref="ModelBuilderExtensions.ApplyMessagingConfiguration"/> and the module CHANGELOG.
+/// <see cref="OutboxMessage.Headers"/> is stored as one JSON object in a text column; the other
+/// columns map one to one. The host owns the migrations: none is shipped.
 /// </para>
 /// </remarks>
 public sealed class OutboxMessageConfiguration : IEntityTypeConfiguration<OutboxMessage>
@@ -62,10 +53,18 @@ public sealed class OutboxMessageConfiguration : IEntityTypeConfiguration<Outbox
         builder.Property(m => m.Source)
             .HasMaxLength(256);
 
-        builder.Property(m => m.OriginMessageId)
-            .HasConversion(new ValueConverter<MessageId?, Guid?>(
-                v => v == null ? null : v.Value,
-                v => v == null ? null : new MessageId(v.Value)));
+        // The publication's own headers, as one JSON object. A value comparer is required: without
+        // it EF compares the dictionary by reference and would never see a change to its contents.
+        builder.Property(m => m.Headers)
+            .HasConversion(
+                v => HeadersJson.Write(v),
+                v => HeadersJson.Read(v),
+                new ValueComparer<IReadOnlyDictionary<string, string>?>(
+                    (a, b) => a == null ? b == null : b != null && a.Count == b.Count && !a.Except(b).Any(),
+                    // Order-independent, like the equality: a dictionary read back from JSON and
+                    // one built in another order are equal and must hash alike.
+                    v => v == null ? 0 : v.Aggregate(0, (h, kv) => h ^ HashCode.Combine(kv.Key, kv.Value)),
+                    v => v == null ? null : new Dictionary<string, string>(v, StringComparer.Ordinal)));
 
         builder.Property(m => m.EventType)
             .IsRequired()
@@ -136,41 +135,6 @@ public sealed class OutboxMessageConfiguration : IEntityTypeConfiguration<Outbox
         // by ad-hoc operator queries.
         builder.HasIndex(m => new { m.Status, m.NextRetryAtUtc, m.LockedUntilUtc })
             .HasDatabaseName("IX_OutboxMessages_Status_NextRetryAt_LockedUntil");
-
-        // The replay natural key. A redelivered dispatch re-runs its handlers, which publish the
-        // same contract from the same origin row — so the second write collides here instead of
-        // producing a duplicate integration message.
-        //
-        // UNFILTERED, and that is a support declaration rather than an oversight. A notification
-        // row has both columns null, and unlimited such rows must coexist:
-        //
-        //   PostgreSQL  nulls are DISTINCT in a unique index (NULLS NOT DISTINCT is opt-in,
-        //               PG15+, and is not used here)              -> supported
-        //   SQLite      same rule, explicitly documented           -> supported
-        //   SQL Server  nulls compare EQUAL, so the SECOND notification row ever written is
-        //               rejected                                   -> NOT SUPPORTED
-        //
-        // SQL Server is not supported for this constraint. The remedy there is a filtered index
-        // (WHERE both columns IS NOT NULL), which cannot live here: HasFilter takes provider-
-        // specific SQL and this is the provider-neutral package. Unlike the size-oriented partial
-        // indexes noted above, this one carries a model invariant, so it is declared rather than
-        // left to a consumer to reconstruct. See the README and CHANGELOG.
-        //
-        // Note what the null semantics also mean: a NULL on either side is DISTINCT, so a contract
-        // row staged outside a dispatch (no origin row) does not deduplicate. That is the intended
-        // scope — the key guards the replay path, where an origin row always exists.
-        //
-        // The collision is absorbed by EfIntegrationEventWriter.AddAsync, which owns the INSERT for
-        // exactly this reason: the answer has to reach IIntegrationEventPublisher before it returns,
-        // or the violation surfaces out of the caller's own CommitAsync where nothing can absorb it.
-        // It takes a savepoint first — on PostgreSQL a unique violation aborts the whole
-        // transaction, not just the statement, so a bare catch would leave the caller's transaction
-        // dead, including the verification query inside the catch block itself. The 24-character
-        // savepoint-name cap is kept there although SQL Server, the provider it exists for, is not
-        // supported by this index.
-        builder.HasIndex(m => new { m.OriginMessageId, m.ContractName })
-            .IsUnique()
-            .HasDatabaseName("UX_OutboxMessages_Origin_ContractName");
 
         // Cleanup index: DeleteProcessedAsync filter on (TenantId, ProcessedAtUtc).
         builder.HasIndex(m => new { m.TenantId, m.ProcessedAtUtc })

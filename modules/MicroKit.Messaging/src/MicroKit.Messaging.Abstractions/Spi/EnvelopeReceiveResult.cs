@@ -22,8 +22,7 @@ namespace MicroKit.Messaging.Spi;
 /// than warn.
 /// </para>
 /// <para>
-/// Shaped like <see cref="IntegrationEventWriteResult"/> — private constructor, get-only members,
-/// a static factory — deliberately, and <b>not</b> as a positional record. The freeze on
+/// Shaped with a private constructor, get-only members and a static factory — deliberately, and <b>not</b> as a positional record. The freeze on
 /// <see cref="MessageEnvelope"/>'s primary constructor exists because a provider <i>constructs</i>
 /// one; this type travels the other way, built by <c>MicroKit.Messaging</c> and read by a provider,
 /// so a private constructor lets it gain a member later without a source or binary break at any

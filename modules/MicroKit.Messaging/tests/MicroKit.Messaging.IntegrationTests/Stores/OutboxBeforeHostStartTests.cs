@@ -26,8 +26,7 @@ public sealed class OutboxBeforeHostStartTests
             bus.ServiceName = "tests.outbox-before-start";
             bus.Publishes<StagedBeforeStart>();
             bus.AddHandler<StagedBeforeStartHandler>();
-            bus.AddEfCoreOutbox<TestMessagingDbContext>();
-            bus.AddEfCoreIntegrationEvents<TestMessagingDbContext>();
+            bus.UseEntityFrameworkOutbox<TestMessagingDbContext>();
             bus.UseInMemoryTransport();
             bus.Configure(o =>
             {
@@ -43,10 +42,10 @@ public sealed class OutboxBeforeHostStartTests
             var context = scope.ServiceProvider.GetRequiredService<TestMessagingDbContext>();
             await context.Database.EnsureCreatedAsync();
 
-            await using var transaction = await context.Database.BeginTransactionAsync();
-            await scope.ServiceProvider.GetRequiredService<IIntegrationEventPublisher>()
+            // Outbox by enlistment (#188): the bus adds the row, the caller's save commits it.
+            await scope.ServiceProvider.GetRequiredService<IMessageBus>()
                 .PublishAsync(new StagedBeforeStart(id));
-            await transaction.CommitAsync();
+            await context.SaveChangesAsync();
         }
 
         await host.StartAsync();

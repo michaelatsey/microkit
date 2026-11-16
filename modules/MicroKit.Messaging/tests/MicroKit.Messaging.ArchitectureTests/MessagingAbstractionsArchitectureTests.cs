@@ -320,82 +320,33 @@ public sealed class MessagingAbstractionsArchitectureTests
     // Topology seam (ADR-MSG-002)
     // ---------------------------------------------------------------------------
 
-    [Fact]
-    public void Core_DependsOnSharedDbOutboxCoordinator_OnlyThroughIOutboxCoordinator()
-    {
-        // A second topology must be addable without editing the engine, which is only possible
-        // while nothing inside Core reaches for the shared-DB implementation by name. The
-        // composition root necessarily does — that is what a composition root is — and the type may
-        // of course refer to itself.
-        //
-        // ADR-MSG-002 made this promise about a per-tenant coordinator in a separate
-        // MicroKit.Messaging.Multitenancy package, and #185 superseded that: IOutboxCoordinator is
-        // now internal to Core, because the database-per-tenant requirement it served is tracked by
-        // #191 as a generic multi-store engine IN Core rather than a coordinator outside it. The
-        // decoupling this test enforces is what #191 will build on, so the rule outlives the
-        // package it was written for.
-        //
-        // Name-based rather than typeof(): SharedDbOutboxCoordinator is internal and this project
-        // has no InternalsVisibleTo, which is itself part of the point — and since #185 the same is
-        // true of IOutboxCoordinator.
-        const string Coordinator = "MicroKit.Messaging.Processing.SharedDbOutboxCoordinator";
-
-        var permitted = new[]
-        {
-            Coordinator,
-            "MicroKit.Messaging.ServiceCollectionExtensions",
-            // Since #186 the outbox and inbox engine is registered by the store provider through
-            // this SPI seam, not by AddMicroKitMessaging(): it is the composition root now.
-            "MicroKit.Messaging.Spi.OutboxInboxProcessingExtensions",
-        };
-
-        var offenders = Types.InAssembly(CoreAssembly)
-            .That()
-            .HaveDependencyOn(Coordinator)
-            .GetTypes()
-            .Where(t => !permitted.Contains(t.FullName, StringComparer.Ordinal))
-            .Select(t => t.FullName)
-            .ToList();
-
-        offenders.ShouldBeEmpty(
-            "only the composition root may name SharedDbOutboxCoordinator; everything else must " +
-            "depend on IOutboxCoordinator, or a second topology cannot be added without " +
-            "editing the engine (ADR-MSG-002, superseded by #185; the multi-store engine " +
-            "is #191)");
-    }
-
     /// <summary>
-    /// The inbox twin of the test above. <c>SharedDbInboxCoordinator</c> carried the same
-    /// ADR-MSG-002 promise in its doc comment from the beginning but had no guard behind it, so
-    /// the promise was enforceable on one side of the module and merely stated on the other.
+    /// The successor of the two coordinator rules (#188): the engine iterates stores through
+    /// <see cref="IMessageStoreSet"/>, and only the composition root names the static set, so #191
+    /// can put a dynamic set behind the same SPI without editing the engine.
     /// </summary>
     [Fact]
-    public void Core_DependsOnSharedDbInboxCoordinator_OnlyThroughIInboxCoordinator()
+    public void Core_DependsOnTheStaticStoreSet_OnlyThroughIMessageStoreSet()
     {
-        const string Coordinator = "MicroKit.Messaging.Processing.SharedDbInboxCoordinator";
+        // Name-based: the static set is internal and this project has no InternalsVisibleTo.
+        const string StaticSet = "MicroKit.Messaging.Stores.StaticMessageStoreSet";
 
-        var permitted = new[]
-        {
-            Coordinator,
-            "MicroKit.Messaging.ServiceCollectionExtensions",
-            // Since #186 the outbox and inbox engine is registered by the store provider through
-            // this SPI seam, not by AddMicroKitMessaging(): it is the composition root now.
-            "MicroKit.Messaging.Spi.OutboxInboxProcessingExtensions",
-        };
+        Types.InAssembly(CoreAssembly).GetTypes()
+            .ShouldContain(t => t.FullName == StaticSet, "CONTROL: the rule names a type that exists");
+
+        var permitted = new[] { StaticSet, "MicroKit.Messaging.ServiceCollectionExtensions" };
 
         var offenders = Types.InAssembly(CoreAssembly)
             .That()
-            .HaveDependencyOn(Coordinator)
+            .HaveDependencyOn(StaticSet)
             .GetTypes()
             .Where(t => !permitted.Contains(t.FullName, StringComparer.Ordinal))
             .Select(t => t.FullName)
             .ToList();
 
         offenders.ShouldBeEmpty(
-            "only the composition root may name SharedDbInboxCoordinator; everything else must " +
-            "depend on IInboxCoordinator, or a second topology cannot be added without " +
-            "editing the engine (ADR-MSG-002, superseded by #185; the multi-store engine " +
-            "is #191)");
+            "only the composition root may name StaticMessageStoreSet; the engine iterates stores " +
+            "through IMessageStoreSet, or the dynamic set of #191 cannot replace it");
     }
 
     // ---------------------------------------------------------------------------

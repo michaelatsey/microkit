@@ -3,6 +3,8 @@
 #pragma warning disable CA2012
 namespace MicroKit.Messaging.MediatR.UnitTests;
 
+using MicroKit.Messaging.Stores;
+
 /// <summary>
 /// The glue's contribution to domain-event dispatch: P3 (notification mapping) and P4 (batched
 /// outbox write). P1 (drain) and P2 (handler dispatch) belong to the core orchestrator and are
@@ -28,8 +30,20 @@ public sealed class OutboxDomainEventSinkTests
         _serializer.ContentType.Returns("application/json");
         _serializer.Serialize(Arg.Any<object>(), Arg.Any<Type>())
             .Returns((ReadOnlyMemory<byte>)"{}"u8.ToArray());
+        // One store, whose writer is the substitute (#188: the sink enlists in the store D3 picks).
+        var store = new MessageStoreKey("tests:sink-store");
+        var composition = new MessagingComposition();
+        composition.GetOrAddStore(store, out _);
+        var services = Substitute.For<IServiceProvider, Microsoft.Extensions.DependencyInjection.IKeyedServiceProvider>();
+        ((Microsoft.Extensions.DependencyInjection.IKeyedServiceProvider)services).GetRequiredKeyedService(typeof(IOutboxWriter), store).Returns(_outboxWriter);
+
         _sut = new OutboxDomainEventSink(
-            _factory, new OutboxMessageFactory(_serializer, TimeProvider.System), _outboxWriter, _ctx);
+            _factory,
+            new OutboxMessageFactory(_serializer, TimeProvider.System),
+            new MessageStoreResolver(composition, new MicroKit.Messaging.Stores.StaticMessageStoreSet(composition)),
+            new DeliveryStoreHolder(),
+            services,
+            _ctx);
     }
 
     [Fact]

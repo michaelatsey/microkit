@@ -1,0 +1,16 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!-- A second assembly for the multi-store tests (#188): a store is bound to an assembly, so two
+       stores with distinct bindings need the handlers and message types of two assemblies. -->
+  <PropertyGroup>
+    <AssemblyName>MicroKit.Messaging.IntegrationTests.SecondModule</AssemblyName>
+    <RootNamespace>MicroKit.Messaging.IntegrationTests.SecondModule</RootNamespace>
+    <IsPackable>false</IsPackable>
+    <IsTestProject>false</IsTestProject>
+    <GenerateDocumentationFile>false</GenerateDocumentationFile>
+    <NoWarn>CS1591;CA1707</NoWarn>
+  </PropertyGroup>
+  <ItemGroup>
+    <!-- Same-module, IsPackable=false — unconditional ProjectReference -->
+    <ProjectReference Include="../../src/MicroKit.Messaging.Abstractions/MicroKit.Messaging.Abstractions.csproj" />
+  </ItemGroup>
+</Project>

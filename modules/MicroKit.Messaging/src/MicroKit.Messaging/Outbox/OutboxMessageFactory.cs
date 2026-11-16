@@ -1,6 +1,5 @@
 namespace MicroKit.Messaging.Outbox;
 
-using System.Diagnostics;
 using System.Text;
 using MicroKit.Messaging.Serialization;
 
@@ -11,10 +10,9 @@ using MicroKit.Messaging.Serialization;
 /// <remarks>
 /// <para>
 /// Two methods rather than one with a <see cref="MessageKind"/> parameter: the two paths agree on
-/// almost nothing. A notification's identity is supplied by the caller and a contract's is
-/// generated; a notification's occurrence time is intrinsic and required while a contract's is
-/// optional; and only a contract carries a contract name, a source, an origin and a trace parent.
-/// One method with every parameter, half ignored per call, hides which are meaningful.
+/// almost nothing. A notification's identity and occurrence time are intrinsic to its domain event
+/// and its metadata comes from the scope; a contract's are those the bus already put on the
+/// publication, and only a contract carries a contract name, a source, headers and a trace parent.
 /// </para>
 /// <para>
 /// Both set <see cref="OutboxMessage.MessageKind"/> explicitly. <c>Notification</c> is the enum's
@@ -31,9 +29,8 @@ using MicroKit.Messaging.Serialization;
 /// argument.</param>
 /// <param name="timeProvider">
 /// Supplies the staging time. Injected rather than read from <see cref="DateTimeOffset.UtcNow"/> so
-/// that <c>CreatedAtUtc</c> — which the claim orders on — and the occurrence time substituted for an
-/// unsupplied <c>occurredOnUtc</c> are both assertable against exact values in tests rather than
-/// approximated with a tolerance.
+/// that <c>CreatedAtUtc</c> — which the claim orders on — is assertable against exact values in
+/// tests rather than approximated with a tolerance.
 /// </param>
 internal sealed class OutboxMessageFactory(IMessageSerializer serializer, TimeProvider timeProvider)
 {
@@ -59,8 +56,8 @@ internal sealed class OutboxMessageFactory(IMessageSerializer serializer, TimePr
     /// </param>
     /// <returns>
     /// A pending <see cref="MessageKind.Notification"/> row. It carries no
-    /// <see cref="OutboxMessage.ContractName"/>, <see cref="OutboxMessage.Source"/> or
-    /// <see cref="OutboxMessage.OriginMessageId"/>: a notification never leaves the process, so it
+    /// <see cref="OutboxMessage.ContractName"/> or <see cref="OutboxMessage.Source"/>: a
+    /// notification never leaves the process, so it
     /// has no wire identity and no emitter to declare.
     /// </returns>
     public OutboxMessage CreateNotification(
@@ -90,96 +87,64 @@ internal sealed class OutboxMessageFactory(IMessageSerializer serializer, TimePr
 
     /// <summary>
     /// Creates a <see cref="MessageKind.Contract"/> row — an integration event bound for a
-    /// transport.
+    /// transport — from a publication the bus has already addressed and headed.
     /// </summary>
     /// <param name="payload">The integration event. Business payload only.</param>
-    /// <param name="contractName">
-    /// The wire contract name from <see cref="MessageContractAttribute"/>, e.g.
-    /// <c>saasbtp.safety.constat-recorded.v1</c>.
-    /// </param>
-    /// <param name="source">The emitting module, e.g. <c>/saasbtp/safety</c>.</param>
-    /// <param name="originMessageId">
-    /// The outbox row whose dispatch produced this one, or <see langword="null"/> when publishing
-    /// outside a dispatch. Half of the replay key; see <see cref="OutboxMessage.OriginMessageId"/>.
-    /// </param>
-    /// <param name="occurredOnUtc">
-    /// When the underlying fact happened, if the caller knows.
-    /// </param>
-    /// <param name="context">
-    /// The ambient execution context supplying <c>TenantId</c>, <c>CorrelationId</c> and
-    /// <c>CausationId</c>.
+    /// <param name="messageId">The publication's identifier, the one the caller is returned.</param>
+    /// <param name="contractName">The wire type, e.g. <c>saasbtp.safety.constat-recorded.v1</c>.</param>
+    /// <param name="source">The emitting service.</param>
+    /// <param name="occurredOnUtc">The publication instant, the envelope's <c>Time</c>.</param>
+    /// <param name="headers">
+    /// The envelope headers the bus built: the reserved ones become the row's columns, the others
+    /// its <see cref="OutboxMessage.Headers"/>.
     /// </param>
     /// <returns>A pending <see cref="MessageKind.Contract"/> row.</returns>
     /// <remarks>
-    /// <para>
-    /// <b><paramref name="occurredOnUtc"/> is resolved here, not deferred.</b>
-    /// <see cref="OutboxMessage.OccurredOnUtc"/> and <see cref="MessageEnvelope.Time"/> are
-    /// both non-nullable, so "not stated" cannot survive onto the row: null becomes the staging
-    /// time. That is the same fallback the transport would otherwise apply, moved one step earlier
-    /// and made visible — the publisher logs when it happens, which is the only remaining trace of
-    /// the distinction.
-    /// </para>
-    /// <para>
-    /// <b>The trace parent is captured here and only for contracts.</b> This is the last moment the
-    /// producing trace is current: the relay runs later, on another thread, under another activity.
-    /// A notification row is fanned out in this same process and has no wire to carry a trace onto,
-    /// so it is not captured there.
-    /// </para>
+    /// The reserved headers are read back from what the bus wrote, never from the scope again, so
+    /// the row carries exactly what a direct send would have put on the envelope — the trace parent
+    /// included, captured while the producing trace is current.
     /// </remarks>
     public OutboxMessage CreateContract(
         object payload,
+        MessageId messageId,
         string contractName,
         string source,
-        MessageId? originMessageId,
-        DateTimeOffset? occurredOnUtc,
-        IExecutionContext context)
+        DateTimeOffset occurredOnUtc,
+        IReadOnlyDictionary<string, string> headers)
     {
         ArgumentNullException.ThrowIfNull(payload);
+        ArgumentNullException.ThrowIfNull(messageId);
         ArgumentException.ThrowIfNullOrWhiteSpace(contractName);
         ArgumentException.ThrowIfNullOrWhiteSpace(source);
-        ArgumentNullException.ThrowIfNull(context);
+        ArgumentNullException.ThrowIfNull(headers);
 
-        var createdAtUtc = timeProvider.GetUtcNow();
+        var extra = headers
+            .Where(h => !MessageHeaders.IsReserved(h.Key))
+            .ToDictionary(h => h.Key, h => h.Value, StringComparer.Ordinal);
 
         return new OutboxMessage
         {
-            Id = MessageId.New(),
+            Id = messageId,
             MessageKind = MessageKind.Contract,
             ContractName = contractName,
             Source = source,
-            OriginMessageId = originMessageId,
 
             // The local deserialization key. It never travels — a receiving process cannot resolve
-            // an assembly-qualified name — but the column is required and a row staged in a
-            // modular monolith may still be read locally.
+            // an assembly-qualified name — but the column is required.
             EventType = payload.GetType().AssemblyQualifiedName!,
             Payload = SerializeAsText(payload),
-
-            TenantId = context.TenantId,   // null pass-through — ADR-MSG-008 §5
-            CorrelationId = ResolveCorrelation(context),
-            CausationId = ResolveCausation(context),
-            TraceParent = Activity.Current?.Id,
-
-            CreatedAtUtc = createdAtUtc,
-            OccurredOnUtc = occurredOnUtc ?? createdAtUtc,
-
+            TenantId = headers.GetValueOrDefault(MessageHeaders.TenantId),
+            CorrelationId = ResolveCorrelation(headers.GetValueOrDefault(MessageHeaders.CorrelationId)),
+            CausationId = ResolveCausation(headers.GetValueOrDefault(MessageHeaders.CausationId)),
+            TraceParent = headers.GetValueOrDefault(MessageHeaders.TraceParent),
+            Headers = extra.Count == 0 ? null : extra,
+            CreatedAtUtc = timeProvider.GetUtcNow(),
+            OccurredOnUtc = occurredOnUtc,
             Status = OutboxMessageStatus.Pending,
             RetryCount = 0,
         };
     }
 
-    /// <summary>
-    /// Serializes <paramref name="payload"/> as its runtime type, into the row's text column.
-    /// </summary>
-    /// <remarks>
-    /// The serializer works on bytes since #186; the outbox row keeps a string, so the bytes are
-    /// read as UTF-8 JSON — the content type the dispatcher declares when it sends the row. A
-    /// serializer of any other content type is refused here, loudly, rather than decoded as UTF-8:
-    /// a binary body would be corrupted in the row and then sent labelled as JSON.
-    /// </remarks>
-    /// <exception cref="OutboxConfigurationException">
-    /// The registered serializer does not produce <c>application/json</c>.
-    /// </exception>
     private string SerializeAsText(object payload)
     {
         if (!SystemTextJsonMessageSerializer.IsJson(serializer.ContentType))
@@ -203,13 +168,19 @@ internal sealed class OutboxMessageFactory(IMessageSerializer serializer, TimePr
     /// message, which is what writing null would cost.
     /// </remarks>
     private static CorrelationId ResolveCorrelation(IExecutionContext context)
-        => Guid.TryParse(context.CorrelationId, out var correlation)
+        => ResolveCorrelation(context.CorrelationId);
+
+    private static CorrelationId ResolveCorrelation(string? correlationId)
+        => Guid.TryParse(correlationId, out var correlation)
             ? CorrelationId.From(correlation)
             : CorrelationId.New();
 
     /// <summary>Rebuilds the causation, which legitimately has no value on a root event.</summary>
     private static CausationId? ResolveCausation(IExecutionContext context)
-        => Guid.TryParse(context.CausationId, out var causation)
+        => ResolveCausation(context.CausationId);
+
+    private static CausationId? ResolveCausation(string? causationId)
+        => Guid.TryParse(causationId, out var causation)
             ? CausationId.From(causation)
             : null;
 }

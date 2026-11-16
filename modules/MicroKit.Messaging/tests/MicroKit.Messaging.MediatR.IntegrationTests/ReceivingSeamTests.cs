@@ -238,7 +238,6 @@ public sealed class ReceivingSeamTests
             messaging.Publishes<WidgetShipped>();
 
             messaging
-                .AddEfCoreIntegrationEvents<E2EDbContext>()
                 .AddTransportDispatcher()
                 .AddHandler<FirstWidgetShippedConsumer>()
                 .AddHandler<SecondWidgetShippedConsumer>();

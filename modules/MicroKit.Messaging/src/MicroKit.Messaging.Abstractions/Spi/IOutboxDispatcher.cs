@@ -28,8 +28,8 @@ namespace MicroKit.Messaging.Spi;
 /// <b>A broker provider does not implement this seam.</b> It implements
 /// <see cref="IMessageTransport"/> and registers it from its own <c>Add{Provider}Transport()</c>
 /// extension; <c>TransportOutboxDispatcher</c> is what feeds it. Nothing about either seam is a
-/// hosted service — <c>OutboxWorker</c> is the only hosted service on the outbox path, and it is
-/// internal.
+/// hosted service — the store engine, which runs one outbox loop per store, is the only hosted
+/// service on the outbox path, and it is internal.
 /// </para>
 /// <para>
 /// <b>Registration uses two slots, and the split is the contract.</b> Implementations are

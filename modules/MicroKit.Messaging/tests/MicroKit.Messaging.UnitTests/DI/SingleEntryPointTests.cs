@@ -135,19 +135,27 @@ public sealed class SingleEntryPointTests
         ex.Message.ShouldContain("bus.UseInMemoryTransport()");
     }
 
-    [Theory]
-    [InlineData(typeof(IOutboxProcessorStore), "An IOutboxProcessorStore is registered, but the outbox engine is not")]
-    [InlineData(typeof(IInboxProcessorStore), "An IInboxProcessorStore is registered, but the inbox engine is not")]
-    public async Task AStoreWithoutItsWorker_FailsAtHostStart(Type store, string expected)
+    /// <summary>
+    /// A store whose provider registered none of the services the engine resolves under its key
+    /// fails at start, naming every missing one (#188 D12).
+    /// </summary>
+    [Fact]
+    public async Task AStoreMissingItsServices_FailsAtHostStart()
     {
         using var host = BuildHost(
-            bus => bus.ServiceName = "svc",
-            services => services.AddScoped(store, _ => Substitute.For([store], [])));
+            bus =>
+            {
+                bus.ServiceName = "svc";
+                bus.AddMessageStore(new MessageStoreKey("tests:incomplete"), _ => { });
+            },
+            _ => { });
 
         var ex = await Should.ThrowAsync<IntegrationEventConfigurationException>(() => host.StartAsync());
 
-        ex.Message.ShouldContain(expected);
-        ex.Message.ShouldContain("AddOutboxInboxProcessing()");
+        ex.Message.ShouldContain(
+            "Store 'tests:incomplete' is configured, but IOutboxWriter, IOutboxProcessorStore, " +
+            "IOutboxRetentionStore, IInboxWriter, IInboxProcessorStore, IInboxSettlementStore, " +
+            "IInboxRetentionStore are not registered under its key");
     }
 
     [Fact]
@@ -158,30 +166,32 @@ public sealed class SingleEntryPointTests
             {
                 bus.ServiceName = "svc";
                 bus.Publishes<Uncontracted>();
+                bus.AddMessageStore(new MessageStoreKey("tests:incomplete"), _ => { });
             },
-            services => services.AddScoped(_ => Substitute.For<IInboxProcessorStore>()));
+            _ => { });
 
         var ex = await Should.ThrowAsync<IntegrationEventConfigurationException>(() => host.StartAsync());
 
         ex.Message.ShouldContain("(3 problems)");
         ex.Message.ShouldContain("has no [MessageContract]");
         ex.Message.ShouldContain("no IMessageTransport is registered");
-        ex.Message.ShouldContain("An IInboxProcessorStore is registered");
+        ex.Message.ShouldContain("Store 'tests:incomplete' is configured");
     }
 
     /// <summary>
     /// The validator runs before the in-memory transport binds its endpoint: an invalid
     /// composition binds nothing. The problem chosen is one the registry cannot see — a store
-    /// without its engine — so only the validator's position can keep the endpoint unbound.
+    /// missing its services — so only the validator's position can keep the endpoint unbound.
     /// </summary>
     [Fact]
     public async Task AnInvalidComposition_BindsNoEndpoint()
     {
         var broker = new InMemoryBroker();
         await using var invalid = BusTestHost.Build(
-            bus => bus.AddHandler<FirstOrderPlacedHandler>(),
+            bus => bus.AddHandler<FirstOrderPlacedHandler>()
+                .AddMessageStore(new MessageStoreKey("tests:incomplete"), _ => { }),
             broker,
-            services => services.AddScoped(_ => Substitute.For<IOutboxProcessorStore>()),
+            null,
             "svc.invalid",
             out _);
 
@@ -189,7 +199,7 @@ public sealed class SingleEntryPointTests
 
         broker.EndpointsBoundTo("tests.bus.order-placed.v1").ShouldBeEmpty();
 
-        // CONTROL: the same composition without the stray store binds its endpoint.
+        // CONTROL: the same composition without the incomplete store binds its endpoint.
         await using var valid = await BusTestHost.StartAsync(
             bus => bus.AddHandler<FirstOrderPlacedHandler>(), broker, serviceName: "svc.valid");
         broker.EndpointsBoundTo("tests.bus.order-placed.v1").ShouldBe(["svc.valid"]);
@@ -204,48 +214,17 @@ public sealed class SingleEntryPointTests
     {
         var broker = new InMemoryBroker();
         await using var invalid = BusTestHost.Build(
-            bus => bus.AddHandler<FirstOrderPlacedHandler>(),
+            bus => bus.AddHandler<FirstOrderPlacedHandler>()
+                .AddMessageStore(new MessageStoreKey("tests:incomplete"), _ => { }),
             broker,
             services => services
-                .Configure<HostOptions>(o => o.ServicesStartConcurrently = true)
-                .AddScoped(_ => Substitute.For<IOutboxProcessorStore>()),
+                .Configure<HostOptions>(o => o.ServicesStartConcurrently = true),
             "svc.concurrent",
             out _);
 
         await Should.ThrowAsync<Exception>(() => invalid.StartHostAsync());
 
         broker.EndpointsBoundTo("tests.bus.order-placed.v1").ShouldBeEmpty();
-    }
-
-    [Fact]
-    public async Task AnOutboxPublisherWithNoTransportDispatcher_FailsAtHostStart()
-    {
-        using var host = BuildHost(
-            bus =>
-            {
-                bus.ServiceName = "svc";
-                bus.Services.AddSingleton(Substitute.For<IMessageTransport>());
-            },
-            services => services.AddScoped(_ => Substitute.For<IIntegrationEventPublisher>()));
-
-        var ex = await Should.ThrowAsync<IntegrationEventConfigurationException>(() => host.StartAsync());
-
-        ex.Message.ShouldContain("IIntegrationEventPublisher stages publications in the outbox, but no transport dispatcher is registered");
-    }
-
-    [Fact]
-    public async Task AnOutboxPublisherWithTheInMemoryTransport_PassesTheDispatcherCheck()
-    {
-        using var host = BuildHost(
-            bus =>
-            {
-                bus.ServiceName = "svc";
-                bus.UseInMemoryTransport();
-            },
-            services => services.AddScoped(_ => Substitute.For<IIntegrationEventPublisher>()));
-
-        await host.StartAsync();
-        await host.StopAsync();
     }
 
     // ── Options from configuration ───────────────────────────────────────────────────────────

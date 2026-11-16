@@ -21,6 +21,8 @@ using MicroKit.Messaging.UnitTests.Publishing;
 /// </remarks>
 public sealed class EnvelopeReceiverTests
 {
+    private static readonly MessageStoreKey Store = new("tests:inbox-store");
+
     private const string ContractName = "partner.billing.invoice-settled.v1";
     private const string Source = "/partner/billing";
     private const string ConsumerA = "MicroKit.Messaging.UnitTests.Processing.EnvelopeReceiverTests+FirstConsumer";
@@ -311,15 +313,15 @@ public sealed class EnvelopeReceiverTests
     [Fact]
     public async Task ReceiveAsync_WhenTheInboxWriterIsNotRegistered_FailsAsAConfigurationFault()
     {
-        // A host that composed contracts but never called AddEfCoreOutbox<TContext>(). Typed, so a
-        // provider does not nack forever against a defect no redelivery can fix.
+        // A store whose inbox writer is missing. Typed, so a provider does not nack forever against
+        // a defect no redelivery can fix.
         var harness = Harness.Build(consumers: 1, registerWriter: false);
 
         var ex = await Should.ThrowAsync<InboxConfigurationException>(
             async () => await harness.Receiver.ReceiveAsync(Envelope()));
 
         ex.Message.ShouldContain(nameof(IInboxWriter));
-        ex.Message.ShouldContain("AddEfCoreOutbox");
+        ex.Message.ShouldContain("UseEntityFrameworkOutbox");
     }
 
     /// <summary>
@@ -463,11 +465,11 @@ public sealed class EnvelopeReceiverTests
                 // REGISTERED, and unactivatable — the shape a tenant-aware scope produces when it
                 // cannot resolve a connection for the envelope's tenant. Distinct from
                 // registerWriter: false, which is the absent-registration case.
-                services.AddScoped<IInboxWriter>(_ => throw writerActivationFailure);
+                services.AddKeyedScoped<IInboxWriter>(Store, (_, _) => throw writerActivationFailure);
             }
             else if (registerWriter)
             {
-                services.AddScoped<IInboxWriter>(_ => writer);
+                services.AddKeyedScoped<IInboxWriter>(Store, (_, _) => writer);
             }
 
             var provider = services.BuildServiceProvider();
@@ -491,9 +493,14 @@ public sealed class EnvelopeReceiverTests
 
             var logs = new CapturingLogger<EnvelopeReceiver>();
 
+            // One store, so every consumer's row goes to it (#188).
+            var composition = new MessagingComposition();
+            composition.GetOrAddStore(Store, out _);
+
             var receiver = new EnvelopeReceiver(
                 contracts,
                 handlers,
+                new MicroKit.Messaging.Stores.MessageStoreResolver(composition, new MicroKit.Messaging.Stores.StaticMessageStoreSet(composition)),
                 scopes,
                 new FakeTimeProvider(ReceivedAt),
                 new InboxMetrics(),

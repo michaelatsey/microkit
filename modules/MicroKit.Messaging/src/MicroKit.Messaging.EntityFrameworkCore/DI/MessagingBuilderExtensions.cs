@@ -1,138 +1,136 @@
 namespace MicroKit.Messaging.EntityFrameworkCore;
 
-using MicroKit.Messaging.Publishing;
+using Microsoft.EntityFrameworkCore.Metadata;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 
-/// <summary>
-/// Extension methods on <see cref="MessagingBuilder"/> for wiring EF Core outbox/inbox stores.
-/// </summary>
+/// <summary>Extension methods on <see cref="MessagingBuilder"/> for the EF Core store.</summary>
 public static class MessagingBuilderExtensions
 {
     /// <summary>
-    /// Registers the EF Core persistence adapter for the transactional outbox and inbox.
+    /// Makes <typeparamref name="TContext"/> a message store: the outbox and the inbox of that
+    /// <see cref="DbContext"/>, drained by the engine with their own loops and back-off.
     /// </summary>
     /// <typeparam name="TContext">
-    /// The application's <see cref="DbContext"/> type. Must have
-    /// <see cref="ModelBuilderExtensions.ApplyMessagingConfiguration"/> called in
-    /// <c>OnModelCreating</c>.
+    /// The application's <see cref="DbContext"/>. Its model must call
+    /// <see cref="ModelBuilderExtensions.ApplyMessagingConfiguration"/>, and the host owns its
+    /// migrations: none is shipped.
     /// </typeparam>
-    /// <param name="builder">The <see cref="MessagingBuilder"/> handed to
-    /// <c>AddMicroKitMessaging(bus => ...)</c>.</param>
-    /// <returns>The same <paramref name="builder"/> for chaining.</returns>
+    /// <param name="builder">The builder handed to <c>AddMicroKitMessaging(bus =&gt; ...)</c>.</param>
+    /// <param name="configure">Binds assemblies to the store; needed only with several stores.</param>
+    /// <returns>The same builder, for chaining.</returns>
     /// <remarks>
     /// <para>
-    /// <b>The name is a misnomer: this wires the inbox too.</b> Each store is registered once as
-    /// scoped by concrete type, and every interface resolves to that instance through a factory
-    /// lambda — <see cref="IOutboxWriter"/>, <see cref="IOutboxProcessorStore"/>,
-    /// <see cref="IOutboxAdminStore"/> and <see cref="IOutboxRetentionStore"/> for the outbox;
-    /// <see cref="IInboxWriter"/>, <see cref="IInboxProcessorStore"/>,
-    /// <see cref="IInboxSettlementStore"/>, <see cref="IInboxAdminStore"/> and
-    /// <see cref="IInboxRetentionStore"/> for the inbox. One scope therefore holds one store
-    /// over one <typeparamref name="TContext"/>.
+    /// <b>Outbox by enlistment.</b> Once a store is configured, <see cref="IEventPublisher.PublishAsync{T}"/>
+    /// adds the message to the scope's <typeparamref name="TContext"/> and saves nothing. The
+    /// caller's <c>SaveChanges</c> — whatever owns it — commits the message with the business data;
+    /// there is no open-transaction precondition. A message still unsaved when its scope ends is
+    /// reported at <c>Error</c> (event 4000); one discarded with the change tracker, at <c>Debug</c>
+    /// (event 4001).
     /// </para>
     /// <para>
-    /// That is also what makes inbox settlement transactional. Resolved from the per-message
-    /// execution scope, <see cref="IInboxSettlementStore"/> necessarily shares its
-    /// <typeparamref name="TContext"/> with the handler resolved from the same scope, so the
-    /// staged processed mark commits in the handler's own transaction. <b>Registering either
-    /// store with any lifetime other than scoped breaks that guarantee silently.</b>
+    /// <b>Repeatable, one store per <typeparamref name="TContext"/>.</b> A second call for the same
+    /// type adds to that store. A call for another <see cref="DbContext"/> adds a second store; with
+    /// several, bind each handler's assembly with
+    /// <see cref="EntityFrameworkOutboxBuilder.ForAssemblyContaining{TMarker}"/>, or the host fails
+    /// to start. A message type is bound the same way: a publication outside any delivery whose
+    /// type no binding resolves, and that names no <see cref="PublishOptions.Store"/>, fails at
+    /// publication.
     /// </para>
     /// <para>
-    /// <b>It also switches on the outbox and inbox engine</b> — the four hosted workers, the
-    /// processors and the coordinators — through
-    /// <see cref="OutboxInboxProcessingExtensions.AddOutboxInboxProcessing"/>. Since #186
-    /// <c>AddMicroKitMessaging()</c> registers no worker — its only hosted service is the
-    /// composition validator — so a host without this call runs no outbox or inbox worker at all. Transitional: #188 replaces it with opt-in durability on the bus.
+    /// <b>Checked at host start:</b> <typeparamref name="TContext"/> is registered, and its model
+    /// carries the messaging entities. The model check builds one instance of the context, in a
+    /// scope of its own.
+    /// </para>
+    /// <para>
+    /// Built on the public store SPI only (<see cref="MessageStoreRegistrationExtensions.AddMessageStore"/>);
+    /// a store over another persistence technology registers itself the same way.
     /// </para>
     /// </remarks>
-    public static MessagingBuilder AddEfCoreOutbox<TContext>(this MessagingBuilder builder)
-        where TContext : DbContext
-    {
-        builder.Services.AddScoped<EfOutboxStore<TContext>>();
-        builder.Services.AddScoped<IOutboxWriter>(
-            sp => sp.GetRequiredService<EfOutboxStore<TContext>>());
-        builder.Services.AddScoped<IOutboxProcessorStore>(
-            sp => sp.GetRequiredService<EfOutboxStore<TContext>>());
-
-        // Admin and retention are separate contracts (ISP) served by the same instance: a DLQ
-        // console has no business seeing ClaimBatchAsync, and the processor has no business
-        // seeing RequeueAsync.
-        builder.Services.AddScoped<IOutboxAdminStore>(
-            sp => sp.GetRequiredService<EfOutboxStore<TContext>>());
-        builder.Services.AddScoped<IOutboxRetentionStore>(
-            sp => sp.GetRequiredService<EfOutboxStore<TContext>>());
-        // The inbox store follows the same shape as the outbox: the concrete type is registered
-        // once as scoped, and each interface resolves to that single instance, so one scope holds
-        // one store over one DbContext.
-        //
-        // That is also what makes settlement transactional, with no second registration needed.
-        // IInboxSettlementStore is resolved from the PER-MESSAGE execution scope, which is a
-        // fresh scope; the instance it yields therefore shares its TContext with the handler
-        // resolved from that same scope, and the staged mark commits in the handler's own
-        // transaction. Registering the store as anything other than scoped breaks that silently.
-        builder.Services.AddScoped<EfInboxStore<TContext>>();
-        builder.Services.AddScoped<IInboxWriter>(
-            sp => sp.GetRequiredService<EfInboxStore<TContext>>());
-        builder.Services.AddScoped<IInboxProcessorStore>(
-            sp => sp.GetRequiredService<EfInboxStore<TContext>>());
-        builder.Services.AddScoped<IInboxSettlementStore>(
-            sp => sp.GetRequiredService<EfInboxStore<TContext>>());
-        builder.Services.AddScoped<IInboxAdminStore>(
-            sp => sp.GetRequiredService<EfInboxStore<TContext>>());
-        builder.Services.AddScoped<IInboxRetentionStore>(
-            sp => sp.GetRequiredService<EfInboxStore<TContext>>());
-
-        // The workers require the stores registered above, so the store provider is what
-        // registers them (#186) — not AddMicroKitMessaging().
-        builder.AddOutboxInboxProcessing();
-
-        return builder;
-    }
-
-    /// <summary>
-    /// Registers integration-event publishing through the outbox: the EF Core staging writer and
-    /// the <see cref="IIntegrationEventPublisher"/> that writes through it.
-    /// </summary>
-    /// <typeparam name="TContext">
-    /// The application's <see cref="DbContext"/> type. Must have
-    /// <see cref="ModelBuilderExtensions.ApplyMessagingConfiguration"/> called in
-    /// <c>OnModelCreating</c>.
-    /// </typeparam>
-    /// <param name="builder">The <see cref="MessagingBuilder"/> handed to
-    /// <c>AddMicroKitMessaging(bus => ...)</c>.</param>
-    /// <returns>The same <paramref name="builder"/> for chaining.</returns>
-    /// <remarks>
-    /// <para>
-    /// <b>The publisher is registered here (#187)</b>, not by <c>AddMicroKitMessaging</c>: it
-    /// cannot be activated without the <see cref="IIntegrationEventWriter"/> this call provides.
-    /// The types it publishes are declared with <c>bus.Publishes&lt;T&gt;()</c>, like any
-    /// publication. The publisher is scoped: it is resolved from the per-message execution scope,
-    /// and a singleton would capture one execution context and one writer.
-    /// </para>
-    /// <para>
-    /// <b>Scoped, and it is load-bearing.</b> The writer's <c>HasOpenTransaction</c> guard reads
-    /// the transaction on the <typeparamref name="TContext"/> instance it holds, so the writer and
-    /// the caller's unit of work must be the same instance — which is exactly what one scoped
-    /// registration over one scoped <c>DbContext</c> gives. Registering it with any other lifetime
-    /// makes the guard pass while the row commits somewhere else.
-    /// </para>
-    /// <para>
-    /// <b>The provider must support savepoints.</b> The writer flushes inside the caller's
-    /// transaction so a replayed publication is absorbed before <c>PublishAsync</c> returns, and it
-    /// takes a savepoint first because a rejected insert aborts the whole transaction on PostgreSQL
-    /// — without one, absorbing the replay would destroy the caller's own pending writes. A provider
-    /// that cannot take a savepoint is refused at publish time with
-    /// <c>IntegrationEventPublishException</c> rather than silently losing that protection. Both
-    /// supported providers, PostgreSQL and SQLite, qualify.
-    /// </para>
-    /// </remarks>
-    public static MessagingBuilder AddEfCoreIntegrationEvents<TContext>(this MessagingBuilder builder)
+    public static MessagingBuilder UseEntityFrameworkOutbox<TContext>(
+        this MessagingBuilder builder, Action<EntityFrameworkOutboxBuilder>? configure = null)
         where TContext : DbContext
     {
         ArgumentNullException.ThrowIfNull(builder);
+        var key = EntityFrameworkOutbox.KeyOf<TContext>();
 
-        builder.Services.AddScoped<IIntegrationEventWriter, EfIntegrationEventWriter<TContext>>();
-        builder.Services.TryAddScoped<IIntegrationEventPublisher, IntegrationEventPublisher>();
-        return builder;
+        return builder.AddMessageStore(key, store =>
+        {
+            var services = store.Services;
+
+            // A second call for the same TContext reaches the same store: its registrations are
+            // already there, and its start check too.
+            var first = !services.Any(d => d.ServiceType == typeof(EfOutboxStore<TContext>));
+            if (first)
+            {
+                store.AddStartupCheck(CheckStore<TContext>);
+            }
+
+            // One store instance per scope over the scope's TContext; every contract resolves to it.
+            services.TryAddScoped<EfOutboxStore<TContext>>();
+            services.TryAddKeyedScoped<IOutboxWriter>(key, static (sp, _) => sp.GetRequiredService<EfOutboxStore<TContext>>());
+            services.TryAddKeyedScoped<IOutboxProcessorStore>(key, static (sp, _) => sp.GetRequiredService<EfOutboxStore<TContext>>());
+            services.TryAddKeyedScoped<IOutboxAdminStore>(key, static (sp, _) => sp.GetRequiredService<EfOutboxStore<TContext>>());
+            services.TryAddKeyedScoped<IOutboxRetentionStore>(key, static (sp, _) => sp.GetRequiredService<EfOutboxStore<TContext>>());
+
+            services.TryAddScoped<EfInboxStore<TContext>>();
+            services.TryAddKeyedScoped<IInboxWriter>(key, static (sp, _) => sp.GetRequiredService<EfInboxStore<TContext>>());
+            services.TryAddKeyedScoped<IInboxProcessorStore>(key, static (sp, _) => sp.GetRequiredService<EfInboxStore<TContext>>());
+            services.TryAddKeyedScoped<IInboxSettlementStore>(key, static (sp, _) => sp.GetRequiredService<EfInboxStore<TContext>>());
+            services.TryAddKeyedScoped<IInboxAdminStore>(key, static (sp, _) => sp.GetRequiredService<EfInboxStore<TContext>>());
+            services.TryAddKeyedScoped<IInboxRetentionStore>(key, static (sp, _) => sp.GetRequiredService<EfInboxStore<TContext>>());
+
+            if (configure is not null)
+            {
+                configure(new EntityFrameworkOutboxBuilder(store));
+            }
+        });
+    }
+
+    private static IEnumerable<string> CheckStore<TContext>(IServiceProvider services)
+        where TContext : DbContext
+    {
+        var key = EntityFrameworkOutbox.KeyOf<TContext>();
+        var name = typeof(TContext).FullName;
+
+        if (!services.GetRequiredService<IServiceProviderIsService>().IsService(typeof(TContext)))
+        {
+            return [
+                $"Store '{key}' is the outbox of '{name}', which is not registered. Register the " +
+                $"context — services.AddDbContext<{typeof(TContext).Name}>(...) — before the host starts."];
+        }
+
+        IModel model;
+        try
+        {
+            using var scope = services.CreateScope();
+            model = scope.ServiceProvider.GetRequiredService<TContext>().Model;
+        }
+#pragma warning disable CA1031 // a start check reports every problem; it never throws one of them
+        catch (Exception ex)
+#pragma warning restore CA1031
+        {
+            return [
+                $"Store '{key}': '{name}' could not be built to check that its model carries the " +
+                $"messaging entities ({ex.GetType().Name}: {ex.Message}). The check builds it in a " +
+                "scope of its own, with no tenant or request."];
+        }
+
+        var missing = new List<string>(2);
+        if (model.FindEntityType(typeof(OutboxMessage)) is null)
+        {
+            missing.Add(nameof(OutboxMessage));
+        }
+
+        if (model.FindEntityType(typeof(InboxMessage)) is null)
+        {
+            missing.Add(nameof(InboxMessage));
+        }
+
+        return missing.Count == 0
+            ? []
+            : [
+                $"Store '{key}': the model of '{name}' has no {string.Join(" or ", missing)} entity. " +
+                "Call modelBuilder.ApplyMessagingConfiguration() in its OnModelCreating, and add " +
+                "the tables to the host's migrations."];
     }
 }

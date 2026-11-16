@@ -82,7 +82,6 @@ public sealed class PublicSurfaceTests
             // and the engine catches them.
             "IEventPublisher",
             "IIntegrationEvent",
-            "IIntegrationEventPublisher",
             "IMessageBus",
             "IMessageHandler`1",
             "IMessageReceiveMiddleware",
@@ -95,6 +94,7 @@ public sealed class PublicSurfaceTests
             "MessageContractAttribute",
             "MessageId",
             "MessageReceiveContext",
+            "MessageStoreKey",
             "MessageSendContext",
             "PermanentMessageException",
             "PublishOptions",
@@ -133,7 +133,7 @@ public sealed class PublicSurfaceTests
             "EnvelopeReceiveResult", "IMessageSerializer",
             // The seam a store provider calls to switch on the outbox and inbox engine — Core,
             // transitional until #188.
-            "OutboxInboxProcessingExtensions",
+            "IMessageStoreSet", "MessageStoreBuilder", "MessageStoreRegistrationExtensions",
             // Dispatch.
             "IOutboxDispatcher", "OutboxDispatcherKeys",
             // Stores, split by consumer (ISP).
@@ -141,7 +141,6 @@ public sealed class PublicSurfaceTests
             "IInboxWriter", "IInboxProcessorStore", "IInboxSettlementStore", "IInboxAdminStore",
             "IInboxRetentionStore",
             // The staging writer.
-            "IIntegrationEventWriter", "IntegrationEventWriteResult",
             // The rows and the types the stores exchange.
             "OutboxMessage", "InboxMessage", "OutboxClaim", "InboxClaim", "OutboxOutcome",
             "InboxOutcome", "InboxMessageKey",
@@ -207,13 +206,15 @@ public sealed class PublicSurfaceTests
         VisibleNamespacesIn(EfCoreAssembly).ShouldBe(["MicroKit.Messaging.EntityFrameworkCore"]);
         VisibleTypeNamesIn("MicroKit.Messaging.EntityFrameworkCore", EfCoreAssembly).ShouldBe(
             [
+                "EntityFrameworkOutbox",
+                "EntityFrameworkOutboxBuilder",
                 "InboxMessageConfiguration",
                 "MessagingBuilderExtensions",
                 "ModelBuilderExtensions",
                 "OutboxMessageConfiguration",
             ],
-            "the EF Core package exposes the two entity configurations and the two registration " +
-            "entry points; the stores themselves are internal");
+            "the EF Core package exposes the two entity configurations, the store registration, its " +
+            "builder and its key; the stores themselves are internal");
 
         VisibleNamespacesIn(MediatRGlueAssembly).ShouldBe(
             ["MicroKit.Messaging.MediatR.DependencyInjection"]);

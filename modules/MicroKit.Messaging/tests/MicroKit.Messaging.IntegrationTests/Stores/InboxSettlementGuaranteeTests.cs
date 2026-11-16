@@ -51,7 +51,7 @@ public sealed class InboxSettlementGuaranteeTests
             // The per-message scope, created exactly as InboxProcessor creates it.
             await using var scope = await fixture.CreateMessageScopeAsync();
 
-            var settlement = scope.ServiceProvider.GetRequiredService<IInboxSettlementStore>();
+            var settlement = scope.ServiceProvider.GetRequiredKeyedService<IInboxSettlementStore>(EntityFrameworkOutbox.KeyOf<TestMessagingDbContext>());
             var handlerContext = scope.ServiceProvider
                 .GetRequiredService<TestMessagingDbContext>();
 
@@ -87,7 +87,7 @@ public sealed class InboxSettlementGuaranteeTests
             var token = await fixture.ClaimAsync();
 
             await using var scope = await fixture.CreateMessageScopeAsync();
-            var settlement = scope.ServiceProvider.GetRequiredService<IInboxSettlementStore>();
+            var settlement = scope.ServiceProvider.GetRequiredKeyedService<IInboxSettlementStore>(EntityFrameworkOutbox.KeyOf<TestMessagingDbContext>());
             var handlerContext = scope.ServiceProvider
                 .GetRequiredService<TestMessagingDbContext>();
 
@@ -102,7 +102,7 @@ public sealed class InboxSettlementGuaranteeTests
         });
 
     /// <summary>
-    /// The same contract end to end, through the coordinator. Before the fix this pass reported
+    /// The same contract end to end, through the store's processor as its loop resolves it. Before the fix this pass reported
     /// <c>Processed = 1</c> while leaving the row <c>Processing</c> with its claim token intact —
     /// success reported over an infinite replay.
     /// </summary>
@@ -115,8 +115,8 @@ public sealed class InboxSettlementGuaranteeTests
 
             await using var batchScope = fixture.Provider.CreateAsyncScope();
             var result = await batchScope.ServiceProvider
-                .GetRequiredService<IInboxCoordinator>()
-                .ExecuteAsync();
+                .GetRequiredKeyedService<IInboxProcessor>(EntityFrameworkOutbox.KeyOf<TestMessagingDbContext>())
+                .ProcessBatchAsync(100);
 
             result.Claimed.ShouldBe(1);
             result.Processed.ShouldBe(1);
@@ -147,7 +147,7 @@ public sealed class InboxSettlementGuaranteeTests
             var token = await fixture.ClaimAsync();
 
             await using var scope = await fixture.CreateMessageScopeAsync();
-            var settlement = scope.ServiceProvider.GetRequiredService<IInboxSettlementStore>();
+            var settlement = scope.ServiceProvider.GetRequiredKeyedService<IInboxSettlementStore>(EntityFrameworkOutbox.KeyOf<TestMessagingDbContext>());
             var handlerContext = scope.ServiceProvider
                 .GetRequiredService<TestMessagingDbContext>();
 
@@ -198,14 +198,14 @@ public sealed class InboxSettlementGuaranteeTests
                 }
             });
 
-            // No IOutboxDispatcher is registered, and none is needed: this suite drives
-            // IInboxCoordinator directly and seeds its own inbox rows rather than going through
+            // No IOutboxDispatcher is registered, and none is needed: this suite drives the
+            // store's IInboxProcessor directly and seeds its own inbox rows rather than going through
             // IEnvelopeReceiver. That keeps the drain's guarantees tested independently of how the
             // rows got there.
             services.AddMicroKitMessaging(bus =>
             {
                 bus.ServiceName = "tests.settlement";
-                bus.AddEfCoreOutbox<TestMessagingDbContext>();
+                bus.UseEntityFrameworkOutbox<TestMessagingDbContext>();
                 bus.AddHandler<RecordingSettlementHandler>();
             });
 
@@ -248,7 +248,7 @@ public sealed class InboxSettlementGuaranteeTests
         {
             await using var scope = Provider.CreateAsyncScope();
             var claim = await scope.ServiceProvider
-                .GetRequiredService<IInboxProcessorStore>()
+                .GetRequiredKeyedService<IInboxProcessorStore>(EntityFrameworkOutbox.KeyOf<TestMessagingDbContext>())
                 .ClaimBatchAsync(10, Lease);
 
             claim.Count.ShouldBe(1);

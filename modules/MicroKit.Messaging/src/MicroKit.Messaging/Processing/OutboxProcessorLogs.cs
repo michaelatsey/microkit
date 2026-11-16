@@ -2,7 +2,7 @@ namespace MicroKit.Messaging.Processing;
 
 /// <summary>
 /// Source-generated log methods for <see cref="OutboxProcessor"/> and
-/// <see cref="OutboxRetentionWorker"/>.
+/// <see cref="OutboxRetentionLoop"/>.
 /// </summary>
 /// <remarks>
 /// <c>[LoggerMessage]</c> emits a cached delegate per message, so a log call allocates
@@ -64,8 +64,7 @@ internal static partial class OutboxProcessorLogs
     /// <remarks>
     /// Deliberately names no particular registration. <c>OutboxConfigurationException</c> reaches
     /// this event from two kinds of place that a single sentence cannot cover: something the
-    /// processor resolves from the scope is not registered at all (<c>IOutboxDispatcher</c>, or
-    /// <c>OriginMessageHolder</c>); or a dispatcher was handed a row it structurally cannot serve,
+    /// processor resolves from the scope is not registered at all (<c>IOutboxDispatcher</c>); or a dispatcher was handed a row it structurally cannot serve,
     /// such as a notification with no MediatR glue installed. The exception carries which one, and
     /// is logged with this event; a headline naming only the first sends an operator to check a
     /// registration that is already there. A dispatcher that is registered but cannot be
@@ -146,11 +145,4 @@ internal static partial class OutboxProcessorLogs
         Level = LogLevel.Error,
         Message = "Outbox retention pass failed. Retrying after {Interval}.")]
     public static partial void RetentionFailed(ILogger logger, Exception exception, TimeSpan interval);
-
-    [LoggerMessage(
-        EventId = 1023,
-        Level = LogLevel.Critical,
-        Message = "IOutboxRetentionStore cannot be resolved — stopping the retention worker. " +
-                  "Register a store (e.g. call AddEfCoreOutbox()); retrying will not help.")]
-    public static partial void RetentionStoreUnresolvable(ILogger logger, Exception exception);
 }

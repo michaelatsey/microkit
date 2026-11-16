@@ -43,7 +43,7 @@ public sealed class EfOutboxStoreTests
         MessageKind messageKind = MessageKind.Notification,
         string? contractName = null,
         string? source = null,
-        MessageId? originMessageId = null)
+        IReadOnlyDictionary<string, string>? headers = null)
     {
         return new OutboxMessage
         {
@@ -52,7 +52,7 @@ public sealed class EfOutboxStoreTests
             MessageKind = messageKind,
             ContractName = contractName,
             Source = source,
-            OriginMessageId = originMessageId,
+            Headers = headers,
             EventType = "MicroKit.Test.TestEvent, MicroKit.Test",
             Payload = "{}",
             Status = status,
@@ -109,12 +109,11 @@ public sealed class EfOutboxStoreTests
             await using var _ = conn;
             await using var __ = ctx;
 
-            var originRow = MessageId.New();
             var message = BuildOutboxMessage(
                 messageKind: MessageKind.Contract,
                 contractName: "shop.orders.order-placed.v1",
                 source: "/shop/orders",
-                originMessageId: originRow);
+                headers: new Dictionary<string, string> { ["x-origin"] = "checkout", ["x-lang"] = "fr" });
 
             await Store(ctx).AddAsync(message);
             await ctx.SaveChangesAsync();
@@ -125,7 +124,9 @@ public sealed class EfOutboxStoreTests
             stored.MessageKind.ShouldBe(MessageKind.Contract);
             stored.ContractName.ShouldBe("shop.orders.order-placed.v1");
             stored.Source.ShouldBe("/shop/orders");
-            stored.OriginMessageId.ShouldBe(originRow);
+            stored.Headers.ShouldNotBeNull().ShouldBe(
+                new Dictionary<string, string> { ["x-origin"] = "checkout", ["x-lang"] = "fr" },
+                ignoreOrder: true);
         });
 
     /// <summary>
@@ -134,9 +135,7 @@ public sealed class EfOutboxStoreTests
     /// <remarks>
     /// Not a trivial mirror of the test above: marking <c>Source</c> or <c>ContractName</c>
     /// <c>IsRequired()</c> would break every notification write in the module, and this is what
-    /// would catch it. It also covers the unique index over
-    /// <c>(OriginMessageId, ContractName)</c> — two all-null rows must coexist, which they do on
-    /// SQLite and PostgreSQL because nulls are distinct there.
+    /// would catch it.
     /// </remarks>
     [Fact]
     public Task AddAsync_AllowsNullWireColumnsOnNotificationRows()
@@ -802,85 +801,11 @@ public sealed class EfOutboxStoreTests
         });
 
     /// <summary>
-    /// A contract row is not purged while the row that produced it can still be dispatched again.
-    /// </summary>
-    /// <remarks>
-    /// <para>
-    /// The replay key only rejects a duplicate while the row it produced is still in the table, so
-    /// a contract row has to outlive every chance its origin has of being re-dispatched. That
-    /// window is a <b>state</b>, not a duration: automatic replay is bounded by
-    /// <c>MaxRetries × MaxRetryBackoff</c>, both configurable, and an operator requeue of a
-    /// dead-lettered origin is unbounded — so no retention default covers it.
-    /// </para>
-    /// <para>
-    /// What it prevents is the one duplicate nothing downstream can recognise: a republished
-    /// contract is a new row with a new <c>MessageId</c>, and a consumer deduplicates on that id.
-    /// </para>
-    /// </remarks>
-    [Fact]
-    public Task DeleteProcessedAsync_KeepsAContractWhoseOriginCanStillBeDispatched()
-        => Task.Run(async () =>
-        {
-            var (conn, ctx) = CreateIsolatedDb();
-            await using var _ = conn;
-            await using var __ = ctx;
-
-            // A dead-lettered origin is never purged and can be requeued at any time.
-            var deadLetteredOrigin = BuildOutboxMessage(
-                status: OutboxMessageStatus.Failed, deadLettered: true);
-
-            var contract = BuildOutboxMessage(
-                status: OutboxMessageStatus.Published,
-                processedAtUtc: Now.AddDays(-30),
-                messageKind: MessageKind.Contract,
-                contractName: "saasbtp.safety.constat-recorded.v1",
-                source: "/saasbtp/safety",
-                originMessageId: deadLetteredOrigin.Id);
-
-            ctx.OutboxMessages.AddRange(deadLetteredOrigin, contract);
-            await ctx.SaveChangesAsync();
-
-            var deleted = await Store(ctx).DeleteProcessedAsync(Now.AddDays(-7));
-
-            deleted.ShouldBe(0, "purging it would leave a later requeue nothing to collide with");
-            (await ctx.OutboxMessages.AsNoTracking().CountAsync(m => m.Id == contract.Id))
-                .ShouldBe(1);
-        });
-
-    /// <summary>
-    /// Once the origin is <c>Published</c> nothing can re-dispatch it, so the contract row is free.
+    /// A published contract row is purged by age like any other row: nothing holds it back once
+    /// the replay key is gone (#188).
     /// </summary>
     [Fact]
-    public Task DeleteProcessedAsync_PurgesAContractWhoseOriginIsTerminal()
-        => Task.Run(async () =>
-        {
-            var (conn, ctx) = CreateIsolatedDb();
-            await using var _ = conn;
-            await using var __ = ctx;
-
-            var origin = BuildOutboxMessage(
-                status: OutboxMessageStatus.Published, processedAtUtc: Now.AddDays(-30));
-
-            var contract = BuildOutboxMessage(
-                status: OutboxMessageStatus.Published,
-                processedAtUtc: Now.AddDays(-30),
-                messageKind: MessageKind.Contract,
-                contractName: "saasbtp.safety.constat-recorded.v1",
-                source: "/saasbtp/safety",
-                originMessageId: origin.Id);
-
-            ctx.OutboxMessages.AddRange(origin, contract);
-            await ctx.SaveChangesAsync();
-
-            (await Store(ctx).DeleteProcessedAsync(Now.AddDays(-7))).ShouldBe(2);
-            (await ctx.OutboxMessages.AsNoTracking().CountAsync()).ShouldBe(0);
-        });
-
-    /// <summary>
-    /// A contract published outside a dispatch has no origin, so nothing holds it back.
-    /// </summary>
-    [Fact]
-    public Task DeleteProcessedAsync_PurgesAContractWithNoOrigin()
+    public Task DeleteProcessedAsync_PurgesAPublishedContractRowByAge()
         => Task.Run(async () =>
         {
             var (conn, ctx) = CreateIsolatedDb();
@@ -976,14 +901,15 @@ public sealed class EfOutboxStoreTests
     }
 
     /// <summary>
-    /// Both are meaningful only for a contract row, so both are optional — and the pairing with
-    /// <c>MessageKind</c> is deliberately not enforced at this layer. The integration-event
-    /// publisher is the only writer that will ever set them, so the invariant belongs there. A
+    /// The contract name is meaningful only for a contract row, and headers only when the
+    /// publication has any, so both are optional — and the pairing with <c>MessageKind</c> is
+    /// deliberately not enforced at this layer. The bus is the only writer that will ever set them,
+    /// so the invariant belongs there. A
     /// check constraint would have to spell <c>MessageKind &lt;&gt; 'Contract'</c>, hardcoding an
     /// enum member name into the schema.
     /// </summary>
     [Fact]
-    public void ContractNameAndOriginMessageId_AreOptional()
+    public void ContractNameAndHeaders_AreOptional()
     {
         var (conn, ctx) = CreateIsolatedDb();
         using var _ = conn;
@@ -996,9 +922,28 @@ public sealed class EfOutboxStoreTests
             "a consumer's contract names are data this column truncates silently on a provider " +
             "that does not enforce width, so the bound is pinned rather than left to a comment");
 
-        var origin = Property(ctx, nameof(OutboxMessage.OriginMessageId));
-        origin.IsNullable.ShouldBeTrue("a row not produced by a dispatch has no origin");
-        origin.GetValueConverter().ShouldNotBeNull("MessageId? is not a storable type on its own");
+        var headers = Property(ctx, nameof(OutboxMessage.Headers));
+        headers.IsNullable.ShouldBeTrue("most publications carry no header of their own");
+        headers.GetValueConverter().ShouldNotBeNull("a dictionary is stored as one JSON column");
+    }
+
+    /// <summary>
+    /// The headers comparer is order-independent in its hash as in its equality: two equal
+    /// dictionaries built in different orders must hash alike, or EF's snapshot contract breaks.
+    /// </summary>
+    [Fact]
+    public void TheHeadersComparer_HashesEqualDictionariesAlike_WhateverTheirOrder()
+    {
+        var (conn, ctx) = CreateIsolatedDb();
+        using var _ = conn;
+        using var __ = ctx;
+        var comparer = Property(ctx, nameof(OutboxMessage.Headers)).GetValueComparer().ShouldNotBeNull();
+
+        IReadOnlyDictionary<string, string> one = new Dictionary<string, string> { ["a"] = "1", ["b"] = "2", ["c"] = "3" };
+        IReadOnlyDictionary<string, string> other = new Dictionary<string, string> { ["c"] = "3", ["a"] = "1", ["b"] = "2" };
+
+        comparer.Equals(one, other).ShouldBeTrue();
+        comparer.GetHashCode(one).ShouldBe(comparer.GetHashCode(other));
     }
 
     /// <summary>
@@ -1035,29 +980,6 @@ public sealed class EfOutboxStoreTests
     }
 
     /// <summary>
-    /// The index name is pinned because a consumer hand-writes their own DDL against it — the EF
-    /// configuration is the schema's only definition, so the name is part of the contract.
-    /// </summary>
-    [Fact]
-    public void TheReplayNaturalKey_IsAUniqueIndexOverOriginThenContract()
-    {
-        var (conn, ctx) = CreateIsolatedDb();
-        using var _ = conn;
-        using var __ = ctx;
-
-        var index = ctx.Model
-            .FindEntityType(typeof(OutboxMessage))!
-            .GetIndexes()
-            .SingleOrDefault(i =>
-                i.GetDatabaseName() == "UX_OutboxMessages_Origin_ContractName");
-
-        index.ShouldNotBeNull("the replay natural key is the whole point of the two columns");
-        index.IsUnique.ShouldBeTrue("without uniqueness a replay writes a duplicate silently");
-        index.Properties.Select(p => p.Name).ShouldBe(
-            [nameof(OutboxMessage.OriginMessageId), nameof(OutboxMessage.ContractName)]);
-    }
-
-    /// <summary>
     /// A converter that maps but does not round-trip passes every metadata assertion above.
     /// </summary>
     [Fact]
@@ -1068,13 +990,10 @@ public sealed class EfOutboxStoreTests
             await using var _ = conn;
             await using var __ = ctx;
 
-            var origin = MessageId.New();
-
             ctx.OutboxMessages.Add(BuildOutboxMessage());
             ctx.OutboxMessages.Add(BuildOutboxMessage(
                 messageKind: MessageKind.Contract,
-                contractName: "saasbtp.safety.constat-recorded.v1",
-                originMessageId: origin));
+                contractName: "saasbtp.safety.constat-recorded.v1"));
             await ctx.SaveChangesAsync();
 
             await using var probe = SecondContext(conn);
@@ -1084,69 +1003,34 @@ public sealed class EfOutboxStoreTests
 
             var notification = rows.Single(m => m.MessageKind == MessageKind.Notification);
             notification.ContractName.ShouldBeNull();
-            notification.OriginMessageId.ShouldBeNull();
+            notification.Headers.ShouldBeNull();
 
             var contract = rows.Single(m => m.MessageKind == MessageKind.Contract);
             contract.ContractName.ShouldBe("saasbtp.safety.constat-recorded.v1");
-            contract.OriginMessageId.ShouldBe(origin);
         });
 
     /// <summary>
-    /// Every notification row carries (null, null). If nulls ever compared equal in this index the
-    /// SECOND notification the system ever wrote would be rejected — which is precisely why SQL
-    /// Server is declared unsupported for this constraint. This is the assertion that fails the day
-    /// someone "improves" the index with NULLS NOT DISTINCT.
+    /// The replay key is gone (#188 D5): the outbox table carries no unique index beside its
+    /// primary key, so two contract rows of one contract from one delivery coexist.
     /// </summary>
+    /// <remarks>
+    /// Its job — keeping a redelivered handler's publications from duplicating — moved to the inbox
+    /// guard, where those publications commit or roll back with the handler's inbox row.
+    /// </remarks>
     [Fact]
-    public Task Many_notification_rows_with_no_contract_key_coexist()
-        => Task.Run(async () =>
-        {
-            var (conn, ctx) = CreateIsolatedDb();
-            await using var _ = conn;
-            await using var __ = ctx;
+    public void TheOutboxTable_HasNoUniqueIndexBesideItsKey()
+    {
+        var (conn, ctx) = CreateIsolatedDb();
+        using var _ = conn;
+        using var __ = ctx;
 
-            for (var i = 0; i < 5; i++)
-            {
-                ctx.OutboxMessages.Add(BuildOutboxMessage());
-            }
+        var entity = ctx.Model.FindEntityType(typeof(OutboxMessage)).ShouldNotBeNull();
+        entity.GetIndexes().Where(i => i.IsUnique).ShouldBeEmpty();
+        entity.FindProperty("OriginMessageId").ShouldBeNull("the replay column is removed");
+    }
 
-            await ctx.SaveChangesAsync();
-
-            await using var probe = SecondContext(conn);
-            (await probe.OutboxMessages.CountAsync()).ShouldBe(5);
-        });
-
-    /// <summary>The natural key doing its job: a replayed publish collides instead of duplicating.</summary>
     [Fact]
-    public Task A_second_row_with_the_same_origin_and_contract_is_rejected()
-        => Task.Run(async () =>
-        {
-            var (conn, ctx) = CreateIsolatedDb();
-            await using var _ = conn;
-            await using var __ = ctx;
-
-            var origin = MessageId.New();
-
-            ctx.OutboxMessages.Add(BuildOutboxMessage(
-                messageKind: MessageKind.Contract,
-                contractName: "saasbtp.safety.constat-recorded.v1",
-                originMessageId: origin));
-            await ctx.SaveChangesAsync();
-
-            ctx.OutboxMessages.Add(BuildOutboxMessage(
-                messageKind: MessageKind.Contract,
-                contractName: "saasbtp.safety.constat-recorded.v1",
-                originMessageId: origin));
-
-            await Should.ThrowAsync<DbUpdateException>(() => ctx.SaveChangesAsync());
-        });
-
-    /// <summary>
-    /// The key is (origin, contract), not contract alone: one contract published from many
-    /// different origin rows is the nominal case, not a duplicate.
-    /// </summary>
-    [Fact]
-    public Task The_same_contract_from_two_different_origins_is_accepted()
+    public Task TwoContractRowsOfOneContract_Coexist()
         => Task.Run(async () =>
         {
             var (conn, ctx) = CreateIsolatedDb();
@@ -1154,44 +1038,13 @@ public sealed class EfOutboxStoreTests
             await using var __ = ctx;
 
             ctx.OutboxMessages.Add(BuildOutboxMessage(
-                messageKind: MessageKind.Contract,
-                contractName: "saasbtp.safety.constat-recorded.v1",
-                originMessageId: MessageId.New()));
+                messageKind: MessageKind.Contract, contractName: "shop.order-placed.v1", source: "/shop"));
             ctx.OutboxMessages.Add(BuildOutboxMessage(
-                messageKind: MessageKind.Contract,
-                contractName: "saasbtp.safety.constat-recorded.v1",
-                originMessageId: MessageId.New()));
+                messageKind: MessageKind.Contract, contractName: "shop.order-placed.v1", source: "/shop"));
 
             await ctx.SaveChangesAsync();
 
-            await using var probe = SecondContext(conn);
-            (await probe.OutboxMessages.CountAsync()).ShouldBe(2);
+            (await ctx.OutboxMessages.AsNoTracking().CountAsync()).ShouldBe(2);
         });
 
-    /// <summary>
-    /// The scope of the guarantee, pinned so it is not later read as unconditional. A contract
-    /// staged outside a dispatch has no origin row, the tuple contains a null, and nulls are
-    /// distinct — so it does not deduplicate. That is intended: the key guards the REPLAY path,
-    /// where an origin row always exists.
-    /// </summary>
-    [Fact]
-    public Task A_contract_row_with_no_origin_does_not_deduplicate()
-        => Task.Run(async () =>
-        {
-            var (conn, ctx) = CreateIsolatedDb();
-            await using var _ = conn;
-            await using var __ = ctx;
-
-            ctx.OutboxMessages.Add(BuildOutboxMessage(
-                messageKind: MessageKind.Contract,
-                contractName: "saasbtp.safety.constat-recorded.v1"));
-            ctx.OutboxMessages.Add(BuildOutboxMessage(
-                messageKind: MessageKind.Contract,
-                contractName: "saasbtp.safety.constat-recorded.v1"));
-
-            await ctx.SaveChangesAsync();
-
-            await using var probe = SecondContext(conn);
-            (await probe.OutboxMessages.CountAsync()).ShouldBe(2);
-        });
 }

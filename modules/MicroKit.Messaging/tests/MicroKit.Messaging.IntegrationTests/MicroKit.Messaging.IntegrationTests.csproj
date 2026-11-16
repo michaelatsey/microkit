@@ -11,6 +11,7 @@
     <ProjectReference Include="../../src/MicroKit.Messaging.Abstractions/MicroKit.Messaging.Abstractions.csproj" />
     <ProjectReference Include="../../src/MicroKit.Messaging/MicroKit.Messaging.csproj" />
     <ProjectReference Include="../../src/MicroKit.Messaging.EntityFrameworkCore/MicroKit.Messaging.EntityFrameworkCore.csproj" />
+    <ProjectReference Include="../MicroKit.Messaging.IntegrationTests.SecondModule/MicroKit.Messaging.IntegrationTests.SecondModule.csproj" />
   </ItemGroup>
   <!-- SQLitePCLRaw.lib.e_sqlite3 2.1.11 has a known vulnerability (GHSA-2m69-gcr7-jv3q).
        This is a transitive test-only dependency of Microsoft.EntityFrameworkCore.Sqlite;

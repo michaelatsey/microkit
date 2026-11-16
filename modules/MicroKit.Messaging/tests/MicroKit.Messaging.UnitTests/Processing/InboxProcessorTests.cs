@@ -303,6 +303,28 @@ public sealed class InboxProcessorTests
         outcome.NextRetryAtUtc.ShouldBe(Now.AddSeconds(2));
     }
 
+    /// <summary>
+    /// A disposed provider while the host keeps running is a failure, not a stop (#188 review): a
+    /// stop would release the row with no attempt charged, and a recurring fault would then be
+    /// re-claimed forever without ever reaching the dead-letter.
+    /// </summary>
+    [Fact]
+    public async Task ProcessBatch_WhenTheProviderIsDisposedWhileTheHostRuns_RetriesTheRowAsAFailure()
+    {
+        var message = InboxFixtures.Message(consumerType: ConsumerType, eventType: EventType, retryCount: 0);
+        var store = StoreReturning(InboxFixtures.Claim(message));
+
+        var sut = Build(store, out var handler, out var settlement);
+        handler.ThrowOnHandle = new ObjectDisposedException(nameof(IServiceProvider));
+        settlement.MarkUncommitted = true;
+
+        var result = await sut.ProcessBatchAsync(batchSize: 10, CancellationToken.None);
+
+        result.AbortReason.ShouldBe(InboxBatchAbortReason.None, "the host is running: nothing was stopped");
+        result.Retried.ShouldBe(1);
+        (await CapturedOutcomes(store)).ShouldHaveSingleItem().Kind.ShouldBe(InboxOutcomeKind.Retry);
+    }
+
     [Fact]
     public async Task ProcessBatch_WhenHandlerThrows_AtMaxRetries_DeadLetters()
     {

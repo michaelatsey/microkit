@@ -1,13 +1,23 @@
 namespace MicroKit.Messaging.Bus;
 
 using System.Diagnostics;
+using MicroKit.Messaging.Outbox;
 using MicroKit.Messaging.Publishing;
+using MicroKit.Messaging.Stores;
 
 /// <summary>
-/// The standard <see cref="IMessageBus"/>: publishes straight to the registered transport, with no
-/// persistence.
+/// The standard <see cref="IMessageBus"/>: with no store configured, publishes straight to the
+/// registered transport; with stores, enlists the publication in a store's outbox.
 /// </summary>
 /// <remarks>
+/// <para>
+/// <b>Outbox by enlistment.</b> With a store configured, the publication becomes an outbox row
+/// added to the store's unit of work in this scope — for EF Core, its <c>DbContext</c> — and nothing
+/// is saved here. Whatever saves that unit of work commits the row with the business data it
+/// announces; inside a delivery, the engine's save does. The store is chosen by
+/// <see cref="MessageStoreResolver"/>: <see cref="PublishOptions.Store"/>, the delivery's store, the
+/// only store, or the store bound to the message type's assembly.
+/// </para>
 /// <para>
 /// <b>Scoped, and the scope is the ambient context.</b> Tenant, correlation and causation are read
 /// from the scope's <see cref="IExecutionContext"/>, which the receive pipeline fills from the
@@ -17,7 +27,7 @@ using MicroKit.Messaging.Publishing;
 /// </para>
 /// <para>
 /// <b>Every check runs before anything is sent</b>: the contract, the reserved headers, the tenant
-/// and the transport. A publication either reaches the transport or throws — including when a send
+/// and the transport. A publication either reaches the transport — or its store's outbox — or throws — including when a send
 /// middleware stops the pipeline, which would otherwise return an identifier for a message that
 /// never left.
 /// </para>
@@ -26,6 +36,9 @@ internal sealed class MessageBus(
     IntegrationEventRegistry registry,
     IMessageSerializer serializer,
     IExecutionContext executionContext,
+    MessageStoreResolver stores,
+    DeliveryStoreHolder deliveryStore,
+    OutboxMessageFactory outboxFactory,
     IServiceProvider services,
     TimeProvider timeProvider,
     ILogger<MessageBus> logger)
@@ -44,6 +57,7 @@ internal sealed class MessageBus(
         var registration = registry.ResolveContract(messageType);
         RejectReservedHeaders(options?.Headers);
         var tenantId = ResolveTenant(messageType, options?.TenantId);
+        var store = stores.ForPublication(messageType, options?.Store, deliveryStore.Store);
         var transport = services.GetService<IMessageTransport>()
             ?? throw new IntegrationEventConfigurationException(
                 $"'{messageType.Name}' was published, but no transport is registered, so the " +
@@ -80,8 +94,16 @@ internal sealed class MessageBus(
                 "the transport or fails; it never succeeds silently.");
         }
 
-        BusLogs.Published(
-            logger, messageId.ToString(), registration.ContractName, registry.Source, tenantId);
+        if (store is null)
+        {
+            BusLogs.Published(
+                logger, messageId.ToString(), registration.ContractName, registry.Source, tenantId);
+        }
+        else
+        {
+            BusLogs.Enlisted(
+                logger, messageId.ToString(), registration.ContractName, store.Value, tenantId);
+        }
 
         return messageId;
 
@@ -92,14 +114,27 @@ internal sealed class MessageBus(
 
         async ValueTask SendAsync()
         {
+            var headers = BuildHeaders(context.Headers, tenantId);
+            var time = timeProvider.GetUtcNow();
+
+            if (store is not null)
+            {
+                var row = outboxFactory.CreateContract(
+                    message, messageId, registration.ContractName, registry.Source, time, headers);
+                var writer = services.GetRequiredKeyedService<IOutboxWriter>(store);
+                await writer.AddAsync(row, ct).ConfigureAwait(false);
+                sent = true;
+                return;
+            }
+
             var envelope = new MessageEnvelope
             {
                 Id = messageId.ToString(),
                 Source = registry.Source,
                 Type = registration.ContractName,
-                Time = timeProvider.GetUtcNow(),
+                Time = time,
                 DataContentType = serializer.ContentType,
-                Headers = BuildHeaders(context.Headers, tenantId),
+                Headers = headers,
                 Body = serializer.Serialize(message, messageType),
             };
 

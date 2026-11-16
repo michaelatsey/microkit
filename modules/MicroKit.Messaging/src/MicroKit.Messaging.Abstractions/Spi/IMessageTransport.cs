@@ -57,9 +57,8 @@ namespace MicroKit.Messaging.Spi;
 /// broker a message is copied to every endpoint bound to its type, and a type no endpoint is bound
 /// to reaches no one: the send returns, and the transport logs a <c>Warning</c>. A broker
 /// provider supplies its own implementation from its <c>Add{Provider}Transport()</c> extension.
-/// <b>With no transport registered</b>, a declared publication — on the bus, or staged in the
-/// outbox through <c>IIntegrationEventPublisher</c> — fails at host start, and a bus publication
-/// throws. The outbox's transport dispatcher is registered with the transport (#187), so a
+/// <b>With no transport registered</b>, a declared publication fails at host start, and a
+/// publication throws. The outbox's transport dispatcher is registered with the transport (#187), so a
 /// <see cref="MessageKind.Contract"/> row that still reaches a host without one is a missing
 /// registration: the batch is released, no retry is consumed, and the worker stops.
 /// </para>

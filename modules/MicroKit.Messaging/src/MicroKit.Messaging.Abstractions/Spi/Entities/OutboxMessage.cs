@@ -69,9 +69,8 @@ public sealed class OutboxMessage
     /// it is an assembly-qualified name the receiving process cannot resolve.
     /// </para>
     /// <para>
-    /// Half of the replay natural key, with <see cref="OriginMessageId"/>. Nothing enforces that a
-    /// <see cref="MessageKind.Contract"/> row actually carries one, and that is a <b>deferral, not
-    /// an omission</b>: the integration-event publisher is the only writer that will ever set these
+    /// Nothing enforces that a <see cref="MessageKind.Contract"/> row actually carries one, and that
+    /// is a <b>deferral, not an omission</b>: the bus is the only writer that will ever set these
     /// columns, so the invariant belongs there — next to the code that knows the contract — rather
     /// than scattered across a schema anyone can write to.
     /// </para>
@@ -123,60 +122,15 @@ public sealed class OutboxMessage
     public string? Source { get; set; }
 
     /// <summary>
-    /// Gets or sets the <see cref="Id"/> of the outbox row whose dispatch produced this one.
-    /// <see langword="null"/> for a row that was not produced by a dispatch.
+    /// Gets or sets the extra headers of the publication: those of <c>PublishOptions.Headers</c>
+    /// and those the send middleware set. <see langword="null"/> when there are none.
     /// </summary>
     /// <remarks>
-    /// <para>
-    /// <b>Structural, not tracing — and that is why it is not called a causation.</b>
-    /// <see cref="CorrelationId"/> and <see cref="CausationId"/> are diagnostic values rebuilt from
-    /// strings, and both degrade to <see langword="null"/> when the string does not parse: losing a
-    /// trace link is preferable to losing a message. This one cannot degrade. It is half of the
-    /// unique key on (<see cref="OriginMessageId"/>, <see cref="ContractName"/>), so a silent null
-    /// here silently switches deduplication off rather than merely blurring a trace.
-    /// </para>
-    /// <para>
-    /// <b>Not <c>Source</c> either</b>, and that is not a matter of taste: <c>Source</c> already
-    /// means <i>the emitting module</i> in this package — see <see cref="Source"/> and
-    /// <c>IntegrationEventRegistration.Source</c>, and the log line that reads "as
-    /// '{ContractName}' from '{Source}'". Both notions now live on this entity, which is why one
-    /// of them had to take another word.
-    /// </para>
-    /// <para>
-    /// <b>What it buys.</b> A redelivered dispatch re-runs its handlers, which publish the same
-    /// contract again with the same origin row — so the second write collides on the unique index
-    /// instead of producing a duplicate integration message. This closes the window a per-message
-    /// settlement leaves open, because it also covers a crash occurring <i>after</i> the commit,
-    /// which atomicity alone cannot.
-    /// </para>
-    /// <para>
-    /// It follows that two handlers of one notification must not publish the same contract: they
-    /// would collide on this key and the second would be absorbed as a duplicate. Forbidden by
-    /// convention rather than detected.
-    /// </para>
-    /// <para>
-    /// <b>Retention cannot outrun it, and that is enforced rather than assumed.</b> This key only
-    /// rejects a duplicate while the row it produced is still in the table, so a
-    /// <see cref="MessageKind.Contract"/> row must outlive every chance its origin has of being
-    /// dispatched again. <c>IOutboxRetentionStore.DeleteProcessedAsync</c> therefore refuses to
-    /// purge one while the row named here still exists and is not
-    /// <see cref="OutboxMessageStatus.Published"/>.
-    /// </para>
-    /// <para>
-    /// The window is a <i>state</i> and not a duration, which is why no retention default is the
-    /// answer: automatic replay is bounded by <c>MaxRetries × MaxRetryBackoff</c>, both
-    /// configurable, and an operator requeue of a dead-lettered origin is unbounded. Once the
-    /// origin is <c>Published</c> nothing can re-dispatch it; once the origin has itself been
-    /// purged there is nothing left to requeue.
-    /// </para>
-    /// <para>
-    /// What that prevents is a duplicate <b>nothing downstream could recognise</b>: a republished
-    /// contract is a new row with a new <see cref="Id"/> — the primary key forbids reusing the
-    /// origin's — and a consumer deduplicates on that id, so it would run the handler a second time
-    /// with full business side effects.
-    /// </para>
+    /// Never holds a reserved header (<c>tenantid</c>, <c>correlationid</c>, <c>causationid</c>,
+    /// <c>traceparent</c>): those are rebuilt at dispatch from the row's own columns, so a header
+    /// here can never forge them. Copied onto the envelope verbatim.
     /// </remarks>
-    public MessageId? OriginMessageId { get; set; }
+    public IReadOnlyDictionary<string, string>? Headers { get; set; }
 
     /// <summary>
     /// Gets or sets the assembly-qualified CLR type name of the serialized
@@ -394,9 +348,7 @@ public sealed class OutboxMessage
     /// </para>
     /// <para>
     /// Diagnostic, never load-bearing: nothing keys, indexes, filters or orders on it, and it
-    /// degrades to <see langword="null"/> rather than failing when it cannot be parsed. Do not
-    /// confuse it with <see cref="OriginMessageId"/>, which records the same identity on a contract
-    /// row for the opposite kind of reason — that one is half of a unique key and may never degrade.
+    /// degrades to <see langword="null"/> rather than failing when it cannot be parsed.
     /// </para>
     /// </remarks>
     public CausationId? CausationId { get; set; }

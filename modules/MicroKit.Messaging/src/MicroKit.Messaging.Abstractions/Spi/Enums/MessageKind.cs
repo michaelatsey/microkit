@@ -57,8 +57,7 @@ public enum MessageKind
     /// <summary>
     /// An in-process notification, dispatched through the MediatR fan-out contributed by
     /// <c>MicroKit.Messaging.MediatR</c>. It never crosses a service boundary, so it has no wire
-    /// identity: <see cref="OutboxMessage.ContractName"/> and
-    /// <see cref="OutboxMessage.OriginMessageId"/> are both <see langword="null"/> on such a row.
+    /// identity: <see cref="OutboxMessage.ContractName"/> is <see langword="null"/> on such a row.
     /// </summary>
     Notification = 0,
 

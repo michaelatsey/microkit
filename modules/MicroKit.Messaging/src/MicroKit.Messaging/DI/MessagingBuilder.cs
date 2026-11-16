@@ -30,6 +30,9 @@ public sealed class MessagingBuilder
     /// </summary>
     public IServiceCollection Services { get; }
 
+    /// <summary>Gets the composition this builder writes into.</summary>
+    internal MessagingComposition Composition => _composition;
+
     /// <summary>
     /// Gets or sets the name of this service: the <c>Source</c> of every message it publishes and
     /// the endpoint it consumes from. <see langword="null"/> leaves it unset.
@@ -310,7 +313,7 @@ public sealed class MessagingBuilder
     /// </para>
     /// <para>
     /// It also registers the outbox's transport dispatcher (<c>TransportOutboxDispatcher</c>), so
-    /// a host with <c>AddEfCoreOutbox&lt;TContext&gt;()</c> sends its contract rows here with no
+    /// a host with <c>UseEntityFrameworkOutbox&lt;TContext&gt;()</c> sends its contract rows here with no
     /// further call — in either order with <c>AddMediatRDomainEvents()</c>.
     /// </para>
     /// <para>

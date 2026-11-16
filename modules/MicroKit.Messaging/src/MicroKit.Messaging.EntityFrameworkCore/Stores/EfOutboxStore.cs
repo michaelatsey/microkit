@@ -1,6 +1,8 @@
 using System.Linq.Expressions;
 
 using Microsoft.EntityFrameworkCore.Query;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 
 namespace MicroKit.Messaging.EntityFrameworkCore;
 
@@ -40,10 +42,16 @@ namespace MicroKit.Messaging.EntityFrameworkCore;
 /// </para>
 /// </remarks>
 /// <typeparam name="TContext">The application's <see cref="DbContext"/> type.</typeparam>
-internal sealed class EfOutboxStore<TContext>(TContext context, TimeProvider timeProvider)
-    : IOutboxWriter, IOutboxProcessorStore, IOutboxAdminStore, IOutboxRetentionStore
+internal sealed class EfOutboxStore<TContext>(
+    TContext context,
+    TimeProvider timeProvider,
+    ILogger<EfOutboxStore<TContext>>? logger = null)
+    : IOutboxWriter, IOutboxProcessorStore, IOutboxAdminStore, IOutboxRetentionStore, IDisposable
     where TContext : DbContext
 {
+    private readonly ILogger _logger = logger ?? NullLogger<EfOutboxStore<TContext>>.Instance;
+    private List<OutboxMessage>? _enlisted;
+
     // ---------- IOutboxWriter ----------
     // Stages the row; the caller's UoW (SaveChanges) commits it atomically with domain
     // changes. Do NOT call SaveChangesAsync here.
@@ -51,15 +59,68 @@ internal sealed class EfOutboxStore<TContext>(TContext context, TimeProvider tim
     /// <inheritdoc/>
     public ValueTask AddAsync(OutboxMessage message, CancellationToken ct = default)
     {
+        ArgumentNullException.ThrowIfNull(message);
         context.Set<OutboxMessage>().Add(message);
+        (_enlisted ??= []).Add(message);
         return ValueTask.CompletedTask;
     }
 
     /// <inheritdoc/>
     public ValueTask AddBatchAsync(IReadOnlyList<OutboxMessage> messages, CancellationToken ct = default)
     {
+        ArgumentNullException.ThrowIfNull(messages);
         context.Set<OutboxMessage>().AddRange(messages);
+        (_enlisted ??= []).AddRange(messages);
         return ValueTask.CompletedTask;
+    }
+
+    // ---------- end of scope: an enlisted row is never lost silently ----------
+
+    /// <summary>
+    /// Reports every row this scope enlisted and never saved. Runs when the scope is disposed:
+    /// the store depends on the context, so the container disposes it first, while the context is
+    /// still usable.
+    /// </summary>
+    /// <remarks>
+    /// A row still <c>Added</c> is a publication whose unit of work was never saved — lost with the
+    /// scope, so an <c>Error</c>. A row <c>Detached</c> was discarded on purpose with the change
+    /// tracker — a rolled-back attempt, <c>DiscardChanges</c> — together with the business data it
+    /// announced, so a <c>Debug</c>. A row saved and then rolled back by its transaction is neither:
+    /// the business data rolled back with it.
+    /// </remarks>
+    public void Dispose()
+    {
+        if (_enlisted is null)
+        {
+            return;
+        }
+
+        var store = EntityFrameworkOutbox.KeyOf<TContext>().Value;
+        var enlisted = _enlisted;
+        _enlisted = null;
+
+        foreach (var row in enlisted)
+        {
+            EntityState state;
+            try
+            {
+                state = context.Entry(row).State;
+            }
+            catch (ObjectDisposedException)
+            {
+                // The context went first (a host disposing it by hand): nothing can be read.
+                return;
+            }
+
+            if (state is EntityState.Added)
+            {
+                EfOutboxLogs.UnsavedEnlistment(_logger, row.Id.Value, row.ContractName ?? row.EventType, store);
+            }
+            else if (state is EntityState.Detached)
+            {
+                EfOutboxLogs.DiscardedEnlistment(_logger, row.Id.Value, row.ContractName ?? row.EventType, store);
+            }
+        }
     }
 
     // ---------- IOutboxProcessorStore ----------
@@ -298,31 +359,10 @@ internal sealed class EfOutboxStore<TContext>(TContext context, TimeProvider tim
     public async ValueTask<int> DeleteProcessedAsync(
         DateTimeOffset olderThan, string? tenantId = null, CancellationToken ct = default)
     {
-        var rows = context.Set<OutboxMessage>();
-
-        return await rows
+        return await context.Set<OutboxMessage>()
             .Where(m => m.Status == OutboxMessageStatus.Published && m.ProcessedAtUtc < olderThan)
             .Where(m => tenantId == null || m.TenantId == tenantId)
 
-            // The replay guard, and the reason this delete is not a plain age filter. A Contract
-            // row is the only thing that can reject a duplicate publication of itself, and it can
-            // only do so while it is still in the table — so it must outlive every chance its
-            // origin row has of being dispatched again.
-            //
-            // That window is a STATE, not a duration. Automatic replay is bounded by
-            // MaxRetries x MaxRetryBackoff, both configurable, so no fixed retention covers it by
-            // construction; and an operator requeue of a dead-lettered origin is unbounded, so no
-            // duration covers it at all. Once the origin is Published nothing can re-dispatch it,
-            // and once the origin has itself been purged there is nothing left to requeue — in both
-            // cases the NOT EXISTS below is satisfied and the contract row is free.
-            //
-            // What it prevents: a republished contract is a NEW row with a NEW MessageId, because
-            // the primary key forbids reusing the origin's. A consumer deduplicates on that id, so
-            // it would see a message it has never seen and run the handler a second time with full
-            // business side effects. Nothing anywhere could recognise it as a duplicate.
-            .Where(m => m.MessageKind != MessageKind.Contract
-                        || !rows.Any(origin => origin.Id == m.OriginMessageId
-                                               && origin.Status != OutboxMessageStatus.Published))
             .ExecuteDeleteAsync(ct)
             .ConfigureAwait(false);
     }

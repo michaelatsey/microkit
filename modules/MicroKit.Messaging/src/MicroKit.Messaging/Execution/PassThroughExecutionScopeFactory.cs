@@ -34,13 +34,13 @@ namespace MicroKit.Messaging.Execution;
 /// </para>
 /// <para>
 /// <b>Second:</b> build the scope from the <i>application's own</i>
-/// <see cref="IServiceScopeFactory"/> — not from a private container of your own. The outbox
-/// processor stamps the row it is dispatching onto a scoped service it resolves from the scope you
-/// hand back (<c>OriginMessageHolder</c>, internal to this package, so you cannot register it
-/// yourself). A scope from a container that cannot supply it fails the dispatch with
-/// <c>OutboxConfigurationException</c>: the batch is released untouched, no retry budget is spent,
-/// and the worker stops. That is deliberate — it is a deployment defect, and the alternative to
-/// failing is a null origin, which switches the integration-event replay key off in silence.
+/// <see cref="IServiceScopeFactory"/> — not from a private container of your own — and hand back a
+/// provider that serves keyed lookups (<c>IKeyedServiceProvider</c>): every store service is
+/// resolved from the scope by its store's key. The engine also names the delivery's store on a
+/// scoped service it resolves from that scope (internal to this package, so you cannot register it
+/// yourself); a scope from a container that cannot supply it loses that name, and a publication
+/// made there is enlisted by the other rules — the only store, or the store bound to the message
+/// type's assembly — rather than in the delivery's store.
 /// </para>
 /// <para>
 /// A host that registers its own <see cref="IExecutionContext"/> — a tenant-aware one, say —

@@ -1,6 +1,6 @@
 using System.Diagnostics;
 
-using MicroKit.Messaging.Outbox;
+using MicroKit.Messaging.Stores;
 
 using MessageCtx = MicroKit.Messaging.Execution.ExecutionContext;
 
@@ -92,14 +92,15 @@ namespace MicroKit.Messaging.Processing;
 internal sealed class OutboxProcessor : IOutboxProcessor
 {
     // Batch-scoped by design (ADR-MSG-002 shared-DB cross-tenant reservation): NOT resolved
-    // from the per-message IExecutionScope. Per-tenant DB resolution is the deferred
-    // PerTenantOutboxCoordinator's responsibility, not the processor's.
+    // from the per-message IExecutionScope. It is the store this processor drains, resolved by
+    // the store's key from its loop's scope (#188); a dynamic store set is #191's.
     private readonly IOutboxProcessorStore _store;
     private readonly IExecutionScopeFactory _executionScopeFactory;
     private readonly OutboxProcessorOptions _options;
     private readonly TimeProvider _timeProvider;
     private readonly Random _random;
     private readonly ILogger<OutboxProcessor> _logger;
+    private readonly MessageStoreKey? _storeKey;
 
     /// <summary>Initializes a new <see cref="OutboxProcessor"/>.</summary>
     /// <param name="store">Claim and settlement operations. Batch-scoped, not per-message.</param>
@@ -111,13 +112,18 @@ internal sealed class OutboxProcessor : IOutboxProcessor
     /// deterministic substitute pins the back-off curve to exact values instead of a range.
     /// </param>
     /// <param name="logger">Logger.</param>
+    /// <param name="storeKey">
+    /// The store this processor drains, written on every dispatch scope so a publication made there
+    /// is enlisted in the same store. Null only for a processor built by hand.
+    /// </param>
     public OutboxProcessor(
         IOutboxProcessorStore store,
         IExecutionScopeFactory executionScopeFactory,
         OutboxProcessorOptions options,
         TimeProvider timeProvider,
         Random random,
-        ILogger<OutboxProcessor> logger)
+        ILogger<OutboxProcessor> logger,
+        MessageStoreKey? storeKey = null)
     {
         _store = store;
         _executionScopeFactory = executionScopeFactory;
@@ -125,6 +131,7 @@ internal sealed class OutboxProcessor : IOutboxProcessor
         _timeProvider = timeProvider;
         _random = random;
         _logger = logger;
+        _storeKey = storeKey;
     }
 
     /// <inheritdoc />
@@ -165,11 +172,13 @@ internal sealed class OutboxProcessor : IOutboxProcessor
                 await DispatchAsync(message, cancellationToken).ConfigureAwait(false);
                 outcomes.Add(OutboxOutcome.Published(message.Id));
             }
-            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            catch (Exception ex) when (HostStop.Is(ex, cancellationToken))
             {
                 // Released, not retried: the dispatch may well have completed before the
                 // cancellation landed. Charging a retry would penalise a message for a
-                // shutdown it had no part in.
+                // shutdown it had no part in. A provider disposed under the dispatch while the host
+                // stops — the scope's creation included — is the same shutdown, never a failure
+                // (#128); the same exception while the host runs is a failure (HostStop).
                 abortReason = OutboxBatchAbortReason.Cancelled;
                 OutboxProcessorLogs.BatchCancelled(_logger, messages.Count - index);
                 break;
@@ -277,11 +286,6 @@ internal sealed class OutboxProcessor : IOutboxProcessor
             // that was never built. The reentrant hop is where that stopped being harmless — a
             // contract published by a notification handler demonstrably has a cause, and it is the
             // row this scope is dispatching.
-            //
-            // Same identity OriginMessageHolder carries two statements below, for a different
-            // purpose: the origin is a REPLAY KEY and must be exact, causation is a TRACE LINK and
-            // degrades to null when unparseable (OutboxMessageFactory.ResolveCausation). They are
-            // kept separate because one may never be allowed to fall back and the other must.
             CausationId = message.Id.Value.ToString(),
         };
 
@@ -293,58 +297,17 @@ internal sealed class OutboxProcessor : IOutboxProcessor
             .CreateScopeAsync(ctx, cancellationToken)
             .ConfigureAwait(false);
 
-        // Stamped on the scope this processor received, deliberately not passed to the factory.
-        // A host may supply its own IExecutionScopeFactory, and an implementation that forgot to
-        // carry the value would not throw — it would leave the origin null, which silently
-        // disables deduplication for every contract this dispatch publishes, because nulls are
-        // distinct in UX_OutboxMessages_Origin_ContractName. Doing it here removes the chance.
-        StampOrigin(scope.ServiceProvider, message.Id);
+        // Written on the scope this processor received, deliberately not passed to the factory:
+        // a host may supply its own IExecutionScopeFactory. A publication made in this scope — a
+        // notification handler's — is enlisted in the store this row came from.
+        if (_storeKey is not null && scope.ServiceProvider.GetService<DeliveryStoreHolder>() is { } holder)
+        {
+            holder.Store = _storeKey;
+        }
 
         var dispatcher = ResolveDispatcher(scope.ServiceProvider);
 
         await dispatcher.DispatchAsync(message, cancellationToken).ConfigureAwait(false);
-    }
-
-    /// <summary>
-    /// Names the row being dispatched, so a notification handler that publishes an integration
-    /// event records which dispatch produced it.
-    /// </summary>
-    /// <remarks>
-    /// <para>
-    /// <see cref="OriginMessageHolder"/> is registered by <c>AddMicroKitMessaging()</c>. A scope whose
-    /// provider does not have it was built from a container this composition does not control — most
-    /// likely by a custom <see cref="IExecutionScopeFactory"/> — which is a deployment defect, not a
-    /// transient fault. It is therefore <see cref="OutboxConfigurationException"/>: the batch is
-    /// released and the worker stops. Classifying it as transient would spend the retry budget of
-    /// every queued message on a condition no retry can change, and carrying on without it would
-    /// leave the origin null, which silently disables the replay key for every contract this dispatch
-    /// publishes.
-    /// </para>
-    /// <para>
-    /// <c>GetService</c> and a null test rather than <c>GetRequiredService</c> inside a <c>catch</c>,
-    /// because only <see langword="null"/> means nothing is registered. Here no reachable input tells
-    /// the two forms apart: the holder is an internal marker with no constructor dependencies, so its
-    /// activation cannot fail — which is also why this method, unlike
-    /// <see cref="ResolveDispatcher"/>, has no activation verdict.
-    /// </para>
-    /// <para>
-    /// ⚠ <b>If the holder ever gains a dependency, revisit this method.</b> An activation failure
-    /// would then propagate unwrapped into the per-message transient arm — the misclassification
-    /// <see cref="ResolveDispatcher"/> exists to avoid.
-    /// </para>
-    /// </remarks>
-    private static void StampOrigin(IServiceProvider serviceProvider, MessageId originId)
-    {
-        var holder = serviceProvider.GetService<OriginMessageHolder>()
-            ?? throw new OutboxConfigurationException(
-                $"{nameof(OriginMessageHolder)} could not be resolved from the execution scope. " +
-                "It is registered by AddMicroKitMessaging(), so the likeliest cause is an " +
-                "IExecutionScopeFactory returning a scope built from a different container. " +
-                "Without it a published integration event cannot record the dispatch that " +
-                "produced it, and the replay key that stops a redelivery duplicating it is " +
-                "silently inactive. Retrying will not help.");
-
-        holder.OriginMessageId = originId;
     }
 
     /// <summary>
@@ -381,7 +344,7 @@ internal sealed class OutboxProcessor : IOutboxProcessor
     /// </para>
     /// <para>
     /// <b>That stall is narrowed, not closed.</b> This method runs in the scope of the message being
-    /// dispatched, built from its <c>TenantId</c> and stamped with its origin before the call, so
+    /// dispatched, built from its <c>TenantId</c>, so
     /// activation can see the message and throw <see cref="InvalidOperationException"/> for one tenant
     /// only. A de-provisioned tenant does not recover on its own: its row stays oldest, heads every
     /// claim, and the verdict below stalls the outbox for every tenant. ADR-MSG-019 records that as a

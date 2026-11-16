@@ -127,8 +127,8 @@ internal sealed class TransportOutboxDispatcher(
             throw new OutboxPayloadException(
                 $"Outbox message {message.Id} is a {nameof(MessageKind.Contract)} but carries no " +
                 "ContractName. A contract is addressed on the wire by that name and by nothing " +
-                "else, so this row can never be sent. Whoever staged it must set it — see " +
-                "IIntegrationEventPublisher.");
+                "else, so this row can never be sent. Whoever staged it must set it; the bus " +
+                "always does.");
         }
 
         if (string.IsNullOrWhiteSpace(message.Source))
@@ -145,6 +145,19 @@ internal sealed class TransportOutboxDispatcher(
         // reserved headers come from the row's own columns, captured at staging — traceparent
         // included, which is the trace of the publication rather than of this relay.
         var headers = new Dictionary<string, string>(StringComparer.Ordinal);
+
+        // The publication's own headers first, so a reserved one stored by hand cannot win over the
+        // columns below.
+        if (message.Headers is { } extra)
+        {
+            foreach (var (name, value) in extra)
+            {
+                if (!MessageHeaders.IsReserved(name))
+                {
+                    headers[name] = value;
+                }
+            }
+        }
 
         // Non-nullable and required on a stored row, but a row built by hand can still carry null;
         // the dispatcher sends it without a correlation rather than failing it until dead-letter.

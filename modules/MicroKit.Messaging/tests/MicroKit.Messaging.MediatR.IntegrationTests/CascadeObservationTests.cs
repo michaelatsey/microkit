@@ -13,7 +13,7 @@ namespace MicroKit.Messaging.MediatR.IntegrationTests;
 public sealed class CascadeObservationTests(ITestOutputHelper output)
 {
     [Fact]
-    public async Task Cascade_NotificationHandlerRaisingDomainEvent_SecondDrainProducesNothing()
+    public async Task Cascade_NotificationHandlerRaisingDomainEvent_IsLostAndReportedAsLost()
     {
         await using var connection = await E2EHarness.OpenConnectionAsync();
         await E2EHarness.CreateSchemaAsync(connection);
@@ -53,7 +53,9 @@ public sealed class CascadeObservationTests(ITestOutputHelper output)
         // OBSERVED BEHAVIOUR. The cascade row is staged by P4 into the processor scope's DbContext
         // change tracker, and nothing on the outbox path ever calls SaveChanges on that context:
         // TransactionBehavior is the only flush owner and it is not in this path. The staged row
-        // dies with the scope, so the cascade domain event is silently lost — no row, no error.
+        // dies with the scope, so the cascade domain event is lost — no row. Since #188 D5 the loss
+        // is no longer silent: the store reports the unsaved row at Error (event 4000). Its
+        // delivery is the local endpoint's (#188 D8).
         // ---------------------------------------------------------------------------------------
         afterDrain1.Count.ShouldBe(1, "the cascade row is staged but never flushed — no second row appears");
         afterDrain1.Single().Status.ShouldBe(OutboxMessageStatus.Published);
@@ -65,8 +67,11 @@ public sealed class CascadeObservationTests(ITestOutputHelper output)
         recorder.For<RecordWidgetArchivedHandler>().ShouldBeEmpty(
             "WidgetArchivedEvent never reaches the outbox, so its notification is never published");
 
-        // Silent loss: nothing at Warning or above is logged on either drain.
-        drain1Logs.ShouldBeEmpty("the loss is silent — nothing warns that the cascade row vanished");
+        // Reported loss: one Error naming the lost cascade row, and nothing else.
+        var lost = drain1Logs.ShouldHaveSingleItem("the loss is reported once, by the store");
+        lost.EventId.ShouldBe(4000);
+        lost.Level.ShouldBe(LogLevel.Error);
+        lost.RenderedMessage.ShouldContain(nameof(WidgetArchivedNotification));
         drain2Logs.ShouldBeEmpty();
 
         Report(afterCommand.Count, afterDrain1, afterDrain2, drain1Logs, drain2Logs, recorder);
@@ -90,6 +95,6 @@ public sealed class CascadeObservationTests(ITestOutputHelper output)
         output.WriteLine($"  cascade notification handler   : {recorder.For<RecordWidgetArchivedHandler>().Count} time(s)");
         output.WriteLine($"  Warning+ during drain 1        : {drain1Warnings.Count}");
         output.WriteLine($"  Warning+ during drain 2        : {drain2Warnings.Count}");
-        output.WriteLine("  => the cascade domain event is lost with no row and no diagnostic.");
+        output.WriteLine("  => the cascade domain event is lost with no row; the store reports it at Error.");
     }
 }

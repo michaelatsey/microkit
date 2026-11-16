@@ -143,10 +143,89 @@ public sealed class OutboxMessageFactoryTests
         var sut = new OutboxMessageFactory(binary, new FakeTimeProvider(Now));
 
         var ex = Should.Throw<OutboxConfigurationException>(() => sut.CreateContract(
-            new FakeNotification(), "c.v1", "/s", originMessageId: null, occurredOnUtc: null, _ctx));
+            new FakeNotification(), MessageId.New(), "c.v1", "/s", Now, new Dictionary<string, string>()));
 
         ex.Message.ShouldContain("application/x-msgpack");
         binary.DidNotReceiveWithAnyArgs().Serialize(default!, default!);
+    }
+
+    // ── contract rows: what the bus enlists in a store (#188) ─────────────────
+
+    /// <summary>
+    /// A contract row carries exactly what a direct send would have put on the envelope: the
+    /// identity the caller was returned, the wire type, the source, and the publication time.
+    /// </summary>
+    [Fact]
+    public void CreateContract_CarriesTheIdentityTheWireTypeTheSourceAndThePublicationTime()
+    {
+        var id = MessageId.New();
+        var published = Now.AddMinutes(-3);
+
+        var row = _sut.CreateContract(
+            new FakeNotification(), id, "shop.order-placed.v1", "shop.orders", published, new Dictionary<string, string>());
+
+        row.Id.ShouldBe(id);
+        row.MessageKind.ShouldBe(MessageKind.Contract);
+        row.ContractName.ShouldBe("shop.order-placed.v1");
+        row.Source.ShouldBe("shop.orders");
+        row.OccurredOnUtc.ShouldBe(published);
+        row.CreatedAtUtc.ShouldBe(Now, "the claim orders on the staging clock");
+        row.EventType.ShouldBe(typeof(FakeNotification).AssemblyQualifiedName);
+        row.Payload.ShouldBe("{\"$t\":\"FakeNotification\"}");
+        row.Status.ShouldBe(OutboxMessageStatus.Pending);
+    }
+
+    /// <summary>
+    /// The reserved headers become the row's columns and only the others its
+    /// <see cref="OutboxMessage.Headers"/>, so a header stored there can never forge them.
+    /// </summary>
+    [Fact]
+    public void CreateContract_SplitsTheReservedHeadersFromThePublicationsOwn()
+    {
+        var correlation = Guid.NewGuid();
+        var causation = Guid.NewGuid();
+        var headers = new Dictionary<string, string>
+        {
+            [MessageHeaders.TenantId] = "tenant-a",
+            [MessageHeaders.CorrelationId] = correlation.ToString(),
+            [MessageHeaders.CausationId] = causation.ToString(),
+            [MessageHeaders.TraceParent] = "00-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-01",
+            ["x-origin"] = "checkout",
+        };
+
+        var row = _sut.CreateContract(new FakeNotification(), MessageId.New(), "c.v1", "/s", Now, headers);
+
+        row.TenantId.ShouldBe("tenant-a");
+        row.CorrelationId.ShouldBe(CorrelationId.From(correlation));
+        row.CausationId.ShouldBe(CausationId.From(causation));
+        row.TraceParent.ShouldBe("00-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-01");
+        row.Headers.ShouldNotBeNull().ShouldBe(new Dictionary<string, string> { ["x-origin"] = "checkout" });
+    }
+
+    [Fact]
+    public void CreateContract_WithNoHeadersOfItsOwn_StoresNone()
+    {
+        var row = _sut.CreateContract(
+            new FakeNotification(), MessageId.New(), "c.v1", "/s", Now,
+            new Dictionary<string, string> { [MessageHeaders.CorrelationId] = Guid.NewGuid().ToString() });
+
+        row.Headers.ShouldBeNull();
+        row.TenantId.ShouldBeNull();
+        row.CausationId.ShouldBeNull("a root publication has no cause");
+    }
+
+    /// <summary>
+    /// The column is required: an ambient correlation that is not a GUID is replaced, never null.
+    /// </summary>
+    [Fact]
+    public void CreateContract_WhenTheCorrelationIsNotAGuid_SubstitutesAFreshOne()
+    {
+        var row = _sut.CreateContract(
+            new FakeNotification(), MessageId.New(), "c.v1", "/s", Now,
+            new Dictionary<string, string> { [MessageHeaders.CorrelationId] = "not-a-guid" });
+
+        row.CorrelationId.ShouldNotBeNull();
+        row.CorrelationId.Value.ShouldNotBe(Guid.Empty);
     }
 
     // ── helpers ──────────────────────────────────────────────────────────────

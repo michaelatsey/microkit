@@ -2,6 +2,7 @@ using System.Text;
 using MicroKit.Messaging.Publishing;
 using MicroKit.Messaging.Serialization;
 using MicroKit.Messaging.Registry;
+using MicroKit.Messaging.Stores;
 
 using MessageCtx = MicroKit.Messaging.Execution.ExecutionContext;
 
@@ -68,8 +69,8 @@ namespace MicroKit.Messaging.Processing;
 internal sealed class InboxProcessor : IInboxProcessor
 {
     // Batch-scoped by design (ADR-MSG-002 shared-DB cross-tenant reservation): NOT resolved
-    // from the per-message IExecutionScope. Per-tenant DB resolution is the deferred
-    // PerTenantInboxCoordinator's responsibility, not the processor's.
+    // from the per-message IExecutionScope. It is the store this processor drains, resolved by
+    // the store's key from its loop's scope (#188); a dynamic store set is #191's.
     private readonly IInboxProcessorStore _store;
     private readonly MessageHandlerRegistry _registry;
     private readonly IntegrationEventRegistry _contracts;
@@ -79,6 +80,7 @@ internal sealed class InboxProcessor : IInboxProcessor
     private readonly TimeProvider _timeProvider;
     private readonly Random _random;
     private readonly ILogger<InboxProcessor> _logger;
+    private readonly MessageStoreKey? _storeKey;
 
     /// <summary>Initializes a new <see cref="InboxProcessor"/>.</summary>
     /// <param name="store">Claim and deferred settlement, batch-scoped.</param>
@@ -90,6 +92,11 @@ internal sealed class InboxProcessor : IInboxProcessor
     /// <param name="timeProvider">Clock used for back-off deadlines.</param>
     /// <param name="random">Jitter source for the back-off draw.</param>
     /// <param name="logger">Logger.</param>
+    /// <param name="storeKey">
+    /// The store this processor drains: written on every handler scope, so the handler's publications
+    /// are enlisted in that store, and the key its settlement store is resolved by. Null only for a
+    /// processor built by hand, which then resolves the unkeyed settlement store.
+    /// </param>
     public InboxProcessor(
         IInboxProcessorStore store,
         MessageHandlerRegistry registry,
@@ -99,7 +106,8 @@ internal sealed class InboxProcessor : IInboxProcessor
         InboxProcessorOptions options,
         TimeProvider timeProvider,
         Random random,
-        ILogger<InboxProcessor> logger)
+        ILogger<InboxProcessor> logger,
+        MessageStoreKey? storeKey = null)
     {
         _store = store;
         _registry = registry;
@@ -110,6 +118,7 @@ internal sealed class InboxProcessor : IInboxProcessor
         _timeProvider = timeProvider;
         _random = random;
         _logger = logger;
+        _storeKey = storeKey;
     }
 
     /// <inheritdoc />
@@ -174,7 +183,7 @@ internal sealed class InboxProcessor : IInboxProcessor
                         break;
                 }
             }
-            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            catch (Exception ex) when (HostStop.Is(ex, cancellationToken))
             {
                 // Released, not retried: the handler may well have committed before the
                 // cancellation landed. Charging a retry would penalise a message for a
@@ -284,7 +293,12 @@ internal sealed class InboxProcessor : IInboxProcessor
         var context = BuildContext(message, eventType);
 
         var handler = Resolve(scope.ServiceProvider, entry.HandlerType);
-        var settlement = ResolveSettlement(scope.ServiceProvider);
+        if (_storeKey is not null && scope.ServiceProvider.GetService<DeliveryStoreHolder>() is { } holder)
+        {
+            holder.Store = _storeKey;
+        }
+
+        var settlement = ResolveSettlement(scope.ServiceProvider, _storeKey);
 
         // Staged BEFORE invoking, so the mark is part of whatever unit of work the handler
         // commits. Staging only — the handler's UoW owns the transaction boundary.
@@ -499,8 +513,11 @@ internal sealed class InboxProcessor : IInboxProcessor
     /// to copy it here.
     /// </para>
     /// </remarks>
-    private static IInboxSettlementStore ResolveSettlement(IServiceProvider serviceProvider)
-        => serviceProvider.GetService<IInboxSettlementStore>()
+    private static IInboxSettlementStore ResolveSettlement(
+        IServiceProvider serviceProvider, MessageStoreKey? storeKey)
+        => (storeKey is null
+                ? serviceProvider.GetService<IInboxSettlementStore>()
+                : serviceProvider.GetKeyedService<IInboxSettlementStore>(storeKey))
             ?? throw new InboxConfigurationException(
                 $"{nameof(IInboxSettlementStore)} is not registered in the execution scope. " +
                 "Without it the inbox cannot settle inside the handler transaction, and " +

@@ -107,7 +107,7 @@ internal static class ReadmeSnippets
         services.AddMicroKitMessaging(bus =>
         {
             bus.ServiceName = "shop.orders";
-            bus.AddEfCoreOutbox<AppDbContext>();
+            bus.UseEntityFrameworkOutbox<AppDbContext>();
             bus.AddMediatRDomainEvents();    // only with MicroKit.Messaging.MediatR
         });
         // end-snippet
@@ -120,9 +120,8 @@ internal static class ReadmeSnippets
         {
             bus.ServiceName = "shop.orders";
             bus.Publishes<OrderPlaced>();
-            bus.AddEfCoreOutbox<AppDbContext>();
-            bus.AddEfCoreIntegrationEvents<AppDbContext>();   // the outbox writer and IIntegrationEventPublisher
-            bus.UseInMemoryTransport();                       // or a broker provider's transport
+            bus.UseEntityFrameworkOutbox<AppDbContext>();   // publications are enlisted in its DbContext
+            bus.UseInMemoryTransport();                     // or a broker provider's transport
         });
         // end-snippet
     }

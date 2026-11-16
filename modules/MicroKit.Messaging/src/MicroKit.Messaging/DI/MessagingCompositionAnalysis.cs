@@ -24,6 +24,8 @@ using System.Text;
 /// <item><description>
 /// Two <c>AddMicroKitMessaging</c> calls setting different <c>bus.ServiceName</c> values.
 /// </description></item>
+/// <item><description>An assembly bound to two stores.</description></item>
+/// <item><description>Several stores, and a handler whose assembly is bound to none.</description></item>
 /// </list>
 /// <para>
 /// <b>One CLR type maps to exactly one contract</b>, structurally: the attribute allows one usage
@@ -107,7 +109,45 @@ internal static class MessagingCompositionAnalysis
                 $"('{MessagingOptions.SectionName}:ServiceName').");
         }
 
+        AnalyzeStoreBindings(composition, problems);
+
         return problems;
+    }
+
+    private static void AnalyzeStoreBindings(MessagingComposition composition, List<string> problems)
+    {
+        var stores = composition.Stores;
+
+        foreach (var assembly in stores.SelectMany(s => s.Assemblies).Distinct())
+        {
+            var owners = stores.Where(s => s.Assemblies.Contains(assembly)).ToList();
+            if (owners.Count > 1)
+            {
+                problems.Add(
+                    $"Assembly '{assembly.GetName().Name}' is bound to {owners.Count} stores " +
+                    $"({string.Join(", ", owners.Select(o => $"'{o.Key}'"))}). A handler and a message " +
+                    "type use exactly one store: bind the assembly to one of them.");
+            }
+        }
+
+        if (stores.Count < 2)
+        {
+            return;
+        }
+
+        var bound = stores.SelectMany(s => s.Assemblies).ToHashSet();
+        foreach (var handler in composition.Handled.Select(h => h.HandlerType).Distinct())
+        {
+            if (!bound.Contains(handler.Assembly))
+            {
+                problems.Add(
+                    $"Handler '{handler.FullName}' is bound to no store, and {stores.Count} stores " +
+                    $"are configured ({string.Join(", ", stores.Select(s => $"'{s.Key}'"))}). Its inbox " +
+                    $"row lives in one store: bind its assembly '{handler.Assembly.GetName().Name}' to " +
+                    "one of them (for EF Core: bus.UseEntityFrameworkOutbox<TContext>(store => " +
+                    $"store.ForAssemblyContaining<{handler.Name}>())).");
+            }
+        }
     }
 
     /// <summary>Throws one exception listing every problem, when there is any.</summary>

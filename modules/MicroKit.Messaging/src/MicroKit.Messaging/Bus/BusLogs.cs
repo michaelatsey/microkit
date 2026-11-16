@@ -11,6 +11,14 @@ internal static partial class BusLogs
         ILogger logger, string messageId, string wireType, string source, string? tenantId);
 
     [LoggerMessage(
+        EventId = 3004,
+        Level = LogLevel.Debug,
+        Message = "Enlisted message {MessageId} as '{WireType}' in the outbox of store '{Store}' " +
+                  "for tenant {TenantId}. It is sent once the unit of work it joined is saved.")]
+    public static partial void Enlisted(
+        ILogger logger, string messageId, string wireType, string store, string? tenantId);
+
+    [LoggerMessage(
         EventId = 3001,
         Level = LogLevel.Warning,
         Message = "Message {MessageId} ('{WireType}' from '{Source}') resolves to local type " +

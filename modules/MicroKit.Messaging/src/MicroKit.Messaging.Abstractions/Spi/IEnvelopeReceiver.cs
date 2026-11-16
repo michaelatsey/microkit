@@ -111,12 +111,8 @@ namespace MicroKit.Messaging.Spi;
 /// is thrown for it.
 /// </para>
 /// <para>
-/// <b>On the transaction boundary — and why it is the opposite of
-/// <see cref="IIntegrationEventPublisher"/>.</b> That interface requires a transaction the caller
-/// already owns and never commits; this one requires none and commits before returning. The
-/// asymmetry is not an inconsistency. On the publishing side the caller has a transaction carrying
-/// business writes, and a contract row must join it or announce a fact that may still roll back. On
-/// the receiving side the provider's consume loop <i>is</i> the outer boundary: there are no
+/// <b>On the transaction boundary.</b> This seam requires no transaction and commits before
+/// returning. On the receiving side the provider's consume loop <i>is</i> the outer boundary: there are no
 /// business writes in flight and nothing to join, and the durability the acknowledgement rule
 /// demands can only come from a write that has already committed.
 /// </para>
@@ -145,7 +141,6 @@ namespace MicroKit.Messaging.Spi;
 /// </para>
 /// </remarks>
 /// <seealso cref="IMessageTransport"/>
-/// <seealso cref="IIntegrationEventPublisher"/>
 public interface IEnvelopeReceiver
 {
     /// <summary>
