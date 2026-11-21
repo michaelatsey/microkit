@@ -29,8 +29,8 @@
     <PackageReference Include="Testcontainers.PostgreSql" />
     <!-- FakeTimeProvider: pins claim/lease instants so nothing depends on a wall clock. -->
     <PackageReference Include="Microsoft.Extensions.TimeProvider.Testing" />
-    <!-- The generic host of OutboxBeforeHostStartTests (#187): the outbox worker and the in-memory
-         consume loop running under the real hosted lifecycle. -->
+    <!-- The generic host of the hosted suites: the store engine's loops and the in-memory consume
+         loop running under the real hosted lifecycle. -->
     <PackageReference Include="Microsoft.Extensions.Hosting" />
     <PackageReference Include="Microsoft.NET.Test.Sdk" />
     <PackageReference Include="xunit" />

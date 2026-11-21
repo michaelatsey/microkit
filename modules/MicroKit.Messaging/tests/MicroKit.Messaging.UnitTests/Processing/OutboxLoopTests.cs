@@ -238,43 +238,56 @@ public sealed class OutboxLoopTests
         sut.NextDelay(partial, TimeSpan.FromMinutes(1)).ShouldBe(TimeSpan.FromSeconds(5));
     }
 
+    /// <summary>
+    /// A down endpoint is not the loop's to back off (#188): its rows were deferred to the end of
+    /// the endpoint's own back-off, so the loop keeps the cadence of the rows behind them.
+    /// </summary>
     [Fact]
-    public void NextDelay_WhenTransportUnavailable_BacksOffTowardTheOutageCeiling()
+    public void NextDelay_WhenAnEndpointWasDown_KeepsThePartialCadence()
     {
         var sut = BuildWorker(Substitute.For<IOutboxProcessor>(), out _, CadenceOptions);
         var outage = new OutboxBatchResult(
             Claimed: 3, Published: 0, Retried: 0, DeadLettered: 0, Released: 3,
             OutboxBatchAbortReason.TransportUnavailable);
 
-        // Grows past the idle ceiling: there is nothing to gain from probing a broker that is down.
-        sut.NextDelay(outage, TimeSpan.FromMinutes(1)).ShouldBe(TimeSpan.FromMinutes(2));
-        sut.NextDelay(outage, TimeSpan.FromMinutes(4)).ShouldBe(TimeSpan.FromMinutes(5));
-        sut.NextDelay(outage, TimeSpan.FromMinutes(5)).ShouldBe(TimeSpan.FromMinutes(5));
+        sut.NextDelay(outage, TimeSpan.FromMinutes(1)).ShouldBe(CadenceOptions.PollingInterval);
     }
 
     /// <summary>
-    /// A dispatcher that cannot be built backs off like an outage, even when the abandoned batch
-    /// was full.
+    /// A full batch whose endpoint was down polls again at once: its rows are deferred, so the next
+    /// claim reaches the rows behind them instead of re-claiming the same ones.
     /// </summary>
-    /// <remarks>
-    /// Saturated on purpose. An abandoned batch still reports every row it claimed, so a full one
-    /// matches the saturation arm — poll again immediately — unless the abort reason is checked
-    /// first. The rows it released are claimable at once, so that ordering would re-claim them,
-    /// fail the same way and spin against the database.
-    /// </remarks>
     [Fact]
-    public void NextDelay_WhenTheDispatcherCannotBeActivated_BacksOffTowardTheOutageCeiling()
+    public void NextDelay_WhenAFullBatchsEndpointWasDown_PollsAgainAtOnce()
     {
         var sut = BuildWorker(Substitute.For<IOutboxProcessor>(), out _, CadenceOptions);
-        var abandoned = new OutboxBatchResult(
+        var deferred = new OutboxBatchResult(
             Claimed: 10, Published: 0, Retried: 0, DeadLettered: 0, Released: 10,
             OutboxBatchAbortReason.DispatcherActivationFailed);
 
-        abandoned.IsSaturated(CadenceOptions.BatchSize).ShouldBeTrue("the case the ordering exists for");
+        deferred.IsSaturated(CadenceOptions.BatchSize).ShouldBeTrue();
+        sut.NextDelay(deferred, TimeSpan.FromMinutes(1)).ShouldBe(TimeSpan.Zero);
+    }
 
-        sut.NextDelay(abandoned, TimeSpan.FromMinutes(1)).ShouldBe(TimeSpan.FromMinutes(2));
-        sut.NextDelay(abandoned, TimeSpan.FromMinutes(4)).ShouldBe(TimeSpan.FromMinutes(5));
-        sut.NextDelay(abandoned, TimeSpan.FromMinutes(5)).ShouldBe(TimeSpan.FromMinutes(5));
+    /// <summary>
+    /// A full batch of rows handed over while their endpoint is in back-off — a store whose claim
+    /// ignores the endpoint filter — waits the polling interval rather than rewriting the down
+    /// endpoint's backlog back to back.
+    /// </summary>
+    [Fact]
+    public void NextDelay_WhenAFullBatchCarriedRowsHandedOverInBackOff_WaitsThePollingInterval()
+    {
+        var sut = BuildWorker(Substitute.For<IOutboxProcessor>(), out _, CadenceOptions);
+        var handedOver = new OutboxBatchResult(
+            Claimed: 10, Published: 0, Retried: 0, DeadLettered: 0, Released: 10,
+            OutboxBatchAbortReason.EndpointInBackOff) { HandedOverInBackOff = true };
+        // The first verdict was the other endpoint's: the flag, not the reason, decides.
+        var mixed = handedOver with { Published = 4, Released = 6, AbortReason = OutboxBatchAbortReason.TransportUnavailable };
+
+        handedOver.IsSaturated(CadenceOptions.BatchSize).ShouldBeTrue();
+        sut.NextDelay(handedOver, TimeSpan.Zero).ShouldBe(CadenceOptions.PollingInterval);
+        sut.NextDelay(mixed, TimeSpan.Zero).ShouldBe(CadenceOptions.PollingInterval,
+            "one delivered row must not send a filterless store round the down endpoint's backlog at once");
     }
 
     [Fact]

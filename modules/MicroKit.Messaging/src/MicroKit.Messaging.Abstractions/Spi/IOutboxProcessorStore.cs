@@ -21,7 +21,7 @@ namespace MicroKit.Messaging.Spi;
 /// <b>ISP.</b> Administration (<see cref="IOutboxAdminStore"/>) and retention
 /// (<see cref="IOutboxRetentionStore"/>) are separate contracts. One implementation may
 /// satisfy all three, but a DLQ console has no business seeing
-/// <see cref="ClaimBatchAsync"/>, and the processor has no business seeing
+/// <see cref="ClaimBatchAsync(int, TimeSpan, CancellationToken)"/>, and the processor has no business seeing
 /// <see cref="IOutboxAdminStore.RequeueAsync"/>.
 /// </para>
 /// <para>
@@ -57,6 +57,34 @@ public interface IOutboxProcessorStore
         int batchSize,
         TimeSpan lockDuration,
         CancellationToken ct = default);
+
+    /// <summary>
+    /// Claims a batch as <see cref="ClaimBatchAsync(int, TimeSpan, CancellationToken)"/> does,
+    /// leaving out the rows of the <paramref name="excluded"/> endpoints: they are in back-off, so the
+    /// claim reaches the other endpoint's rows behind them, however many there are, and the down
+    /// endpoint's rows are not rewritten while it is down (#188).
+    /// </summary>
+    /// <param name="batchSize">The maximum number of messages to claim.</param>
+    /// <param name="lockDuration">How long the claim holds the messages.</param>
+    /// <param name="excluded">The endpoints whose rows are not claimed.</param>
+    /// <param name="ct">Cancellation token.</param>
+    /// <returns>The claim; empty when nothing eligible remains.</returns>
+    /// <remarks>
+    /// The default implementation ignores <paramref name="excluded"/> and claims as the overload
+    /// without it. That stays correct — the processor defers an excluded endpoint's rows it is handed,
+    /// without an attempt, as <see cref="OutboxOutcomeKind.Deferred"/>, which
+    /// <see cref="ApplyOutcomesAsync"/> must settle like every other kind — but every claim then
+    /// carries the down endpoint's rows; a store that can filter on <see cref="OutboxMessage.Endpoint"/>
+    /// should, with an index led by the status and then the endpoint, so neither the down endpoint's
+    /// backlog nor the published history is walked. A row whose endpoint is neither the
+    /// transport nor the local endpoint is never excluded: the processor dead-letters it.
+    /// </remarks>
+    ValueTask<OutboxClaim> ClaimBatchAsync(
+        int batchSize,
+        TimeSpan lockDuration,
+        OutboxEndpoints excluded,
+        CancellationToken ct = default)
+        => ClaimBatchAsync(batchSize, lockDuration, ct);
 
     /// <summary>
     /// Persists the disposition of every message from the matching claim, in one call at

@@ -4,7 +4,8 @@
     <RootNamespace>MicroKit.Messaging</RootNamespace>
     <Description>Messaging core for MicroKit — the message bus (publish straight to a transport,
     receive pipeline with middleware and typed verdicts), the in-memory transport, System.Text.Json
-    serialization, and the transitional outbox and inbox engine, with its DI extensions.</Description>
+    serialization, the inbox guard, the local endpoint, and the store engine that drains each
+    configured outbox and inbox, with its DI extensions.</Description>
     <PackageTags>microkit;messaging;outbox;inbox;integration-events;dotnet</PackageTags>
     <Authors>Ange-Michaël Atsé</Authors>
     <PackageLicenseExpression>MIT</PackageLicenseExpression>

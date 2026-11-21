@@ -36,10 +36,11 @@ using MicroKit.Messaging.Serialization;
 /// processor classifies it as <i>transient</i> — spending the full retry budget of every queued
 /// message on a missing line in a composition root, then dead-lettering them all. Taken through the
 /// constructor, the same missing registration fails while the processor is <i>activating</i> this
-/// type, which it classifies batch-wide: the batch is released untouched, no retry is consumed, the
-/// batch result reports <see cref="OutboxBatchAbortReason.DispatcherActivationFailed"/>, and the
-/// worker backs off and tries again on the next cycle, logging each time. The rows stay
-/// <see cref="OutboxMessageStatus.Pending"/> until a transport is there to take them.
+/// type, which it classifies endpoint-wide: the store's transport rows are deferred untouched, no
+/// retry is consumed, the batch result reports <see cref="OutboxBatchAbortReason.DispatcherActivationFailed"/>,
+/// the local rows are still delivered, and activation is tried again — and logged — once per
+/// back-off period. The rows stay <see cref="OutboxMessageStatus.Pending"/> until a transport is
+/// there to take them.
 /// </para>
 /// <para>
 /// <b>No <c>try</c>/<c>catch</c> around the send.</b> A transport's exception type <i>is</i> its
@@ -47,9 +48,10 @@ using MicroKit.Messaging.Serialization;
 /// it. Wrapping or re-typing anything here would destroy the only signal the engine has.
 /// </para>
 /// <para>
-/// Registered as <b>scoped</b> with the transport, keyed <see cref="OutboxDispatchers.Transport"/>,
-/// by <c>UseInMemoryTransport()</c> or a broker provider; the processor resolves it from the
-/// per-message execution scope.
+/// Registered as <b>scoped</b>, keyed <see cref="OutboxDispatchers.Transport"/>, with every store
+/// (<c>StoreEngineRegistration.AddStore</c>) — a broker provider registers only its
+/// <see cref="IMessageTransport"/> — and idempotently by <c>UseInMemoryTransport()</c>; the processor
+/// resolves it from the per-message execution scope.
 /// </para>
 /// </remarks>
 internal sealed class TransportOutboxDispatcher(

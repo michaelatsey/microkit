@@ -185,7 +185,7 @@ public sealed class OutboxProcessorTests
     // ---------------------------------------------------------------------------
 
     [Fact]
-    public async Task ProcessBatch_WhenTransportUnavailable_ReleasesRemainderWithoutConsumingRetries()
+    public async Task ProcessBatch_WhenTransportUnavailable_DefersItsEndpointsRemainderWithoutConsumingRetries()
     {
         var first = OutboxFixtures.Message();
         var second = OutboxFixtures.Message();
@@ -198,13 +198,13 @@ public sealed class OutboxProcessorTests
 
         result.AbortReason.ShouldBe(OutboxBatchAbortReason.TransportUnavailable);
         result.Published.ShouldBe(1);
-        result.Released.ShouldBe(2, "the message that hit the outage AND every message after it");
+        result.Released.ShouldBe(2, "the message that hit the outage AND every later row of its endpoint");
         result.Retried.ShouldBe(0, "an outage must not burn the queue's retry budget");
         result.DeadLettered.ShouldBe(0);
 
-        // The message that triggered the outage is released, not retried.
-        captured.Single(o => o.MessageId == second.Id).Kind.ShouldBe(OutboxOutcomeKind.Released);
-        captured.Single(o => o.MessageId == third.Id).Kind.ShouldBe(OutboxOutcomeKind.Released);
+        // The message that triggered the outage is deferred, its attempt count unchanged.
+        captured.Where(o => o.MessageId != first.Id).ShouldAllBe(o =>
+            o.Kind == OutboxOutcomeKind.Deferred && o.NextRetryAtUtc != null);
         dispatcher.Dispatched.Count.ShouldBe(2, "the third message is never attempted");
     }
 
@@ -286,7 +286,7 @@ public sealed class OutboxProcessorTests
     /// </para>
     /// </remarks>
     [Fact]
-    public async Task ProcessBatch_WhenTheDispatcherCannotBeActivated_ReleasesTheBatchWithoutConsumingRetriesOrRethrowing()
+    public async Task ProcessBatch_WhenTheDispatcherCannotBeActivated_DefersItsEndpointsRowsWithoutConsumingRetriesOrRethrowing()
     {
         var first = OutboxFixtures.Message(retryCount: 1);
         // Its own tenant and kind, so the 1009 assertion below cannot pass on a neighbour's values.
@@ -321,16 +321,15 @@ public sealed class OutboxProcessorTests
         activationFailure.ShouldContain("endpoint", Case.Sensitive, "the row's endpoint names the dispatcher that failed");
 
         result.Published.ShouldBe(1, "message 1 was delivered before message 2's dispatcher failed");
-        result.Released.ShouldBe(2, "the message that hit the fault AND every message after it");
+        result.Released.ShouldBe(2, "the message that hit the fault AND every later row of its endpoint");
         result.Retried.ShouldBe(0, "an activation failure is not a per-message fault");
         result.DeadLettered.ShouldBe(0);
 
         captured.Single(o => o.MessageId == first.Id).Kind.ShouldBe(OutboxOutcomeKind.Published);
-        foreach (var released in captured.Where(o => o.MessageId != first.Id))
+        foreach (var deferred in captured.Where(o => o.MessageId != first.Id))
         {
-            released.Kind.ShouldBe(OutboxOutcomeKind.Released);
-            released.RetryCount.ShouldBe(0, "Released carries no retry count — the row keeps its own");
-            released.NextRetryAtUtc.ShouldBeNull();
+            deferred.Kind.ShouldBe(OutboxOutcomeKind.Deferred, "the row keeps its own count: no attempt is charged");
+            deferred.NextRetryAtUtc.ShouldNotBeNull("deferred to the end of the endpoint's back-off");
         }
 
         dispatcher.Dispatched.ShouldHaveSingleItem().Id.ShouldBe(first.Id, "message 3 is never attempted");

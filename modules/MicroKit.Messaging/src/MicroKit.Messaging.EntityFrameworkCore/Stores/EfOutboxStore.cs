@@ -126,8 +126,13 @@ internal sealed class EfOutboxStore<TContext>(
     // ---------- IOutboxProcessorStore ----------
 
     /// <inheritdoc/>
-    public async ValueTask<OutboxClaim> ClaimBatchAsync(
+    public ValueTask<OutboxClaim> ClaimBatchAsync(
         int batchSize, TimeSpan lockDuration, CancellationToken ct = default)
+        => ClaimBatchAsync(batchSize, lockDuration, OutboxEndpoints.None, ct);
+
+    /// <inheritdoc/>
+    public async ValueTask<OutboxClaim> ClaimBatchAsync(
+        int batchSize, TimeSpan lockDuration, OutboxEndpoints excluded, CancellationToken ct = default)
     {
         var now = timeProvider.GetUtcNow();
         var lockExpiry = now.Add(lockDuration);
@@ -145,7 +150,9 @@ internal sealed class EfOutboxStore<TContext>(
         //    business timestamp the caller supplies, or a backdated event jumps every row ahead of
         //    it. This clause and the contended read-back below must always agree — two different
         //    sorts would make the claim's contents depend on whether it was contended.
-        var candidates = await Dispatchable(now)
+        //    The excluded endpoints' rows are left out here only: the stamp below matches the
+        //    candidates by id, and the read-back by token.
+        var candidates = await Excluding(Dispatchable(now), excluded)
             .OrderBy(m => m.CreatedAtUtc)
             .Take(batchSize)
             .ToListAsync(ct)
@@ -275,6 +282,8 @@ internal sealed class EfOutboxStore<TContext>(
                   .SetProperty(m => m.ClaimToken, (Guid?)null),
             ct).ConfigureAwait(false);
 
+        written += await SettleDeferredAsync(claimToken, outcomes, ct).ConfigureAwait(false);
+
         // Retries and dead-letters carry per-message values (retry count, next attempt,
         // error text), so they cannot collapse into one statement without a server-side join
         // over a values list — which is provider-specific and would forfeit SQLite testing.
@@ -380,6 +389,38 @@ internal sealed class EfOutboxStore<TContext>(
 
     // ---------- helpers ----------
 
+    /// <summary>Leaves out the rows of the endpoints in back-off (#188).</summary>
+    private static IQueryable<OutboxMessage> Excluding(IQueryable<OutboxMessage> rows, OutboxEndpoints excluded)
+    {
+        if ((excluded & OutboxEndpoints.Transport) != 0)
+        {
+            rows = rows.Where(m => m.Endpoint != null);
+        }
+
+        if ((excluded & OutboxEndpoints.Local) != 0)
+        {
+            // Three ranges around the local rows — the transport rows, and any other endpoint's,
+            // which the processor dead-letters — as a UNION ALL of branches, each of which an index
+            // can scan: "<> 'local'", or an OR the planner cannot push into the eligibility
+            // predicate's own OR, walks the local backlog (EndpointExclusionPlanTests).
+            // string.Compare is the form EF Core translates to SQL "<" and ">"; it is never run in
+            // .NET, so the culture CA1309 guards against does not apply. The ranges equal
+            // "<> 'local'" under a deterministic (case-sensitive) collation, the default of the tested
+            // providers; under a case-insensitive one, an unroutable "LOCAL" would wait out the local
+            // back-off before being dead-lettered.
+#pragma warning disable CA1309
+            rows = (excluded & OutboxEndpoints.Transport) != 0
+                ? rows.Where(m => string.Compare(m.Endpoint, OutboxMessage.LocalEndpoint) < 0)
+                    .Concat(rows.Where(m => string.Compare(m.Endpoint, OutboxMessage.LocalEndpoint) > 0))
+                : rows.Where(m => m.Endpoint == null)
+                    .Concat(rows.Where(m => string.Compare(m.Endpoint, OutboxMessage.LocalEndpoint) < 0))
+                    .Concat(rows.Where(m => string.Compare(m.Endpoint, OutboxMessage.LocalEndpoint) > 0));
+#pragma warning restore CA1309
+        }
+
+        return rows;
+    }
+
     private IQueryable<OutboxMessage> Dispatchable(DateTimeOffset now) =>
         context.Set<OutboxMessage>().AsNoTracking().Where(EligibilityPredicate(now));
 
@@ -393,6 +434,59 @@ internal sealed class EfOutboxStore<TContext>(
              && (m.Status == OutboxMessageStatus.Pending
                  || (m.Status == OutboxMessageStatus.Processing && m.LockedUntilUtc <= now))
              && (m.NextRetryAtUtc == null || m.NextRetryAtUtc <= now);
+
+    /// <summary>
+    /// Deferrals, set-based: an outage defers whole batches, so one statement per distinct next
+    /// attempt — in practice one per down endpoint — rather than one per row. The retry count and
+    /// the error text are left alone: no attempt was made.
+    /// </summary>
+    private async ValueTask<int> SettleDeferredAsync(
+        Guid claimToken, IReadOnlyList<OutboxOutcome> outcomes, CancellationToken ct)
+    {
+        // A deferral with no next attempt (the positional constructor allows one) is settled as
+        // eligible at once, like a release: never left claimed until its lease expires.
+        var groups = new Dictionary<DateTimeOffset, List<MessageId>>();
+        List<MessageId>? dueNow = null;
+        foreach (var outcome in outcomes)
+        {
+            if (outcome.Kind is not OutboxOutcomeKind.Deferred)
+            {
+                continue;
+            }
+
+            List<MessageId>? ids;
+            if (outcome.NextRetryAtUtc is not { } until)
+            {
+                ids = dueNow ??= [];
+            }
+            else if (!groups.TryGetValue(until, out ids))
+            {
+                groups[until] = ids = [];
+            }
+
+            ids.Add(outcome.MessageId);
+        }
+
+        var written = dueNow is null ? 0 : await DeferAsync(claimToken, dueNow, null, ct).ConfigureAwait(false);
+        foreach (var (until, ids) in groups)
+        {
+            written += await DeferAsync(claimToken, ids, until, ct).ConfigureAwait(false);
+        }
+
+        return written;
+    }
+
+    private async ValueTask<int> DeferAsync(
+        Guid claimToken, List<MessageId> ids, DateTimeOffset? nextAttempt, CancellationToken ct)
+        => await context.Set<OutboxMessage>()
+            .Where(m => ids.Contains(m.Id) && m.ClaimToken == claimToken)
+            .ExecuteUpdateAsync(s => s
+                .SetProperty(m => m.Status, OutboxMessageStatus.Pending)
+                .SetProperty(m => m.NextRetryAtUtc, nextAttempt)
+                .SetProperty(m => m.LockedUntilUtc, (DateTimeOffset?)null)
+                .SetProperty(m => m.ClaimToken, (Guid?)null),
+                ct)
+            .ConfigureAwait(false);
 
     private async ValueTask<int> SettleAsync(
         Guid claimToken,

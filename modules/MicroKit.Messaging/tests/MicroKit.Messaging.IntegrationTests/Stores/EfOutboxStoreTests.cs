@@ -491,6 +491,106 @@ public sealed class EfOutboxStoreTests
             row.ClaimToken.ShouldBeNull();
         });
 
+    [Theory]
+    [InlineData(OutboxEndpoints.Transport)]
+    [InlineData(OutboxEndpoints.Local)]
+    [InlineData(OutboxEndpoints.Transport | OutboxEndpoints.Local)]
+    public Task ClaimBatchAsync_LeavesOutTheExcludedEndpointsRows_AndNeverAnUnroutableOne(OutboxEndpoints excluded)
+        => Task.Run(async () =>
+        {
+            var (conn, ctx) = CreateIsolatedDb();
+            await using var _ = conn;
+            await using var __ = ctx;
+
+            OutboxMessage Row(string? endpoint, int order)
+            {
+                var row = BuildOutboxMessage(createdAtUtc: Now.AddSeconds(order - 10));
+                row.Endpoint = endpoint;
+                return row;
+            }
+
+            var transport = Row(null, 0);
+            var local = Row(OutboxMessage.LocalEndpoint, 1);
+            var unroutable = Row("rabbitmq", 2);
+            var unroutableBelow = Row("kafka", 3);   // sorts below "local": the other range
+            ctx.OutboxMessages.AddRange(transport, local, unroutable, unroutableBelow);
+            await ctx.SaveChangesAsync();
+
+            var claimed = (await Store(ctx).ClaimBatchAsync(10, Lease, excluded)).Messages.Select(m => m.Id).ToList();
+
+            claimed.Contains(transport.Id).ShouldBe((excluded & OutboxEndpoints.Transport) == 0);
+            claimed.Contains(local.Id).ShouldBe((excluded & OutboxEndpoints.Local) == 0);
+            claimed.ShouldContain(unroutable.Id, "the processor dead-letters it; no filter hides it");
+            claimed.ShouldContain(unroutableBelow.Id, "on either side of 'local'");
+        });
+
+    [Fact]
+    public Task ApplyOutcomesAsync_Deferred_KeepsTheRetryCountAndTheError_AndSetsEachNextAttempt()
+        => Task.Run(async () =>
+        {
+            var (conn, ctx) = CreateIsolatedDb();
+            await using var _ = conn;
+            await using var __ = ctx;
+
+            // Seeded with a count and an error of their own: a deferral must keep both (#188).
+            for (var i = 0; i < 3; i++)
+            {
+                var seeded = BuildOutboxMessage(createdAtUtc: Now.AddSeconds(-10 + i));
+                seeded.RetryCount = 2;
+                seeded.ErrorMessage = "schema registry timeout";
+                ctx.OutboxMessages.Add(seeded);
+            }
+
+            await ctx.SaveChangesAsync();
+
+            var store = Store(ctx);
+            var claim = await store.ClaimBatchAsync(10, Lease);
+            var transportUntil = Now.AddSeconds(5);
+            var localUntil = Now.AddSeconds(10);
+            var written = await store.ApplyOutcomesAsync(claim.Token,
+            [
+                OutboxOutcome.Deferred(claim.Messages[0].Id, transportUntil),
+                OutboxOutcome.Deferred(claim.Messages[1].Id, transportUntil),
+                OutboxOutcome.Deferred(claim.Messages[2].Id, localUntil),
+            ]);
+
+            written.ShouldBe(3);
+            await using var probe = SecondContext(conn);
+            var rows = await probe.OutboxMessages.AsNoTracking().ToDictionaryAsync(m => m.Id);
+            rows.Values.ShouldAllBe(r => r.Status == OutboxMessageStatus.Pending && r.LockedUntilUtc == null && r.ClaimToken == null);
+            rows.Values.ShouldAllBe(r => r.RetryCount == 2, "no attempt was made");
+            rows.Values.ShouldAllBe(r => r.ErrorMessage == "schema registry timeout", "the last real error survives");
+            rows[claim.Messages[0].Id].NextRetryAtUtc.ShouldBe(transportUntil);
+            rows[claim.Messages[1].Id].NextRetryAtUtc.ShouldBe(transportUntil);
+            rows[claim.Messages[2].Id].NextRetryAtUtc.ShouldBe(localUntil, "each next attempt is its own");
+            (await store.ClaimBatchAsync(10, Lease)).Messages.ShouldBeEmpty("a deferred row is not claimable before its next attempt");
+        });
+
+    [Fact]
+    public Task ApplyOutcomesAsync_DeferredWithNoNextAttempt_IsSettledEligibleAtOnce_NeverLeftClaimed()
+        => Task.Run(async () =>
+        {
+            var (conn, ctx) = CreateIsolatedDb();
+            await using var _ = conn;
+            await using var __ = ctx;
+
+            ctx.OutboxMessages.Add(BuildOutboxMessage());
+            await ctx.SaveChangesAsync();
+
+            var store = Store(ctx);
+            var claim = await store.ClaimBatchAsync(10, Lease);
+            var id = claim.Messages[0].Id;
+            var written = await store.ApplyOutcomesAsync(
+                claim.Token, [new OutboxOutcome(id, OutboxOutcomeKind.Deferred, 0, null, null)]);
+
+            written.ShouldBe(1);
+            await using var probe = SecondContext(conn);
+            var row = await probe.OutboxMessages.AsNoTracking().SingleAsync();
+            row.Status.ShouldBe(OutboxMessageStatus.Pending);
+            row.ClaimToken.ShouldBeNull("never left claimed until its lease expires");
+            row.NextRetryAtUtc.ShouldBeNull();
+        });
+
     [Fact]
     public Task ApplyOutcomesAsync_Retry_PersistsRetryCountAndNextAttempt()
         => Task.Run(async () =>

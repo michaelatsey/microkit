@@ -30,9 +30,33 @@ internal static class StoreEngineRegistration
         services.TryAddEnumerable(ServiceDescriptor.Singleton<IHostedService, MessageStoreEngine>());
         services.TryAddSingleton<InboxMetrics>();
 
-        // A local row (#188 D7) is delivered by the store's own outbox loop, through the receive
-        // pipeline: its dispatcher comes with the first store, whatever the transport.
+        // Both dispatchers of a store's outbox come with the first store: a local row (#188 D7) is
+        // delivered through the receive pipeline whatever the transport, and a transport row goes to
+        // whatever IMessageTransport the host registers — the in-memory one or a provider's, which
+        // has no other way to register this internal dispatcher. With no transport registered, the
+        // transport dispatcher cannot be activated: the store's transport rows are deferred to the end
+        // of the transport endpoint's back-off (event 1009, naming the call to add) until one is
+        // deployed, and its local rows are delivered meanwhile.
         services.TryAddKeyedScoped<IOutboxDispatcher, Local.LocalOutboxDispatcher>(OutboxDispatchers.Local);
+
+        // A factory, not a type: a host with a store and no transport is valid (domain events only),
+        // and ValidateOnBuild — on by default in Development — would reject a typed registration
+        // whose constructor needs an IMessageTransport. Resolving the factory still throws the
+        // container's InvalidOperationException, so the activation verdict is unchanged.
+        services.TryAddKeyedScoped<IOutboxDispatcher>(OutboxDispatchers.Transport, static (sp, _) =>
+            new Dispatch.TransportOutboxDispatcher(
+                sp.GetService<IMessageTransport>() ?? throw new InvalidOperationException(
+                    "No IMessageTransport is registered, so a transport outbox row cannot be sent. Register " +
+                    "one — bus.UseInMemoryTransport(), or a broker provider's transport — and the row is " +
+                    "sent on the next attempt; the store's local rows are delivered meanwhile."),
+                sp.GetRequiredService<ILogger<Dispatch.TransportOutboxDispatcher>>()));
+
+        // The store's endpoint back-off: a singleton, it outlives each cycle's scoped processor.
+        services.AddKeyedSingleton(store, static (sp, _) =>
+        {
+            var options = sp.GetRequiredService<OutboxProcessorOptions>();
+            return new OutboxEndpointBackoff(options.PollingInterval, options.TransportUnavailableBackoff);
+        });
 
         // The processors are keyed by store and built over that store's keyed services, resolved
         // from the loop's scope: the store's instance — its DbContext included — comes from the
@@ -44,7 +68,8 @@ internal static class StoreEngineRegistration
             sp.GetRequiredService<TimeProvider>(),
             sp.GetRequiredService<Random>(),
             sp.GetRequiredService<ILogger<OutboxProcessor>>(),
-            (MessageStoreKey)key!));
+            (MessageStoreKey)key!,
+            sp.GetRequiredKeyedService<OutboxEndpointBackoff>(key)));
 
         services.AddKeyedScoped<IInboxProcessor>(store, static (sp, key) => new InboxProcessor(
             sp.GetRequiredKeyedService<IInboxProcessorStore>(key),

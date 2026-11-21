@@ -17,9 +17,10 @@ namespace MicroKit.Messaging.Spi;
 /// <para>
 /// <b>Raised by service resolution, before any delivery is attempted.</b> <c>OutboxProcessor</c>
 /// resolves the dispatcher of each row's endpoint with <c>GetService</c>, and raises this only when
-/// the container returns <see langword="null"/>: the dispatcher is not registered at all — a
-/// transport row in a host that registers no transport. The row is valid; its arrival is what proves
-/// a registration is missing.
+/// the container returns <see langword="null"/>: the dispatcher is not registered at all. Every store
+/// registers both dispatchers, so that is a container composed outside the store engine; a host with
+/// no transport meets the activation failure instead. The row is valid; its arrival is what proves a
+/// registration is missing.
 /// A <see cref="IMessageTransport"/> implementation must <b>not</b> raise it — see that
 /// interface's remarks. By the time a transport runs, the composition has already been proven
 /// adequate by the fact that the transport was resolved and called.
@@ -28,21 +29,22 @@ namespace MicroKit.Messaging.Spi;
 /// <b>Not raised for a dispatcher that is registered but cannot be activated.</b> A
 /// <c>TransportOutboxDispatcher</c> with no <see cref="IMessageTransport"/> behind it is the common
 /// case: the container throws <see cref="InvalidOperationException"/> while activating the graph, and
-/// that is a different verdict. The message that met it and every one after it are released with no
-/// retry consumed, nothing is rethrown, the batch result reports
-/// <c>OutboxBatchAbortReason.DispatcherActivationFailed</c>, and the next cycle retries. The
-/// worker keeps running, so a transient cause drains the queue once it passes, and a missing
-/// dependency drains it once a build that supplies it is deployed. Only that exception type gets this
+/// that is a different verdict. The message's endpoint is put in back-off: the message that met it
+/// and that endpoint's later rows are deferred with no retry consumed, the endpoint is left out of the
+/// claim until its back-off ends, nothing is rethrown, the batch result reports
+/// <c>OutboxBatchAbortReason.DispatcherActivationFailed</c>, and the other endpoint's rows are still
+/// dispatched. A transient cause drains the queue once it passes, and a missing dependency drains it
+/// once a build that supplies it is deployed. Only that exception type gets this
 /// verdict: any other thrown while the graph is built, this one included, is classified as if the
 /// dispatcher had thrown it.
 /// </para>
 /// <para>
 /// <b>Not every such cause passes.</b> The dispatcher is activated in the scope of the message being
 /// dispatched, built from that message's tenant, so a tenant-aware composition can throw that
-/// exception for one tenant only — and a de-provisioned tenant never recovers. Its row stays oldest
-/// and heads every claim, and the outbox stalls for every tenant, with no dead-letter exit, until an
-/// operator intervenes. That is
-/// a known defect, not a design property; ADR-MSG-019 records it and the fix owed.
+/// exception for one tenant only — and a de-provisioned tenant never recovers. Each time the
+/// endpoint's back-off ends its row fails again, and that endpoint's rows of every tenant wait, with
+/// no dead-letter exit, until an operator intervenes; the other endpoint's rows still go out. That is
+/// a known defect, not a design property; the fix is owed by #124.
 /// </para>
 /// <para>
 /// <b>The two are separated by the container, not by inspecting an exception.</b>

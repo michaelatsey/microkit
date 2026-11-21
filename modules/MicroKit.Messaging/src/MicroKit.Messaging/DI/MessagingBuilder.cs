@@ -228,7 +228,9 @@ public sealed class MessagingBuilder
     /// <remarks>
     /// Keyed <see cref="OutboxDispatchers.Transport"/>: <c>OutboxProcessor</c> resolves a row's
     /// dispatcher by its endpoint, so the transport and the local endpoint never compete for one
-    /// slot (#188 D7). Internal since #187: a transport registration owns it. Idempotent.
+    /// slot (#188 D7). Every store registers it too (<c>StoreEngineRegistration.AddStore</c>), which is
+    /// how a broker provider's transport — which registers only its <see cref="IMessageTransport"/> —
+    /// sends a store's rows; this call is the in-memory transport's idempotent second path.
     /// </remarks>
     internal MessagingBuilder AddTransportDispatcher()
     {

@@ -22,16 +22,20 @@ namespace MicroKit.Messaging.Processing;
 /// <para>
 /// <b>Failure classification.</b> Failures <i>known</i> to be permanent are dead-lettered
 /// on first sight rather than after <c>MaxRetries</c> pointless dispatches, and a failure
-/// known to be fatal to the batch abandons it and releases the remainder untouched instead
-/// of failing every message in turn and burning the whole queue's retry budget during an
-/// outage. Everything unrecognised stays transient: a library that guesses permanence
-/// wrongly loses messages, so only proven permanence dead-letters.
+/// known to take an endpoint down — its transport unreachable, its dispatcher not activatable —
+/// defers that endpoint's rows to the end of its back-off (<see cref="OutboxEndpointBackoff"/>),
+/// unattempted and uncounted, instead of failing every message in turn and burning the queue's retry
+/// budget during an outage; the other endpoint's rows are still dispatched, and the deferred rows no
+/// longer head the claim (#188). Cancellation and a configuration fault release the rest of the
+/// batch; the rows handled before keep their outcomes.
+/// Everything unrecognised stays transient: a library that guesses permanence wrongly loses
+/// messages, so only proven permanence dead-letters.
 /// </para>
 /// <para>
 /// Resolving the dispatcher yields three verdicts, and the container decides between them rather
 /// than an inspection of its exception: <c>GetService</c> returning <see langword="null"/> is a
-/// configuration fault; <c>GetService</c> throwing <see cref="InvalidOperationException"/> is
-/// batch-fatal at no retry cost; any other type it throws, and anything thrown once the dispatcher
+/// configuration fault; <c>GetService</c> throwing <see cref="InvalidOperationException"/> takes the
+/// row's endpoint down at no retry cost; any other type it throws, and anything thrown once the dispatcher
 /// exists, is classified as above.
 /// </para>
 /// <para>
@@ -46,10 +50,10 @@ namespace MicroKit.Messaging.Processing;
 /// batch, rethrows <see cref="OutboxConfigurationException"/> and stops the worker: it will not fix
 /// itself without a redeployment. A registration the container can supply but cannot activate —
 /// <c>GetService</c> throws <see cref="InvalidOperationException"/>, most often because
-/// <see cref="IMessageTransport"/> is missing behind a transport dispatcher — abandons the batch
-/// too, but costs no retry budget and is not rethrown: the batch reports
-/// <see cref="OutboxBatchAbortReason.DispatcherActivationFailed"/>, the worker backs off, and the
-/// next cycle tries again.
+/// <see cref="IMessageTransport"/> is missing behind a transport dispatcher — defers that endpoint's
+/// rows, costs no retry budget and is not rethrown: the batch reports
+/// <see cref="OutboxBatchAbortReason.DispatcherActivationFailed"/>, and the endpoint is tried again
+/// once its back-off ends.
 /// </para>
 /// <para>
 /// <b>Delivery semantics.</b> At-least-once. A crash between dispatch and the settlement
@@ -85,6 +89,7 @@ internal sealed class OutboxProcessor : IOutboxProcessor
     private readonly Random _random;
     private readonly ILogger<OutboxProcessor> _logger;
     private readonly MessageStoreKey? _storeKey;
+    private readonly OutboxEndpointBackoff _endpointBackoff;
 
     /// <summary>Initializes a new <see cref="OutboxProcessor"/>.</summary>
     /// <param name="store">Claim and settlement operations. Batch-scoped, not per-message.</param>
@@ -100,6 +105,10 @@ internal sealed class OutboxProcessor : IOutboxProcessor
     /// The store this processor drains, written on every dispatch scope so a publication made there
     /// is enlisted in the same store. Null only for a processor built by hand.
     /// </param>
+    /// <param name="endpointBackoff">
+    /// The store's endpoint back-off, shared by every cycle's processor. Null only for a processor
+    /// built by hand, which then gets one of its own.
+    /// </param>
     public OutboxProcessor(
         IOutboxProcessorStore store,
         IExecutionScopeFactory executionScopeFactory,
@@ -107,7 +116,8 @@ internal sealed class OutboxProcessor : IOutboxProcessor
         TimeProvider timeProvider,
         Random random,
         ILogger<OutboxProcessor> logger,
-        MessageStoreKey? storeKey = null)
+        MessageStoreKey? storeKey = null,
+        OutboxEndpointBackoff? endpointBackoff = null)
     {
         _store = store;
         _executionScopeFactory = executionScopeFactory;
@@ -116,6 +126,8 @@ internal sealed class OutboxProcessor : IOutboxProcessor
         _random = random;
         _logger = logger;
         _storeKey = storeKey;
+        _endpointBackoff = endpointBackoff
+            ?? new OutboxEndpointBackoff(options.PollingInterval, options.TransportUnavailableBackoff);
     }
 
     /// <inheritdoc />
@@ -123,9 +135,12 @@ internal sealed class OutboxProcessor : IOutboxProcessor
         int batchSize,
         CancellationToken cancellationToken = default)
     {
-        var claim = await _store
-            .ClaimBatchAsync(batchSize, _options.LockDuration, cancellationToken)
-            .ConfigureAwait(false);
+        // An endpoint in back-off is left out of the claim (#188): its rows are neither claimed nor
+        // rewritten while it is down, and the other endpoint's rows behind them are reached.
+        var excluded = _endpointBackoff.BlockedAt(_timeProvider.GetUtcNow());
+        var claim = excluded is OutboxEndpoints.None
+            ? await _store.ClaimBatchAsync(batchSize, _options.LockDuration, cancellationToken).ConfigureAwait(false)
+            : await _store.ClaimBatchAsync(batchSize, _options.LockDuration, excluded, cancellationToken).ConfigureAwait(false);
 
         if (claim.Count == 0)
         {
@@ -140,6 +155,15 @@ internal sealed class OutboxProcessor : IOutboxProcessor
         OutboxConfigurationException? configurationFault = null;
         var index = 0;
 
+        // An endpoint that is down — its transport unreachable, its dispatcher not activatable, a
+        // local consumer's dependency out — has its rows deferred, unattempted and uncounted, until
+        // its back-off ends; the other endpoint's rows are still dispatched (#188). The back-off is
+        // the store's, kept across cycles, so a down endpoint is tried once per back-off period and
+        // its stuck rows never head the next claim. Event 1010 reports, per endpoint, what the batch
+        // deferred, once the batch is done.
+        var deferred = default(DeferralTally);
+        var handedOver = false;
+
         for (; index < messages.Count; index++)
         {
             if (cancellationToken.IsCancellationRequested)
@@ -150,11 +174,34 @@ internal sealed class OutboxProcessor : IOutboxProcessor
             }
 
             var message = messages[index];
+            var endpointKey = OutboxDispatchers.KeyOf(message);
+            if (endpointKey is not null
+                && _endpointBackoff.IsBlocked(endpointKey, _timeProvider.GetUtcNow(), out var blockedUntil))
+            {
+                // Handed over although its endpoint is in back-off: by a store whose claim ignores the
+                // filter, or a back-off that began after the claim.
+                abortReason = FirstOf(abortReason, OutboxBatchAbortReason.EndpointInBackOff);
+
+                // Only a row whose endpoint the claim was asked to leave out tells the loop to wait:
+                // a store that ignores the filter. A back-off that began in this batch does not: its
+                // deferred rows wait out their NextRetryAtUtc, a filtering store leaves the endpoint out
+                // of the next claim, and a filterless one hands over the rest of its backlog, which
+                // sets the flag then if that batch comes within the back-off — at most one immediate
+                // batch more per back-off start.
+                handedOver |= (excluded & EndpointOf(endpointKey)) != 0;
+                outcomes.Add(OutboxOutcome.Deferred(message.Id, blockedUntil));
+                deferred.Add(endpointKey, blockedUntil);
+                continue;
+            }
 
             try
             {
                 await DispatchAsync(message, cancellationToken).ConfigureAwait(false);
                 outcomes.Add(OutboxOutcome.Published(message.Id));
+                if (endpointKey is not null)
+                {
+                    _endpointBackoff.Clear(endpointKey);
+                }
             }
             catch (Exception ex) when (HostStop.Is(ex, cancellationToken))
             {
@@ -169,15 +216,17 @@ internal sealed class OutboxProcessor : IOutboxProcessor
             }
             catch (OutboxTransportUnavailableException ex)
             {
-                abortReason = OutboxBatchAbortReason.TransportUnavailable;
-                OutboxProcessorLogs.TransportUnavailable(_logger, ex, messages.Count - index);
-                break;
+                var until = BlockEndpoint(endpointKey);
+                abortReason = FirstOf(abortReason, OutboxBatchAbortReason.TransportUnavailable);
+                OutboxProcessorLogs.TransportUnavailable(_logger, ex, message.Endpoint);
+                outcomes.Add(OutboxOutcome.Deferred(message.Id, until));
+                deferred.Add(endpointKey, until);
             }
             catch (OutboxConfigurationException ex)
             {
                 // A missing registration is a deployment defect, not a transient fault:
                 // treating it as transient would dead-letter the whole queue over one missing
-                // line in the composition root. The batch is settled below — every message
+                // line in the composition root. The batch is settled below — the rest of it
                 // released untouched — and only then is the fault rethrown, so the worker can
                 // stop without stranding a single lease.
                 abortReason = OutboxBatchAbortReason.ConfigurationError;
@@ -189,25 +238,29 @@ internal sealed class OutboxProcessor : IOutboxProcessor
             {
                 // A dispatcher that is registered but cannot be activated — the container's
                 // InvalidOperationException, the only type ResolveDispatcher tags: neither a
-                // per-message retry nor a configuration fault. The batch is abandoned and released
-                // untouched, costing no retry budget, and NOT rethrown: the worker backs off and the
-                // next cycle tries again, so a transient condition, or a redeployment that supplies a
-                // missing dependency, drains the queue.
+                // per-message retry nor a configuration fault. The endpoint is down: this row and its
+                // endpoint's later rows are deferred to the end of its back-off, costing no retry
+                // budget, and NOT rethrown; the other endpoint's rows are still dispatched. A
+                // transient condition, or a redeployment that supplies a missing dependency, drains
+                // the queue once the back-off ends.
                 //
-                // KNOWN DEFECT (ADR-MSG-019). Activation runs in THIS message's scope, built from its
+                // KNOWN DEFECT (#124). Activation runs in THIS message's scope, built from its
                 // TenantId, so it can fail for one tenant only. A cause that never clears — a
-                // de-provisioned tenant — leaves this row oldest, heading every claim, and stalls the
-                // outbox for every tenant with no dead-letter exit. The log names the row so an
-                // operator can find it; the fix is owed.
-                abortReason = OutboxBatchAbortReason.DispatcherActivationFailed;
+                // de-provisioned tenant — fails again each time the endpoint is tried: its back-off
+                // grows toward its ceiling, or restarts from the base delay whenever another
+                // tenant's row of the endpoint gets through first. Either way the row is never
+                // dead-lettered, and the endpoint's rows wait while it fails. The log names the row
+                // so an operator can find it; the fix is owed.
+                var until = BlockEndpoint(endpointKey);
+                abortReason = FirstOf(abortReason, OutboxBatchAbortReason.DispatcherActivationFailed);
                 OutboxProcessorLogs.DispatcherActivationFailed(
                     _logger,
                     ex.InnerException ?? ex,
                     message.Id.Value,
                     message.TenantId,
-                    message.Endpoint,
-                    messages.Count - index);
-                break;
+                    message.Endpoint);
+                outcomes.Add(OutboxOutcome.Deferred(message.Id, until));
+                deferred.Add(endpointKey, until);
             }
             catch (OutboxPayloadException ex)
             {
@@ -223,8 +276,8 @@ internal sealed class OutboxProcessor : IOutboxProcessor
         }
 
         // Everything from `index` onward was claimed but never attempted — including the
-        // message that triggered the break. Released, never Retry: an outage must not
-        // consume the retry budget of messages it never reached.
+        // message that triggered the break (cancellation, a configuration fault). Released, never
+        // Retry: an outage must not consume the retry budget of messages it never reached.
         for (var i = index; i < messages.Count; i++)
         {
             outcomes.Add(OutboxOutcome.Released(messages[i].Id));
@@ -236,7 +289,21 @@ internal sealed class OutboxProcessor : IOutboxProcessor
 
         // Settle before anything else can throw: a stranded lease is worse than a late
         // exception, because it blocks its message for the whole LockDuration.
-        await SettleAsync(claim.Token, outcomes).ConfigureAwait(false);
+        var settled = await SettleAsync(claim.Token, outcomes).ConfigureAwait(false);
+
+        // 1010 reports a deferral that was written: a failed or partial settlement is reported by
+        // its own event, and its rows wait out their lease instead.
+        if (settled && deferred.Transport > 0)
+        {
+            OutboxProcessorLogs.EndpointDeferred(
+                _logger, null, deferred.Transport, deferred.TransportFrom, deferred.TransportUntil);
+        }
+
+        if (settled && deferred.Local > 0)
+        {
+            OutboxProcessorLogs.EndpointDeferred(
+                _logger, OutboxMessage.LocalEndpoint, deferred.Local, deferred.LocalFrom, deferred.LocalUntil);
+        }
 
         if (configurationFault is not null)
         {
@@ -245,7 +312,65 @@ internal sealed class OutboxProcessor : IOutboxProcessor
             throw configurationFault;
         }
 
-        return Summarize(outcomes, messages.Count, abortReason);
+        return Summarize(outcomes, messages.Count, abortReason) with { HandedOverInBackOff = handedOver };
+    }
+
+    /// <summary>
+    /// Puts the row's endpoint in back-off, from the time the failure happened — not the batch's
+    /// start, which a long batch leaves in the past — and returns when it ends.
+    /// </summary>
+    private DateTimeOffset BlockEndpoint(string? endpointKey)
+        => _endpointBackoff.Block(endpointKey ?? OutboxDispatchers.Transport, _timeProvider.GetUtcNow());
+
+    /// <summary>The <see cref="OutboxEndpoints"/> flag of a dispatcher key.</summary>
+    private static OutboxEndpoints EndpointOf(string endpointKey)
+        => endpointKey is OutboxDispatchers.Local ? OutboxEndpoints.Local : OutboxEndpoints.Transport;
+
+    /// <summary>
+    /// The batch's reason is the first endpoint verdict it met; each endpoint's own is logged with
+    /// its endpoint (1004, 1009).
+    /// </summary>
+    private static OutboxBatchAbortReason FirstOf(OutboxBatchAbortReason current, OutboxBatchAbortReason next)
+        => current is OutboxBatchAbortReason.None ? next : current;
+
+    /// <summary>What one batch deferred, per endpoint, for event 1010.</summary>
+    /// <remarks>
+    /// Rows of one endpoint can wait until different times: a back-off can end mid-batch and the
+    /// next failure start another. The tally keeps the earliest and the latest.
+    /// </remarks>
+    private struct DeferralTally
+    {
+        public int Transport;
+        public int Local;
+        public DateTimeOffset TransportFrom;
+        public DateTimeOffset TransportUntil;
+        public DateTimeOffset LocalFrom;
+        public DateTimeOffset LocalUntil;
+
+        public void Add(string? endpointKey, DateTimeOffset until)
+        {
+            if (endpointKey is OutboxDispatchers.Local)
+            {
+                Widen(ref Local, ref LocalFrom, ref LocalUntil, until);
+            }
+            else
+            {
+                Widen(ref Transport, ref TransportFrom, ref TransportUntil, until);
+            }
+        }
+
+        private static void Widen(ref int count, ref DateTimeOffset from, ref DateTimeOffset to, DateTimeOffset until)
+        {
+            if (count++ == 0 || until < from)
+            {
+                from = until;
+            }
+
+            if (until > to)
+            {
+                to = until;
+            }
+        }
     }
 
     private async ValueTask DispatchAsync(OutboxMessage message, CancellationToken cancellationToken)
@@ -324,15 +449,15 @@ internal sealed class OutboxProcessor : IOutboxProcessor
     /// reaches the transient arm — one message, one retry, and the rest of the batch runs. A wider
     /// catch would move a tenant lookup failing with its own type, a <see cref="KeyNotFoundException"/>
     /// say, from a per-message retry that dead-letters while every other tenant keeps publishing into
-    /// the batch-wide verdict below, which stalls them all.
+    /// the endpoint-wide verdict below, which holds them all.
     /// </para>
     /// <para>
     /// <b>That stall is narrowed, not closed.</b> This method runs in the scope of the message being
     /// dispatched, built from its <c>TenantId</c>, so
     /// activation can see the message and throw <see cref="InvalidOperationException"/> for one tenant
-    /// only. A de-provisioned tenant does not recover on its own: its row stays oldest, heads every
-    /// claim, and the verdict below stalls the outbox for every tenant. ADR-MSG-019 records that as a
-    /// known defect with the fix owed.
+    /// only. A de-provisioned tenant does not recover on its own: each time its endpoint's back-off
+    /// ends the row fails again, and the verdict below holds that endpoint's rows of every tenant: a
+    /// known defect, the fix owed by #124. The other endpoint's rows are not held.
     /// </para>
     /// <para>
     /// <c>GetService</c> separates the two verdicts structurally rather than by inspecting an exception:
@@ -344,8 +469,8 @@ internal sealed class OutboxProcessor : IOutboxProcessor
     ///         without a redeployment.</item>
     ///   <item><b>An <see cref="InvalidOperationException"/></b> is wrapped in
     ///         <see cref="OutboxDispatcherActivationException"/>, which the batch loop catches by type:
-    ///         the batch is released and settled, no retry budget moves, nothing is rethrown, and the
-    ///         next cycle tries again. The <c>try</c> wraps <c>GetService</c> and nothing else, and
+    ///         the row's endpoint is deferred, no retry budget moves, nothing is rethrown, and the
+    ///         endpoint is tried again once its back-off ends. The <c>try</c> wraps <c>GetService</c> and nothing else, and
     ///         <c>GetService</c> never throws for an absent registration, so the wrapper tags an
     ///         activation failure — it classifies nothing as configuration.</item>
     ///   <item><b>Cancellation and disposal are not tagged.</b> An
@@ -353,19 +478,19 @@ internal sealed class OutboxProcessor : IOutboxProcessor
     ///         <see cref="InvalidOperationException"/>, so it never reaches the <c>catch</c>: it takes the
     ///         loop's cancellation arm when the token is cancelled, and the transient arm otherwise. An
     ///         <see cref="ObjectDisposedException"/> does derive from it, and the filter excludes it: the
-    ///         provider going away is the host shutting down, not the composition failing. Not being an
-    ///         <see cref="OperationCanceledException"/>, it reaches the transient arm and costs that
-    ///         message one retry — exactly as one thrown by <c>CreateScopeAsync</c> does. Whether
-    ///         shutdown should release rather than retry is owed (ADR-MSG-019).</item>
+    ///         provider going away is the host shutting down, not the composition failing: while the host
+    ///         stops, the batch loop's <c>HostStop</c> arm releases the row with its attempt count
+    ///         unchanged (#128); while it runs, it is a transient failure of that message.</item>
     /// </list>
     /// </para>
     /// <para>
-    /// <b>Batch-wide rather than per message.</b> For a cause every message shares — a missing
+    /// <b>Endpoint-wide rather than per message.</b> For a cause every message shares — a missing
     /// <see cref="IMessageTransport"/> — a per-message verdict would charge N retry budgets for one
     /// cause and, at <c>MaxRetries</c>, dead-letter the queue over one line in a composition root. Not
-    /// every cause is shared: a tenant-scoped one fails for some messages only, and releasing the batch
-    /// for it is the known defect above. The inbox does not copy it (#188): a guard that cannot be
-    /// activated fails that one delivery, redelivered, or that one retry, counted — never the batch.
+    /// every cause is shared: a tenant-scoped one fails for some messages only, and deferring the
+    /// endpoint for it is the known defect above. The inbox does not copy it (#188): a guard that
+    /// cannot be activated fails that one delivery, redelivered, or that one retry, counted — never the
+    /// batch.
     /// </para>
     /// </remarks>
     private static IOutboxDispatcher ResolveDispatcher(IServiceProvider serviceProvider, OutboxMessage message)
@@ -392,13 +517,9 @@ internal sealed class OutboxProcessor : IOutboxProcessor
 
         return dispatcher
             ?? throw new OutboxConfigurationException(
-                key is OutboxDispatchers.Transport
-                    ? $"Outbox message {message.Id} is bound for the transport, but no transport is " +
-                      "registered, so it cannot be dispatched. Register one — bus.UseInMemoryTransport(), " +
-                      "or a broker provider's Add{Provider}Transport(). Retrying will not help."
-                    : $"Outbox message {message.Id} is bound for the local endpoint, but its dispatcher " +
-                      "is not registered. The store engine registers it with every store; a container " +
-                      "missing it was composed outside AddMicroKitMessaging. Retrying will not help.");
+                $"Outbox message {message.Id} is bound for the {(key is OutboxDispatchers.Transport ? "transport" : "local endpoint")}, " +
+                "but its dispatcher is not registered. The store engine registers both dispatchers with every " +
+                "store, so this container was composed outside AddMessageStore. Retrying will not help.");
     }
 
     private OutboxOutcome BuildTransientOutcome(OutboxMessage message, Exception ex)
@@ -462,7 +583,8 @@ internal sealed class OutboxProcessor : IOutboxProcessor
     /// message would be dispatched again. A brief flush window on shutdown is strictly
     /// cheaper than that.
     /// </remarks>
-    private async ValueTask SettleAsync(Guid claimToken, List<OutboxOutcome> outcomes)
+    /// <returns><see langword="true"/> when every outcome was written.</returns>
+    private async ValueTask<bool> SettleAsync(Guid claimToken, List<OutboxOutcome> outcomes)
     {
         using var settleCts = new CancellationTokenSource(_options.OutcomeFlushTimeout);
 
@@ -477,7 +599,10 @@ internal sealed class OutboxProcessor : IOutboxProcessor
                 // Silent success is forbidden: fewer rows than outcomes means leases were
                 // lost mid-batch and another processor now owns those messages.
                 OutboxProcessorLogs.PartialSettlement(_logger, written, outcomes.Count);
+                return false;
             }
+
+            return true;
         }
         catch (Exception ex)
         {
@@ -485,6 +610,7 @@ internal sealed class OutboxProcessor : IOutboxProcessor
             // Letting this escape would take down the hosting BackgroundService over a
             // condition the outbox is designed to survive.
             OutboxProcessorLogs.SettlementFailed(_logger, ex, outcomes.Count);
+            return false;
         }
     }
 
@@ -505,7 +631,8 @@ internal sealed class OutboxProcessor : IOutboxProcessor
                 case OutboxOutcomeKind.Published: published++; break;
                 case OutboxOutcomeKind.Retry: retried++; break;
                 case OutboxOutcomeKind.DeadLetter: deadLettered++; break;
-                case OutboxOutcomeKind.Released: released++; break;
+                // A deferred row was not attempted: reported with the released ones.
+                case OutboxOutcomeKind.Released or OutboxOutcomeKind.Deferred: released++; break;
                 default: break;
             }
         }

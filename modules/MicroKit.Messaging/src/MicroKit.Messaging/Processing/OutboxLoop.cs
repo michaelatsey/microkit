@@ -12,9 +12,18 @@ namespace MicroKit.Messaging.Processing;
 /// </para>
 /// <para>
 /// <b>Cadence.</b> A saturated batch polls again at once; an empty queue grows the delay toward
-/// <see cref="OutboxProcessorOptions.MaxPollingInterval"/>; a transport outage or an abandoned
-/// batch grows it toward <see cref="OutboxProcessorOptions.TransportUnavailableBackoff"/>; a partial
-/// batch returns to <see cref="OutboxProcessorOptions.PollingInterval"/>.
+/// <see cref="OutboxProcessorOptions.MaxPollingInterval"/>; a partial batch returns to
+/// <see cref="OutboxProcessorOptions.PollingInterval"/>. A down endpoint is not the loop's to back
+/// off (#188): the processor defers its rows to the end of the endpoint's own back-off
+/// (<see cref="OutboxEndpointBackoff"/>), so the next claim skips them and the other endpoint's rows
+/// keep this cadence. One exception, before saturation: a batch that carried rows handed over in
+/// back-off (<see cref="OutboxBatchResult.HandedOverInBackOff"/> — a store whose claim ignores the
+/// endpoint filter) waits <see cref="OutboxProcessorOptions.PollingInterval"/>, or the loop would
+/// rewrite the down endpoint's backlog back to back. That store still costs a down endpoint's
+/// backlog a rewrite each back-off period, and holds the other endpoint to one batch per polling
+/// interval while it keeps handing that backlog over; a store should filter. A processor that
+/// cannot be activated grows the delay toward
+/// <see cref="OutboxProcessorOptions.TransportUnavailableBackoff"/>.
 /// </para>
 /// <para>
 /// <b>Activation is not registration.</b> The processor and its store are registered — host start
@@ -72,7 +81,7 @@ internal sealed class OutboxLoop(
             }
             catch (OutboxConfigurationException ex)
             {
-                // The batch was settled — every row released — before the processor rethrew. A
+                // The batch was settled — the rest of it released — before the processor rethrew. A
                 // missing registration does not fix itself, so the loop stops rather than retrying
                 // forever, and only this store's loop stops.
                 StoreEngineLogs.LoopStopped(logger, ex, Loop, store.Value);
@@ -112,12 +121,13 @@ internal sealed class OutboxLoop(
     /// <returns>The next delay.</returns>
     internal TimeSpan NextDelay(OutboxBatchResult result, TimeSpan current) => result switch
     {
-        // Checked BEFORE saturation: an abandoned batch still reports every row it claimed, so a
-        // full one would otherwise poll again at once and spin against the database.
-        { AbortReason: OutboxBatchAbortReason.TransportUnavailable
-            or OutboxBatchAbortReason.DispatcherActivationFailed }
-            => Grow(current, options.TransportUnavailableBackoff),
+        // No outage arm: a down endpoint's rows were deferred by the processor (OutboxEndpointBackoff),
+        // so a batch that hit one is sized like any other — a full one cannot re-claim its own rows.
         { AbortReason: OutboxBatchAbortReason.Cancelled } => current,
+        // Rows handed over while their endpoint is in back-off — a store that ignores the claim's
+        // endpoint filter: polling again at once, even after a batch that also delivered something,
+        // would rewrite the down endpoint's whole backlog a batch at a time.
+        { HandedOverInBackOff: true } => options.PollingInterval,
         var r when r.IsSaturated(options.BatchSize) => TimeSpan.Zero,
         { HasWork: false } => Grow(current, options.MaxPollingInterval),
         _ => options.PollingInterval,

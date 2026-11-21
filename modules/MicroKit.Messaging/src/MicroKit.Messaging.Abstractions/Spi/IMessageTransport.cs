@@ -86,8 +86,9 @@ public interface IMessageTransport
     /// rejected, channel closed — so sending the <i>next</i> message is certain to fail too.
     /// <para>
     /// This says something about the transport, not about this message, which is why it must be
-    /// raised only when that is genuinely true. The processor abandons the whole batch on it and
-    /// releases every unattempted message without consuming a retry. Without that distinction one
+    /// raised only when that is genuinely true. The processor puts the transport in back-off on it:
+    /// the store's transport rows are deferred to its end and left out of the claim until then, no
+    /// retry consumed, while the local rows are still delivered. Without that distinction one
     /// outage fails every claimed message, writes a failure row for each, burns each retry budget,
     /// and repeats on the next tick until the queue has dead-lettered itself.
     /// </para>
@@ -124,10 +125,10 @@ public interface IMessageTransport
     /// decides rather than a parsed message. A missing <see cref="IMessageTransport"/> behind a
     /// <i>registered</i> dispatcher is not that case: the container throws
     /// <see cref="InvalidOperationException"/> while activating the dispatcher, and the processor
-    /// releases the batch without rethrowing
-    /// (<c>OutboxBatchAbortReason.DispatcherActivationFailed</c>). The commonest case of the first is
-    /// a transport row reaching a host with no transport registered at all. It is a property of the
-    /// composition, decided before the message is sent.
+    /// defers the store's transport rows without rethrowing
+    /// (<c>OutboxBatchAbortReason.DispatcherActivationFailed</c>) while its local rows are delivered — what a host with no transport
+    /// registered at all meets, since every store registers the dispatcher. Both are properties of
+    /// the composition, decided before the message is sent.
     /// A transport's failures never are: by the time it runs, the composition has already been
     /// proven adequate by the fact that the transport was resolved and called at all.
     /// </para>
@@ -139,7 +140,7 @@ public interface IMessageTransport
     /// from this method, and an untyped one is retried per message — except
     /// <see cref="InvalidOperationException"/>, the type the container uses for a dependency it cannot
     /// supply, which is reported as <c>OutboxBatchAbortReason.DispatcherActivationFailed</c> and
-    /// abandons the batch. A client that knows its broker is unreachable should say so with
+    /// defers every transport row until the transport's back-off ends. A client that knows its broker is unreachable should say so with
     /// <see cref="OutboxTransportUnavailableException"/> rather than let that type escape.
     /// </para>
     /// </remarks>

@@ -132,11 +132,20 @@ public sealed class StoreIsolationTests(
             AssertWithinBound("outage", steady.Samples("outage", handledA), timeline, logs,
                 extra: StoreIsolationReport.LoopTimeline(logs.Since(outageMark), StoreB.Value));
 
-            // B backs off on its own curve, growing toward MaxPolling.
-            var delays = logs.Since(outageMark)
+            // B backs off on its own curve, growing toward MaxPolling. A's 40 messages bound the
+            // window by A's cadence, not by B's cycles, which take longer under load (each waits out
+            // its connect timeout): wait, B still down, for the cycles the curve needs.
+            List<TimeSpan> BDelays() => [.. logs.Since(outageMark)
                 .Where(e => e.EventId == 1401 && Value(e, "Loop") == "outbox" && Value(e, "Store") == StoreB.Value)
-                .Select(e => (TimeSpan)e.State.First(kv => kv.Key == "Delay").Value!)
-                .ToList();
+                .Select(e => (TimeSpan)e.State.First(kv => kv.Key == "Delay").Value!)];
+            // Bounded, and not an assertion: the one below names what B did report.
+            var cyclesDeadline = DateTime.UtcNow + TimeSpan.FromSeconds(15);
+            while (BDelays().Count < 3 && DateTime.UtcNow < cyclesDeadline)
+            {
+                await Task.Delay(50);
+            }
+
+            var delays = BDelays();
             delays.Count.ShouldBeGreaterThanOrEqualTo(3,
                 $"B's outbox loop reports each failed cycle: {string.Join(", ", delays)}; logs: " +
                 string.Join(" | ", logs.Since(outageMark).Where(e => e.Level >= LogLevel.Warning)

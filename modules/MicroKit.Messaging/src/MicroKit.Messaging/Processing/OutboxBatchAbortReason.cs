@@ -1,17 +1,30 @@
 namespace MicroKit.Messaging.Processing;
 
-/// <summary>Why a batch stopped before every claimed message was attempted.</summary>
+/// <summary>
+/// Why the batch did not run every claimed message to an outcome of its own: it stopped (cancellation,
+/// a configuration fault), or an endpoint was down and its later rows were deferred (#188). The first endpoint verdict the
+/// batch met, unless the batch then stopped — cancellation or a configuration fault takes precedence;
+/// why an endpoint is down is logged with it (1004, 1009), and what each endpoint deferred is event
+/// 1010 — the only event for <see cref="EndpointInBackOff"/> — once the batch is fully settled; a
+/// partial or failed settlement is reported by its own event instead.
+/// </summary>
 /// <remarks>
 /// Members may be added in a later version. A consumer switching over this type should give unknown
-/// values a default arm rather than treat the switch as exhaustive, and should test the reason before
-/// <see cref="OutboxBatchResult.IsSaturated"/>: an aborted batch still counts every message it claimed.
+/// values a default arm rather than treat the switch as exhaustive, and should test
+/// <see cref="Cancelled"/> and <see cref="OutboxBatchResult.HandedOverInBackOff"/> before
+/// <see cref="OutboxBatchResult.IsSaturated"/>: a released row can be claimed at once, and a
+/// filterless store keeps handing over the down endpoint's backlog, a batch at a time.
 /// </remarks>
 internal enum OutboxBatchAbortReason
 {
     /// <summary>Every claimed message was attempted.</summary>
     None = 0,
 
-    /// <summary>The transport was unreachable. Back off hard; it may recover on its own.</summary>
+    /// <summary>
+    /// An endpoint was unreachable — the transport, or a local consumer's dependency
+    /// (<see cref="OutboxTransportUnavailableException"/> either way). Its rows were deferred to the end
+    /// of the endpoint's back-off; it may recover on its own.
+    /// </summary>
     TransportUnavailable = 1,
 
     /// <summary>The host is shutting down. Not an error.</summary>
@@ -26,9 +39,9 @@ internal enum OutboxBatchAbortReason
     /// <summary>
     /// An <see cref="IOutboxDispatcher"/> is registered, but the container threw
     /// <see cref="InvalidOperationException"/> while activating it — most often because a dependency
-    /// such as <see cref="IMessageTransport"/> is not registered. The message that met the fault and
-    /// every message after it were released with no retry consumed; messages dispatched before it keep
-    /// their outcome. Nothing was rethrown: the worker backs off and the next cycle retries.
+    /// such as <see cref="IMessageTransport"/> is not registered. The message that met the fault was
+    /// deferred, and its endpoint's later messages too while the back-off was in force, with no retry
+    /// consumed; the other endpoint's were still dispatched. Nothing was rethrown: the endpoint is tried again once its back-off ends.
     /// </summary>
     /// <remarks>
     /// <para>
@@ -39,11 +52,17 @@ internal enum OutboxBatchAbortReason
     /// <para>
     /// ⚠ <b>Known defect — not every cause passes.</b> The dispatcher is activated in the scope of the
     /// message being dispatched, built from its tenant, so the cause can be one tenant's. One that never
-    /// clears, such as a de-provisioned tenant, keeps that message oldest: it heads every claim, every
-    /// batch reports this value, no tenant publishes, and nothing dead-letters. Treat this value
-    /// persisting across cycles as an incident, not as back-pressure. ADR-MSG-019 records the defect
-    /// and the fix owed; the module README gives the way out.
+    /// clears, such as a de-provisioned tenant, fails each time the endpoint's back-off ends: the
+    /// endpoint's rows of every tenant wait, and nothing dead-letters. Treat this value persisting as an
+    /// incident, not as back-pressure. #124 is the defect and the fix owed; the module README gives the
+    /// way out.
     /// </para>
     /// </remarks>
     DispatcherActivationFailed = 4,
+
+    /// <summary>
+    /// Rows of an endpoint already in back-off were handed over — by a store whose claim ignores the
+    /// endpoint filter, or because the back-off began after the claim — and deferred unattempted.
+    /// </summary>
+    EndpointInBackOff = 5,
 }

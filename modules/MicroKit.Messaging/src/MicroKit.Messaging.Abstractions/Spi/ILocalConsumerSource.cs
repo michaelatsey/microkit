@@ -2,7 +2,7 @@ namespace MicroKit.Messaging.Spi;
 
 /// <summary>
 /// Supplies local consumers: what a local message (<see cref="ILocalMessageSender"/>) is delivered
-/// to. Registered with <c>MessagingBuilder.AddLocalConsumerSource</c>.
+/// to. Registered with <c>MessagingIntegrationExtensions.AddLocalConsumerSource</c>, on the <c>MessagingBuilder</c>.
 /// </summary>
 /// <remarks>
 /// <para>

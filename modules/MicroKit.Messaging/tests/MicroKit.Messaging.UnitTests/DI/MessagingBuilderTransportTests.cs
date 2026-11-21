@@ -1,3 +1,4 @@
+using Microsoft.Extensions.Time.Testing;
 namespace MicroKit.Messaging.UnitTests.DI;
 
 using MicroKit.Messaging.Dispatch;
@@ -66,17 +67,103 @@ public sealed class MessagingBuilderTransportTests
     }
 
     [Fact]
-    public void AStore_RegistersTheLocalDispatcher_WhateverTheTransport()
+    public void AStore_RegistersBothDispatchers_WhateverTheTransport()
     {
-        // A local row is drained by its store's own loop (#188 D7): with no transport registered at
-        // all, the local dispatcher is still there.
+        // A local row is drained by its store's own loop (#188 D7) whatever the transport; a
+        // transport row goes to whatever IMessageTransport the host registers.
         var services = new ServiceCollection();
 
         Builder(services).AddMessageStore(new MessageStoreKey("tests:local"), _ => { });
 
         Dispatchers(services, OutboxDispatchers.Local).ShouldHaveSingleItem()
             .KeyedImplementationType.ShouldBe(typeof(LocalOutboxDispatcher));
-        Dispatchers(services, OutboxDispatchers.Transport).ShouldBeEmpty();
+        // A factory: ValidateOnBuild must accept a store with no transport (next test).
+        Dispatchers(services, OutboxDispatchers.Transport).ShouldHaveSingleItem()
+            .KeyedImplementationFactory.ShouldNotBeNull();
+    }
+
+    [Fact]
+    public void AStoreWithNoTransport_PassesValidateOnBuild()
+    {
+        // Review finding (#188 P4): a typed registration of the transport dispatcher made
+        // Host.CreateApplicationBuilder() fail at Build() in Development (ValidateOnBuild) for the
+        // README's own composition — a store, domain events, no transport.
+        var services = new ServiceCollection();
+        services.AddSingleton<ILoggerFactory>(NullLoggerFactory.Instance);
+        services.AddSingleton(typeof(ILogger<>), typeof(NullLogger<>));
+        Builder(services).AddMessageStore(new MessageStoreKey("tests:validated"), _ => { });
+
+        using var provider = services.BuildServiceProvider(
+            new ServiceProviderOptions { ValidateOnBuild = true, ValidateScopes = true });
+    }
+
+    [Fact]
+    public async Task AStoreWithAProvidersOwnTransport_SendsItsTransportRowsThroughIt()
+    {
+        // A broker provider registers its IMessageTransport and nothing else: it has no access to
+        // the internal dispatcher. The store's registration is what lets its rows leave.
+        var transport = new RecordingMessageTransport();
+        var services = new ServiceCollection();
+        services.AddSingleton(typeof(ILogger<>), typeof(NullLogger<>));
+        services.AddSingleton<IMessageTransport>(transport);
+        Builder(services).AddMessageStore(new MessageStoreKey("tests:provider"), _ => { });
+
+        await using var provider = services.BuildServiceProvider();
+        await using var scope = provider.CreateAsyncScope();
+        var row = OutboxFixtures.ContractMessage();
+        await scope.ServiceProvider.GetRequiredKeyedService<IOutboxDispatcher>(OutboxDispatchers.Transport).DispatchAsync(row);
+
+        transport.Sent.ShouldHaveSingleItem().Id.ShouldBe(row.Id.Value.ToString());
+    }
+
+    [Fact]
+    public async Task AStoreWithNoTransport_CannotActivateTheTransportDispatcher()
+    {
+        // The reversible verdict (event 1009, back-off): the container cannot build the dispatcher,
+        // which OutboxProcessor tags as an activation failure rather than a missing registration.
+        var services = new ServiceCollection();
+        services.AddSingleton(typeof(ILogger<>), typeof(NullLogger<>));
+        Builder(services).AddMessageStore(new MessageStoreKey("tests:none"), _ => { });
+
+        await using var provider = services.BuildServiceProvider();
+        await using var scope = provider.CreateAsyncScope();
+
+        Should.Throw<InvalidOperationException>(
+            () => scope.ServiceProvider.GetKeyedService<IOutboxDispatcher>(OutboxDispatchers.Transport));
+    }
+
+    [Fact]
+    public async Task AStoresProcessor_KeepsItsEndpointBackOffAcrossCycles()
+    {
+        // The processor is scoped — rebuilt every cycle — and the back-off must outlive it, or a down
+        // endpoint is tried again on every cycle (#188). Two cycles, no transport: one activation
+        // failure, then the endpoint's rows are deferred without a second attempt.
+        var key = new MessageStoreKey("tests:backoff");
+        var row = OutboxFixtures.ContractMessage();
+        var store = Substitute.For<IOutboxProcessorStore>();
+        store.ClaimBatchAsync(Arg.Any<int>(), Arg.Any<TimeSpan>(), Arg.Any<CancellationToken>())
+            .Returns(_ => ValueTask.FromResult(OutboxFixtures.Claim(row)));
+        store.ClaimBatchAsync(Arg.Any<int>(), Arg.Any<TimeSpan>(), Arg.Any<OutboxEndpoints>(), Arg.Any<CancellationToken>())
+            .Returns(_ => ValueTask.FromResult(OutboxFixtures.Claim(row)));
+        var logs = new CapturingLogger<OutboxProcessor>();
+        var services = new ServiceCollection();
+        services.AddSingleton(typeof(ILogger<>), typeof(NullLogger<>));
+        services.AddSingleton<ILogger<OutboxProcessor>>(logs);
+        services.AddSingleton<TimeProvider>(new FakeTimeProvider(DateTimeOffset.UnixEpoch));
+        var bus = Builder(services);
+        bus.ServiceName = "tests.backoff";
+        bus.AddMessageStore(key, s => s.Services.AddKeyedScoped(key, (_, _) => store));
+
+        await using var provider = services.BuildServiceProvider();
+        for (var cycle = 0; cycle < 2; cycle++)
+        {
+            await using var scope = provider.CreateAsyncScope();
+            await scope.ServiceProvider.GetRequiredKeyedService<IOutboxProcessor>(key).ProcessBatchAsync(10);
+        }
+
+        logs.Records.Count(r => r.EventId == 1009).ShouldBe(1, "the second cycle found the endpoint in back-off");
+        logs.Records.Single(r => r.EventId == 1009).Exception!.ToString()
+            .ShouldContain("bus.UseInMemoryTransport()", Case.Sensitive, "the activation fault names the fix");
     }
 
     [Theory]

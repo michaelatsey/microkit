@@ -51,7 +51,7 @@ public sealed class OutboxTransportClassificationTests
     /// retry budgets, and repeats on every tick.
     /// </remarks>
     [Fact]
-    public async Task ProcessBatch_WhenTransportUnavailable_ReleasesEveryMessageWithoutConsumingRetries()
+    public async Task ProcessBatch_WhenTransportUnavailable_DefersEveryMessageWithoutConsumingRetries()
     {
         var messages = Enumerable.Range(0, 4)
             .Select(_ => OutboxFixtures.ContractMessage(retryCount: 1)).ToArray();
@@ -65,8 +65,8 @@ public sealed class OutboxTransportClassificationTests
 
         result.AbortReason.ShouldBe(OutboxBatchAbortReason.TransportUnavailable);
         captured.Count.ShouldBe(messages.Length, "every claimed message must carry an outcome");
-        captured.ShouldAllBe(o => o.Kind == OutboxOutcomeKind.Released);
-        captured.ShouldAllBe(o => o.RetryCount == 0, "Released consumes no retry budget");
+        captured.ShouldAllBe(o => o.Kind == OutboxOutcomeKind.Deferred && o.NextRetryAtUtc != null,
+            "a deferral consumes no retry budget");
     }
 
     [Fact]
@@ -143,16 +143,18 @@ public sealed class OutboxTransportClassificationTests
     // -----------------------------------------------------------------------------------------
 
     /// <summary>
-    /// A transport row in a host that registers no transport at all releases the batch and stops
-    /// the loop, rather than dead-lettering the queue.
+    /// A transport row whose dispatcher is not registered at all releases the batch and stops the
+    /// loop, rather than dead-lettering the queue.
     /// </summary>
     /// <remarks>
-    /// The transport's dispatcher is registered with the transport, so its absence is a missing
-    /// registration: the rows are fine and dispatch the moment a transport is deployed. Classifying
-    /// it as a payload fault would dead-letter every queued contract on the first poll.
+    /// Every store registers both dispatchers, so only a container composed outside the store engine
+    /// meets this; a host with no transport meets the activation failure instead
+    /// (<c>MessagingBuilderTransportTests.AStoreWithNoTransport_CannotActivateTheTransportDispatcher</c>).
+    /// The rows are fine: classifying a missing registration as a payload fault would dead-letter
+    /// every queued contract on the first poll.
     /// </remarks>
     [Fact]
-    public async Task ProcessBatch_WhenATransportRowMeetsNoTransport_ReleasesBatchThenRethrows()
+    public async Task ProcessBatch_WhenATransportRowHasNoDispatcher_ReleasesBatchThenRethrows()
     {
         var messages = Enumerable.Range(0, 3).Select(_ => OutboxFixtures.ContractMessage()).ToArray();
         var (store, captured) = StoreReturning(OutboxFixtures.Claim(messages));
@@ -163,7 +165,7 @@ public sealed class OutboxTransportClassificationTests
         var fault = await Should.ThrowAsync<OutboxConfigurationException>(
             async () => await processor.ProcessBatchAsync(10, CancellationToken.None));
 
-        fault.Message.ShouldContain("no transport is registered");
+        fault.Message.ShouldContain("its dispatcher is not registered");
         captured.Count.ShouldBe(messages.Length);
         captured.ShouldAllBe(o => o.Kind == OutboxOutcomeKind.Released);
         captured.ShouldAllBe(o => o.RetryCount == 0);
@@ -220,7 +222,7 @@ public sealed class OutboxTransportClassificationTests
     /// </para>
     /// </remarks>
     [Fact]
-    public async Task ProcessBatch_WhenNoTransportRegistered_SettlesEveryMessageReleasedWithoutRethrowing()
+    public async Task ProcessBatch_WhenNoTransportRegistered_SettlesEveryMessageDeferredWithoutRethrowing()
     {
         var messages = Enumerable.Range(0, 3).Select(_ => OutboxFixtures.ContractMessage()).ToArray();
         var claim = OutboxFixtures.Claim(messages);
@@ -237,7 +239,9 @@ public sealed class OutboxTransportClassificationTests
         await store.Received(1).ApplyOutcomesAsync(
             claim.Token, Arg.Any<IReadOnlyList<OutboxOutcome>>(), Arg.Any<CancellationToken>());
         captured.Count.ShouldBe(messages.Length);
-        captured.ShouldAllBe(o => o.Kind == OutboxOutcomeKind.Released);
+        captured.ShouldAllBe(o => o.Kind == OutboxOutcomeKind.Deferred && o.NextRetryAtUtc != null, "deferred to the end of the endpoint's back-off");
+        result.Released.ShouldBe(messages.Length, "nothing was attempted on a deferred row");
+        result.Retried.ShouldBe(0);
     }
 
     /// <summary>
@@ -252,9 +256,8 @@ public sealed class OutboxTransportClassificationTests
         await BuildWithoutTransport(store).ProcessBatchAsync(10, CancellationToken.None);
 
         var outcome = captured.ShouldHaveSingleItem();
-        outcome.Kind.ShouldBe(OutboxOutcomeKind.Released);
-        outcome.RetryCount.ShouldBe(0, "Released carries no retry count — the row keeps its own");
-        outcome.NextRetryAtUtc.ShouldBeNull();
+        outcome.Kind.ShouldBe(OutboxOutcomeKind.Deferred, "the store keeps the row's own count: no attempt is charged");
+        outcome.NextRetryAtUtc.ShouldNotBeNull("the claim skips it until the endpoint's back-off ends");
     }
 
     // -----------------------------------------------------------------------------------------

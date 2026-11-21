@@ -8,7 +8,7 @@ namespace MicroKit.Messaging.Processing;
 /// <para>
 /// Raised in exactly one place — around the <c>GetService</c> call in
 /// <c>OutboxProcessor.ResolveDispatcher</c> — and caught in exactly one place, the batch loop, which
-/// abandons the batch without consuming retry budget and without rethrowing. It never escapes
+/// defers the row's endpoint without consuming retry budget and without rethrowing. It never escapes
 /// <see cref="OutboxProcessor.ProcessBatchAsync"/>.
 /// </para>
 /// <para>

@@ -50,10 +50,22 @@ internal static partial class OutboxProcessorLogs
     [LoggerMessage(
         EventId = 1004,
         Level = LogLevel.Error,
-        Message = "Outbox transport unavailable. Abandoning batch and releasing " +
-                  "{ReleasedCount} unattempted message(s) — no retry budget consumed.")]
-    public static partial void TransportUnavailable(
-        ILogger logger, Exception exception, int releasedCount);
+        Message = "Outbox endpoint {Endpoint} is unavailable (null: the transport); the accompanying " +
+                  "exception says why. Event 1010 says what is deferred once the batch is fully settled.")]
+    public static partial void TransportUnavailable(ILogger logger, Exception exception, string? endpoint);
+
+    /// <remarks>
+    /// Deferral has its own event (ADR-MSG-019's constraint, kept by ADR-MSG-020): 1004 and 1009 say
+    /// why an endpoint is down, this one what waits for it.
+    /// </remarks>
+    [LoggerMessage(
+        EventId = 1010,
+        Level = LogLevel.Warning,
+        Message = "Outbox endpoint {Endpoint} (null: the transport) is down: {DeferredCount} row(s) of " +
+                  "the batch were settled to wait, the first until {From:O}, the last until {Until:O}, " +
+                  "no retry consumed.")]
+    public static partial void EndpointDeferred(
+        ILogger logger, string? endpoint, int deferredCount, DateTimeOffset from, DateTimeOffset until);
 
     [LoggerMessage(
         EventId = 1005,
@@ -65,7 +77,7 @@ internal static partial class OutboxProcessorLogs
     /// Deliberately names no particular registration. <c>OutboxConfigurationException</c> reaches
     /// this event from two kinds of place that a single sentence cannot cover: something the
     /// processor resolves from the scope is not registered at all — the dispatcher of a row's endpoint,
-    /// a transport row with no transport registered; or a dispatcher was handed a row it
+    /// in a container composed outside the store engine; or a dispatcher was handed a row it
     /// structurally cannot serve. The exception carries which one, and
     /// is logged with this event; a headline naming only the first sends an operator to check a
     /// registration that is already there. A dispatcher that is registered but cannot be
@@ -98,19 +110,20 @@ internal static partial class OutboxProcessorLogs
 
     /// <remarks>
     /// <para>
-    /// A batch abandoned with no rethrow and no retry movement, so this event is the only trace it
-    /// leaves and must never be silent. It repeats on every cycle until the cause clears.
+    /// An endpoint deferred with no rethrow and no retry movement, so this event is the only trace it
+    /// leaves and must never be silent. It repeats each time the endpoint's back-off ends, until the
+    /// cause clears.
     /// </para>
     /// <para>
     /// <b>It names the row whose dispatcher could not be built</b> — id, tenant and kind. Activation
     /// runs in that row's own scope, so a tenant-scoped cause fails for some rows only, and one that
-    /// never clears — a de-provisioned tenant — leaves the row oldest, heading every claim, with the
-    /// whole outbox stalled behind it. These three values are how an operator finds it. ADR-MSG-019
-    /// records the stall as a known defect.
+    /// never clears — a de-provisioned tenant — fails it again each time the endpoint's back-off ends,
+    /// holding that endpoint's rows of every tenant. These three values are how an operator finds it.
+    /// #124 is the known defect.
     /// </para>
     /// <para>
     /// <c>Error</c>, not <c>Critical</c>, matching <see cref="TransportUnavailable"/> — the other arm
-    /// that abandons a batch without stopping the worker. <c>Critical</c> belongs to
+    /// that defers an endpoint without stopping the worker. <c>Critical</c> belongs to
     /// <see cref="DispatchMisconfigured"/>, which does stop it. The commonest cause is a transport
     /// dispatcher registered with no <c>IMessageTransport</c>; the accompanying exception is the
     /// container's own <see cref="InvalidOperationException"/> — the only type this event reports —
@@ -122,11 +135,9 @@ internal static partial class OutboxProcessorLogs
         Level = LogLevel.Error,
         Message = "The outbox dispatcher is registered but could not be activated for message " +
                   "{MessageId} (tenant {TenantId}, endpoint {Endpoint}); the accompanying exception " +
-                  "says why. Abandoning batch and releasing {ReleasedCount} message(s) with no retry " +
-                  "consumed. The worker keeps running and retries on the next cycle.")]
+                  "says why. Event 1010 says what is deferred once the batch is fully settled.")]
     public static partial void DispatcherActivationFailed(
-        ILogger logger, Exception exception, Guid messageId, string? tenantId, string? endpoint,
-        int releasedCount);
+        ILogger logger, Exception exception, Guid messageId, string? tenantId, string? endpoint);
 
     [LoggerMessage(
         EventId = 1020,

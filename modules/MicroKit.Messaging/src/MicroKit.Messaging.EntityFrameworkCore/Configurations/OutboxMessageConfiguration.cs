@@ -117,6 +117,13 @@ public sealed class OutboxMessageConfiguration : IEntityTypeConfiguration<Outbox
         builder.HasIndex(m => new { m.DeadLettered, m.Status, m.NextRetryAtUtc, m.CreatedAtUtc })
             .HasDatabaseName("IX_OutboxMessages_Dispatchable");
 
+        // Endpoint claim index (#188): while one endpoint is in back-off the claim leaves its rows
+        // out, and with this index it reads the other endpoint's claimable rows — Status first, so
+        // neither the down endpoint's backlog nor the published history is walked
+        // (EndpointExclusionPlanTests measures both directions on PostgreSQL).
+        builder.HasIndex(m => new { m.Status, m.Endpoint, m.CreatedAtUtc })
+            .HasDatabaseName("IX_OutboxMessages_Endpoint_Dispatchable");
+
         // Read-back index: the contended branch of ClaimBatchAsync selects by token alone.
         builder.HasIndex(m => m.ClaimToken)
             .HasDatabaseName("IX_OutboxMessages_ClaimToken");

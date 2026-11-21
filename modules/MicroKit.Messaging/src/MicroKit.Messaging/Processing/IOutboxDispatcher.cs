@@ -26,7 +26,8 @@ internal interface IOutboxDispatcher
     /// <returns>A task that completes once the endpoint has the message.</returns>
     /// <remarks>
     /// <see cref="OutboxPayloadException"/> dead-letters the row,
-    /// <see cref="OutboxTransportUnavailableException"/> releases the rest of the batch,
+    /// <see cref="OutboxTransportUnavailableException"/> defers this endpoint's rows to the end of its
+    /// back-off while the other endpoint's are still dispatched,
     /// <see cref="OutboxConfigurationException"/> stops the loop, and any other exception is a
     /// retry.
     /// </remarks>
@@ -36,7 +37,7 @@ internal interface IOutboxDispatcher
 /// <summary>The keys the two <see cref="IOutboxDispatcher"/> implementations are registered under.</summary>
 internal static class OutboxDispatchers
 {
-    /// <summary>The key of <c>TransportOutboxDispatcher</c>, registered with a transport.</summary>
+    /// <summary>The key of <c>TransportOutboxDispatcher</c>, registered with every store.</summary>
     public const string Transport = "microkit.outbox.transport";
 
     /// <summary>The key of <c>LocalOutboxDispatcher</c>, registered with the store engine.</summary>

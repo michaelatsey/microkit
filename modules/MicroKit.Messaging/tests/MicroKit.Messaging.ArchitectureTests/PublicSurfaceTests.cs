@@ -140,7 +140,7 @@ public sealed class PublicSurfaceTests
             "IOutboxWriter", "IOutboxProcessorStore", "IOutboxAdminStore", "IOutboxRetentionStore",
             "IInboxGuardStore", "IInboxProcessorStore", "IInboxAdminStore", "IInboxRetentionStore",
             // The rows and the types the stores exchange.
-            "OutboxMessage", "InboxMessage", "OutboxClaim", "InboxClaim", "OutboxOutcome",
+            "OutboxMessage", "InboxMessage", "OutboxClaim", "OutboxEndpoints", "InboxClaim", "OutboxOutcome",
             "InboxOutcome", "InboxMessageKey", "InboxRowState",
             // Value objects carried on a row.
             "CorrelationId", "CausationId",

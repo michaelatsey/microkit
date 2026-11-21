@@ -455,7 +455,7 @@ internal sealed record InboxTestEvent(MessageId MessageId, string TenantId) : II
 }
 
 /// <summary>One log record, flattened to what an assertion needs.</summary>
-internal readonly record struct CapturedLog(LogLevel Level, int EventId, string Message);
+internal readonly record struct CapturedLog(LogLevel Level, int EventId, string Message, Exception? Exception = null);
 
 /// <summary>
 /// An <see cref="ILogger{T}"/> that keeps every record, so "silent success is forbidden" can be
@@ -482,7 +482,7 @@ internal sealed class CapturingLogger<T> : ILogger<T>
         TState state,
         Exception? exception,
         Func<TState, Exception?, string> formatter)
-        => Records.Add(new CapturedLog(logLevel, eventId.Id, formatter(state, exception)));
+        => Records.Add(new CapturedLog(logLevel, eventId.Id, formatter(state, exception), exception));
 }
 
 /// <summary>Reads the #186 envelope the way a test asserts on it.</summary>

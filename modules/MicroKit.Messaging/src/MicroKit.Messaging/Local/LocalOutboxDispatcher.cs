@@ -16,7 +16,8 @@ using MicroKit.Messaging.Bus;
 /// </para>
 /// <para>
 /// A verdict the pipeline could not record becomes the outbox's own: a payload no process can read
-/// dead-letters the row; a dependency outage releases the batch, with no retry spent; a failure no
+/// dead-letters the row; a dependency outage defers the batch's local rows to the end of the local
+/// endpoint's back-off, with no retry spent, while its transport rows go out; a failure no
 /// inbox row could hold retries the row — the consumers already done skip on their rows.
 /// </para>
 /// </remarks>
