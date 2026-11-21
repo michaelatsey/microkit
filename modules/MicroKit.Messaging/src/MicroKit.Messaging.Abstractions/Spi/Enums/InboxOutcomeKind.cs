@@ -12,20 +12,14 @@ namespace MicroKit.Messaging.Spi;
 public enum InboxOutcomeKind
 {
     /// <summary>
-    /// Handled successfully but <b>not</b> settled by the handler's transaction, because the
-    /// handler performed no unit-of-work commit. Written by the deferred path as a fallback,
-    /// alongside a warning: for this row the transactional guarantee did not apply and
-    /// processing was at-least-once.
+    /// Handled, settled outside the handler's transaction. The engine no longer produces it
+    /// (#188): a handled row is written in the handler's transaction. A store still persists it as
+    /// <see cref="InboxMessageStatus.Processed"/>.
     /// </summary>
-    /// <remarks>
-    /// Rows settled inside the handler transaction never produce an outcome at all — that is
-    /// the point of <see cref="IInboxSettlementStore"/>. This member exists only for the
-    /// degraded case, and its presence in a batch is a signal worth alerting on.
-    /// </remarks>
     Processed = 0,
 
     /// <summary>
-    /// Transient failure below the retry ceiling. Status returns to <c>Received</c>, retry
+    /// Transient failure below the retry ceiling. Status becomes <c>Failed</c>, retry
     /// count is incremented, lease and token cleared, and the row becomes eligible again at
     /// <see cref="InboxOutcome.NextRetryAtUtc"/>.
     /// </summary>
@@ -39,7 +33,7 @@ public enum InboxOutcomeKind
 
     /// <summary>
     /// Claimed but never attempted — the batch ended early through cancellation, a dependency
-    /// outage or a configuration fault. Status returns to <c>Received</c> with the lease
+    /// outage or a configuration fault. Status becomes <c>Failed</c> with the lease
     /// cleared and <b>no</b> retry budget consumed. Distinguishing this from
     /// <see cref="Retry"/> is what stops an outage from burning the retry allowance of every
     /// row in the queue.

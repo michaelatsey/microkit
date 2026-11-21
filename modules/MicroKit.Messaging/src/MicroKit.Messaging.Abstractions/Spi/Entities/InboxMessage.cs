@@ -16,6 +16,13 @@ namespace MicroKit.Messaging.Spi;
 /// by multiple handlers independently — each gets its own <see cref="InboxMessage"/> row.
 /// </para>
 /// <para>
+/// <b>Written once per (message, handler), by the delivery (#188).</b>
+/// <see cref="InboxMessageStatus.Processed"/> in the handler's own transaction when it succeeds;
+/// <see cref="InboxMessageStatus.Failed"/>, in a transaction of its own, when it fails. A later
+/// delivery that finds the row skips the handler. The row carries what a retry needs to rebuild
+/// the handler's <c>MessageContext</c>: payload, source, headers and the trace values.
+/// </para>
+/// <para>
 /// <b>The primary key is <see cref="RowId"/>, not that compound key.</b> The compound key
 /// remains the dedup gate through a unique index, so ingestion behaviour is unchanged; what the
 /// surrogate buys is a batch claim expressible as ONE bounded list. Filtering an <c>UPDATE</c>
@@ -71,10 +78,26 @@ public sealed class InboxMessage
     /// <summary>Gets or sets the JSON-serialized integration event payload.</summary>
     public string Payload { get; set; } = null!;
 
+    /// <summary>
+    /// Gets or sets the producing service, the envelope's <c>source</c>. Handed back to the handler
+    /// as <c>MessageContext.Source</c> on a retry. <see langword="null"/> on a row written before
+    /// #188.
+    /// </summary>
+    public string? Source { get; set; }
+
+    /// <summary>
+    /// Gets or sets the headers the envelope carried, handed back to the handler as
+    /// <c>MessageContext.Headers</c> on a retry. <see langword="null"/> when there were none.
+    /// </summary>
+    public IReadOnlyDictionary<string, string>? Headers { get; set; }
+
     /// <summary>Gets or sets the current lifecycle state of this inbox message.</summary>
     public InboxMessageStatus Status { get; set; }
 
-    /// <summary>Gets or sets the number of failed handler invocation attempts.</summary>
+    /// <summary>
+    /// Gets or sets the number of attempts that failed and were counted. A delivery that fails
+    /// writes its row with 1; an attempt released by a shutdown or an outage counts nothing.
+    /// </summary>
     public int RetryCount { get; set; }
 
     /// <summary>Gets or sets the UTC time at which this message was received.</summary>
@@ -157,7 +180,7 @@ public sealed class InboxMessage
     /// first failure.
     /// </summary>
     /// <remarks>
-    /// Computed by <c>InboxProcessor</c>, not by the store: back-off is retry policy, not
+    /// Computed by the engine, not by the store: back-off is retry policy, not
     /// persistence, and it must be unit-testable without a database. The formula is full jitter
     /// over an exponential ceiling — <c>Uniform(0, min(2^RetryCount s, MaxRetryBackoff))</c> —
     /// matching the outbox. A deterministic curve would make every message that failed together,
@@ -168,15 +191,14 @@ public sealed class InboxMessage
     /// <summary>
     /// Gets or sets a value indicating whether this message has been permanently dead-lettered.
     /// When <see langword="true"/>, <see cref="Status"/> is
-    /// <see cref="InboxMessageStatus.Failed"/> and no further retry will be attempted.
-    /// Symmetric with <c>OutboxMessage.DeadLettered</c>.
+    /// <see cref="InboxMessageStatus.Failed"/> and no further retry will be attempted; a
+    /// <see cref="InboxMessageStatus.Failed"/> row without it is a retry not yet run.
     /// </summary>
     /// <remarks>
     /// Reached two ways, and the retry count only explains one of them: when the incremented
     /// <see cref="RetryCount"/> reaches <c>MaxRetries</c>, or <b>on the first attempt</b> when
-    /// processing raises <see cref="InboxPayloadException"/> — an unregistered consumer, or a
-    /// payload that cannot be read back. A dead-lettered row can therefore carry a
-    /// <see cref="RetryCount"/> of zero.
+    /// processing raises <see cref="InboxPayloadException"/> or a handler throws
+    /// <c>PermanentMessageException</c>.
     /// </remarks>
     public bool DeadLettered { get; set; }
 
@@ -193,7 +215,7 @@ public sealed class InboxMessage
     /// <remarks>
     /// <para>
     /// Assigned by the producing side and carried inbound; this row does not derive it. What
-    /// <c>InboxProcessor</c> derives is the causation of everything the <i>handler</i> stages — it
+    /// the engine derives is the causation of everything the <i>handler</i> stages — it
     /// puts this row's <see cref="MessageId"/> (never <see cref="RowId"/>, which is a local
     /// surrogate meaningless to any other process) into the per-message <c>IExecutionContext</c>,
     /// so work caused by delivering this message names it as the cause.

@@ -44,12 +44,15 @@ public sealed record OutboxProcessorOptions
     public TimeSpan MaxPollingInterval { get; set; } = TimeSpan.FromMinutes(1);
 
     /// <summary>
-    /// Gets or sets the ceiling the polling interval grows toward while the transport is
-    /// unreachable. Default: 5 minutes.
+    /// Gets or sets the ceiling of an endpoint's back-off while it is down — the transport
+    /// unreachable or not registered, a local consumer's dependency out — and of a store's loop while
+    /// its processor cannot be activated. Default: 5 minutes.
     /// </summary>
     /// <remarks>
-    /// Higher than <see cref="MaxPollingInterval"/>: there is nothing to gain from probing a
-    /// broker that is already down.
+    /// The back-off starts at <see cref="PollingInterval"/> and doubles on each failed attempt; the
+    /// endpoint's rows wait it out unattempted while the other endpoint's keep flowing. Higher than
+    /// <see cref="MaxPollingInterval"/>: there is nothing to gain from probing a broker that is
+    /// already down.
     /// </remarks>
     public TimeSpan TransportUnavailableBackoff { get; set; } = TimeSpan.FromMinutes(5);
 

@@ -27,21 +27,21 @@ namespace MicroKit.Messaging.Execution;
 /// </para>
 /// <para>
 /// <b>There is a second holder, and it is not a copy of this one.</b>
-/// <see cref="MicroKit.Messaging.Outbox.OriginMessageHolder"/> exists for the same structural
+/// <see cref="MicroKit.Messaging.Stores.DeliveryStoreHolder"/> exists for the same structural
 /// reason — a value has to be resolvable as a service to reach constructor injection — and behaves
 /// differently in three ways a reader should not have to infer:
 /// <list type="bullet">
 ///   <item><b>Different writer.</b> This one is written by
 ///         <see cref="PassThroughExecutionScopeFactory"/>, before the scope is handed out. That one
-///         is written by <c>OutboxProcessor</c>, on the scope it received — deliberately not by the
-///         factory, so a host supplying its own cannot drop the value.</item>
+///         is written by the engine, on the scope it received — deliberately not by the factory,
+///         so a host supplying its own cannot drop the value.</item>
 ///   <item><b>Different override semantics.</b> This one is read <i>through</i>
 ///         <see cref="IExecutionContext"/>, so a host that registers its own scoped
 ///         <see cref="IExecutionContext"/> bypasses this holder entirely and takes hydration on
 ///         itself. That one is read as its own concrete internal type and cannot be displaced by
 ///         any host registration.</item>
 ///   <item><b>Different default.</b> This one always holds a context. That one defaults to
-///         <see langword="null"/>, and null there is a valid, common and meaningful value.</item>
+///         <see langword="null"/>: a scope no delivery runs in has no delivery store.</item>
 /// </list>
 /// </para>
 /// <para>

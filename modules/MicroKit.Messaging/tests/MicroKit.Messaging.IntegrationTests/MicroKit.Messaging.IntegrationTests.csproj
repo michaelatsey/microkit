@@ -11,6 +11,7 @@
     <ProjectReference Include="../../src/MicroKit.Messaging.Abstractions/MicroKit.Messaging.Abstractions.csproj" />
     <ProjectReference Include="../../src/MicroKit.Messaging/MicroKit.Messaging.csproj" />
     <ProjectReference Include="../../src/MicroKit.Messaging.EntityFrameworkCore/MicroKit.Messaging.EntityFrameworkCore.csproj" />
+    <ProjectReference Include="../MicroKit.Messaging.IntegrationTests.SecondModule/MicroKit.Messaging.IntegrationTests.SecondModule.csproj" />
   </ItemGroup>
   <!-- SQLitePCLRaw.lib.e_sqlite3 2.1.11 has a known vulnerability (GHSA-2m69-gcr7-jv3q).
        This is a transitive test-only dependency of Microsoft.EntityFrameworkCore.Sqlite;
@@ -28,8 +29,8 @@
     <PackageReference Include="Testcontainers.PostgreSql" />
     <!-- FakeTimeProvider: pins claim/lease instants so nothing depends on a wall clock. -->
     <PackageReference Include="Microsoft.Extensions.TimeProvider.Testing" />
-    <!-- The generic host of OutboxBeforeHostStartTests (#187): the outbox worker and the in-memory
-         consume loop running under the real hosted lifecycle. -->
+    <!-- The generic host of the hosted suites: the store engine's loops and the in-memory consume
+         loop running under the real hosted lifecycle. -->
     <PackageReference Include="Microsoft.Extensions.Hosting" />
     <PackageReference Include="Microsoft.NET.Test.Sdk" />
     <PackageReference Include="xunit" />

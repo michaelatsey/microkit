@@ -164,22 +164,6 @@ public sealed class InMemoryTransportTests
         ex.Message.ShouldContain(nameof(RecordingMessageTransport));
     }
 
-    [Fact]
-    public void AddOutboxInboxProcessing_RegistersTheFourWorkers_AndIsIdempotent()
-    {
-        var services = new ServiceCollection();
-
-        services.AddMicroKitMessaging(bus => bus.AddOutboxInboxProcessing().AddOutboxInboxProcessing());
-
-        services.Where(d => d.ServiceType == typeof(IHostedService))
-            .Select(d => d.ImplementationType!.Name)
-            .ShouldBe(
-                ["MessagingCompositionValidator", "OutboxWorker", "OutboxRetentionWorker", "InboxWorker", "InboxRetentionWorker"],
-                ignoreOrder: true);
-        services.Count(d => d.ServiceType == typeof(IOutboxProcessor)).ShouldBe(1);
-        services.Count(d => d.ServiceType == typeof(IInboxCoordinator)).ShouldBe(1);
-    }
-
     [Theory]
     [InlineData(0)]
     [InlineData(-1)]

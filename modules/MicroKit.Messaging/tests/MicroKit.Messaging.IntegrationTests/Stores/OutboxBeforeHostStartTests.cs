@@ -26,13 +26,19 @@ public sealed class OutboxBeforeHostStartTests
             bus.ServiceName = "tests.outbox-before-start";
             bus.Publishes<StagedBeforeStart>();
             bus.AddHandler<StagedBeforeStartHandler>();
-            bus.AddEfCoreOutbox<TestMessagingDbContext>();
-            bus.AddEfCoreIntegrationEvents<TestMessagingDbContext>();
+            bus.UseEntityFrameworkOutbox<TestMessagingDbContext>();
             bus.UseInMemoryTransport();
             bus.Configure(o =>
             {
                 o.Outbox.PollingInterval = TimeSpan.FromMilliseconds(50);
                 o.Outbox.MaxPollingInterval = TimeSpan.FromMilliseconds(100);
+
+                // Every context here shares one SQLite connection, which takes one transaction at a
+                // time: the guarded attempt can lose to the outbox's settlement ("nested
+                // transactions") and be recorded Failed. Its designed recovery is the store's retry,
+                // so the inbox loop polls as fast as the outbox, inside the test's window.
+                o.Inbox.PollingInterval = TimeSpan.FromMilliseconds(50);
+                o.Inbox.MaxPollingInterval = TimeSpan.FromMilliseconds(100);
             });
         });
         using var host = builder.Build();
@@ -43,10 +49,10 @@ public sealed class OutboxBeforeHostStartTests
             var context = scope.ServiceProvider.GetRequiredService<TestMessagingDbContext>();
             await context.Database.EnsureCreatedAsync();
 
-            await using var transaction = await context.Database.BeginTransactionAsync();
-            await scope.ServiceProvider.GetRequiredService<IIntegrationEventPublisher>()
+            // Outbox by enlistment (#188): the bus adds the row, the caller's save commits it.
+            await scope.ServiceProvider.GetRequiredService<IMessageBus>()
                 .PublishAsync(new StagedBeforeStart(id));
-            await transaction.CommitAsync();
+            await context.SaveChangesAsync();
         }
 
         await host.StartAsync();

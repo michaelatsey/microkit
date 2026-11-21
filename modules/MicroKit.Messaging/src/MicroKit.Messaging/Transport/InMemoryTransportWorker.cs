@@ -73,22 +73,66 @@ internal sealed class InMemoryTransportWorker(
             pipeline = scope.ServiceProvider.GetRequiredService<MessageReceivePipeline>();
         }
 
-        while (!stoppingToken.IsCancellationRequested)
-        {
-            MessageEnvelope envelope;
-            try
+        // Under the module's one loop guard: only a host stop ends the loop, and no log call can.
+        await GuardedLoop.RunAsync(
+            async ct =>
             {
-                envelope = await broker.DequeueAsync(endpoint, stoppingToken).ConfigureAwait(false);
-            }
-            catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
-            {
-                return;
-            }
+                var envelope = await broker.DequeueAsync(endpoint, ct).ConfigureAwait(false);
+                return await ProcessOneAsync(pipeline, endpoint, envelope, ct).ConfigureAwait(false);
+            },
+            OnLoopFault,
+            timeProvider,
+            stoppingToken).ConfigureAwait(false);
+    }
 
-            if (!await ProcessOneAsync(pipeline, endpoint, envelope, stoppingToken).ConfigureAwait(false))
-            {
-                return;
-            }
+    /// <summary>
+    /// The delay after a fault outside any one envelope — the broker itself — so that a broker that
+    /// keeps failing is retried, never spun on.
+    /// </summary>
+    private static readonly TimeSpan BrokerFaultDelay = TimeSpan.FromSeconds(1);
+
+    /// <summary>A fault of the loop itself, outside any envelope's verdict: reported, then retried.</summary>
+    /// <param name="fault">The fault.</param>
+    /// <returns>The delay before the next pass.</returns>
+    internal TimeSpan OnLoopFault(Exception fault)
+    {
+        GuardedLoop.Log(() => BusLogs.InMemoryLoopFaulted(logger, fault, BrokerFaultDelay));
+        return BrokerFaultDelay;
+    }
+
+    /// <summary>
+    /// An unsettled delivery while the host runs (#188, review of 556bbc0). The root container
+    /// cannot create a scope — disposed, or failing any other way: no service can be built until it
+    /// is back — the dependency-outage path, requeued
+    /// uncounted and paused, never a busy loop that dead-letters every message in milliseconds.
+    /// Otherwise — a handler using a provider it captured from a disposed scope — a counted failed
+    /// attempt, which dead-letters at the limit rather than pausing everything for ever.
+    /// </summary>
+    /// <param name="outcome">The unsettled outcome.</param>
+    /// <returns>The outcome to settle.</returns>
+    internal DeliveryOutcome WhileTheHostRuns(DeliveryOutcome outcome)
+    {
+        var reason = outcome.Reason ?? outcome.Error?.Message;
+        return RootContainerDisposed()
+            ? new DeliveryOutcome(DeliveryVerdict.DependencyUnavailable, outcome.Error, reason)
+            : new DeliveryOutcome(DeliveryVerdict.Transient, outcome.Error, reason);
+    }
+
+    /// <summary>
+    /// Whether no scope can be built. Any failure counts — another container reports its disposal
+    /// with its own exception type — and none escapes: the probe runs after the message left the
+    /// queue and before it is settled, so an escaping exception would lose it.
+    /// </summary>
+    private bool RootContainerDisposed()
+    {
+        try
+        {
+            using var probe = scopeFactory.CreateScope();
+            return false;
+        }
+        catch (Exception)
+        {
+            return true;
         }
     }
 
@@ -104,7 +148,10 @@ internal sealed class InMemoryTransportWorker(
     }
 
     /// <summary>Delivers and settles one envelope. Never throws.</summary>
-    /// <returns><see langword="false"/> when the loop must stop, which only shutdown causes.</returns>
+    /// <returns>
+    /// The delay before the next envelope; <see langword="null"/> when the loop must stop, which only
+    /// a host stop causes.
+    /// </returns>
     /// <remarks>
     /// <para>
     /// The safety net (#186): no exception from one message may end the consume loop, and the
@@ -113,12 +160,12 @@ internal sealed class InMemoryTransportWorker(
     /// </para>
     /// <para>
     /// <b>Settle first, log afterwards.</b> Every log call of this loop goes through
-    /// <see cref="TryLog"/>, so a failing logging provider cannot interrupt a settlement or escape
+    /// <see cref="GuardedLoop.Log"/>, so a failing logging provider cannot interrupt a settlement or escape
     /// the loop. <b>Settlement is idempotent per delivery</b>: once the envelope is requeued or
     /// dead-lettered, nothing settles it again, whatever fails afterwards.
     /// </para>
     /// </remarks>
-    private async ValueTask<bool> ProcessOneAsync(
+    private async ValueTask<TimeSpan?> ProcessOneAsync(
         MessageReceivePipeline pipeline,
         string endpoint,
         MessageEnvelope envelope,
@@ -142,11 +189,15 @@ internal sealed class InMemoryTransportWorker(
             outcome = DeliveryOutcome.Permanent("An unexpected fault escaped the receive pipeline.", ex);
         }
 
-        bool keepConsuming;
+        if (outcome.Verdict is DeliveryVerdict.Unsettled && !stoppingToken.IsCancellationRequested)
+        {
+            outcome = WhileTheHostRuns(outcome);
+        }
+
+        TimeSpan? next;
         try
         {
-            keepConsuming = await SettleAsync(delivery, outcome, logDisposition: escaped is null, stoppingToken)
-                .ConfigureAwait(false);
+            next = Settle(delivery, outcome, logDisposition: escaped is null);
         }
         catch (Exception ex)
         {
@@ -162,107 +213,76 @@ internal sealed class InMemoryTransportWorker(
                 delivery.DeadLetter();
             }
 
-            keepConsuming = !stoppingToken.IsCancellationRequested;
+            next = stoppingToken.IsCancellationRequested ? null : TimeSpan.Zero;
         }
 
         if (escaped is not null)
         {
             // Logged once, after the settlement, naming what actually happened to the message.
             var disposition = delivery.Disposition;
-            TryLog(() => BusLogs.UnexpectedDeliveryFault(
+            GuardedLoop.Log(() => BusLogs.UnexpectedDeliveryFault(
                 logger, escaped, envelope.Id, envelope.Type, disposition));
         }
 
-        return keepConsuming;
+        return next;
     }
 
-    /// <returns><see langword="false"/> when the loop must stop.</returns>
-    private async ValueTask<bool> SettleAsync(
+    /// <returns>The delay before the next envelope; <see langword="null"/> when the loop must stop.</returns>
+    private TimeSpan? Settle(
         Delivery delivery,
         DeliveryOutcome outcome,
-        bool logDisposition,
-        CancellationToken stoppingToken)
+        bool logDisposition)
     {
         var envelope = delivery.Envelope;
 
         switch (outcome.Verdict)
         {
             case DeliveryVerdict.Succeeded:
-                return true;
+                return TimeSpan.Zero;
 
             case DeliveryVerdict.Permanent:
                 delivery.DeadLetter();
                 if (logDisposition)
                 {
                     var attempts = envelope.Id is null ? 0 : broker.GetFailedAttempts(delivery.Endpoint, envelope.Id);
-                    TryLog(() => BusLogs.DeadLettered(
+                    GuardedLoop.Log(() => BusLogs.DeadLettered(
                         logger, outcome.Error, envelope.Id, envelope.Type, attempts, outcome.Reason));
                 }
 
-                return true;
+                return TimeSpan.Zero;
 
             case DeliveryVerdict.Transient:
                 var failed = broker.RecordFailedAttempt(delivery.Endpoint, envelope);
                 if (failed >= broker.MaxDeliveryAttempts)
                 {
                     delivery.DeadLetter();
-                    TryLog(() => BusLogs.DeadLettered(
+                    GuardedLoop.Log(() => BusLogs.DeadLettered(
                         logger, outcome.Error, envelope.Id, envelope.Type, failed, outcome.Reason));
                 }
                 else
                 {
                     delivery.Requeue();
-                    TryLog(() => BusLogs.Redelivered(
+                    GuardedLoop.Log(() => BusLogs.Redelivered(
                         logger, envelope.Id, envelope.Type, failed, broker.MaxDeliveryAttempts));
                 }
 
-                return true;
+                return TimeSpan.Zero;
 
             case DeliveryVerdict.DependencyUnavailable:
                 delivery.Requeue();
-                TryLog(() => BusLogs.EndpointPaused(
+                GuardedLoop.Log(() => BusLogs.EndpointPaused(
                     logger, envelope.Id, envelope.Type, broker.DependencyUnavailableBackoff));
-                try
-                {
-                    await Task.Delay(broker.DependencyUnavailableBackoff, timeProvider, stoppingToken)
-                        .ConfigureAwait(false);
-                }
-                catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
-                {
-                    return false;
-                }
-
-                return true;
+                return broker.DependencyUnavailableBackoff;
 
             case DeliveryVerdict.Unsettled:
-                // Only genuine shutdown yields this verdict — a cancelled host token or a disposed
-                // provider — so the message is requeued with its count unchanged and the loop ends.
+                // Only a host stop reaches this arm (above): the message is requeued with its count
+                // unchanged and the loop ends.
                 delivery.Requeue();
-                return false;
+                return null;
 
             default:
                 throw new InvalidOperationException(
                     $"Unhandled {nameof(DeliveryVerdict)} '{outcome.Verdict}'.");
-        }
-    }
-
-    /// <summary>
-    /// Runs one log call. A logging provider that throws must never interrupt a settlement or end
-    /// the consume loop, and there is nowhere left to report its failure, so it is swallowed.
-    /// </summary>
-    [System.Diagnostics.CodeAnalysis.SuppressMessage(
-        "Design",
-        "CA1031:Do not catch general exception types",
-        Justification = "A failing logger must never end the consume loop; nothing is left to report to.")]
-    private static void TryLog(Action log)
-    {
-        try
-        {
-            log();
-        }
-        catch (Exception)
-        {
-            // Deliberately swallowed: see the summary.
         }
     }
 

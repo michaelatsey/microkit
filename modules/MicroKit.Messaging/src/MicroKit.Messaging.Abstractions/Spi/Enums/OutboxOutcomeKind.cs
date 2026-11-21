@@ -29,10 +29,20 @@ public enum OutboxOutcomeKind
 
     /// <summary>
     /// Claimed but never attempted — the batch ended early through cancellation or a
-    /// transport outage. Status returns to <c>Pending</c> with the lease cleared and
+    /// configuration fault. Status returns to <c>Pending</c> with the lease cleared and
     /// <b>no</b> retry budget consumed. Distinguishing this from
-    /// <see cref="Retry"/> is what stops a broker outage from burning the retry
+    /// <see cref="Retry"/> is what stops an outage from burning the retry
     /// allowance of every message in the queue.
     /// </summary>
     Released = 3,
+
+    /// <summary>
+    /// Not attempted because the message's endpoint is down — its transport unreachable or not
+    /// registered, a local consumer's dependency out. Status returns to <c>Pending</c> with the lease
+    /// cleared and the message eligible again at <see cref="OutboxOutcome.NextRetryAtUtc"/>, the end
+    /// of the endpoint's back-off. <b>Neither</b> the retry count nor the error text changes: no
+    /// attempt was made. A store settles deferrals set-based, one statement per distinct
+    /// <see cref="OutboxOutcome.NextRetryAtUtc"/>, since an outage defers whole batches.
+    /// </summary>
+    Deferred = 4,
 }

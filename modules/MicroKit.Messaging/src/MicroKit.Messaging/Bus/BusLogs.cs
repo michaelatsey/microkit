@@ -11,6 +11,14 @@ internal static partial class BusLogs
         ILogger logger, string messageId, string wireType, string source, string? tenantId);
 
     [LoggerMessage(
+        EventId = 3004,
+        Level = LogLevel.Debug,
+        Message = "Enlisted message {MessageId} as '{WireType}' in the outbox of store '{Store}' " +
+                  "for tenant {TenantId}. It is sent once the unit of work it joined is saved.")]
+    public static partial void Enlisted(
+        ILogger logger, string messageId, string wireType, string store, string? tenantId);
+
+    [LoggerMessage(
         EventId = 3001,
         Level = LogLevel.Warning,
         Message = "Message {MessageId} ('{WireType}' from '{Source}') resolves to local type " +
@@ -102,4 +110,10 @@ internal static partial class BusLogs
                   "that failed is not registered. First loader error: {FirstError}")]
     public static partial void TypesNotLoaded(
         ILogger logger, string assembly, int count, string typeNames, string firstError);
+
+    [LoggerMessage(
+        EventId = 3017,
+        Level = LogLevel.Error,
+        Message = "The in-memory transport's consume loop failed outside any envelope; it runs again in {RetryIn}.")]
+    public static partial void InMemoryLoopFaulted(ILogger logger, Exception exception, TimeSpan retryIn);
 }

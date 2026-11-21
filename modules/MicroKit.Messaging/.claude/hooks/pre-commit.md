@@ -18,15 +18,17 @@ Exit non-zero if any compiler diagnostic line appears (format: `file(line,col): 
 > informational lines containing those words. The `^.+ (error|warning) [A-Z]+[0-9]+` pattern
 > matches only actual compiler/MSBuild diagnostic lines.
 
-### 2. No MediatR.Contracts reference
+### 2. No MediatR.Contracts reference outside the glue
 
 ```bash
-grep -rn "MediatR\.Contracts" modules/MicroKit.Messaging/ \
-  --include="*.csproj" --include="*.cs" --include="*.props"
+grep -rn "Include=\"MediatR" modules/MicroKit.Messaging/ --include="*.csproj" --include="*.props"
 ```
 
-Exit non-zero if any match found. **This is a zero-tolerance check** — `MediatR.Contracts` must
-never appear anywhere in this module, in any form (PackageReference, using directive, type reference).
+Exit non-zero if any match found. No project in this module references `MediatR` or
+`MediatR.Contracts` directly: `MicroKit.Messaging.MediatR` reaches them through `MicroKit.MediatR`
+(ADR-MSG-009), and the architecture tests keep them out of Abstractions, Core and
+EntityFrameworkCore. A text grep for `MediatR.Contracts` over `*.cs` is not the check: the
+architecture tests and a test `.csproj` comment name it to forbid it.
 
 ### 3. No Console.WriteLine
 

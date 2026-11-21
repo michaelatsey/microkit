@@ -40,19 +40,19 @@ public sealed class EfOutboxStoreTests
         DateTimeOffset? createdAtUtc = null,
         DateTimeOffset? processedAtUtc = null,
         Guid? claimToken = null,
-        MessageKind messageKind = MessageKind.Notification,
+        string? endpoint = OutboxMessage.LocalEndpoint,
         string? contractName = null,
         string? source = null,
-        MessageId? originMessageId = null)
+        IReadOnlyDictionary<string, string>? headers = null)
     {
         return new OutboxMessage
         {
             Id = MessageId.New(),
             TenantId = tenantId,
-            MessageKind = messageKind,
+            Endpoint = endpoint,
             ContractName = contractName,
             Source = source,
-            OriginMessageId = originMessageId,
+            Headers = headers,
             EventType = "MicroKit.Test.TestEvent, MicroKit.Test",
             Payload = "{}",
             Status = status,
@@ -109,12 +109,11 @@ public sealed class EfOutboxStoreTests
             await using var _ = conn;
             await using var __ = ctx;
 
-            var originRow = MessageId.New();
             var message = BuildOutboxMessage(
-                messageKind: MessageKind.Contract,
+                endpoint: null,
                 contractName: "shop.orders.order-placed.v1",
                 source: "/shop/orders",
-                originMessageId: originRow);
+                headers: new Dictionary<string, string> { ["x-origin"] = "checkout", ["x-lang"] = "fr" });
 
             await Store(ctx).AddAsync(message);
             await ctx.SaveChangesAsync();
@@ -122,10 +121,12 @@ public sealed class EfOutboxStoreTests
             await using var probe = SecondContext(conn);
             var stored = await probe.OutboxMessages.SingleAsync();
 
-            stored.MessageKind.ShouldBe(MessageKind.Contract);
+            stored.Endpoint.ShouldBeNull("a contract row is bound for the transport");
             stored.ContractName.ShouldBe("shop.orders.order-placed.v1");
             stored.Source.ShouldBe("/shop/orders");
-            stored.OriginMessageId.ShouldBe(originRow);
+            stored.Headers.ShouldNotBeNull().ShouldBe(
+                new Dictionary<string, string> { ["x-origin"] = "checkout", ["x-lang"] = "fr" },
+                ignoreOrder: true);
         });
 
     /// <summary>
@@ -134,9 +135,7 @@ public sealed class EfOutboxStoreTests
     /// <remarks>
     /// Not a trivial mirror of the test above: marking <c>Source</c> or <c>ContractName</c>
     /// <c>IsRequired()</c> would break every notification write in the module, and this is what
-    /// would catch it. It also covers the unique index over
-    /// <c>(OriginMessageId, ContractName)</c> — two all-null rows must coexist, which they do on
-    /// SQLite and PostgreSQL because nulls are distinct there.
+    /// would catch it.
     /// </remarks>
     [Fact]
     public Task AddAsync_AllowsNullWireColumnsOnNotificationRows()
@@ -189,7 +188,7 @@ public sealed class EfOutboxStoreTests
             ctx.OutboxMessages.AddRange(pending, BuildOutboxMessage(OutboxMessageStatus.Published));
             await ctx.SaveChangesAsync();
 
-            var claim = await Store(ctx).ClaimBatchAsync(10, Lease);
+            var claim = await Store(ctx).ClaimBatchAsync(10, Lease, OutboxEndpoints.None);
 
             claim.Count.ShouldBe(1);
             claim.Messages[0].Id.ShouldBe(pending.Id);
@@ -210,7 +209,7 @@ public sealed class EfOutboxStoreTests
             ctx.OutboxMessages.Add(stale);
             await ctx.SaveChangesAsync();
 
-            var claim = await Store(ctx).ClaimBatchAsync(10, Lease);
+            var claim = await Store(ctx).ClaimBatchAsync(10, Lease, OutboxEndpoints.None);
 
             claim.Count.ShouldBe(1);
             claim.Messages[0].ClaimToken.ShouldBe(claim.Token, "the new owner's token replaces the dead one");
@@ -228,7 +227,7 @@ public sealed class EfOutboxStoreTests
                 OutboxMessageStatus.Processing, lockedUntilUtc: Now.AddMinutes(5)));
             await ctx.SaveChangesAsync();
 
-            (await Store(ctx).ClaimBatchAsync(10, Lease)).Count.ShouldBe(0);
+            (await Store(ctx).ClaimBatchAsync(10, Lease, OutboxEndpoints.None)).Count.ShouldBe(0);
         });
 
     [Fact]
@@ -242,7 +241,7 @@ public sealed class EfOutboxStoreTests
             ctx.OutboxMessages.Add(BuildOutboxMessage(nextRetryAtUtc: Now.AddMinutes(5)));
             await ctx.SaveChangesAsync();
 
-            (await Store(ctx).ClaimBatchAsync(10, Lease)).Count.ShouldBe(0);
+            (await Store(ctx).ClaimBatchAsync(10, Lease, OutboxEndpoints.None)).Count.ShouldBe(0);
         });
 
     [Fact]
@@ -256,7 +255,7 @@ public sealed class EfOutboxStoreTests
             ctx.OutboxMessages.Add(BuildOutboxMessage(OutboxMessageStatus.Failed, deadLettered: true));
             await ctx.SaveChangesAsync();
 
-            (await Store(ctx).ClaimBatchAsync(10, Lease)).Count.ShouldBe(0);
+            (await Store(ctx).ClaimBatchAsync(10, Lease, OutboxEndpoints.None)).Count.ShouldBe(0);
         });
 
     [Fact]
@@ -267,7 +266,7 @@ public sealed class EfOutboxStoreTests
             await using var _ = conn;
             await using var __ = ctx;
 
-            var claim = await Store(ctx).ClaimBatchAsync(10, Lease);
+            var claim = await Store(ctx).ClaimBatchAsync(10, Lease, OutboxEndpoints.None);
 
             claim.Count.ShouldBe(0);
             claim.Token.ShouldBe(Guid.Empty);
@@ -288,7 +287,7 @@ public sealed class EfOutboxStoreTests
             ctx.OutboxMessages.AddRange(BuildOutboxMessage(), BuildOutboxMessage(), BuildOutboxMessage());
             await ctx.SaveChangesAsync();
 
-            var claim = await Store(ctx).ClaimBatchAsync(10, Lease);
+            var claim = await Store(ctx).ClaimBatchAsync(10, Lease, OutboxEndpoints.None);
 
             claim.Count.ShouldBe(3);
             claim.Token.ShouldNotBe(Guid.Empty);
@@ -342,7 +341,7 @@ public sealed class EfOutboxStoreTests
             ctx.OutboxMessages.AddRange(stagedThird, stagedFirst, stagedSecond);
             await ctx.SaveChangesAsync();
 
-            var claim = await Store(ctx).ClaimBatchAsync(2, Lease);
+            var claim = await Store(ctx).ClaimBatchAsync(2, Lease, OutboxEndpoints.None);
 
             claim.Count.ShouldBe(2);
             claim.Messages.Select(m => m.Id).ShouldBe(
@@ -405,7 +404,7 @@ public sealed class EfOutboxStoreTests
 
             // Not wrapped in Should.NotThrowAsync: an InvalidOperationException from Sort()
             // escaping here fails the test just as loudly, and keeps the claim value usable.
-            var claim = await Store(ctx).ClaimBatchAsync(25, Lease);
+            var claim = await Store(ctx).ClaimBatchAsync(25, Lease, OutboxEndpoints.None);
 
             claim.Count.ShouldBe(25);
         });
@@ -427,8 +426,8 @@ public sealed class EfOutboxStoreTests
 
             await using var ctxB = SecondContext(conn);
 
-            var claimA = await Store(ctx).ClaimBatchAsync(10, Lease);
-            var claimB = await Store(ctxB).ClaimBatchAsync(10, Lease);
+            var claimA = await Store(ctx).ClaimBatchAsync(10, Lease, OutboxEndpoints.None);
+            var claimB = await Store(ctxB).ClaimBatchAsync(10, Lease, OutboxEndpoints.None);
 
             var idsA = claimA.Messages.Select(m => m.Id).ToHashSet();
             var idsB = claimB.Messages.Select(m => m.Id).ToHashSet();
@@ -454,7 +453,7 @@ public sealed class EfOutboxStoreTests
             await ctx.SaveChangesAsync();
 
             var store = Store(ctx);
-            var claim = await store.ClaimBatchAsync(10, Lease);
+            var claim = await store.ClaimBatchAsync(10, Lease, OutboxEndpoints.None);
             var written = await store.ApplyOutcomesAsync(
                 claim.Token, [OutboxOutcome.Published(claim.Messages[0].Id)]);
 
@@ -480,7 +479,7 @@ public sealed class EfOutboxStoreTests
             await ctx.SaveChangesAsync();
 
             var store = Store(ctx);
-            var claim = await store.ClaimBatchAsync(10, Lease);
+            var claim = await store.ClaimBatchAsync(10, Lease, OutboxEndpoints.None);
             await store.ApplyOutcomesAsync(claim.Token, [OutboxOutcome.Released(claim.Messages[0].Id)]);
 
             await using var probe = SecondContext(conn);
@@ -490,6 +489,106 @@ public sealed class EfOutboxStoreTests
             row.NextRetryAtUtc.ShouldBeNull("and must be immediately eligible again");
             row.LockedUntilUtc.ShouldBeNull();
             row.ClaimToken.ShouldBeNull();
+        });
+
+    [Theory]
+    [InlineData(OutboxEndpoints.Transport)]
+    [InlineData(OutboxEndpoints.Local)]
+    [InlineData(OutboxEndpoints.Transport | OutboxEndpoints.Local)]
+    public Task ClaimBatchAsync_LeavesOutTheExcludedEndpointsRows_AndNeverAnUnroutableOne(OutboxEndpoints excluded)
+        => Task.Run(async () =>
+        {
+            var (conn, ctx) = CreateIsolatedDb();
+            await using var _ = conn;
+            await using var __ = ctx;
+
+            OutboxMessage Row(string? endpoint, int order)
+            {
+                var row = BuildOutboxMessage(createdAtUtc: Now.AddSeconds(order - 10));
+                row.Endpoint = endpoint;
+                return row;
+            }
+
+            var transport = Row(null, 0);
+            var local = Row(OutboxMessage.LocalEndpoint, 1);
+            var unroutable = Row("rabbitmq", 2);
+            var unroutableBelow = Row("kafka", 3);   // sorts below "local": the other range
+            ctx.OutboxMessages.AddRange(transport, local, unroutable, unroutableBelow);
+            await ctx.SaveChangesAsync();
+
+            var claimed = (await Store(ctx).ClaimBatchAsync(10, Lease, excluded)).Messages.Select(m => m.Id).ToList();
+
+            claimed.Contains(transport.Id).ShouldBe((excluded & OutboxEndpoints.Transport) == 0);
+            claimed.Contains(local.Id).ShouldBe((excluded & OutboxEndpoints.Local) == 0);
+            claimed.ShouldContain(unroutable.Id, "the processor dead-letters it; no filter hides it");
+            claimed.ShouldContain(unroutableBelow.Id, "on either side of 'local'");
+        });
+
+    [Fact]
+    public Task ApplyOutcomesAsync_Deferred_KeepsTheRetryCountAndTheError_AndSetsEachNextAttempt()
+        => Task.Run(async () =>
+        {
+            var (conn, ctx) = CreateIsolatedDb();
+            await using var _ = conn;
+            await using var __ = ctx;
+
+            // Seeded with a count and an error of their own: a deferral must keep both (#188).
+            for (var i = 0; i < 3; i++)
+            {
+                var seeded = BuildOutboxMessage(createdAtUtc: Now.AddSeconds(-10 + i));
+                seeded.RetryCount = 2;
+                seeded.ErrorMessage = "schema registry timeout";
+                ctx.OutboxMessages.Add(seeded);
+            }
+
+            await ctx.SaveChangesAsync();
+
+            var store = Store(ctx);
+            var claim = await store.ClaimBatchAsync(10, Lease, OutboxEndpoints.None);
+            var transportUntil = Now.AddSeconds(5);
+            var localUntil = Now.AddSeconds(10);
+            var written = await store.ApplyOutcomesAsync(claim.Token,
+            [
+                OutboxOutcome.Deferred(claim.Messages[0].Id, transportUntil),
+                OutboxOutcome.Deferred(claim.Messages[1].Id, transportUntil),
+                OutboxOutcome.Deferred(claim.Messages[2].Id, localUntil),
+            ]);
+
+            written.ShouldBe(3);
+            await using var probe = SecondContext(conn);
+            var rows = await probe.OutboxMessages.AsNoTracking().ToDictionaryAsync(m => m.Id);
+            rows.Values.ShouldAllBe(r => r.Status == OutboxMessageStatus.Pending && r.LockedUntilUtc == null && r.ClaimToken == null);
+            rows.Values.ShouldAllBe(r => r.RetryCount == 2, "no attempt was made");
+            rows.Values.ShouldAllBe(r => r.ErrorMessage == "schema registry timeout", "the last real error survives");
+            rows[claim.Messages[0].Id].NextRetryAtUtc.ShouldBe(transportUntil);
+            rows[claim.Messages[1].Id].NextRetryAtUtc.ShouldBe(transportUntil);
+            rows[claim.Messages[2].Id].NextRetryAtUtc.ShouldBe(localUntil, "each next attempt is its own");
+            (await store.ClaimBatchAsync(10, Lease, OutboxEndpoints.None)).Messages.ShouldBeEmpty("a deferred row is not claimable before its next attempt");
+        });
+
+    [Fact]
+    public Task ApplyOutcomesAsync_DeferredWithNoNextAttempt_IsSettledEligibleAtOnce_NeverLeftClaimed()
+        => Task.Run(async () =>
+        {
+            var (conn, ctx) = CreateIsolatedDb();
+            await using var _ = conn;
+            await using var __ = ctx;
+
+            ctx.OutboxMessages.Add(BuildOutboxMessage());
+            await ctx.SaveChangesAsync();
+
+            var store = Store(ctx);
+            var claim = await store.ClaimBatchAsync(10, Lease, OutboxEndpoints.None);
+            var id = claim.Messages[0].Id;
+            var written = await store.ApplyOutcomesAsync(
+                claim.Token, [new OutboxOutcome(id, OutboxOutcomeKind.Deferred, 0, null, null)]);
+
+            written.ShouldBe(1);
+            await using var probe = SecondContext(conn);
+            var row = await probe.OutboxMessages.AsNoTracking().SingleAsync();
+            row.Status.ShouldBe(OutboxMessageStatus.Pending);
+            row.ClaimToken.ShouldBeNull("never left claimed until its lease expires");
+            row.NextRetryAtUtc.ShouldBeNull();
         });
 
     [Fact]
@@ -504,7 +603,7 @@ public sealed class EfOutboxStoreTests
             await ctx.SaveChangesAsync();
 
             var store = Store(ctx);
-            var claim = await store.ClaimBatchAsync(10, Lease);
+            var claim = await store.ClaimBatchAsync(10, Lease, OutboxEndpoints.None);
             var nextAttempt = Now.AddSeconds(4);
 
             await store.ApplyOutcomesAsync(
@@ -533,7 +632,7 @@ public sealed class EfOutboxStoreTests
             await ctx.SaveChangesAsync();
 
             var store = Store(ctx);
-            var claim = await store.ClaimBatchAsync(10, Lease);
+            var claim = await store.ClaimBatchAsync(10, Lease, OutboxEndpoints.None);
 
             await store.ApplyOutcomesAsync(
                 claim.Token, [OutboxOutcome.DeadLetter(claim.Messages[0].Id, 5, "max retries exceeded")]);
@@ -564,7 +663,7 @@ public sealed class EfOutboxStoreTests
             await ctx.SaveChangesAsync();
 
             var store = Store(ctx);
-            var claim = await store.ClaimBatchAsync(10, Lease);
+            var claim = await store.ClaimBatchAsync(10, Lease, OutboxEndpoints.None);
             var ids = claim.Messages.Select(m => m.Id).ToList();
 
             var written = await store.ApplyOutcomesAsync(claim.Token,
@@ -605,13 +704,13 @@ public sealed class EfOutboxStoreTests
             await ctx.SaveChangesAsync();
 
             var storeA = Store(ctx);
-            var staleClaim = await storeA.ClaimBatchAsync(10, Lease);
+            var staleClaim = await storeA.ClaimBatchAsync(10, Lease, OutboxEndpoints.None);
             var messageId = staleClaim.Messages[0].Id;
 
             // The lease expires and processor B takes the message over.
             await using var ctxB = SecondContext(conn);
             var storeB = Store(ctxB, Now.Add(Lease).AddMinutes(1));
-            var freshClaim = await storeB.ClaimBatchAsync(10, Lease);
+            var freshClaim = await storeB.ClaimBatchAsync(10, Lease, OutboxEndpoints.None);
             freshClaim.Count.ShouldBe(1, "the expired lease must be re-claimable");
             freshClaim.Token.ShouldNotBe(staleClaim.Token);
 
@@ -640,11 +739,11 @@ public sealed class EfOutboxStoreTests
             await ctx.SaveChangesAsync();
 
             var storeA = Store(ctx);
-            var staleClaim = await storeA.ClaimBatchAsync(10, Lease);
+            var staleClaim = await storeA.ClaimBatchAsync(10, Lease, OutboxEndpoints.None);
             var messageId = staleClaim.Messages[0].Id;
 
             await using var ctxB = SecondContext(conn);
-            await Store(ctxB, Now.Add(Lease).AddMinutes(1)).ClaimBatchAsync(10, Lease);
+            await Store(ctxB, Now.Add(Lease).AddMinutes(1)).ClaimBatchAsync(10, Lease, OutboxEndpoints.None);
 
             var written = await storeA.ApplyOutcomesAsync(staleClaim.Token,
             [
@@ -671,7 +770,7 @@ public sealed class EfOutboxStoreTests
             await ctx.SaveChangesAsync();
 
             var store = Store(ctx);
-            var claim = await store.ClaimBatchAsync(10, Lease);
+            var claim = await store.ClaimBatchAsync(10, Lease, OutboxEndpoints.None);
             var ids = claim.Messages.Select(m => m.Id).ToList();
 
             // One of the two is stolen back before settlement.
@@ -802,85 +901,11 @@ public sealed class EfOutboxStoreTests
         });
 
     /// <summary>
-    /// A contract row is not purged while the row that produced it can still be dispatched again.
-    /// </summary>
-    /// <remarks>
-    /// <para>
-    /// The replay key only rejects a duplicate while the row it produced is still in the table, so
-    /// a contract row has to outlive every chance its origin has of being re-dispatched. That
-    /// window is a <b>state</b>, not a duration: automatic replay is bounded by
-    /// <c>MaxRetries × MaxRetryBackoff</c>, both configurable, and an operator requeue of a
-    /// dead-lettered origin is unbounded — so no retention default covers it.
-    /// </para>
-    /// <para>
-    /// What it prevents is the one duplicate nothing downstream can recognise: a republished
-    /// contract is a new row with a new <c>MessageId</c>, and a consumer deduplicates on that id.
-    /// </para>
-    /// </remarks>
-    [Fact]
-    public Task DeleteProcessedAsync_KeepsAContractWhoseOriginCanStillBeDispatched()
-        => Task.Run(async () =>
-        {
-            var (conn, ctx) = CreateIsolatedDb();
-            await using var _ = conn;
-            await using var __ = ctx;
-
-            // A dead-lettered origin is never purged and can be requeued at any time.
-            var deadLetteredOrigin = BuildOutboxMessage(
-                status: OutboxMessageStatus.Failed, deadLettered: true);
-
-            var contract = BuildOutboxMessage(
-                status: OutboxMessageStatus.Published,
-                processedAtUtc: Now.AddDays(-30),
-                messageKind: MessageKind.Contract,
-                contractName: "saasbtp.safety.constat-recorded.v1",
-                source: "/saasbtp/safety",
-                originMessageId: deadLetteredOrigin.Id);
-
-            ctx.OutboxMessages.AddRange(deadLetteredOrigin, contract);
-            await ctx.SaveChangesAsync();
-
-            var deleted = await Store(ctx).DeleteProcessedAsync(Now.AddDays(-7));
-
-            deleted.ShouldBe(0, "purging it would leave a later requeue nothing to collide with");
-            (await ctx.OutboxMessages.AsNoTracking().CountAsync(m => m.Id == contract.Id))
-                .ShouldBe(1);
-        });
-
-    /// <summary>
-    /// Once the origin is <c>Published</c> nothing can re-dispatch it, so the contract row is free.
+    /// A published contract row is purged by age like any other row: nothing holds it back once
+    /// the replay key is gone (#188).
     /// </summary>
     [Fact]
-    public Task DeleteProcessedAsync_PurgesAContractWhoseOriginIsTerminal()
-        => Task.Run(async () =>
-        {
-            var (conn, ctx) = CreateIsolatedDb();
-            await using var _ = conn;
-            await using var __ = ctx;
-
-            var origin = BuildOutboxMessage(
-                status: OutboxMessageStatus.Published, processedAtUtc: Now.AddDays(-30));
-
-            var contract = BuildOutboxMessage(
-                status: OutboxMessageStatus.Published,
-                processedAtUtc: Now.AddDays(-30),
-                messageKind: MessageKind.Contract,
-                contractName: "saasbtp.safety.constat-recorded.v1",
-                source: "/saasbtp/safety",
-                originMessageId: origin.Id);
-
-            ctx.OutboxMessages.AddRange(origin, contract);
-            await ctx.SaveChangesAsync();
-
-            (await Store(ctx).DeleteProcessedAsync(Now.AddDays(-7))).ShouldBe(2);
-            (await ctx.OutboxMessages.AsNoTracking().CountAsync()).ShouldBe(0);
-        });
-
-    /// <summary>
-    /// A contract published outside a dispatch has no origin, so nothing holds it back.
-    /// </summary>
-    [Fact]
-    public Task DeleteProcessedAsync_PurgesAContractWithNoOrigin()
+    public Task DeleteProcessedAsync_PurgesAPublishedContractRowByAge()
         => Task.Run(async () =>
         {
             var (conn, ctx) = CreateIsolatedDb();
@@ -890,7 +915,7 @@ public sealed class EfOutboxStoreTests
             ctx.OutboxMessages.Add(BuildOutboxMessage(
                 status: OutboxMessageStatus.Published,
                 processedAtUtc: Now.AddDays(-30),
-                messageKind: MessageKind.Contract,
+                endpoint: null,
                 contractName: "saasbtp.safety.constat-recorded.v1",
                 source: "/saasbtp/safety"));
             await ctx.SaveChangesAsync();
@@ -947,7 +972,7 @@ public sealed class EfOutboxStoreTests
     }
 
     // ---------------------------------------------------------------------------
-    // Message kind, contract name, and the replay natural key
+    // Endpoint, contract name, and the removed replay key
     // ---------------------------------------------------------------------------
 
     private static Microsoft.EntityFrameworkCore.Metadata.IReadOnlyProperty Property(
@@ -955,50 +980,68 @@ public sealed class EfOutboxStoreTests
         => ctx.Model.FindEntityType(typeof(OutboxMessage))!.FindProperty(name)!;
 
     /// <summary>
-    /// The column exists to be queried — session 023 calls it "routing, queryable in SQL". An int
-    /// discriminator is unreadable in psql or the Supabase dashboard, which would defeat the only
-    /// reason the column is there rather than inferred from the payload's CLR type.
+    /// The routing column (#188 D7): a readable string, optional because a transport row is its
+    /// null, and bounded.
     /// </summary>
     [Fact]
-    public void MessageKind_IsMappedAsARequiredConstrainedString()
+    public void Endpoint_IsMappedAsAnOptionalBoundedString()
     {
         var (conn, ctx) = CreateIsolatedDb();
         using var _ = conn;
         using var __ = ctx;
 
-        var kind = Property(ctx, nameof(OutboxMessage.MessageKind));
+        var endpoint = Property(ctx, nameof(OutboxMessage.Endpoint));
 
-        kind.GetProviderClrType().ShouldBe(
-            typeof(string), "an int discriminator is unreadable in a SQL console");
-        kind.GetMaxLength().ShouldBe(
-            32, "the width every other status column in this module uses");
-        kind.IsNullable.ShouldBeFalse("every row has a nature");
+        endpoint.ClrType.ShouldBe(typeof(string), "readable in a SQL console");
+        endpoint.GetValueConverter().ShouldBeNull("stored as the string it is");
+        endpoint.GetMaxLength().ShouldBe(64);
+        endpoint.IsNullable.ShouldBeTrue("a transport row is the column's null");
+        ctx.Model.FindEntityType(typeof(OutboxMessage))!.FindProperty("MessageKind")
+            .ShouldBeNull("the column is removed (#188)");
     }
 
     /// <summary>
-    /// Both are meaningful only for a contract row, so both are optional — and the pairing with
-    /// <c>MessageKind</c> is deliberately not enforced at this layer. The integration-event
-    /// publisher is the only writer that will ever set them, so the invariant belongs there. A
-    /// check constraint would have to spell <c>MessageKind &lt;&gt; 'Contract'</c>, hardcoding an
-    /// enum member name into the schema.
+    /// The contract name is meaningful only for a transport row, and headers only when the
+    /// publication has any, so both are optional — and their pairing with <c>Endpoint</c> is
+    /// deliberately not enforced at this layer. The bus is the only writer that will ever set them,
+    /// so the invariant belongs there.
     /// </summary>
     [Fact]
-    public void ContractNameAndOriginMessageId_AreOptional()
+    public void ContractNameAndHeaders_AreOptional()
     {
         var (conn, ctx) = CreateIsolatedDb();
         using var _ = conn;
         using var __ = ctx;
 
         var contractName = Property(ctx, nameof(OutboxMessage.ContractName));
-        contractName.IsNullable.ShouldBeTrue("a notification has no wire identity");
+        contractName.IsNullable.ShouldBeTrue("a local message has no wire identity");
         contractName.GetMaxLength().ShouldBe(
             256,
             "a consumer's contract names are data this column truncates silently on a provider " +
             "that does not enforce width, so the bound is pinned rather than left to a comment");
 
-        var origin = Property(ctx, nameof(OutboxMessage.OriginMessageId));
-        origin.IsNullable.ShouldBeTrue("a row not produced by a dispatch has no origin");
-        origin.GetValueConverter().ShouldNotBeNull("MessageId? is not a storable type on its own");
+        var headers = Property(ctx, nameof(OutboxMessage.Headers));
+        headers.IsNullable.ShouldBeTrue("most publications carry no header of their own");
+        headers.GetValueConverter().ShouldNotBeNull("a dictionary is stored as one JSON column");
+    }
+
+    /// <summary>
+    /// The headers comparer is order-independent in its hash as in its equality: two equal
+    /// dictionaries built in different orders must hash alike, or EF's snapshot contract breaks.
+    /// </summary>
+    [Fact]
+    public void TheHeadersComparer_HashesEqualDictionariesAlike_WhateverTheirOrder()
+    {
+        var (conn, ctx) = CreateIsolatedDb();
+        using var _ = conn;
+        using var __ = ctx;
+        var comparer = Property(ctx, nameof(OutboxMessage.Headers)).GetValueComparer().ShouldNotBeNull();
+
+        IReadOnlyDictionary<string, string> one = new Dictionary<string, string> { ["a"] = "1", ["b"] = "2", ["c"] = "3" };
+        IReadOnlyDictionary<string, string> other = new Dictionary<string, string> { ["c"] = "3", ["a"] = "1", ["b"] = "2" };
+
+        comparer.Equals(one, other).ShouldBeTrue();
+        comparer.GetHashCode(one).ShouldBe(comparer.GetHashCode(other));
     }
 
     /// <summary>
@@ -1035,118 +1078,55 @@ public sealed class EfOutboxStoreTests
     }
 
     /// <summary>
-    /// The index name is pinned because a consumer hand-writes their own DDL against it — the EF
-    /// configuration is the schema's only definition, so the name is part of the contract.
+    /// A converter that maps but does not round-trip passes every metadata assertion above.
     /// </summary>
     [Fact]
-    public void TheReplayNaturalKey_IsAUniqueIndexOverOriginThenContract()
+    public Task BothEndpoints_RoundTripThroughTheDatabase()
+        => Task.Run(async () =>
+        {
+            var (conn, ctx) = CreateIsolatedDb();
+            await using var _ = conn;
+            await using var __ = ctx;
+
+            ctx.OutboxMessages.Add(BuildOutboxMessage());
+            ctx.OutboxMessages.Add(BuildOutboxMessage(
+                endpoint: null,
+                contractName: "saasbtp.safety.constat-recorded.v1"));
+            await ctx.SaveChangesAsync();
+
+            await using var probe = SecondContext(conn);
+            var rows = await probe.OutboxMessages.AsNoTracking().ToListAsync();
+
+            var local = rows.Single(m => m.Endpoint == OutboxMessage.LocalEndpoint);
+            local.ContractName.ShouldBeNull();
+            local.Headers.ShouldBeNull();
+
+            var contract = rows.Single(m => m.Endpoint == null);
+            contract.ContractName.ShouldBe("saasbtp.safety.constat-recorded.v1");
+        });
+
+    /// <summary>
+    /// The replay key is gone (#188 D5): the outbox table carries no unique index beside its
+    /// primary key, so two contract rows of one contract from one delivery coexist.
+    /// </summary>
+    /// <remarks>
+    /// Its job — keeping a redelivered handler's publications from duplicating — moved to the inbox
+    /// guard, where those publications commit or roll back with the handler's inbox row.
+    /// </remarks>
+    [Fact]
+    public void TheOutboxTable_HasNoUniqueIndexBesideItsKey()
     {
         var (conn, ctx) = CreateIsolatedDb();
         using var _ = conn;
         using var __ = ctx;
 
-        var index = ctx.Model
-            .FindEntityType(typeof(OutboxMessage))!
-            .GetIndexes()
-            .SingleOrDefault(i =>
-                i.GetDatabaseName() == "UX_OutboxMessages_Origin_ContractName");
-
-        index.ShouldNotBeNull("the replay natural key is the whole point of the two columns");
-        index.IsUnique.ShouldBeTrue("without uniqueness a replay writes a duplicate silently");
-        index.Properties.Select(p => p.Name).ShouldBe(
-            [nameof(OutboxMessage.OriginMessageId), nameof(OutboxMessage.ContractName)]);
+        var entity = ctx.Model.FindEntityType(typeof(OutboxMessage)).ShouldNotBeNull();
+        entity.GetIndexes().Where(i => i.IsUnique).ShouldBeEmpty();
+        entity.FindProperty("OriginMessageId").ShouldBeNull("the replay column is removed");
     }
 
-    /// <summary>
-    /// A converter that maps but does not round-trip passes every metadata assertion above.
-    /// </summary>
     [Fact]
-    public Task BothKinds_RoundTripThroughTheDatabase()
-        => Task.Run(async () =>
-        {
-            var (conn, ctx) = CreateIsolatedDb();
-            await using var _ = conn;
-            await using var __ = ctx;
-
-            var origin = MessageId.New();
-
-            ctx.OutboxMessages.Add(BuildOutboxMessage());
-            ctx.OutboxMessages.Add(BuildOutboxMessage(
-                messageKind: MessageKind.Contract,
-                contractName: "saasbtp.safety.constat-recorded.v1",
-                originMessageId: origin));
-            await ctx.SaveChangesAsync();
-
-            await using var probe = SecondContext(conn);
-            var rows = await probe.OutboxMessages.AsNoTracking()
-                .OrderBy(m => m.MessageKind)
-                .ToListAsync();
-
-            var notification = rows.Single(m => m.MessageKind == MessageKind.Notification);
-            notification.ContractName.ShouldBeNull();
-            notification.OriginMessageId.ShouldBeNull();
-
-            var contract = rows.Single(m => m.MessageKind == MessageKind.Contract);
-            contract.ContractName.ShouldBe("saasbtp.safety.constat-recorded.v1");
-            contract.OriginMessageId.ShouldBe(origin);
-        });
-
-    /// <summary>
-    /// Every notification row carries (null, null). If nulls ever compared equal in this index the
-    /// SECOND notification the system ever wrote would be rejected — which is precisely why SQL
-    /// Server is declared unsupported for this constraint. This is the assertion that fails the day
-    /// someone "improves" the index with NULLS NOT DISTINCT.
-    /// </summary>
-    [Fact]
-    public Task Many_notification_rows_with_no_contract_key_coexist()
-        => Task.Run(async () =>
-        {
-            var (conn, ctx) = CreateIsolatedDb();
-            await using var _ = conn;
-            await using var __ = ctx;
-
-            for (var i = 0; i < 5; i++)
-            {
-                ctx.OutboxMessages.Add(BuildOutboxMessage());
-            }
-
-            await ctx.SaveChangesAsync();
-
-            await using var probe = SecondContext(conn);
-            (await probe.OutboxMessages.CountAsync()).ShouldBe(5);
-        });
-
-    /// <summary>The natural key doing its job: a replayed publish collides instead of duplicating.</summary>
-    [Fact]
-    public Task A_second_row_with_the_same_origin_and_contract_is_rejected()
-        => Task.Run(async () =>
-        {
-            var (conn, ctx) = CreateIsolatedDb();
-            await using var _ = conn;
-            await using var __ = ctx;
-
-            var origin = MessageId.New();
-
-            ctx.OutboxMessages.Add(BuildOutboxMessage(
-                messageKind: MessageKind.Contract,
-                contractName: "saasbtp.safety.constat-recorded.v1",
-                originMessageId: origin));
-            await ctx.SaveChangesAsync();
-
-            ctx.OutboxMessages.Add(BuildOutboxMessage(
-                messageKind: MessageKind.Contract,
-                contractName: "saasbtp.safety.constat-recorded.v1",
-                originMessageId: origin));
-
-            await Should.ThrowAsync<DbUpdateException>(() => ctx.SaveChangesAsync());
-        });
-
-    /// <summary>
-    /// The key is (origin, contract), not contract alone: one contract published from many
-    /// different origin rows is the nominal case, not a duplicate.
-    /// </summary>
-    [Fact]
-    public Task The_same_contract_from_two_different_origins_is_accepted()
+    public Task TwoContractRowsOfOneContract_Coexist()
         => Task.Run(async () =>
         {
             var (conn, ctx) = CreateIsolatedDb();
@@ -1154,44 +1134,13 @@ public sealed class EfOutboxStoreTests
             await using var __ = ctx;
 
             ctx.OutboxMessages.Add(BuildOutboxMessage(
-                messageKind: MessageKind.Contract,
-                contractName: "saasbtp.safety.constat-recorded.v1",
-                originMessageId: MessageId.New()));
+                endpoint: null, contractName: "shop.order-placed.v1", source: "/shop"));
             ctx.OutboxMessages.Add(BuildOutboxMessage(
-                messageKind: MessageKind.Contract,
-                contractName: "saasbtp.safety.constat-recorded.v1",
-                originMessageId: MessageId.New()));
+                endpoint: null, contractName: "shop.order-placed.v1", source: "/shop"));
 
             await ctx.SaveChangesAsync();
 
-            await using var probe = SecondContext(conn);
-            (await probe.OutboxMessages.CountAsync()).ShouldBe(2);
+            (await ctx.OutboxMessages.AsNoTracking().CountAsync()).ShouldBe(2);
         });
 
-    /// <summary>
-    /// The scope of the guarantee, pinned so it is not later read as unconditional. A contract
-    /// staged outside a dispatch has no origin row, the tuple contains a null, and nulls are
-    /// distinct — so it does not deduplicate. That is intended: the key guards the REPLAY path,
-    /// where an origin row always exists.
-    /// </summary>
-    [Fact]
-    public Task A_contract_row_with_no_origin_does_not_deduplicate()
-        => Task.Run(async () =>
-        {
-            var (conn, ctx) = CreateIsolatedDb();
-            await using var _ = conn;
-            await using var __ = ctx;
-
-            ctx.OutboxMessages.Add(BuildOutboxMessage(
-                messageKind: MessageKind.Contract,
-                contractName: "saasbtp.safety.constat-recorded.v1"));
-            ctx.OutboxMessages.Add(BuildOutboxMessage(
-                messageKind: MessageKind.Contract,
-                contractName: "saasbtp.safety.constat-recorded.v1"));
-
-            await ctx.SaveChangesAsync();
-
-            await using var probe = SecondContext(conn);
-            (await probe.OutboxMessages.CountAsync()).ShouldBe(2);
-        });
 }

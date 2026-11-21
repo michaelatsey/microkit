@@ -1,0 +1,105 @@
+namespace MicroKit.Messaging.Processing;
+
+/// <summary>
+/// The back-off of each endpoint of one store's outbox (#188): while an endpoint is down — its
+/// transport unreachable, its dispatcher not activatable, a local consumer's dependency out — its
+/// rows are deferred, not attempted, and the other endpoint's rows keep flowing.
+/// </summary>
+/// <remarks>
+/// <para>
+/// One instance per store, a singleton keyed by the store, shared by the store's scoped
+/// <see cref="OutboxProcessor"/> of every cycle: the processor is rebuilt each cycle, the back-off
+/// outlives it. The delay starts at the polling interval, doubles on each failed attempt, is capped at
+/// <see cref="OutboxProcessorOptions.TransportUnavailableBackoff"/>, and is cleared by the first row
+/// the endpoint dispatches; a failure a whole ceiling past the end of the back-off starts again from
+/// the base delay. While it runs, <see cref="BlockedAt"/> tells the claim to leave the endpoint's rows
+/// out, so they are neither claimed nor rewritten.
+/// </para>
+/// <para>
+/// A deferred row (<see cref="OutboxOutcomeKind.Deferred"/>) is settled with its retry count and error
+/// text unchanged and its next attempt at the end of the back-off, so the claim skips it until then: the endpoint's stuck rows never head the claim, and
+/// the endpoint is tried once per back-off period, not once per cycle.
+/// </para>
+/// </remarks>
+internal sealed class OutboxEndpointBackoff(TimeSpan initial, TimeSpan ceiling)
+{
+    private Slot? _transport;
+    private Slot? _local;
+
+    /// <summary>Whether <paramref name="endpoint"/> is in back-off at <paramref name="now"/>.</summary>
+    /// <param name="endpoint">A dispatcher key (<see cref="OutboxDispatchers"/>).</param>
+    /// <param name="now">The current time.</param>
+    /// <param name="until">When the back-off ends, when it is in force.</param>
+    /// <returns><see langword="true"/> while the back-off is in force.</returns>
+    public bool IsBlocked(string endpoint, DateTimeOffset now, out DateTimeOffset until)
+    {
+        var slot = Volatile.Read(ref SlotOf(endpoint));
+        until = slot?.Until ?? default;
+        return slot is not null && now < slot.Until;
+    }
+
+    /// <summary>The endpoints in back-off at <paramref name="now"/>, for the claim to leave out.</summary>
+    /// <param name="now">The current time.</param>
+    /// <returns>The endpoints whose rows are not to be claimed.</returns>
+    public OutboxEndpoints BlockedAt(DateTimeOffset now)
+    {
+        var blocked = OutboxEndpoints.None;
+        if (IsBlocked(OutboxDispatchers.Transport, now, out _))
+        {
+            blocked |= OutboxEndpoints.Transport;
+        }
+
+        if (IsBlocked(OutboxDispatchers.Local, now, out _))
+        {
+            blocked |= OutboxEndpoints.Local;
+        }
+
+        return blocked;
+    }
+
+    /// <summary>Records a failed attempt of <paramref name="endpoint"/> and grows its back-off.</summary>
+    /// <param name="endpoint">A dispatcher key.</param>
+    /// <param name="now">The current time.</param>
+    /// <returns>When the endpoint is tried again.</returns>
+    public DateTimeOffset Block(string endpoint, DateTimeOffset now)
+    {
+        ref var field = ref SlotOf(endpoint);
+        var previous = Volatile.Read(ref field);
+
+        // Doubles from the last failure — unless the endpoint went a whole ceiling past the end of its
+        // back-off without failing again: a new outage then starts from the base delay. The ceiling,
+        // not the last delay: the loop's own idle polling stretches the gap before the next try.
+        var delay = previous is null || now >= previous.Until + ceiling ? initial : previous.Delay * 2;
+        if (delay > ceiling)
+        {
+            delay = ceiling;
+        }
+
+        var slot = new Slot(now + delay, delay);
+        Volatile.Write(ref field, slot);
+        return slot.Until;
+    }
+
+    /// <summary>Clears <paramref name="endpoint"/>'s back-off: it dispatched a row.</summary>
+    /// <param name="endpoint">A dispatcher key.</param>
+    public void Clear(string endpoint)
+    {
+        ref var field = ref SlotOf(endpoint);
+        if (Volatile.Read(ref field) is not null)
+        {
+            Volatile.Write(ref field, null);
+        }
+    }
+
+    private ref Slot? SlotOf(string endpoint)
+    {
+        if (endpoint is OutboxDispatchers.Local)
+        {
+            return ref _local;
+        }
+
+        return ref _transport;
+    }
+
+    private sealed record Slot(DateTimeOffset Until, TimeSpan Delay);
+}

@@ -30,7 +30,7 @@ using Microsoft.Extensions.Logging;
 /// a registration exists; activating the one singleton that takes <see cref="IMessageSerializer"/>
 /// through its constructor proves the default is actually reachable by a real consumer.
 /// <c>InboxProcessor</c> is deliberately not resolved here: it also requires the inbox stores, which
-/// come from <c>AddEfCoreOutbox()</c>, so its failure would not isolate the serializer.
+/// come from a store (<c>UseEntityFrameworkOutbox&lt;TContext&gt;()</c>), so its failure would not isolate the serializer.
 /// </para>
 /// <para>
 /// The notification-only composition lives in <c>MicroKit.Messaging.MediatR.UnitTests</c> — this

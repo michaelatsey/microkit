@@ -13,20 +13,19 @@ namespace MicroKit.Messaging;
 /// <list type="bullet">
 /// <item><description>a declared publication with no <see cref="IMessageTransport"/> registered;</description></item>
 /// <item><description>
-/// an <see cref="IIntegrationEventPublisher"/> registered — publications staged in the outbox —
-/// with no transport dispatcher to send them: the outbox would stop on its first contract row;
+/// a configured store missing one of the services the engine resolves keyed by its key;
 /// </description></item>
 /// <item><description>
-/// an <see cref="IOutboxProcessorStore"/> or <see cref="IInboxProcessorStore"/> registered while
-/// the matching engine — <c>AddOutboxInboxProcessing()</c> — is not: staged rows would never be
-/// drained.
+/// the start checks a store provider added (for EF Core: the <c>DbContext</c> is not registered,
+/// or its model lacks the messaging entities).
 /// </description></item>
 /// </list>
 /// <para>
-/// <b>Those are structural checks.</b> They ask <see cref="IServiceProviderIsService"/> whether a
-/// service is registered and resolve nothing, so they prove a registration exists, not that its
-/// activation will succeed: a transport whose constructor throws still fails later, where it is
-/// first resolved.
+/// <b>The registration checks are structural.</b> They ask <see cref="IServiceProviderIsService"/>
+/// whether a service is registered and resolve nothing, so they prove a registration exists, not
+/// that its activation will succeed: a store whose constructor throws is reported by the engine as
+/// an activation failure, where it is first resolved. A store provider's own checks may resolve
+/// what they need.
 /// </para>
 /// <para>
 /// <b>Why <see cref="StartingAsync"/>.</b> The host runs every <c>StartingAsync</c> before any
@@ -40,7 +39,7 @@ namespace MicroKit.Messaging;
 /// </remarks>
 internal sealed class MessagingCompositionValidator(
     MessagingComposition composition,
-    IServiceProviderIsService isService,
+    IServiceProvider services,
     ILogger<MessagingCompositionValidator> logger)
     : IHostedLifecycleService
 {
@@ -76,6 +75,7 @@ internal sealed class MessagingCompositionValidator(
     {
         var problems = new List<string>(MessagingCompositionAnalysis.Analyze(composition));
 
+        var isService = services.GetRequiredService<IServiceProviderIsService>();
         if (composition.Publications.Count > 0 && !isService.IsService(typeof(IMessageTransport)))
         {
             var types = string.Join(", ", composition.Publications.Select(t => $"'{t.Name}'"));
@@ -85,34 +85,76 @@ internal sealed class MessagingCompositionValidator(
                 "no route. Call bus.UseInMemoryTransport(), or register a broker provider's transport.");
         }
 
-        if (isService.IsService(typeof(IIntegrationEventPublisher))
-            && !(isService is IServiceProviderIsKeyedService keyed
-                 && keyed.IsKeyedService(typeof(IOutboxDispatcher), OutboxDispatcherKeys.Standard)))
+        var keyed = services.GetRequiredService<IServiceProviderIsKeyedService>();
+        foreach (var store in composition.Stores)
         {
-            problems.Add(
-                "IIntegrationEventPublisher stages publications in the outbox, but no transport " +
-                "dispatcher is registered to send them, so the outbox would stop on its first " +
-                "contract row. Register the transport through bus.UseInMemoryTransport(), or a " +
-                "broker provider's transport registration.");
+            var missing = StoreEngineRegistration.RequiredStoreServices
+                .Where(required => !keyed.IsKeyedService(required, store.Key))
+                .Select(required => required.Name)
+                .ToList();
+            if (missing.Count > 0)
+            {
+                problems.Add(
+                    $"Store '{store.Key}' is configured, but {string.Join(", ", missing)} " +
+                    $"{(missing.Count == 1 ? "is" : "are")} not registered under its key, so the " +
+                    "engine cannot drain it. Its provider registers every store service keyed by " +
+                    "the store's key: fix the provider's registration.");
+            }
+
+            foreach (var check in store.StartupChecks)
+            {
+                problems.AddRange(check(services));
+            }
         }
 
-        if (isService.IsService(typeof(IOutboxProcessorStore)) && !isService.IsService(typeof(IOutboxProcessor)))
+        foreach (var check in composition.StartupChecks)
         {
-            problems.Add(
-                "An IOutboxProcessorStore is registered, but the outbox engine is not, so staged rows " +
-                "would never be dispatched. Register the stores through AddEfCoreOutbox<TContext>(), " +
-                "or call AddOutboxInboxProcessing() after registering your own.");
+            problems.AddRange(check(services));
         }
 
-        if (isService.IsService(typeof(IInboxProcessorStore)) && !isService.IsService(typeof(IInboxProcessor)))
-        {
-            problems.Add(
-                "An IInboxProcessorStore is registered, but the inbox engine is not, so received rows " +
-                "would never be handled. Register the stores through AddEfCoreOutbox<TContext>(), " +
-                "or call AddOutboxInboxProcessing() after registering your own.");
-        }
+        problems.AddRange(UnboundLocalConsumers());
 
         MessagingCompositionAnalysis.ThrowIfAny(problems);
+    }
+
+    /// <summary>
+    /// The local consumers are read at start, so a source supplying an invalid one fails here rather
+    /// than a send. With several stores, a local consumer whose handler type sits in an assembly bound
+    /// to none of them has no inbox to be guarded by — the rule an unbound handler already follows (D12).
+    /// </summary>
+    private IEnumerable<string> UnboundLocalConsumers()
+    {
+        if (composition.LocalConsumerSources.Count == 0)
+        {
+            return [];
+        }
+
+        IReadOnlyList<LocalConsumer> consumers;
+        try
+        {
+            consumers = services.GetRequiredService<Registry.LocalConsumerRegistry>().Consumers;
+        }
+        catch (ArgumentException ex)
+        {
+            return [$"A local consumer source supplied an invalid consumer: {ex.Message} Fix the source's consumers."];
+        }
+
+        return composition.Stores.Count < 2 ? [] : Unbound(consumers);
+    }
+
+    private IEnumerable<string> Unbound(IReadOnlyList<LocalConsumer> consumers)
+    {
+        var bound = composition.Stores.SelectMany(s => s.Assemblies).ToHashSet();
+        foreach (var handler in consumers.Select(c => c.HandlerType).Distinct())
+        {
+            if (!bound.Contains(handler.Assembly))
+            {
+                yield return
+                    $"Local consumer '{handler.FullName}' is bound to no store, and {composition.Stores.Count} " +
+                    $"are configured. Bind its assembly '{handler.Assembly.GetName().Name}' to one store " +
+                    "(for EF Core: store => store.ForAssemblyContaining<T>()).";
+            }
+        }
     }
 
     /// <inheritdoc />

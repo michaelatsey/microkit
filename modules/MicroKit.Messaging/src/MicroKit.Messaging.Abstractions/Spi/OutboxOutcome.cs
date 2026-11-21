@@ -19,7 +19,8 @@ namespace MicroKit.Messaging.Spi;
 /// and <see cref="OutboxOutcomeKind.DeadLetter"/>; zero otherwise.
 /// </param>
 /// <param name="NextRetryAtUtc">
-/// Earliest eligibility for re-dispatch. Non-null only for <see cref="OutboxOutcomeKind.Retry"/>.
+/// Earliest eligibility for re-dispatch. Non-null only for <see cref="OutboxOutcomeKind.Retry"/>
+/// and <see cref="OutboxOutcomeKind.Deferred"/>.
 /// </param>
 /// <param name="ErrorMessage">
 /// Truncated failure text. Non-null only for failure outcomes.
@@ -66,4 +67,11 @@ public readonly record struct OutboxOutcome(
     /// <returns>The outcome to buffer.</returns>
     public static OutboxOutcome Released(MessageId messageId) =>
         new(messageId, OutboxOutcomeKind.Released, RetryCount: 0, NextRetryAtUtc: null, ErrorMessage: null);
+
+    /// <summary>Creates a <see cref="OutboxOutcomeKind.Deferred"/> outcome.</summary>
+    /// <param name="messageId">The message whose endpoint is down; it was not attempted.</param>
+    /// <param name="nextAttemptAtUtc">The end of the endpoint's back-off.</param>
+    /// <returns>The outcome to buffer.</returns>
+    public static OutboxOutcome Deferred(MessageId messageId, DateTimeOffset nextAttemptAtUtc) =>
+        new(messageId, OutboxOutcomeKind.Deferred, RetryCount: 0, nextAttemptAtUtc, ErrorMessage: null);
 }

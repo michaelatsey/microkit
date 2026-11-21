@@ -22,113 +22,125 @@ public sealed class OutboxMessageFactoryTests
     }
 
     [Fact]
-    public void CreateNotification_EventType_IsAssemblyQualifiedNameOfPayloadRuntimeType()
+    public void CreateLocal_EventType_IsAssemblyQualifiedNameOfPayloadRuntimeType()
     {
         var payload = new FakeNotification();
-        var msg = _sut.CreateNotification(payload, Guid.NewGuid(), DateTimeOffset.UtcNow, _ctx);
+        var msg = _sut.CreateLocal(payload, MessageId.From(Guid.NewGuid()), DateTimeOffset.UtcNow, source: null, _ctx);
 
         msg.EventType.ShouldBe(typeof(FakeNotification).AssemblyQualifiedName);
     }
 
     [Fact]
-    public void CreateNotification_MessageId_CopiedFromParameter()
+    public void CreateLocal_MessageId_CopiedFromParameter()
     {
         var id = Guid.NewGuid();
-        var msg = _sut.CreateNotification(new FakeNotification(), id, DateTimeOffset.UtcNow, _ctx);
+        var msg = _sut.CreateLocal(new FakeNotification(), MessageId.From(id), DateTimeOffset.UtcNow, source: null, _ctx);
 
         msg.Id.ShouldBe(MessageId.From(id));
     }
 
     [Fact]
-    public void CreateNotification_OccurredOnUtc_CopiedFromParameter()
+    public void CreateLocal_OccurredOnUtc_CopiedFromParameter()
     {
         var occurred = new DateTimeOffset(2025, 6, 1, 10, 0, 0, TimeSpan.Zero);
-        var msg = _sut.CreateNotification(new FakeNotification(), Guid.NewGuid(), occurred, _ctx);
+        var msg = _sut.CreateLocal(new FakeNotification(), MessageId.From(Guid.NewGuid()), occurred, source: null, _ctx);
 
         msg.OccurredOnUtc.ShouldBe(occurred);
     }
 
     [Fact]
-    public void CreateNotification_TenantId_WhenContextHasTenantId_Copied()
+    public void CreateLocal_TenantId_WhenContextHasTenantId_Copied()
     {
         _ctx.TenantId.Returns("tenant-42");
-        var msg = _sut.CreateNotification(new FakeNotification(), Guid.NewGuid(), DateTimeOffset.UtcNow, _ctx);
+        var msg = _sut.CreateLocal(new FakeNotification(), MessageId.From(Guid.NewGuid()), DateTimeOffset.UtcNow, source: null, _ctx);
 
         msg.TenantId.ShouldBe("tenant-42");
     }
 
     [Fact]
-    public void CreateNotification_TenantId_WhenContextTenantIdIsNull_IsNull()
+    public void CreateLocal_TenantId_WhenContextTenantIdIsNull_IsNull()
     {
         _ctx.TenantId.Returns((string?)null);
-        var msg = _sut.CreateNotification(new FakeNotification(), Guid.NewGuid(), DateTimeOffset.UtcNow, _ctx);
+        var msg = _sut.CreateLocal(new FakeNotification(), MessageId.From(Guid.NewGuid()), DateTimeOffset.UtcNow, source: null, _ctx);
 
         msg.TenantId.ShouldBeNull();
     }
 
     [Fact]
-    public void CreateNotification_CorrelationId_WhenContextHasValidGuid_Parsed()
+    public void CreateLocal_CorrelationId_WhenContextHasValidGuid_Parsed()
     {
         var guid = Guid.NewGuid();
         _ctx.CorrelationId.Returns(guid.ToString());
-        var msg = _sut.CreateNotification(new FakeNotification(), Guid.NewGuid(), DateTimeOffset.UtcNow, _ctx);
+        var msg = _sut.CreateLocal(new FakeNotification(), MessageId.From(Guid.NewGuid()), DateTimeOffset.UtcNow, source: null, _ctx);
 
         msg.CorrelationId.ShouldBe(CorrelationId.From(guid));
     }
 
     [Fact]
-    public void CreateNotification_CorrelationId_WhenContextCorrelationIdIsNull_GeneratesNew()
+    public void CreateLocal_CorrelationId_WhenContextCorrelationIdIsNull_GeneratesNew()
     {
         _ctx.CorrelationId.Returns((string?)null);
-        var msg = _sut.CreateNotification(new FakeNotification(), Guid.NewGuid(), DateTimeOffset.UtcNow, _ctx);
+        var msg = _sut.CreateLocal(new FakeNotification(), MessageId.From(Guid.NewGuid()), DateTimeOffset.UtcNow, source: null, _ctx);
 
         msg.CorrelationId.ShouldNotBe(default);
     }
 
     [Fact]
-    public void CreateNotification_CausationId_WhenContextHasValidGuid_Parsed()
+    public void CreateLocal_CausationId_WhenContextHasValidGuid_Parsed()
     {
         var guid = Guid.NewGuid();
         _ctx.CausationId.Returns(guid.ToString());
-        var msg = _sut.CreateNotification(new FakeNotification(), Guid.NewGuid(), DateTimeOffset.UtcNow, _ctx);
+        var msg = _sut.CreateLocal(new FakeNotification(), MessageId.From(Guid.NewGuid()), DateTimeOffset.UtcNow, source: null, _ctx);
 
         msg.CausationId.ShouldBe(CausationId.From(guid));
     }
 
     [Fact]
-    public void CreateNotification_CausationId_WhenContextCausationIdIsNull_IsNull()
+    public void CreateLocal_CausationId_WhenContextCausationIdIsNull_IsNull()
     {
         _ctx.CausationId.Returns((string?)null);
-        var msg = _sut.CreateNotification(new FakeNotification(), Guid.NewGuid(), DateTimeOffset.UtcNow, _ctx);
+        var msg = _sut.CreateLocal(new FakeNotification(), MessageId.From(Guid.NewGuid()), DateTimeOffset.UtcNow, source: null, _ctx);
 
         msg.CausationId.ShouldBeNull();
     }
 
     [Fact]
-    public void CreateNotification_Status_IsPending()
+    public void CreateLocal_IsRoutedToTheLocalEndpoint_WithTheSendersSource_AndNoContract()
     {
-        var msg = _sut.CreateNotification(new FakeNotification(), Guid.NewGuid(), DateTimeOffset.UtcNow, _ctx);
+        // #188 D7: a local row is drained into the receive pipeline, never handed to a transport.
+        var msg = _sut.CreateLocal(new FakeNotification(), MessageId.New(), DateTimeOffset.UtcNow, "/shop/orders", _ctx);
+
+        msg.Endpoint.ShouldBe(OutboxMessage.LocalEndpoint);
+        msg.Source.ShouldBe("/shop/orders");
+        msg.ContractName.ShouldBeNull();
+        msg.TraceParent.ShouldBeNull();
+    }
+
+    [Fact]
+    public void CreateLocal_Status_IsPending()
+    {
+        var msg = _sut.CreateLocal(new FakeNotification(), MessageId.From(Guid.NewGuid()), DateTimeOffset.UtcNow, source: null, _ctx);
 
         msg.Status.ShouldBe(OutboxMessageStatus.Pending);
     }
 
     [Fact]
-    public void CreateNotification_RetryCount_IsZero()
+    public void CreateLocal_RetryCount_IsZero()
     {
-        var msg = _sut.CreateNotification(new FakeNotification(), Guid.NewGuid(), DateTimeOffset.UtcNow, _ctx);
+        var msg = _sut.CreateLocal(new FakeNotification(), MessageId.From(Guid.NewGuid()), DateTimeOffset.UtcNow, source: null, _ctx);
 
         msg.RetryCount.ShouldBe(0);
     }
 
     [Fact]
-    public void CreateNotification_Payload_DelegatesTo_Serializer()
+    public void CreateLocal_Payload_DelegatesTo_Serializer()
     {
         var payload = new FakeNotification();
         // Serialized as its RUNTIME type, and the bytes land on the row as UTF-8 text (#186).
         _serializer.Serialize(payload, typeof(FakeNotification))
             .Returns((ReadOnlyMemory<byte>)"{\"serialized\":true}"u8.ToArray());
 
-        var msg = _sut.CreateNotification(payload, Guid.NewGuid(), DateTimeOffset.UtcNow, _ctx);
+        var msg = _sut.CreateLocal(payload, MessageId.From(Guid.NewGuid()), DateTimeOffset.UtcNow, source: null, _ctx);
 
         msg.Payload.ShouldBe("{\"serialized\":true}");
     }
@@ -143,10 +155,89 @@ public sealed class OutboxMessageFactoryTests
         var sut = new OutboxMessageFactory(binary, new FakeTimeProvider(Now));
 
         var ex = Should.Throw<OutboxConfigurationException>(() => sut.CreateContract(
-            new FakeNotification(), "c.v1", "/s", originMessageId: null, occurredOnUtc: null, _ctx));
+            new FakeNotification(), MessageId.New(), "c.v1", "/s", Now, new Dictionary<string, string>()));
 
         ex.Message.ShouldContain("application/x-msgpack");
         binary.DidNotReceiveWithAnyArgs().Serialize(default!, default!);
+    }
+
+    // ── contract rows: what the bus enlists in a store (#188) ─────────────────
+
+    /// <summary>
+    /// A contract row carries exactly what a direct send would have put on the envelope: the
+    /// identity the caller was returned, the wire type, the source, and the publication time.
+    /// </summary>
+    [Fact]
+    public void CreateContract_CarriesTheIdentityTheWireTypeTheSourceAndThePublicationTime()
+    {
+        var id = MessageId.New();
+        var published = Now.AddMinutes(-3);
+
+        var row = _sut.CreateContract(
+            new FakeNotification(), id, "shop.order-placed.v1", "shop.orders", published, new Dictionary<string, string>());
+
+        row.Id.ShouldBe(id);
+        row.Endpoint.ShouldBeNull("a contract row is bound for the transport");
+        row.ContractName.ShouldBe("shop.order-placed.v1");
+        row.Source.ShouldBe("shop.orders");
+        row.OccurredOnUtc.ShouldBe(published);
+        row.CreatedAtUtc.ShouldBe(Now, "the claim orders on the staging clock");
+        row.EventType.ShouldBe(typeof(FakeNotification).AssemblyQualifiedName);
+        row.Payload.ShouldBe("{\"$t\":\"FakeNotification\"}");
+        row.Status.ShouldBe(OutboxMessageStatus.Pending);
+    }
+
+    /// <summary>
+    /// The reserved headers become the row's columns and only the others its
+    /// <see cref="OutboxMessage.Headers"/>, so a header stored there can never forge them.
+    /// </summary>
+    [Fact]
+    public void CreateContract_SplitsTheReservedHeadersFromThePublicationsOwn()
+    {
+        var correlation = Guid.NewGuid();
+        var causation = Guid.NewGuid();
+        var headers = new Dictionary<string, string>
+        {
+            [MessageHeaders.TenantId] = "tenant-a",
+            [MessageHeaders.CorrelationId] = correlation.ToString(),
+            [MessageHeaders.CausationId] = causation.ToString(),
+            [MessageHeaders.TraceParent] = "00-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-01",
+            ["x-origin"] = "checkout",
+        };
+
+        var row = _sut.CreateContract(new FakeNotification(), MessageId.New(), "c.v1", "/s", Now, headers);
+
+        row.TenantId.ShouldBe("tenant-a");
+        row.CorrelationId.ShouldBe(CorrelationId.From(correlation));
+        row.CausationId.ShouldBe(CausationId.From(causation));
+        row.TraceParent.ShouldBe("00-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-01");
+        row.Headers.ShouldNotBeNull().ShouldBe(new Dictionary<string, string> { ["x-origin"] = "checkout" });
+    }
+
+    [Fact]
+    public void CreateContract_WithNoHeadersOfItsOwn_StoresNone()
+    {
+        var row = _sut.CreateContract(
+            new FakeNotification(), MessageId.New(), "c.v1", "/s", Now,
+            new Dictionary<string, string> { [MessageHeaders.CorrelationId] = Guid.NewGuid().ToString() });
+
+        row.Headers.ShouldBeNull();
+        row.TenantId.ShouldBeNull();
+        row.CausationId.ShouldBeNull("a root publication has no cause");
+    }
+
+    /// <summary>
+    /// The column is required: an ambient correlation that is not a GUID is replaced, never null.
+    /// </summary>
+    [Fact]
+    public void CreateContract_WhenTheCorrelationIsNotAGuid_SubstitutesAFreshOne()
+    {
+        var row = _sut.CreateContract(
+            new FakeNotification(), MessageId.New(), "c.v1", "/s", Now,
+            new Dictionary<string, string> { [MessageHeaders.CorrelationId] = "not-a-guid" });
+
+        row.CorrelationId.ShouldNotBeNull();
+        row.CorrelationId.Value.ShouldNotBe(Guid.Empty);
     }
 
     // ── helpers ──────────────────────────────────────────────────────────────
@@ -161,10 +252,9 @@ public sealed class OutboxMessageFactoryTests
     /// assertion about dispatch order depend on wall-clock resolution.
     /// </remarks>
     [Fact]
-    public void CreateNotification_CreatedAtUtc_ComesFromTheInjectedClock()
+    public void CreateLocal_CreatedAtUtc_ComesFromTheInjectedClock()
     {
-        var msg = _sut.CreateNotification(
-            new FakeNotification(), Guid.NewGuid(), DateTimeOffset.UtcNow, _ctx);
+        var msg = _sut.CreateLocal(new FakeNotification(), MessageId.From(Guid.NewGuid()), DateTimeOffset.UtcNow, source: null, _ctx);
 
         msg.CreatedAtUtc.ShouldBe(Now);
     }

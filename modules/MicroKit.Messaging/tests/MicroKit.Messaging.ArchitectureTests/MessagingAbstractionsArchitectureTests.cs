@@ -113,7 +113,7 @@ public sealed class MessagingAbstractionsArchitectureTests
     public void NoAssemblyStillCarriesTheDedicatedIntegrationEventTable()
     {
         // IntegrationEventMessage, IntegrationEventStatus and IntegrationEventMessageConfiguration
-        // were retired when the publisher moved onto MessageKind.Contract outbox rows. The argument
+        // were retired when the publisher moved onto transport outbox rows. The argument
         // that justified a separate table — that a discriminator INFERRED from the payload's CLR
         // type could feed integration events into the MediatR fan-out — no longer applies: the
         // nature of a row is DECLARED by its writer in a column, and both dispatchers switch on
@@ -144,7 +144,7 @@ public sealed class MessagingAbstractionsArchitectureTests
                     .GetTypes()
                     .ShouldBeEmpty(
                         $"{assembly.GetName().Name} must not reinstate {name}; the dedicated " +
-                        "integration-event table was retired onto MessageKind.Contract rows");
+                        "integration-event table was retired onto transport outbox rows");
             }
         }
     }
@@ -169,27 +169,33 @@ public sealed class MessagingAbstractionsArchitectureTests
     }
 
     /// <summary>
-    /// No <see cref="IOutboxDispatcher"/> depends on <see cref="IInboxWriter"/> — nothing writes
-    /// inbox rows on the <i>producing</i> side.
+    /// No outbox dispatcher depends on <see cref="IInboxGuardStore"/> — nothing writes inbox rows on
+    /// the <i>producing</i> side.
     /// </summary>
     /// <remarks>
     /// <para>
     /// <b>This replaces <c>Core_DoesNotDependOnIInboxWriter</c>, which ADR-MSG-019 predicted would
     /// fail at exactly this step.</b> It did, and deliberately: it was written so that whoever
     /// built the receiving seam had to come back to the ADR rather than quietly reinstate an
-    /// in-process producer. That has now happened — <c>EnvelopeReceiver</c> lives in Core and takes
-    /// <see cref="IInboxWriter"/> — so the old assertion is retired rather than deleted, and the
-    /// subject it was really guarding is stated here instead.
+    /// in-process producer. That has now happened — the receive pipeline lives in Core and writes
+    /// rows through <see cref="IInboxGuardStore"/> (#188; <c>IInboxWriter</c> before it) — so the old
+    /// assertion is retired rather than deleted, and the subject it was really guarding is stated
+    /// here instead.
     /// </para>
     /// <para>
-    /// <b>The subject was never "Core must not reference <see cref="IInboxWriter"/>".</b> It was
+    /// <b>The subject was never "Core must not write inbox rows".</b> It was
     /// "no dispatcher writes inbox rows": the defect ADR-MSG-018 and ADR-MSG-019 spent two rewrites
     /// removing was a fan-out that wrote a <i>consumer's</i> row inside the <i>producer</i>,
     /// bypassing the wire and the contract name that make a consumer's own type resolvable. A row
     /// written from the receiving side, from an envelope that crossed a transport, is the opposite
     /// of that defect. This test therefore narrows to the dispatch path, where the regression would
-    /// actually reappear, and covers the glue as well as Core — <c>MediatROutboxDispatcher</c> is
-    /// the other place a producer-side writer could be added without anyone noticing.
+    /// actually reappear.
+    /// </para>
+    /// <para>
+    /// <b>Since #188 the dispatcher seam is internal to Core</b>, so it is selected by name and the
+    /// glue is asserted to have none: <c>MicroKit.Messaging.MediatR</c> sends local messages through
+    /// the public <c>ILocalMessageSender</c>, and <c>LocalOutboxDispatcher</c> delivers them through
+    /// the receive pipeline — the receiving side, whose guard writes each consumer's row.
     /// </para>
     /// </remarks>
     [Fact]
@@ -198,10 +204,10 @@ public sealed class MessagingAbstractionsArchitectureTests
         // CONTROL 1 — the dependency query. An emptiness assertion is worthless if the query can
         // never match anything: a misspelled name, or a matching rule that does not see interface
         // implementations, would make this permanently green and permanently useless. EfCoreAssembly
-        // is known to depend on IInboxWriter (EfInboxStore implements it).
+        // is known to depend on IInboxGuardStore (EfInboxStore implements it).
         Types.InAssembly(EfCoreAssembly)
             .That()
-            .HaveDependencyOn(typeof(IInboxWriter).FullName)
+            .HaveDependencyOn(typeof(IInboxGuardStore).FullName)
             .GetTypes()
             .ShouldNotBeEmpty(
                 "control assertion: if this is empty the dependency query below cannot detect " +
@@ -210,31 +216,36 @@ public sealed class MessagingAbstractionsArchitectureTests
         // CONTROL 2 — the selector. The assertion below is a CONJUNCTION, so it can go vacuous on
         // either side: a selector matching no dispatcher at all yields an empty set whatever the
         // dispatchers do. The original test needed one control; this one needs two.
-        Assembly[] dispatchHosts = [CoreAssembly, MediatRGlueAssembly];
+        var dispatcher = Types.InAssembly(CoreAssembly)
+            .That().HaveName("IOutboxDispatcher").And().ResideInNamespace("MicroKit.Messaging.Processing")
+            .GetTypes()
+            .ShouldHaveSingleItem("the dispatcher seam is found by name: it is internal since #188");
 
-        foreach (var assembly in dispatchHosts)
-        {
-            Types.InAssembly(assembly)
-                .That()
-                .ImplementInterface(typeof(IOutboxDispatcher))
-                .GetTypes()
-                .ShouldNotBeEmpty(
-                    $"control assertion: {assembly.GetName().Name} must contain at least one " +
-                    "IOutboxDispatcher, or the assertion below selects nothing and proves nothing");
+        Types.InAssembly(CoreAssembly)
+            .That()
+            .ImplementInterface(dispatcher)
+            .GetTypes()
+            .Count()
+            .ShouldBe(2, "control assertion: Core holds the transport and the local dispatcher, or " +
+                         "the assertion below selects nothing and proves nothing");
 
-            Types.InAssembly(assembly)
-                .That()
-                .ImplementInterface(typeof(IOutboxDispatcher))
-                .And()
-                .HaveDependencyOn(typeof(IInboxWriter).FullName)
-                .GetTypes()
-                .ShouldBeEmpty(
-                    $"{assembly.GetName().Name} must not write inbox rows from the dispatch path. " +
-                    "Inbox rows are written by IEnvelopeReceiver, on the RECEIVING side, from an " +
-                    "envelope that crossed a transport (ADR-MSG-019). A dispatcher that writes one " +
-                    "is the in-process fan-out coming back. Update this test AND the ADR rather " +
-                    "than deleting the assertion");
-        }
+        Types.InAssembly(CoreAssembly)
+            .That()
+            .ImplementInterface(dispatcher)
+            .And()
+            .HaveDependencyOn(typeof(IInboxGuardStore).FullName)
+            .GetTypes()
+            .ShouldBeEmpty(
+                "No dispatcher may write inbox rows from the dispatch path. Inbox rows are written by " +
+                "the receive pipeline's guard, on the RECEIVING side (#188 D6; ADR-MSG-019). A " +
+                "dispatcher that writes one is the in-process fan-out coming back. Update this test " +
+                "AND the ADR rather than deleting the assertion");
+
+        Types.InAssembly(MediatRGlueAssembly)
+            .That()
+            .HaveDependencyOn(dispatcher.FullName)
+            .GetTypes()
+            .ShouldBeEmpty("the glue sends local messages through the public SPI (#188 D8)");
     }
 
     /// <summary>
@@ -320,82 +331,33 @@ public sealed class MessagingAbstractionsArchitectureTests
     // Topology seam (ADR-MSG-002)
     // ---------------------------------------------------------------------------
 
-    [Fact]
-    public void Core_DependsOnSharedDbOutboxCoordinator_OnlyThroughIOutboxCoordinator()
-    {
-        // A second topology must be addable without editing the engine, which is only possible
-        // while nothing inside Core reaches for the shared-DB implementation by name. The
-        // composition root necessarily does — that is what a composition root is — and the type may
-        // of course refer to itself.
-        //
-        // ADR-MSG-002 made this promise about a per-tenant coordinator in a separate
-        // MicroKit.Messaging.Multitenancy package, and #185 superseded that: IOutboxCoordinator is
-        // now internal to Core, because the database-per-tenant requirement it served is tracked by
-        // #191 as a generic multi-store engine IN Core rather than a coordinator outside it. The
-        // decoupling this test enforces is what #191 will build on, so the rule outlives the
-        // package it was written for.
-        //
-        // Name-based rather than typeof(): SharedDbOutboxCoordinator is internal and this project
-        // has no InternalsVisibleTo, which is itself part of the point — and since #185 the same is
-        // true of IOutboxCoordinator.
-        const string Coordinator = "MicroKit.Messaging.Processing.SharedDbOutboxCoordinator";
-
-        var permitted = new[]
-        {
-            Coordinator,
-            "MicroKit.Messaging.ServiceCollectionExtensions",
-            // Since #186 the outbox and inbox engine is registered by the store provider through
-            // this SPI seam, not by AddMicroKitMessaging(): it is the composition root now.
-            "MicroKit.Messaging.Spi.OutboxInboxProcessingExtensions",
-        };
-
-        var offenders = Types.InAssembly(CoreAssembly)
-            .That()
-            .HaveDependencyOn(Coordinator)
-            .GetTypes()
-            .Where(t => !permitted.Contains(t.FullName, StringComparer.Ordinal))
-            .Select(t => t.FullName)
-            .ToList();
-
-        offenders.ShouldBeEmpty(
-            "only the composition root may name SharedDbOutboxCoordinator; everything else must " +
-            "depend on IOutboxCoordinator, or a second topology cannot be added without " +
-            "editing the engine (ADR-MSG-002, superseded by #185; the multi-store engine " +
-            "is #191)");
-    }
-
     /// <summary>
-    /// The inbox twin of the test above. <c>SharedDbInboxCoordinator</c> carried the same
-    /// ADR-MSG-002 promise in its doc comment from the beginning but had no guard behind it, so
-    /// the promise was enforceable on one side of the module and merely stated on the other.
+    /// The successor of the two coordinator rules (#188): the engine iterates stores through
+    /// <see cref="IMessageStoreSet"/>, and only the composition root names the static set, so #191
+    /// can put a dynamic set behind the same SPI without editing the engine.
     /// </summary>
     [Fact]
-    public void Core_DependsOnSharedDbInboxCoordinator_OnlyThroughIInboxCoordinator()
+    public void Core_DependsOnTheStaticStoreSet_OnlyThroughIMessageStoreSet()
     {
-        const string Coordinator = "MicroKit.Messaging.Processing.SharedDbInboxCoordinator";
+        // Name-based: the static set is internal and this project has no InternalsVisibleTo.
+        const string StaticSet = "MicroKit.Messaging.Stores.StaticMessageStoreSet";
 
-        var permitted = new[]
-        {
-            Coordinator,
-            "MicroKit.Messaging.ServiceCollectionExtensions",
-            // Since #186 the outbox and inbox engine is registered by the store provider through
-            // this SPI seam, not by AddMicroKitMessaging(): it is the composition root now.
-            "MicroKit.Messaging.Spi.OutboxInboxProcessingExtensions",
-        };
+        Types.InAssembly(CoreAssembly).GetTypes()
+            .ShouldContain(t => t.FullName == StaticSet, "CONTROL: the rule names a type that exists");
+
+        var permitted = new[] { StaticSet, "MicroKit.Messaging.ServiceCollectionExtensions" };
 
         var offenders = Types.InAssembly(CoreAssembly)
             .That()
-            .HaveDependencyOn(Coordinator)
+            .HaveDependencyOn(StaticSet)
             .GetTypes()
             .Where(t => !permitted.Contains(t.FullName, StringComparer.Ordinal))
             .Select(t => t.FullName)
             .ToList();
 
         offenders.ShouldBeEmpty(
-            "only the composition root may name SharedDbInboxCoordinator; everything else must " +
-            "depend on IInboxCoordinator, or a second topology cannot be added without " +
-            "editing the engine (ADR-MSG-002, superseded by #185; the multi-store engine " +
-            "is #191)");
+            "only the composition root may name StaticMessageStoreSet; the engine iterates stores " +
+            "through IMessageStoreSet, or the dynamic set of #191 cannot replace it");
     }
 
     // ---------------------------------------------------------------------------

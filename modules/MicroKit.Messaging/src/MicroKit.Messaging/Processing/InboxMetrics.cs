@@ -61,51 +61,18 @@ internal sealed class InboxMetrics : IDisposable
                 "Zero rows written; alert on any sustained non-zero value.");
     }
 
-    /// <summary>Records the outcome of one ingestion attempt.</summary>
-    /// <param name="result">What the write did.</param>
-    /// <param name="consumerType">The consumer the row belongs to, recorded as a tag.</param>
-    /// <exception cref="InvalidOperationException">
-    /// <paramref name="result"/> is not a value this method classifies.
-    /// <para>
-    /// <b>A metrics call that throws is a deliberate choice, not an oversight.</b> The obvious
-    /// alternative — record nothing and return — is what this used to do, and it is the worse
-    /// failure: <c>EnvelopeReceiver</c> classifies the same two cases and would have counted that
-    /// write as a row added, so one write would have produced two counts that disagree with
-    /// neither of them flagged. A third <see cref="InboxWriteResult"/> means this module changed
-    /// an enum and missed a call site, and the two sites must fail together or not at all.
-    /// </para>
-    /// <para>
-    /// Unreachable while <see cref="InboxWriteResult"/> has its two documented values, and since
-    /// #185 this type is <c>internal</c>, so <c>EnvelopeReceiver</c> is the only caller — an
-    /// external broker adapter can no longer reach it. The guard stays because the enum and this
-    /// call site must fail together if a third value is ever added.
-    /// </para>
-    /// </exception>
-    public void Record(InboxWriteResult result, string consumerType)
-    {
-        var tag = new KeyValuePair<string, object?>("consumer.type", consumerType);
+    /// <summary>Counts a new delivery whose handler wrote its inbox row, Processed or Failed.</summary>
+    /// <param name="consumerType">The handler's consumer type.</param>
+    public void RecordAdded(string consumerType)
+        => _added.Add(1, new KeyValuePair<string, object?>("consumer.type", consumerType));
 
-        switch (result)
-        {
-            case InboxWriteResult.Added:
-                _added.Add(1, tag);
-                break;
-
-            case InboxWriteResult.AlreadyPresent:
-                _deduplicated.Add(1, tag);
-                break;
-
-            default:
-                // Aligned with EnvelopeReceiver's own classification, deliberately. Silently
-                // recording nothing here while the receiver counted the same write as a row
-                // added is the divergence this refuses: two counts of one write that disagree,
-                // with neither of them flagged.
-                throw new InvalidOperationException(
-                    $"Unhandled {nameof(InboxWriteResult)} '{result}'. Every value must be " +
-                    "classified here and in EnvelopeReceiver, which carry the same two cases " +
-                    "and must not drift apart.");
-        }
-    }
+    /// <summary>
+    /// Counts a delivery the guard absorbed: the handler's row was already there, or a concurrent
+    /// delivery committed it first.
+    /// </summary>
+    /// <param name="consumerType">The handler's consumer type.</param>
+    public void RecordDeduplicated(string consumerType)
+        => _deduplicated.Add(1, new KeyValuePair<string, object?>("consumer.type", consumerType));
 
     /// <summary>
     /// Records an envelope that resolved to a local type no handler consumes, so no row was
@@ -113,7 +80,7 @@ internal sealed class InboxMetrics : IDisposable
     /// </summary>
     /// <param name="contractName">The wire contract name, recorded as a tag.</param>
     /// <remarks>
-    /// Separate from <see cref="Record"/> because the two answer different questions and the
+    /// Separate from <see cref="RecordAdded"/> and <see cref="RecordDeduplicated"/> because the two answer different questions and the
     /// existing counters cannot express this one: they are tagged by consumer, and here there is no
     /// consumer to name. Tagged by contract name instead, which is what an operator needs to find
     /// the missing registration.

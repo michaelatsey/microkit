@@ -4,8 +4,8 @@ using System.Text.Json;
 namespace MicroKit.Messaging.MediatR.IntegrationTests;
 
 /// <summary>
-/// One handler implementing <see cref="IMessageHandler{T}"/> for two message types, delivered
-/// through the inbox (#187, decision 2). The registry is keyed on (consumer type, message type):
+/// One handler implementing <see cref="IMessageHandler{T}"/> for two message types, retried from
+/// the inbox (#187, decision 2; #188: a first delivery fails, so the retry loop handles it). The registry is keyed on (consumer type, message type):
 /// keyed on the consumer alone, the second registration replaced the first, and the inbox handed a
 /// row of one type to the invoker of the other — a cast failure, dead-lettered as permanent. The
 /// bus half of the guarantee is in <c>SingleEntryPointTests</c>.
@@ -24,14 +24,21 @@ public sealed class MultiTypeHandlerInboxTests
             {
                 messaging.Services.AddSingleton(calls);
                 messaging.AddHandler<TwoTypeInboxHandler>();
+
+                // Due at once, so one retry pass picks both rows up.
+                messaging.Configure(o => o.Inbox.MaxRetryBackoff = TimeSpan.FromTicks(1));
             });
 
         var receiver = provider.GetRequiredService<IEnvelopeReceiver>();
         var widget = new WidgetShipped(Guid.NewGuid());
         var gadget = new GadgetShipped(Guid.NewGuid());
 
-        (await receiver.ReceiveAsync(Envelope(WidgetShipped.ContractName, widget))).RowsAdded.ShouldBe(1);
-        (await receiver.ReceiveAsync(Envelope(GadgetShipped.ContractName, gadget))).RowsAdded.ShouldBe(1);
+        // Each first delivery fails, so each row is written Failed and only the retry — keyed on
+        // (consumer, message type) — reaches the method.
+        calls.FailFirstCall = true;
+        (await receiver.ReceiveAsync(Envelope(WidgetShipped.ContractName, widget))).Disposition.ShouldBe(ReceiveDisposition.Acknowledge);
+        (await receiver.ReceiveAsync(Envelope(GadgetShipped.ContractName, gadget))).Disposition.ShouldBe(ReceiveDisposition.Acknowledge);
+        (await E2EHarness.ReadInboxAsync(connection)).ShouldAllBe(r => r.Status == InboxMessageStatus.Failed);
 
         await E2EHarness.DrainInboxOnceAsync(provider, CancellationToken.None);
 
@@ -70,9 +77,26 @@ internal sealed class TwoTypeCalls
 {
     private readonly System.Collections.Concurrent.ConcurrentQueue<string> _received = new();
 
+    private readonly HashSet<string> _failed = [];
+
     public IReadOnlyList<string> Received => [.. _received];
 
-    public void Record(string call) => _received.Enqueue(call);
+    /// <summary>Gets or sets whether each kind of call fails the first time it is made.</summary>
+    public bool FailFirstCall { get; set; }
+
+    public void Record(string call)
+    {
+        var kind = call[..call.IndexOf(':', StringComparison.Ordinal)];
+        lock (_failed)
+        {
+            if (FailFirstCall && _failed.Add(kind))
+            {
+                throw new InvalidOperationException($"the first {kind} call fails");
+            }
+        }
+
+        _received.Enqueue(call);
+    }
 }
 
 internal sealed class TwoTypeInboxHandler(TwoTypeCalls calls)

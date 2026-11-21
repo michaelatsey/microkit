@@ -15,10 +15,11 @@ namespace MicroKit.Messaging.Spi;
 /// </para>
 /// <para>
 /// The verdict is <b>permanent</b>: the failure is settled at the first attempt and no number of
-/// retries can change it. Where the row exists, the processor dead-letters it immediately without
-/// consuming the retry budget. Where it does not — the ingestion case below — the verdict has
-/// nowhere to live but the broker, so <see cref="IEnvelopeReceiver.ReceiveAsync"/> raises this and
-/// a provider must dead-letter rather than nack for retry.
+/// retries can change it. Where the handler has a store, its row is written dead-lettered without
+/// counting an attempt. Where there is no row to write — a message no handler of this process can
+/// read, or a handler with no store — <see cref="IEnvelopeReceiver.ReceiveAsync"/> answers
+/// <see cref="ReceiveDisposition.DeadLetter"/> and a provider must dead-letter rather than nack for
+/// retry.
 /// </para>
 /// <para>
 /// <b>Raised by the processor for:</b> a <see cref="InboxMessage.ConsumerType"/> absent from

@@ -1,8 +1,9 @@
 namespace MicroKit.Messaging.Spi;
 
 /// <summary>
-/// Records a <see cref="MessageEnvelope"/> arriving from a transport into the inbox, one row per
-/// registered consumer. The seam a broker provider's consume loop calls.
+/// Delivers a <see cref="MessageEnvelope"/> arriving from a transport to every handler of its
+/// contract, and says what the transport must do with it. The seam a broker provider's consume loop
+/// calls.
 /// </summary>
 /// <remarks>
 /// <para>
@@ -10,16 +11,17 @@ namespace MicroKit.Messaging.Spi;
 /// or drives this, and application code never touches it.
 /// </para>
 /// <para>
-/// <b>Returning from <see cref="ReceiveAsync"/> without throwing means the message is durably
-/// recorded and the broker may be acknowledged.</b> Not that it was accepted for background
-/// recording, not that it was buffered in memory. This is the whole contract, and it is stated
-/// first because it is the one thing a caller can get wrong invisibly.
+/// <b>A result whose <see cref="EnvelopeReceiveResult.Disposition"/> is
+/// <see cref="ReceiveDisposition.Acknowledge"/> means every handler's outcome is durable and the
+/// broker may be acknowledged</b> — not that the message was buffered for later. Every other
+/// disposition means it must not be. This is the whole contract, and it is stated first because it
+/// is the one thing a caller can get wrong invisibly.
 /// </para>
 /// <para>
 /// It is the mirror of <see cref="IMessageTransport.SendAsync"/>'s rule. A provider that
-/// acknowledges the broker before this method returns turns every row it did not yet write into a
+/// acknowledges the broker before this method returns turns every handler not yet settled into a
 /// message that no longer exists anywhere: the broker considers it delivered, this process never
-/// recorded it, and there is no log, no metric and no trace of the loss.
+/// handled it, and there is no log, no metric and no trace of the loss.
 /// </para>
 /// <para>
 /// <b>The rule is a constraint on the client's CONFIGURATION, not merely on the order of your
@@ -90,136 +92,60 @@ namespace MicroKit.Messaging.Spi;
 /// A provider's <c>Add{Provider}Transport()</c> may assume the receiver is present: it is an
 /// extension on the builder <c>AddMicroKitMessaging</c> hands out, so the receiver is registered
 /// before it runs. A host that registers no handler declares no subscription, so a wire name it
-/// does not publish resolves to no local type and the receiver reports it as permanent
-/// (<see cref="InboxPayloadException"/>): dead-letter it rather than retry it.
+/// does not publish resolves to no local type and the receiver answers
+/// <see cref="ReceiveDisposition.DeadLetter"/>.
 /// </para>
 /// </para>
 /// <para>
-/// <b>The fan-out is: contract name → local type → consumers.</b>
-/// <see cref="MessageEnvelope.Type"/> resolves to <i>this</i> process's own CLR type
-/// through the contract registry — never to the producer's, which a consumer does not hold — and
-/// that type resolves to every <c>IMessageHandler&lt;T&gt;</c> registered for it. Each consumer
-/// gets its own <see cref="InboxMessage"/>, keyed by
-/// (<see cref="MessageEnvelope.Id"/>, <c>ConsumerType</c>), so the rows advance
-/// independently: one handler may succeed while another retries.
+/// <b>One pipeline (#188).</b> The receiver hands the envelope to the same receive pipeline as the
+/// in-memory transport and a store's retry loop. <see cref="MessageEnvelope.Type"/> resolves to
+/// <i>this</i> process's own CLR type through the contract registry — never to the producer's —
+/// and that type to every handler registered for it, each run in its own scope.
 /// </para>
 /// <para>
-/// <b>A redelivery is nominal, not a failure.</b> Under at-least-once delivery one expired lease
-/// after a crash is enough to produce one. The unique index absorbs it, the affected consumer is
-/// counted in <see cref="EnvelopeReceiveResult.Duplicates"/>, and <b>the remaining consumers still
-/// get their rows</b> — a duplicate for one must never cost the consumers after it theirs. Nothing
-/// is thrown for it.
+/// <b>With a store, each handler is guarded by its inbox row</b>, keyed by
+/// (<see cref="MessageEnvelope.Id"/>, handler): a row already there skips the handler; otherwise the
+/// handler runs in a transaction that commits its work and its row
+/// <see cref="InboxMessageStatus.Processed"/> together. A handler that fails has its row written
+/// <see cref="InboxMessageStatus.Failed"/> in a transaction of its own, and the store retries it;
+/// the message is acknowledged once that row is committed. With no store, a failure asks the
+/// transport to redeliver.
 /// </para>
 /// <para>
-/// <b>On the transaction boundary — and why it is the opposite of
-/// <see cref="IIntegrationEventPublisher"/>.</b> That interface requires a transaction the caller
-/// already owns and never commits; this one requires none and commits before returning. The
-/// asymmetry is not an inconsistency. On the publishing side the caller has a transaction carrying
-/// business writes, and a contract row must join it or announce a fact that may still roll back. On
-/// the receiving side the provider's consume loop <i>is</i> the outer boundary: there are no
-/// business writes in flight and nothing to join, and the durability the acknowledgement rule
-/// demands can only come from a write that has already committed.
+/// <b>Do not call this inside a transaction</b> — one opened on the store's <c>DbContext</c> or an
+/// ambient <c>System.Transactions.TransactionScope</c>. Each handler's transaction is the engine's
+/// own; the consume loop is the outer boundary.
 /// </para>
 /// <para>
-/// Consequently there is no atomicity <i>across</i> the fan-out, and none is wanted. A failure
-/// after the second consumer's row means the first is recorded and the message is redelivered; the
-/// first is then absorbed as a duplicate and the rest are written. That is the same at-least-once
-/// property the inbox exists to make safe, applied to its own ingestion.
-/// </para>
-/// <para>
-/// <b>Do not call this inside an ambient <c>System.Transactions.TransactionScope</c> either</b> —
-/// a stronger statement than the paragraph above, which rules out a transaction the caller opened
-/// on the <c>DbContext</c>. An enlisted scope is invisible to the store: it inspects
-/// <c>Database.CurrentTransaction</c>, which stays null under one. Three things then fail at once
-/// and none of them reports it — the rows are not durable when this method returns, so the
-/// acknowledgement rule above is broken; no savepoint is taken, so an absorbed duplicate aborts
-/// the ambient transaction on PostgreSQL; and the guard that would otherwise refuse a provider
-/// without savepoint support is bypassed. Let the consume loop be the outer boundary, which is
-/// what it already is.
-/// </para>
-/// <para>
-/// Registered as a <b>singleton</b>. It creates one execution scope per envelope internally, so a
-/// consume loop may hold one instance for its lifetime and must not attempt to scope it: sharing a
-/// scope across messages would share a <c>DbContext</c>, and a fault on one message would corrupt
-/// the next.
+/// Registered as a <b>singleton</b>. It creates the scopes it needs internally, so a consume loop
+/// may hold one instance for its lifetime and must not attempt to scope it.
 /// </para>
 /// </remarks>
 /// <seealso cref="IMessageTransport"/>
-/// <seealso cref="IIntegrationEventPublisher"/>
 public interface IEnvelopeReceiver
 {
     /// <summary>
-    /// Records one envelope as an inbox row per registered consumer, returning only once every row
-    /// is durably committed. See the interface remarks — that guarantee is the contract, not a
-    /// quality of service.
+    /// Delivers one envelope to every handler of its contract and returns what the transport must do
+    /// with it. See the interface remarks: acknowledge only on
+    /// <see cref="ReceiveDisposition.Acknowledge"/>, and only once the returned task has completed.
     /// </summary>
     /// <param name="envelope">The message as it arrived from the transport.</param>
-    /// <param name="ct">A cancellation token.</param>
-    /// <returns>
-    /// The per-consumer tally: rows written, redeliveries absorbed, and how many consumers the
-    /// contract matched at all.
-    /// </returns>
-    /// <exception cref="InboxPayloadException">
-    /// <see cref="MessageEnvelope.Type"/> is bound to no local type in this process.
-    /// <para>
-    /// <b>A provider must dead-letter this message, never nack it for retry.</b> The binding is
-    /// established at composition, so it cannot appear without a redeployment and no number of
-    /// redeliveries will change the verdict reached on the first. And unlike every other permanent
-    /// inbox fault there is <i>no row to dead-letter</i> — nothing was written, so the verdict has
-    /// nowhere to live but the broker. A message nacked for retry here loops until the broker's own
-    /// limit and is then discarded with no record that this process ever refused it.
-    /// </para>
-    /// <para>
-    /// ⚠ <b>Read <see cref="InboxPayloadException"/>'s own remarks before writing that
-    /// dead-letter branch.</b> The permanence is a property of <i>a process</i> and is acted on by
-    /// <i>a fleet</i>: during a rolling deployment both versions consume the same queue, so a
-    /// message carrying a contract only the new version binds can land on an old instance and be
-    /// dead-lettered when the instance beside it would have accepted it. The classification stays,
-    /// and the consequences are operational — deploy a consumer that binds a new contract before
-    /// anything publishes it, and treat this dead-letter queue as requeueable once the rollout
-    /// completes. A provider inherits that rule verbatim and should restate it in its own docs.
-    /// </para>
-    /// </exception>
-    /// <exception cref="InboxConfigurationException">
-    /// <see cref="IInboxWriter"/> is not registered, so nothing can be recorded at all. A
-    /// deployment defect, never a runtime fault: a provider should let it stop the consume loop
-    /// rather than nack a message forever against a composition no redelivery can fix.
-    /// <para>
-    /// <b>Not registered, specifically — not "the writer could not be produced".</b> A writer that
-    /// is registered and fails to activate raises whatever its activation raised, and that
-    /// propagates unchanged into the "any other exception" rule below. The distinction is
-    /// load-bearing under a tenant-aware <c>IExecutionScopeFactory</c>, where an envelope naming
-    /// an unknown tenant fails the connection resolution: that is one
-    /// message's data fault, to be nacked, and reporting it here would stop ingestion for every
-    /// tenant.
-    /// </para>
-    /// </exception>
+    /// <param name="ct">The consume loop's token; its cancellation means shutdown.</param>
+    /// <returns>The disposition, with the reason and the error behind any other than
+    /// <see cref="ReceiveDisposition.Acknowledge"/>.</returns>
     /// <exception cref="ArgumentNullException"><paramref name="envelope"/> is
     /// <see langword="null"/>.</exception>
-    /// <exception cref="OperationCanceledException">
-    /// <paramref name="ct"/> was signalled. Rows already written stay written; the message must not
-    /// be acknowledged, and its redelivery is absorbed by the dedup gate.
-    /// </exception>
-    /// <exception cref="InvalidOperationException">
-    /// <see cref="IInboxWriter"/> reported an <see cref="InboxWriteResult"/> this implementation
-    /// does not classify — a defect in this module rather than anything about the message or the
-    /// composition.
-    /// <para>
-    /// Called out separately because the catch-all rule below would otherwise route it to
-    /// redelivery, and a module defect does not resolve on a retry: the message would loop until
-    /// the broker's own limit. It is unreachable while <see cref="InboxWriteResult"/> has its two
-    /// documented values, and it is raised rather than absorbed precisely so a third value cannot
-    /// be counted as a row written. Treat it as an unrecoverable fault: stop the consume loop and
-    /// report it, rather than nacking.
-    /// </para>
-    /// </exception>
     /// <remarks>
-    /// Any other exception is a real failure of the recording itself — a lost connection, a
-    /// timeout, a constraint violation that is not the dedup gate, a registered
-    /// <see cref="IInboxWriter"/> that could not be activated. The message is <b>not</b> recorded
-    /// and must not be acknowledged; nack it for redelivery. Only
-    /// <see cref="InboxPayloadException"/> is proven permanent, and a provider that guesses
-    /// permanence more broadly discards messages that would have succeeded a second later.
+    /// <para>
+    /// <b><see cref="ReceiveDisposition.DeadLetter"/> on a wire type this process does not bind</b>
+    /// is a property of <i>this</i> process acted on by a fleet: during a rolling deployment a
+    /// message carrying a contract only the new version binds can land on an old instance. Deploy a
+    /// consumer that binds a new contract before anything publishes it, and treat that dead-letter
+    /// queue as requeueable once the rollout completes.
+    /// </para>
+    /// <para>
+    /// Nothing about a message or a handler is thrown: every outcome is a disposition.
+    /// </para>
     /// </remarks>
     ValueTask<EnvelopeReceiveResult> ReceiveAsync(
         MessageEnvelope envelope, CancellationToken ct = default);

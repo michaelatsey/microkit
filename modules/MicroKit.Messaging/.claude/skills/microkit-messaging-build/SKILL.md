@@ -43,8 +43,8 @@ Build in this order when building incrementally (avoids restore failures):
 2. `MicroKit.Messaging` (Core)
 3. `MicroKit.Messaging.EntityFrameworkCore` and `MicroKit.Messaging.MediatR` (either order —
    both depend on Core, neither on the other)
-4. `tests/*` (any order)
-5. v2 scaffolds (any order — all `IsPackable=false`)
+4. `tests/*` (any order — except that `MicroKit.Messaging.IntegrationTests` references
+   `MicroKit.Messaging.IntegrationTests.SecondModule`, which builds first)
 
 ## Common Build Errors
 
@@ -115,5 +115,5 @@ dotnet pack modules/MicroKit.Messaging/src/MicroKit.Messaging.MediatR/ -c Releas
 ls /tmp/messaging-nupkg/*.nupkg
 ```
 
-v2 scaffold packages (`RabbitMQ`, `AzureServiceBus`, etc.) must NOT produce `.nupkg` files
-(`IsPackable=false`).
+Four `.nupkg` files, one per `src/` project. No other project in the module is packable: every
+test project sets `IsPackable=false`, and no broker provider project exists.

@@ -28,19 +28,27 @@ Verify every `.csproj` change against the authoritative dependency graph in
 ## Checks
 
 ```
-[ ] MediatR.Contracts absent from ALL packages (Abstractions, Core, EFCore, Testing, providers)
-[ ] MediatR (full package) absent from ALL packages — Messaging uses IIntegrationEvent, not INotification
+[ ] MediatR / MediatR.Contracts absent from Abstractions, Core and EntityFrameworkCore — directly
+    or through MicroKit.MediatR. Only MicroKit.Messaging.MediatR and its test projects reach them
+    (ADR-MSG-009); Messaging uses IIntegrationEvent, not INotification
 [ ] No Version= attribute on PackageReference
-[ ] Cross-module references use CIReleaseBuild two-ItemGroup pattern
-[ ] MicroKit.Persistence.EntityFrameworkCore confined to .EntityFrameworkCore package only
+[ ] Cross-module references from src/ projects use the CIReleaseBuild two-ItemGroup pattern, with
+    symmetric groups; references inside the module and all test-project references are
+    unconditional ProjectReference
+[ ] MicroKit.Persistence.EntityFrameworkCore confined to MicroKit.Messaging.EntityFrameworkCore
+    among src/ projects
 [ ] MicroKit.Messaging.Abstractions has zero framework dependency (no ASP.NET, no EF Core)
-[ ] Testing package has zero Core / EF Core reference (Abstractions only — no xunit/Shouldly/NSubstitute)
+[ ] No EF Core package in Core or MicroKit.Messaging.MediatR
+[ ] Testing package (once it exists — it does not today) has zero Core / EF Core reference
+    (Abstractions only — no xunit/Shouldly/NSubstitute)
 [ ] New package is on the approved list or has explicit architect approval
 [ ] No circular dependency created
 [ ] Directory.Packages.props updated if new package added
-[ ] v2 provider packages have IsPackable=false if not yet implemented
-[ ] No MicroKit.Auth or MicroKit.Multitenancy dependency anywhere
-[ ] IOutboxWriter / IOutboxProcessorStore not referenced from MicroKit.Persistence.* packages
+[ ] A broker provider package (none exists today) has IsPackable=false until implemented
+[ ] No MicroKit.Auth or MicroKit.Tenancy dependency anywhere (ADR-EXEC-001)
+[ ] IOutboxWriter / IOutboxProcessorStore / IInboxGuardStore / IInboxProcessorStore not
+    referenced from MicroKit.Persistence.* packages
+[ ] FluentAssertions absent from every project
 ```
 
 ---

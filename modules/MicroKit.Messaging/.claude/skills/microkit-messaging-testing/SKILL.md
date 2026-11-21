@@ -1,128 +1,144 @@
 # Skill: microkit-messaging-testing
 
-How to run, filter, and write tests for MicroKit.Messaging.
-
-> ⚠ Rewritten after the outbox (#87) and inbox (#90) claim rewrites. The per-message lease API
-> (`GetPendingAsync`, `AcquireLeaseAsync`, `MarkPublishedAsync`, `MarkFailedAsync`,
-> `DeadLetterAsync`, `MarkProcessingAsync`, `MarkProcessedAsync`) no longer exists, and
-> **`MicroKit.Messaging.Testing` has not been built** — see "Test doubles" below for what the
-> suite does instead.
+How to run, filter, and write tests for MicroKit.Messaging. The rules — doubles, the tests that
+carry the design, mutation checks — are in `.claude/rules/microkit-messaging-testing.md`.
 
 ---
 
-## Projects that exist
+## Projects
 
 | Project | What it covers |
 |---|---|
-| `MicroKit.Messaging.UnitTests` | processors, workers, coordinators, publisher, serializer |
-| `MicroKit.Messaging.IntegrationTests` | EF stores on SQLite; `PostgreSql/` subset behind Docker |
-| `MicroKit.Messaging.ArchitectureTests` | dependency boundaries, ADR-MSG-009 carve-out |
-| `MicroKit.Messaging.MediatR.UnitTests` | glue registration, sink, dispatcher, message factory |
-| `MicroKit.Messaging.MediatR.IntegrationTests` | end-to-end domain event → outbox → notification |
+| `MicroKit.Messaging.UnitTests` | The bus and the in-memory transport, the receive pipeline and its guard (over `InMemoryInboxGuard`), `EnvelopeReceiver`, the processors and loops, the dispatchers, the local endpoint without a store, store resolution, composition and options, contracts, the serializer, the envelope, README snippets |
+| `MicroKit.Messaging.IntegrationTests` | `Stores/`: the EF stores and enlistment on SQLite. `PostgreSql/`: concurrency, the guard under real transactions, settlement under a retrying strategy, shutdown release, several stores, store isolation |
+| `MicroKit.Messaging.IntegrationTests.SecondModule` | Not a test project: a second assembly, so the multi-store tests can bind two assemblies |
+| `MicroKit.Messaging.ArchitectureTests` | `PublicSurfaceTests` (the exported surface, name by name) and the dependency rules |
+| `MicroKit.Messaging.MediatR.UnitTests` | The glue's registration and start checks, `NotificationHandlerSource`, `DomainEventNotificationSink` |
+| `MicroKit.Messaging.MediatR.IntegrationTests` | Domain events end to end on SQLite (nominal path, cascade, the receiving seam, the reentrant hop); `PostgreSql/`: the local endpoint under the guard, two stores; README snippets of the durable examples |
 
-There is **no** `MicroKit.Messaging.PerformanceTests`. The directory exists but is empty and is
-absent from `MicroKit.Messaging.slnx`; do not add it to a run command until it holds a project.
+`tests/MicroKit.Messaging.PerformanceTests/` is an empty directory, absent from
+`MicroKit.Messaging.slnx`: do not put it in a run command.
 
 ---
 
 ## Run
 
+Always `-c Release`: `TreatWarningsAsErrors` applies to Release only.
+
 ```bash
-# Everything (this is the gate — must be green before merge)
-dotnet test modules/MicroKit.Messaging/MicroKit.Messaging.slnx -c Release
+# The gate. CI=true makes the PostgreSQL suites run — and fail without Docker — instead of skipping.
+CI=true dotnet test modules/MicroKit.Messaging/MicroKit.Messaging.slnx -c Release
 
 # One project
-dotnet test modules/MicroKit.Messaging/tests/MicroKit.Messaging.UnitTests/
-dotnet test modules/MicroKit.Messaging/tests/MicroKit.Messaging.IntegrationTests/
-dotnet test modules/MicroKit.Messaging/tests/MicroKit.Messaging.ArchitectureTests/
+dotnet test modules/MicroKit.Messaging/tests/MicroKit.Messaging.UnitTests/ -c Release
+dotnet test modules/MicroKit.Messaging/tests/MicroKit.Messaging.IntegrationTests/ -c Release
+dotnet test modules/MicroKit.Messaging/tests/MicroKit.Messaging.ArchitectureTests/ -c Release
 ```
 
 ### Filter
 
 ```bash
-# The claim path, both sides
+# The claim, both sides; settlement and the token guard
 --filter "FullyQualifiedName~ClaimBatchAsync"
-
-# Settlement, including the token guard
 --filter "FullyQualifiedName~ApplyOutcomes"
 
-# Ingestion dedup (NOT ~ExistsAsync — ExistsAsync is a diagnostic, not the gate)
---filter "FullyQualifiedName~Redelivery|FullyQualifiedName~duplicate"
+# The inbox guard: unit, then PostgreSQL
+--filter "FullyQualifiedName~EnvelopeReceiverTests|FullyQualifiedName~MessageReceivePipelineTests"
+--filter "FullyQualifiedName~HandlerIsolationTests|FullyQualifiedName~ExactlyOnceTests"
 
-# Retry / dead-letter / back-off
---filter "FullyQualifiedName~Backoff|FullyQualifiedName~DeadLetter|FullyQualifiedName~Retry"
+# Retry, back-off, dead-letter
+--filter "FullyQualifiedName~Backoff|FullyQualifiedName~Jitter|FullyQualifiedName~DeadLetter|FullyQualifiedName~Retry"
+
+# Stores: resolution, binding, several stores
+--filter "FullyQualifiedName~StoreResolutionTests|FullyQualifiedName~StoreCompositionTests|FullyQualifiedName~TwoStoresTests"
+
+# Every PostgreSQL test of a project (namespace …IntegrationTests.PostgreSql)
+--filter "FullyQualifiedName~.PostgreSql."
 ```
-
-### PostgreSQL subset
-
-`tests/.../PostgreSql/` uses `[DockerRequiredFact]` and skips silently without Docker. Two of
-those tests decide whether the design is correct and cannot be replaced by reading code:
-
-- `InboxLeaseExpiryTests.WhenTheLeaseExpiresMidHandler_TheLoserRollsBackEntirelyAndTheWinnerStands`
-  — fails if `ClaimToken` is not mapped as an EF concurrency token. Verified by mutation.
-- `InboxClaimConcurrencyTests.ClaimBatchAsync_TwoProcessorsOverAFannedOutQueue_AreDisjointAndBounded`
-  — seeds rows sharing a `MessageId` across `ConsumerType` values and asserts **neither claim
-  exceeds `batchSize`**. That is the assertion the compound-key cross-product bug failed.
-
-**Run them before merging anything that touches a claim, a settlement or an EF configuration.**
 
 ---
 
-## Test doubles — what the suite actually uses
+## The PostgreSQL suites
 
-`MicroKit.Messaging.Testing` is planned but **not implemented**; `src/` holds four projects and
-none of them is it (L0 finding #19). Until it exists, follow what the suite does:
+They live in `tests/MicroKit.Messaging.IntegrationTests/PostgreSql/` and
+`tests/MicroKit.Messaging.MediatR.IntegrationTests/PostgreSql/`. The second compiles the first's
+`PostgreSqlFixture.cs`, `DockerRequiredFactAttribute.cs` and `StoreDatabase.cs` as linked files.
+Tests join `[Collection(PostgreSqlSuite.Name)]`, which shares one container per test run;
+`StoreIsolationTests` adds a `StoppablePostgreSqlFixture` it can stop mid-test.
+
+**When `[DockerRequiredFact]` skips** (`DockerRequiredFactAttribute.cs`, `DockerEndpoint.ShouldRunFor`):
+only when **both** hold —
+
+- no Docker daemon answers Testcontainers' endpoint discovery
+  (`TestcontainersSettings.OS.DockerEndpointAuthConfig` is null, probed once per process, bounded at
+  10 seconds; a socket file with no daemon behind it counts as no Docker), **and**
+- the `CI` environment variable is neither `true` (any case) nor `1`.
+
+Under CI without Docker the tests **run and fail**: a suite skipped in CI is a suite that silently
+stopped running. Locally without Docker they skip with a reason naming the fix. `DockerEndpointTests`
+pins this decision and needs no Docker.
+
+**Run them before merging anything that touches a claim, a settlement, the guard, the execution
+strategy or an EF configuration.** SQLite cannot reproduce a blocked `UPDATE` re-evaluating its
+`WHERE`, two transactions racing on the unique index, or a concurrency-token conflict.
+
+---
+
+## Test doubles — what to reach for
 
 ```csharp
-// ✅ Seams → NSubstitute. Processors, coordinators and workers take interfaces; substitute them.
+// ✅ A seam with a canned answer → NSubstitute.
 var store = Substitute.For<IOutboxProcessorStore>();
-store.ClaimBatchAsync(Arg.Any<int>(), Arg.Any<TimeSpan>(), Arg.Any<CancellationToken>())
-     .Returns(new OutboxClaim(token, [message]));
+store.ClaimBatchAsync(Arg.Any<int>(), Arg.Any<TimeSpan>(), Arg.Any<OutboxEndpoints>(), Arg.Any<CancellationToken>())
+     .Returns(new OutboxClaim(Guid.NewGuid(), [message]));
 
-// ✅ Clock and jitter → injected, so back-off is asserted against EXACT values, not a tolerance.
-var processor = new OutboxProcessor(
-    store, scopeFactory, options,
-    new FakeTimeProvider(Now),          // Microsoft.Extensions.TimeProvider.Testing
-    FixedRandom.NoJitter,               // draw = 1.0 → the ceiling exactly; TestFixtures.cs
-                                        // (FixedRandom.ZeroDelay is the 0.0 counterpart)
-    NullLogger<OutboxProcessor>.Instance);
+// ✅ The processor over a keyed dispatcher, a fixed clock and a fixed jitter draw
+//    (OutboxProcessorTests.Build): back-off is asserted against exact values.
+services.AddKeyedSingleton<IOutboxDispatcher>(OutboxDispatchers.Transport, new ScriptedDispatcher());
+new OutboxProcessor(store, new TestExecutionScopeFactory(scopeFactory), options,
+    new FakeTimeProvider(Now), FixedRandom.NoJitter, NullLogger<OutboxProcessor>.Instance, TestStore);
 
-// ✅ Store behaviour → the REAL EF store on an isolated SQLite connection. The claim carries no
-//    provider-specific SQL, so the production code path is exactly what runs.
+// ✅ Store behaviour → the real EF store on an isolated SQLite connection (EfOutboxStoreTests).
 var conn = new SqliteConnection("Data Source=:memory:");
 conn.Open();
 var ctx = new TestMessagingDbContext(
     new DbContextOptionsBuilder<TestMessagingDbContext>().UseSqlite(conn).Options);
 ctx.Database.EnsureCreated();
 var store = new EfOutboxStore<TestMessagingDbContext>(ctx, new FakeTimeProvider(Now));
+
+// ✅ A second processor → a second context on the SAME connection.
+await using var ctxB = new TestMessagingDbContext(
+    new DbContextOptionsBuilder<TestMessagingDbContext>().UseSqlite(conn).Options);
+
+// ✅ The pipeline's guard in a unit test → GuardHarness over InMemoryInboxDatabase, whose
+//    FailNextCommit / FailAfterNextCommit / FailInsertFailed / FailReads / RetryOn script the faults.
+
+// ✅ "Nothing was sent" → RecordingMessageTransport.Sent is empty — never DidNotReceive().
 ```
 
-> **Why the real store and not a hand-written in-memory double.** The claim and the dedup gate are
-> both *database* behaviour — an atomic `UPDATE … WHERE` and a unique index. A double would assert
-> the behaviour it was written to have, which is precisely the bug class these tests exist to
-> catch.
+`FixedRandom.NoJitter` draws 1.0 (the delay is the ceiling); `FixedRandom.ZeroDelay` draws 0.0.
+Both are in `tests/MicroKit.Messaging.UnitTests/TestFixtures.cs`, with `ScriptedDispatcher`,
+`RecordingMessageTransport`, `InMemoryInboxGuard` and the row builders `OutboxFixtures` /
+`InboxFixtures`.
 
 ---
 
 ## Writing tests — the constraints that bite
 
-```csharp
-// ✅ One isolated connection per test, and per Task.Run inside a test.
-private static (SqliteConnection conn, TestMessagingDbContext ctx) CreateIsolatedDb() { ... }
-
-// ✅ Concurrency tests need a SECOND context over the SAME connection — one processor's
-//    change tracker must not be able to see the other's staged work.
-private static TestMessagingDbContext SecondContext(SqliteConnection conn) => new(...);
-
-// ❌ Shared static database name — state bleeds between tests.
-private static readonly string _dbName = "shared-test-db";
-```
-
-- **Shouldly only.** FluentAssertions is banned (Xceed commercial licence v8+). No `.Should().`
-- **`TenantId`** — set it in fixtures. `null` is *valid* in production (single-tenant,
-  ADR-MSG-008 §5), so test both a real tenant and `null` where a query filters on it.
-- **No `Thread.Sleep`.** Drive `FakeTimeProvider` instead; that is why it is injected.
-- **`GenerateDocumentationFile=false`** and **`NoWarn CS1591;CA1707`** in every test `.csproj`.
+- **Shouldly only.** No FluentAssertions, no `.Should()`.
+- **`TenantId`** set in fixtures; test `null` and a real tenant wherever a query filters on it.
+- **Two handlers** whenever fan-out, skipping or a shared correlation is the subject.
+- **No `Thread.Sleep`.** Drive `FakeTimeProvider`, or wait on a condition (`Eventually` in
+  `BusTestHost.cs`).
+- **No `ConfigureAwait(false)` in a test method.**
+- **Log assertions** go through `CapturingLogger<T>` / `CapturingLoggerProvider`, by event id, and
+  are scoped to MicroKit's own categories.
+- **Every test `.csproj`:** `IsPackable=false`, `GenerateDocumentationFile=false`, `NoWarn` including
+  `CS1591;CA1707`, unconditional `ProjectReference`s, no `Version=`.
+- **A README example is code.** A block marked `<!-- snippet: name -->` must equal the region of the
+  same name in `tests/MicroKit.Messaging.UnitTests/Readme/ReadmeSnippets.cs` or
+  `tests/MicroKit.Messaging.MediatR.IntegrationTests/Readme/ReadmeSnippets.cs`; change both together.
+- **A fix comes with a test shown red when the fix is reverted** (mutation check, in the rule).
 
 ---
 
@@ -130,30 +146,34 @@ private static readonly string _dbName = "shared-test-db";
 
 ```bash
 # FluentAssertions — must return nothing
-grep -rn "FluentAssertions\|\.Should()\." modules/MicroKit.Messaging/ --include="*.cs"
+grep -rn "FluentAssertions\|\.Should()\." modules/MicroKit.Messaging/src modules/MicroKit.Messaging/tests --include="*.cs"
 
-# MediatR — must return hits ONLY under MicroKit.Messaging.MediatR{,.UnitTests,.IntegrationTests}
-grep -rln "MediatR" modules/MicroKit.Messaging/src modules/MicroKit.Messaging/tests --include="*.cs"
+# A direct MediatR package reference — must return nothing: the glue reaches MediatR through
+# MicroKit.MediatR, and so do its two test projects
+grep -rn 'Include="MediatR' modules/MicroKit.Messaging --include="*.csproj"
 ```
 
-> The second command **is expected to produce output**. `MicroKit.Messaging.MediatR` is the single
-> package permitted to reference MediatR / MediatR.Contracts (ADR-MSG-009 carve-out), and its two
-> test projects reference it transitively. A hit anywhere else is a violation.
-> `AllAssemblies_HaveNoMediatRContractsDependency` enforces exactly this split — trust the
-> architecture test over a grep.
+A text grep for `MediatR` in `.cs` files is not a check: XML docs across the module mention it. The
+architecture tests are the authority — `Core_HasNoMediatRDependency`,
+`Abstractions_HasNoMediatRDependency`, `EfCore_HasNoMediatRDependency`,
+`AllAssemblies_HaveNoMediatRContractsDependency`.
 
 ---
 
 ## Architecture tests
 
 ```bash
-dotnet test modules/MicroKit.Messaging/tests/MicroKit.Messaging.ArchitectureTests/ -v normal
+dotnet test modules/MicroKit.Messaging/tests/MicroKit.Messaging.ArchitectureTests/ -c Release
 ```
 
-Any failure is a layer-boundary violation. Two are worth knowing about before you touch them:
-
-- `Core_DoesNotContainTypeNamedMessageDispatcher` — pins the removal of the old `MessageDispatcher`
-  in favour of the `IOutboxDispatcher` seam. Re-introducing that name is blocked deliberately.
-- `Core_DependsOn{SharedDbOutbox,SharedDbInbox}Coordinator_OnlyThroughI*Coordinator` — the
-  concrete coordinators stay `internal sealed` so a future per-tenant coordinator composes the
-  public engine rather than reimplementing it.
+- **`PublicSurfaceTests`** fails on a public type that is not in its lists **and** on a listed type
+  that no longer exists. Adding a public type is an edit there, with the reason in the PR.
+- **`NoOutboxDispatcherWritesInboxRows`** — no `IOutboxDispatcher` depends on `IInboxGuardStore`, and
+  the glue does not name `IOutboxDispatcher`. Inbox rows are written by the pipeline's guard only.
+- **`OnlyCoreShipsAnIMessageTransport_AndItIsTheInternalInMemoryOne`** — a second transport, or a
+  public one, is a decision.
+- **`Core_DependsOnTheStaticStoreSet_OnlyThroughIMessageStoreSet`** — keeps the store set
+  replaceable (#191).
+- **`Core_DoesNotContainTypeNamedMessageDispatcher`**,
+  **`Core_DoesNotContainTypeNamedInProcessIntegrationDispatcher`**,
+  **`NoAssemblyStillCarriesTheDedicatedIntegrationEventTable`** — removed designs stay removed.

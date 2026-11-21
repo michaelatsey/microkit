@@ -57,9 +57,9 @@ The workflow runs `dotnet pack -p:CIReleaseBuild=true -p:PackageVersion=${{ env.
 # 1. All tests pass
 dotnet test modules/MicroKit.Messaging/MicroKit.Messaging.slnx --no-build -c Release
 
-# 2. Zero MediatR.Contracts references
-grep -r "MediatR.Contracts" modules/MicroKit.Messaging/ --include="*.csproj" --include="*.cs"
-# must return no output
+# 2. MediatR stays in the glue
+grep -rlE 'Include="(MicroKit\.)?MediatR' modules/MicroKit.Messaging/src/MicroKit.Messaging.Abstractions modules/MicroKit.Messaging/src/MicroKit.Messaging modules/MicroKit.Messaging/src/MicroKit.Messaging.EntityFrameworkCore --include="*.csproj"
+# must return no output: only MicroKit.Messaging.MediatR and its tests reach MediatR (ADR-MSG-009)
 
 # 3. Zero FluentAssertions references
 grep -r "FluentAssertions" modules/MicroKit.Messaging/ --include="*.csproj" --include="*.cs"
@@ -69,11 +69,7 @@ grep -r "FluentAssertions" modules/MicroKit.Messaging/ --include="*.csproj" --in
 dotnet build modules/MicroKit.Messaging/MicroKit.Messaging.slnx -c Release
 # must show: Build succeeded. 0 Error(s). 0 Warning(s).
 
-# 5. v2 scaffolds do not produce packages
-dotnet pack modules/MicroKit.Messaging/src/MicroKit.Messaging.RabbitMQ/ -c Release -o /tmp
-ls /tmp/MicroKit.Messaging.RabbitMQ.*.nupkg 2>/dev/null && echo "FAIL: should not produce nupkg"
-
-# 6. Verify version.json
+# 5. Verify version.json
 cat modules/MicroKit.Messaging/version.json
 ```
 
@@ -89,15 +85,7 @@ MicroKit.Messaging.MediatR
 > `MicroKit.Messaging.Testing` is **not** in this list: the project does not exist yet
 > (L0 finding #19). Add it here when it is built, not before.
 
-## NOT Published (Phase 2 scaffolds, IsPackable=false)
-
-```
-MicroKit.Messaging.RabbitMQ
-MicroKit.Messaging.AzureServiceBus
-MicroKit.Messaging.Kafka
-MicroKit.Messaging.OpenTelemetry
-MicroKit.Messaging.Serialization
-```
+No broker provider project exists in the module yet.
 
 ## version.json
 

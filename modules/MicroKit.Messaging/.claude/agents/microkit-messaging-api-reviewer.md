@@ -18,7 +18,7 @@ well-documented, and respects all naming and design rules before any merge.
 - Verify XML documentation on all public members
 - Check for breaking changes vs previous release
 - Ensure no framework leakage in Abstractions
-- Ensure no MediatR.Contracts reference anywhere
+- Ensure no MediatR.Contracts reference outside the `MicroKit.Messaging.MediatR` glue (ADR-MSG-009)
 - Produce a PASS / BLOCK verdict
 
 ---
@@ -42,22 +42,25 @@ Public API Surface
 [ ] Naming follows microkit-messaging-naming.md conventions
 [ ] IIntegrationEvent used (not INotification, not MediatR types)
 [ ] No framework types (HttpContext, DbContext) in Abstractions
-[ ] ValueTask<T> used for all async methods. ADR-MSG-014's Task exception is GONE — superseded
-    for the outbox seams by ADR-MSG-015 and for the inbox seams by ADR-MSG-017. All four now
-    return ValueTask<OutboxBatchResult> / ValueTask<InboxBatchResult>. BackgroundService overrides
-    still return Task; that is the framework's signature, not ours
+[ ] ValueTask<T> used for all async methods. ADR-MSG-014's Task exception is GONE — the internal
+    processor seams IOutboxProcessor / IInboxProcessor return ValueTask<OutboxBatchResult> /
+    ValueTask<InboxBatchResult>. BackgroundService overrides (MessageStoreEngine, LocalQueueWorker,
+    InMemoryTransportWorker) return Task — the framework's signature — and so do the internal
+    per-store loops' RunAsync, which the engine joins with Task.WhenAll
 [ ] CancellationToken ct = default always last parameter
 [ ] sealed on all records, services, processors, publishers
 
-Dispatch Seam (ADR-MSG-019)
-[ ] IOutboxDispatcher implementations route on OutboxMessage.MessageKind, NEVER on the payload's
-    CLR type — a type test is invisible to SQL and reinstates producer-type-graph coupling
-[ ] A decorator resolves its inner from the keyed OutboxDispatcherKeys.Standard slot and treats it
-    as OPTIONAL; only Core writes that key, and a notification-only host legitimately has no inner
-[ ] OutboxDispatcherKeys.Standard's literal value is a cross-package compatibility commitment —
-    a change is a breaking change to Abstractions, and it is a const, so already-compiled
-    decorators carry the old value inlined
-[ ] A null inner never returns as though it had delivered — OutboxConfigurationException, released
+Dispatch Seam (ADR-MSG-020)
+[ ] IOutboxDispatcher stays internal to Core (ADR-MSG-020). Core ships its only two
+    implementations — TransportOutboxDispatcher and LocalOutboxDispatcher — and a provider
+    implements IMessageTransport instead. A public dispatcher seam is a new decision, not a fix
+[ ] A row is dispatched by OutboxMessage.Endpoint (null → transport, OutboxMessage.LocalEndpoint
+    "local" → the local endpoint), NEVER by the payload's CLR type — a type test is invisible to
+    SQL and reinstates producer-type-graph coupling
+[ ] OutboxMessage.LocalEndpoint's literal is stored in every local row; changing it misroutes the
+    rows already written
+[ ] Store services are resolved keyed by MessageStoreKey from the scope, never from a type fixed
+    at registration (ADR-MSG-020 §3)
 
 Outbox / Inbox Contracts
 [ ] TenantId present on OutboxMessage and InboxMessage
@@ -68,36 +71,41 @@ Outbox / Inbox Contracts
 [ ] OutboxMessage states: Pending / Processing / Published / Failed (always + DeadLettered=true)
 [ ] IOutboxWriter and IOutboxProcessorStore in Messaging.Abstractions — not in Persistence.Abstractions
 [ ] IOutboxWriter has write methods only (AddAsync + AddBatchAsync per ADR-MSG-011) — no GetPendingAsync or state-mutation methods
+[ ] IOutboxWriter enlists: it adds the row to the store's DbContext and never saves (ADR-MSG-020 §4)
+[ ] The store interfaces live in MicroKit.Messaging.Spi: IOutboxWriter, IOutboxProcessorStore,
+    IOutboxAdminStore, IOutboxRetentionStore, IInboxGuardStore, IInboxProcessorStore,
+    IInboxAdminStore, IInboxRetentionStore
 [ ] OutboxMessage and InboxMessage are sealed class (not sealed record) — EF Core entities
 [ ] NextRetryAtUtc present on OutboxMessage (required for back-off filtering)
 
 Dependency Safety
-[ ] No MediatR.Contracts reference in any .csproj
+[ ] No MediatR / MediatR.Contracts reference outside MicroKit.Messaging.MediatR and its test
+    projects (ADR-MSG-009)
 [ ] No new dependency introduced without guardian approval
 [ ] No Version= in .csproj files
-[ ] Cross-module references use CIReleaseBuild two-ItemGroup pattern
+[ ] Cross-module references from src/ projects use the CIReleaseBuild two-ItemGroup pattern;
+    test projects use unconditional ProjectReference
 [ ] MicroKit.Persistence.EntityFrameworkCore confined to .EntityFrameworkCore package only
 
 Breaking Changes
 [ ] No interface member added without default implementation or new interface
-[ ] No public member renamed without obsolete bridge
-[ ] A public member REMOVED outright is not covered by the line above and is not automatically a
-    BLOCK. This module's standing policy (ADR-MSG-016 §4, applied again by ADR-MSG-019) is that a
-    1.0.0-preview.* package with no external consumers takes the break rather than carrying an
-    [Obsolete] alias past 1.0.0. Require instead: the removal is recorded in an ADR, the migration
-    is in CHANGELOG.md, and any in-repo call site is updated
+[ ] No [Obsolete] member is added (ADR-GLOBAL-002 D10): a rename or removal ships outright. A break
+    is not automatically a BLOCK; require instead that it is recorded in an ADR, its migration is in
+    CHANGELOG.md, and every in-repo call site is updated
 [ ] No namespace change without migration note
 
 Result<T> / ValueTask Usage
-[ ] IOutboxWriter.AddAsync returns ValueTask (throws on DB error — propagates through UoW)
-[ ] IOutboxProcessorStore returns ValueTask<OutboxClaim> / ValueTask<int> (claim + settlement, ADR-MSG-015)
-[ ] IInboxWriter.AddAsync returns ValueTask<InboxWriteResult> — a redelivery is REPORTED, never
-    thrown. An implementation that throws on a duplicate is the defect ADR-MSG-017 fixed; the
-    unique index is the guard, and the store absorbs the violation (ADR-MSG-017 §6, §7)
-[ ] IInboxSettlementStore stages only, never commits; IsMarkUncommitted / IsLeaseLost are sync,
-    must not throw, and absent-entry must read as uncommitted (ADR-MSG-017 §3)
-[ ] All async methods return ValueTask (not Task). ADR-MSG-014's exception is GONE — all four
-    coordinator/processor seams now return a batch result (ADR-MSG-015 outbox, ADR-MSG-017 inbox)
+[ ] IOutboxWriter.AddAsync / AddBatchAsync return ValueTask and write nothing to the database:
+    the row is enlisted, and a database error surfaces from the caller's SaveChanges
+[ ] IOutboxProcessorStore / IInboxProcessorStore return ValueTask<OutboxClaim> / ValueTask<InboxClaim>
+    and ValueTask<int> (claim + settlement, ADR-MSG-015, ADR-MSG-017)
+[ ] IInboxGuardStore (ADR-MSG-020 §5): FindAsync returns ValueTask<InboxRowState?> — null when
+    there is no row, read without tracking; EnlistProcessedAsync and MarkClaimedProcessedAsync
+    write nothing until CommitAsync; MarkClaimedProcessedAsync returns false when the claim is
+    lost; TryInsertFailedAsync commits in its own transaction, is never an upsert, and returns
+    false when the row already exists — a redelivery is REPORTED, never thrown; IsLeaseLost is
+    sync
+[ ] All async methods return ValueTask (not Task), except the Task-returning members named above
 ```
 
 ---

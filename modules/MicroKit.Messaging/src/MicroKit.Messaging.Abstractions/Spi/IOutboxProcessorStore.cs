@@ -33,10 +33,16 @@ public interface IOutboxProcessorStore
 {
     /// <summary>
     /// Atomically reserves up to <paramref name="batchSize"/> dispatchable messages and
-    /// stamps them with a lease and an ownership token.
+    /// stamps them with a lease and an ownership token, leaving out the rows of the
+    /// <paramref name="excluded"/> endpoints.
     /// </summary>
     /// <param name="batchSize">Maximum number of messages to claim.</param>
     /// <param name="lockDuration">How long the lease is held.</param>
+    /// <param name="excluded">
+    /// The endpoints in back-off, whose rows must not be claimed (#188): the claim then reaches the
+    /// other endpoint's rows behind them, however many there are, and the down endpoint's rows are not
+    /// rewritten while it is down. <see cref="OutboxEndpoints.None"/> leaves nothing out.
+    /// </param>
     /// <param name="ct">A cancellation token.</param>
     /// <returns>The messages actually won, and the token proving ownership.</returns>
     /// <remarks>
@@ -45,6 +51,16 @@ public interface IOutboxProcessorStore
     /// dead-lettered, and has reached <see cref="OutboxMessage.NextRetryAtUtc"/>.
     /// Two concurrent processors must never both win the same row, and the count returned
     /// must never exceed <paramref name="batchSize"/>.
+    /// <para>
+    /// <b>The endpoint filter is part of the contract.</b> A store that ignores it brings back what
+    /// #188 removed: during a broker outage the transport's backlog heads every claim and the local
+    /// rows behind it starve. Filter on <see cref="OutboxMessage.Endpoint"/> with an index led by the
+    /// status and then the endpoint, so neither the down endpoint's backlog nor the published history
+    /// is walked. A row whose endpoint is neither the transport nor the local endpoint is never
+    /// excluded: the processor dead-letters it. Rows of an excluded endpoint handed over anyway are
+    /// deferred unattempted, as <see cref="OutboxOutcomeKind.Deferred"/>, which
+    /// <see cref="ApplyOutcomesAsync"/> must settle like every other kind.
+    /// </para>
     /// <para>
     /// <b>Clock.</b> The lease expiry is computed from the application clock via
     /// <see cref="TimeProvider"/>, not from the database clock. That keeps the implementation
@@ -56,6 +72,7 @@ public interface IOutboxProcessorStore
     ValueTask<OutboxClaim> ClaimBatchAsync(
         int batchSize,
         TimeSpan lockDuration,
+        OutboxEndpoints excluded,
         CancellationToken ct = default);
 
     /// <summary>

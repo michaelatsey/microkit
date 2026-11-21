@@ -111,9 +111,4 @@ internal static partial class InboxProcessorLogs
     [LoggerMessage(EventId = 2022, Level = LogLevel.Error,
         Message = "Inbox retention pass failed. Retrying after {Interval}.")]
     public static partial void RetentionFailed(ILogger logger, Exception exception, TimeSpan interval);
-
-    [LoggerMessage(EventId = 2023, Level = LogLevel.Critical,
-        Message = "IInboxRetentionStore is not registered — stopping the inbox retention worker. " +
-                  "Register it (e.g. call AddEfCoreOutbox()).")]
-    public static partial void RetentionStoreUnresolvable(ILogger logger, Exception exception);
 }

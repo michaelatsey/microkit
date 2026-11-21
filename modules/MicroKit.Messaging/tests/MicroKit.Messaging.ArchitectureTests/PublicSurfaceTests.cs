@@ -82,7 +82,6 @@ public sealed class PublicSurfaceTests
             // and the engine catches them.
             "IEventPublisher",
             "IIntegrationEvent",
-            "IIntegrationEventPublisher",
             "IMessageBus",
             "IMessageHandler`1",
             "IMessageReceiveMiddleware",
@@ -95,6 +94,7 @@ public sealed class PublicSurfaceTests
             "MessageContractAttribute",
             "MessageId",
             "MessageReceiveContext",
+            "MessageStoreKey",
             "MessageSendContext",
             "PermanentMessageException",
             "PublishOptions",
@@ -119,7 +119,7 @@ public sealed class PublicSurfaceTests
     }
 
     /// <summary>
-    /// The SPI: what an author of a store, a transport or a dispatcher implements. Separate from the
+    /// The SPI: what an author of a store, a transport or an integration package implements. Separate from the
     /// application surface so that neither can grow by accident into the other.
     /// </summary>
     [Fact]
@@ -130,25 +130,22 @@ public sealed class PublicSurfaceTests
             // Transport and the wire form. MessageHeaders names the envelope's reserved
             // extensions (#186).
             "IMessageTransport", "MessageEnvelope", "MessageHeaders", "IEnvelopeReceiver",
-            "EnvelopeReceiveResult", "IMessageSerializer",
-            // The seam a store provider calls to switch on the outbox and inbox engine — Core,
-            // transitional until #188.
-            "OutboxInboxProcessingExtensions",
-            // Dispatch.
-            "IOutboxDispatcher", "OutboxDispatcherKeys",
+            "EnvelopeReceiveResult", "ReceiveDisposition", "IMessageSerializer",
+            // The seam a store provider calls to add a store to the engine (#188).
+            "IMessageStoreSet", "MessageStoreBuilder", "MessageStoreRegistrationExtensions",
+            // The local endpoint (#188 D7, D8): what an integration package sends local messages
+            // through, the consumers it supplies, and its registration path.
+            "ILocalMessageSender", "ILocalConsumerSource", "LocalConsumer", "MessagingIntegrationExtensions",
             // Stores, split by consumer (ISP).
             "IOutboxWriter", "IOutboxProcessorStore", "IOutboxAdminStore", "IOutboxRetentionStore",
-            "IInboxWriter", "IInboxProcessorStore", "IInboxSettlementStore", "IInboxAdminStore",
-            "IInboxRetentionStore",
-            // The staging writer.
-            "IIntegrationEventWriter", "IntegrationEventWriteResult",
+            "IInboxGuardStore", "IInboxProcessorStore", "IInboxAdminStore", "IInboxRetentionStore",
             // The rows and the types the stores exchange.
-            "OutboxMessage", "InboxMessage", "OutboxClaim", "InboxClaim", "OutboxOutcome",
-            "InboxOutcome", "InboxMessageKey",
+            "OutboxMessage", "InboxMessage", "OutboxClaim", "OutboxEndpoints", "MessageConsumerKey", "InboxClaim", "OutboxOutcome",
+            "InboxOutcome", "InboxMessageKey", "InboxRowState",
             // Value objects carried on a row.
             "CorrelationId", "CausationId",
             // Row and outcome state.
-            "MessageKind", "InboxWriteResult", "OutboxMessageStatus", "InboxMessageStatus",
+            "OutboxMessageStatus", "InboxMessageStatus",
             "OutboxOutcomeKind", "InboxOutcomeKind",
             // The exceptions a provider raises across the seam, for the engine to classify.
             "OutboxPayloadException", "OutboxTransportUnavailableException",
@@ -207,21 +204,23 @@ public sealed class PublicSurfaceTests
         VisibleNamespacesIn(EfCoreAssembly).ShouldBe(["MicroKit.Messaging.EntityFrameworkCore"]);
         VisibleTypeNamesIn("MicroKit.Messaging.EntityFrameworkCore", EfCoreAssembly).ShouldBe(
             [
+                "EntityFrameworkOutbox",
+                "EntityFrameworkOutboxBuilder",
                 "InboxMessageConfiguration",
                 "MessagingBuilderExtensions",
                 "ModelBuilderExtensions",
                 "OutboxMessageConfiguration",
             ],
-            "the EF Core package exposes the two entity configurations and the two registration " +
-            "entry points; the stores themselves are internal");
+            "the EF Core package exposes the two entity configurations, the store registration, its " +
+            "builder and its key; the stores themselves are internal");
 
         VisibleNamespacesIn(MediatRGlueAssembly).ShouldBe(
             ["MicroKit.Messaging.MediatR.DependencyInjection"]);
         VisibleTypeNamesIn("MicroKit.Messaging.MediatR.DependencyInjection", MediatRGlueAssembly)
             .ShouldBe(
                 ["MessagingMediatRExtensions"],
-                "the glue is one registration method; the sink, the routing dispatcher and the " +
-                "cascade publisher are internal");
+                "the glue is one registration method; the sink, the dispatch middleware and the " +
+                "notification handler source are internal");
     }
 
     /// <summary>

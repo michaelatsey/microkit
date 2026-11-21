@@ -49,15 +49,16 @@ public sealed class EndpointBindingTests
     public async Task AnInvalidComposition_ResolvingTheTransportThrows_AndBindsNothing()
     {
         await using var host = BusTestHost.Build(
-            bus => bus.AddHandler<FirstOrderPlacedHandler>(),
+            bus => bus.AddHandler<FirstOrderPlacedHandler>()
+                .AddMessageStore(new MessageStoreKey("tests:incomplete"), _ => { }),
             null,
-            services => services.AddScoped(_ => Substitute.For<IOutboxProcessorStore>()),
+            null,
             "svc.invalid",
             out var broker);
 
         var ex = Should.Throw<IntegrationEventConfigurationException>(
             () => host.Provider.GetRequiredService<IMessageTransport>());
-        ex.Message.ShouldContain("An IOutboxProcessorStore is registered, but the outbox engine is not");
+        ex.Message.ShouldContain("Store 'tests:incomplete' is configured, but IOutboxWriter");
 
         // The same exception reaches a publisher, and a failed attempt binds nothing either.
         await Should.ThrowAsync<IntegrationEventConfigurationException>(

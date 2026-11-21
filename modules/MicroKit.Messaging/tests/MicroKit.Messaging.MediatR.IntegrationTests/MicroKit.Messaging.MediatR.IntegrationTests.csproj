@@ -19,16 +19,18 @@
     <PackageReference Include="NSubstitute" />
     <PackageReference Include="Microsoft.Extensions.DependencyInjection" />
     <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" />
-    <!-- AddLogging() lives here, not in .Abstractions. OutboxProcessor, MediatROutboxDispatcher
-         and MediatROutboxDispatcher all take an ILogger<T>; without it the drain cannot activate. -->
+    <!-- AddLogging() lives here, not in .Abstractions. OutboxProcessor and the receive pipeline
+         take an ILogger<T>; without it the drain cannot activate. -->
     <PackageReference Include="Microsoft.Extensions.Logging" />
     <!-- The whole point of this suite: a real DbContext on SQLite is the only way to observe the
          domain-event -> outbox -> notification path end to end. -->
     <PackageReference Include="Microsoft.EntityFrameworkCore" />
     <PackageReference Include="Microsoft.EntityFrameworkCore.Sqlite" />
-    <!-- Compile-only: the README's durable composition names UseNpgsql (#187). Nothing here
-         connects to a PostgreSQL server. -->
+    <!-- The README's durable composition names UseNpgsql (#187), and the PostgreSQL suite of
+         #188 (V2, V3, V4 for domain events) runs on it through Testcontainers, hosted. -->
     <PackageReference Include="Npgsql.EntityFrameworkCore.PostgreSQL" />
+    <PackageReference Include="Testcontainers.PostgreSql" />
+    <PackageReference Include="Microsoft.Extensions.Hosting" />
     <PackageReference Include="coverlet.collector" />
   </ItemGroup>
   <ItemGroup>
@@ -61,6 +63,13 @@
     <ProjectReference Include="../../../MicroKit.Persistence/src/MicroKit.Persistence.EntityFrameworkCore/MicroKit.Persistence.EntityFrameworkCore.csproj" />
     <ProjectReference Include="../../../MicroKit.Domain/src/MicroKit.Domain/MicroKit.Domain.csproj" />
     <ProjectReference Include="../../../MicroKit.Result/src/MicroKit.Result/MicroKit.Result.csproj" />
+  </ItemGroup>
+  <!-- The core suite's container fixture and Docker gate, compiled here too: one source, so both
+       suites skip and fail by the same rule (CI never skips). -->
+  <ItemGroup>
+    <Compile Include="../MicroKit.Messaging.IntegrationTests/PostgreSql/PostgreSqlFixture.cs" Link="PostgreSql/Shared/PostgreSqlFixture.cs" />
+    <Compile Include="../MicroKit.Messaging.IntegrationTests/PostgreSql/DockerRequiredFactAttribute.cs" Link="PostgreSql/Shared/DockerRequiredFactAttribute.cs" />
+    <Compile Include="../MicroKit.Messaging.IntegrationTests/PostgreSql/StoreDatabase.cs" Link="PostgreSql/Shared/StoreDatabase.cs" />
   </ItemGroup>
   <!-- SQLitePCLRaw.lib.e_sqlite3 2.1.11 has a known vulnerability (GHSA-2m69-gcr7-jv3q).
        This is a transitive test-only dependency of Microsoft.EntityFrameworkCore.Sqlite;

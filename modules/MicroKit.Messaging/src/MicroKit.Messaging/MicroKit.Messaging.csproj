@@ -4,7 +4,8 @@
     <RootNamespace>MicroKit.Messaging</RootNamespace>
     <Description>Messaging core for MicroKit — the message bus (publish straight to a transport,
     receive pipeline with middleware and typed verdicts), the in-memory transport, System.Text.Json
-    serialization, and the transitional outbox and inbox engine, with its DI extensions.</Description>
+    serialization, the inbox guard, the local endpoint, and the store engine that drains each
+    configured outbox and inbox, with its DI extensions.</Description>
     <PackageTags>microkit;messaging;outbox;inbox;integration-events;dotnet</PackageTags>
     <Authors>Ange-Michaël Atsé</Authors>
     <PackageLicenseExpression>MIT</PackageLicenseExpression>
@@ -20,24 +21,14 @@
   </PropertyGroup>
   <ItemGroup>
     <InternalsVisibleTo Include="MicroKit.Messaging.UnitTests" />
-    <InternalsVisibleTo Include="MicroKit.Messaging.MediatR" />
-    <!-- AddEfCoreIntegrationEvents<TContext>() registers the internal IntegrationEventPublisher
-         next to the writer it requires (#187); the publisher stays internal to Core. -->
-    <InternalsVisibleTo Include="MicroKit.Messaging.EntityFrameworkCore" />
-    <!-- OutboxDomainEventSinkTests constructs the internal OutboxMessageFactory as a collaborator:
-         ADR-MSG-008 §2 defers an IOutboxMessageMapper until a second implementation exists, so the
-         sealed class cannot be doubled. -->
-    <InternalsVisibleTo Include="MicroKit.Messaging.MediatR.UnitTests" />
-    <!-- IInboxCoordinator / IOutboxCoordinator became internal with #185 (ADR-MSG-002's public
-         surface is superseded; the database-per-tenant engine moved to #191). Three call sites
-         drive one deterministic drain cycle and no public API offers that:
-         InboxSettlementGuaranteeTests.cs:118, E2EHarness.cs:150 and :166. The first also binds the
-         InboxBatchResult those seams return — internal for the same reason — and asserts on it.
-         Removed by #135. -->
+    <!-- IOutboxProcessor / IInboxProcessor are internal (#185; #188 keys them by store). The
+         integration suites drive one deterministic batch through the store's keyed processor, and
+         no public API offers that: InboxSettlementGuaranteeTests, TwoStoresTests and E2EHarness.
+         The first also binds the InboxBatchResult they return — internal for the same reason — and
+         asserts on it. Removed by #135. -->
     <InternalsVisibleTo Include="MicroKit.Messaging.IntegrationTests" />
     <InternalsVisibleTo Include="MicroKit.Messaging.MediatR.IntegrationTests" />
-    <!-- NSubstitute mocks the now-internal drain seams (IOutboxProcessor, IInboxProcessor,
-         IOutboxCoordinator, IInboxCoordinator). Castle emits DynamicProxyGenAssembly2 UNSIGNED
+    <!-- NSubstitute mocks the internal drain seams (IOutboxProcessor, IInboxProcessor). Castle emits DynamicProxyGenAssembly2 UNSIGNED
          here (PublicKeyToken=null), so the strong-named grant below never matches it and the
          unqualified one is what actually grants access; without it every Substitute.For on those
          seams fails at runtime with TypeLoadException, not at compile time. Both lines are kept:

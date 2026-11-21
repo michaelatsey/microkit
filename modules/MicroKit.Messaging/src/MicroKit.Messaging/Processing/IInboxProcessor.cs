@@ -1,9 +1,8 @@
 namespace MicroKit.Messaging.Processing;
 
 /// <summary>
-/// Topology-agnostic batch engine for the transactional inbox. Atomically claims a batch of
-/// processable <see cref="InboxMessage"/> rows, deserializes each event, resolves its handler,
-/// and settles every disposition.
+/// The retry engine of one store's inbox. Atomically claims a batch of rows whose last attempt
+/// failed, runs each through the receive pipeline's guarded retry, and settles the failures.
 /// </summary>
 /// <remarks>
 /// <para>
@@ -17,20 +16,16 @@ namespace MicroKit.Messaging.Processing;
 /// symmetry with <see cref="IOutboxProcessor"/>.
 /// </para>
 /// <para>
-/// The processor must never call <see cref="IInboxWriter.ExistsAsync"/> or
-/// <see cref="IInboxWriter.AddAsync"/> — those belong to the ingestion path
-/// (<c>EnvelopeReceiver</c>, on the receiving side — the in-process dispatcher this once named
-/// was deleted by ADR-MSG-019). The processor is a pure drain loop, and its narrowed
-/// dependency on <see cref="IInboxProcessorStore"/> makes that structural rather than a
-/// convention.
+/// It writes no row of a first delivery: a delivery writes its own (#188 D6), and the processor
+/// only retries rows already there, through <see cref="IInboxProcessorStore"/>.
 /// </para>
 /// </remarks>
 internal interface IInboxProcessor
 {
     /// <summary>
-    /// Claims, handles and settles up to <paramref name="batchSize"/> rows. Each row is handled
-    /// in its own isolated execution scope — one per message, never shared across a batch — and
-    /// success is settled inside the handler's own transaction.
+    /// Claims, retries and settles up to <paramref name="batchSize"/> rows. Each attempt runs in its
+    /// own scope — never shared across a batch — and a success is settled inside the handler's own
+    /// transaction.
     /// </summary>
     /// <param name="batchSize">Maximum number of rows to claim in this call.</param>
     /// <param name="cancellationToken">A cancellation token.</param>

@@ -116,13 +116,12 @@ internal static class OutboxFixtures
         };
 
     /// <summary>
-    /// A <see cref="MessageKind.Contract"/> row — one the transport dispatcher can actually send.
+    /// A transport row — one the transport dispatcher can actually send.
     /// </summary>
     /// <remarks>
-    /// Separate from <see cref="Message"/> rather than a parameter on it, because the two carry
-    /// genuinely different column sets: a contract row must have <c>ContractName</c> and
-    /// <c>Source</c>, and a notification row must not. A single builder with nullable defaults
-    /// would let a test silently construct a row that cannot exist in production.
+    /// Separate from <see cref="Message"/> rather than a parameter on it, because a transport row
+    /// must carry <c>ContractName</c> and <c>Source</c>: a single builder with nullable defaults
+    /// would let a test silently construct a row the bus never writes.
     /// </remarks>
     internal static OutboxMessage ContractMessage(
         string? contractName = "shop.orders.order-placed.v1",
@@ -132,7 +131,6 @@ internal static class OutboxFixtures
         int retryCount = 0)
     {
         var message = Message(retryCount: retryCount, tenantId: tenantId);
-        message.MessageKind = MessageKind.Contract;
         message.ContractName = contractName;
         message.Source = source;
         message.Payload = payload;
@@ -213,38 +211,215 @@ internal static class InboxFixtures
 }
 
 /// <summary>
-/// An <see cref="IInboxSettlementStore"/> whose staging outcome and commit behaviour are
-/// scripted, so the processor's branches can be driven without a database.
+/// The "database" behind <see cref="InMemoryInboxGuard"/>: the committed inbox rows, shared by every
+/// scope, with scripts for the faults a real store raises.
 /// </summary>
-/// <remarks>
-/// The real store stages a tracked change that the handler's unit of work commits. There is no
-/// unit of work here, so the two questions the processor asks — "do I still own this row?" and
-/// "did anything commit the mark?" — are answered directly.
-/// </remarks>
-internal sealed class ScriptedInboxSettlementStore : IInboxSettlementStore
+internal sealed class InMemoryInboxDatabase
 {
-    /// <summary>Gets or sets what <see cref="StageProcessedAsync"/> returns.</summary>
-    public bool Owned { get; set; } = true;
+    private readonly object _gate = new();
 
-    /// <summary>Gets or sets what <see cref="IsMarkUncommitted"/> returns.</summary>
-    public bool MarkUncommitted { get; set; }
+    /// <summary>Gets the committed rows.</summary>
+    public Dictionary<InboxMessageKey, InboxMessage> Rows { get; } = [];
 
-    /// <summary>Gets or sets the predicate deciding whether an exception is a lost lease.</summary>
-    public Func<Exception, bool> LeaseLost { get; set; } = _ => false;
+    /// <summary>Gets or sets a fault raised by the commit of an attempt, once, before anything is written.</summary>
+    public Exception? FailNextCommit { get; set; }
 
-    /// <summary>Gets the keys staged, in order.</summary>
-    public List<InboxMessageKey> Staged { get; } = [];
+    /// <summary>Gets or sets a fault raised by the commit of an attempt, once, after everything is written.</summary>
+    public Exception? FailAfterNextCommit { get; set; }
 
-    public ValueTask<bool> StageProcessedAsync(
-        InboxMessageKey key, Guid claimToken, CancellationToken ct = default)
+    /// <summary>Gets or sets a fault raised by every Failed-row insert.</summary>
+    public Exception? FailInsertFailed { get; set; }
+
+    /// <summary>Gets or sets the faults the guard's strategy retries; none by default.</summary>
+    public Func<Exception, bool> RetryOn { get; set; } = _ => false;
+
+    /// <summary>Gets the number of attempts begun.</summary>
+    public int AttemptsBegun { get; private set; }
+
+    /// <summary>Gets or sets whether every read fails: the database is down.</summary>
+    public bool FailReads { get; set; }
+
+    public InboxMessage? Find(InboxMessageKey key)
     {
-        Staged.Add(key);
-        return ValueTask.FromResult(Owned);
+        lock (_gate)
+        {
+            if (FailReads)
+            {
+                throw new TimeoutException("the database is unreachable");
+            }
+
+            return Rows.GetValueOrDefault(key);
+        }
     }
 
-    public bool IsMarkUncommitted(InboxMessageKey key) => MarkUncommitted;
+    public void Add(InboxMessage row)
+    {
+        lock (_gate)
+        {
+            Rows[new InboxMessageKey(row.MessageId, row.ConsumerType)] = row;
+        }
+    }
 
-    public bool IsLeaseLost(Exception exception) => LeaseLost(exception);
+    internal void Begun()
+    {
+        lock (_gate)
+        {
+            AttemptsBegun++;
+        }
+    }
+
+    internal void Commit(InboxMessage? enlisted, (InboxMessageKey Key, Guid Token)? claimed, DateTimeOffset now)
+    {
+        lock (_gate)
+        {
+            if (FailNextCommit is { } fault)
+            {
+                FailNextCommit = null;
+                throw fault;
+            }
+
+            if (enlisted is not null)
+            {
+                var key = new InboxMessageKey(enlisted.MessageId, enlisted.ConsumerType);
+                if (Rows.ContainsKey(key))
+                {
+                    throw new DuplicateKeyTestException();
+                }
+
+                Rows[key] = enlisted;
+            }
+
+            if (claimed is { } mark)
+            {
+                if (!Rows.TryGetValue(mark.Key, out var row) || row.ClaimToken != mark.Token)
+                {
+                    throw new LeaseLostTestException();
+                }
+
+                row.Status = InboxMessageStatus.Processed;
+                row.ProcessedAtUtc = now;
+                row.ClaimToken = null;
+                row.LockedUntilUtc = null;
+            }
+
+            if (FailAfterNextCommit is { } after)
+            {
+                FailAfterNextCommit = null;
+                throw after;
+            }
+        }
+    }
+
+    internal bool TryInsert(InboxMessage row)
+    {
+        lock (_gate)
+        {
+            if (FailInsertFailed is { } fault)
+            {
+                throw fault;
+            }
+
+            var key = new InboxMessageKey(row.MessageId, row.ConsumerType);
+            if (Rows.ContainsKey(key))
+            {
+                return false;
+            }
+
+            Rows[key] = row;
+            return true;
+        }
+    }
+}
+
+/// <summary>The unique-index violation of <see cref="InMemoryInboxDatabase"/>.</summary>
+internal sealed class DuplicateKeyTestException() : Exception("duplicate (MessageId, ConsumerType)");
+
+/// <summary>The lost claim of <see cref="InMemoryInboxDatabase"/>: the conditioned write matched no row.</summary>
+internal sealed class LeaseLostTestException() : Exception("the claim token no longer matches");
+
+/// <summary>
+/// An <see cref="IInboxGuardStore"/> over <see cref="InMemoryInboxDatabase"/>, scoped like the real
+/// one: what an attempt enlists is written only by <see cref="CommitAsync"/>, so an attempt that does
+/// not commit leaves nothing.
+/// </summary>
+/// <remarks>
+/// Its execution strategy runs the operation once — no retrying strategy — unless
+/// <see cref="InMemoryInboxDatabase.RetryOn"/> names the faults to retry, which then go through the verification first, as
+/// a retrying EF strategy does.
+/// </remarks>
+internal sealed class InMemoryInboxGuard(InMemoryInboxDatabase database, TimeProvider clock) : IInboxGuardStore
+{
+    private InboxMessage? _enlisted;
+    private (InboxMessageKey Key, Guid Token)? _claimed;
+    private bool _begun;
+
+    public ValueTask<InboxRowState?> FindAsync(InboxMessageKey key, CancellationToken ct = default)
+        => ValueTask.FromResult(database.Find(key) is { } row
+            ? new InboxRowState(row.Status, row.DeadLettered, row.RowId)
+            : (InboxRowState?)null);
+
+    public async ValueTask<TResult> ExecuteAsync<TState, TResult>(
+        TState state,
+        Func<TState, CancellationToken, ValueTask<TResult>> operation,
+        Func<TState, CancellationToken, ValueTask<bool>> verifySucceeded,
+        TResult verifiedResult,
+        CancellationToken ct = default)
+    {
+        for (var attempt = 1; ; attempt++)
+        {
+            try
+            {
+                return await operation(state, ct);
+            }
+            catch (Exception ex) when (attempt < 3 && database.RetryOn(ex))
+            {
+                if (await verifySucceeded(state, ct))
+                {
+                    return verifiedResult;
+                }
+            }
+        }
+    }
+
+    public ValueTask BeginAsync(CancellationToken ct = default)
+    {
+        _begun = true;
+        database.Begun();
+        return ValueTask.CompletedTask;
+    }
+
+    public ValueTask EnlistProcessedAsync(InboxMessage row, CancellationToken ct = default)
+    {
+        _enlisted = row;
+        return ValueTask.CompletedTask;
+    }
+
+    public ValueTask<bool> MarkClaimedProcessedAsync(InboxMessageKey key, Guid claimToken, CancellationToken ct = default)
+    {
+        if (database.Find(key)?.ClaimToken != claimToken)
+        {
+            return ValueTask.FromResult(false);
+        }
+
+        _claimed = (key, claimToken);
+        return ValueTask.FromResult(true);
+    }
+
+    public ValueTask CommitAsync(CancellationToken ct = default)
+    {
+        if (!_begun)
+        {
+            throw new InvalidOperationException("Committed before it was begun.");
+        }
+
+        database.Commit(_enlisted, _claimed, clock.GetUtcNow());
+        return ValueTask.CompletedTask;
+    }
+
+    public bool IsLeaseLost(Exception exception) => exception is LeaseLostTestException;
+
+    public ValueTask<bool> TryInsertFailedAsync(InboxMessage row, CancellationToken ct = default)
+        => ValueTask.FromResult(database.TryInsert(row));
 }
 
 /// <summary>A handler that records invocations and can be scripted to throw.</summary>
@@ -280,47 +455,8 @@ internal sealed record InboxTestEvent(MessageId MessageId, string TenantId) : II
     public DateTimeOffset OccurredOnUtc { get; } = DateTimeOffset.UnixEpoch;
 }
 
-/// <summary>
-/// An <see cref="IInboxWriter"/> that records every row it was handed and reports whatever a
-/// script tells it to.
-/// </summary>
-/// <remarks>
-/// <para>
-/// <b>A recording fake rather than an NSubstitute mock, deliberately.</b> Several receiver tests
-/// assert that nothing was written, and a negative assertion against a mock only holds if it names
-/// a method the subject actually calls. Asserting that <see cref="Written"/> is empty cannot be
-/// satisfied that way.
-/// </para>
-/// <para>
-/// <see cref="ExistsAsync"/> throws on purpose. The obvious ingestion bug is
-/// <c>if (!await ExistsAsync(...)) await AddAsync(...)</c> — a time-of-check-to-time-of-use race
-/// the unique index exists to make unnecessary. Nothing on the receiving path may call it, and a
-/// throw pins that without a separate test.
-/// </para>
-/// </remarks>
-internal sealed class RecordingInboxWriter(Func<InboxMessage, InboxWriteResult>? script = null)
-    : IInboxWriter
-{
-    /// <summary>Every row this writer was handed, in order.</summary>
-    public List<InboxMessage> Written { get; } = [];
-
-    public ValueTask<bool> ExistsAsync(
-        MessageId messageId, string consumerType, CancellationToken ct = default)
-        => throw new InvalidOperationException(
-            "The ingestion path must never guard AddAsync with ExistsAsync — that is the " +
-            "time-of-check-to-time-of-use race the unique index exists to remove.");
-
-    public ValueTask<InboxWriteResult> AddAsync(
-        InboxMessage message, CancellationToken ct = default)
-    {
-        Written.Add(message);
-
-        return ValueTask.FromResult(script?.Invoke(message) ?? InboxWriteResult.Added);
-    }
-}
-
 /// <summary>One log record, flattened to what an assertion needs.</summary>
-internal readonly record struct CapturedLog(LogLevel Level, int EventId, string Message);
+internal readonly record struct CapturedLog(LogLevel Level, int EventId, string Message, Exception? Exception = null);
 
 /// <summary>
 /// An <see cref="ILogger{T}"/> that keeps every record, so "silent success is forbidden" can be
@@ -347,7 +483,7 @@ internal sealed class CapturingLogger<T> : ILogger<T>
         TState state,
         Exception? exception,
         Func<TState, Exception?, string> formatter)
-        => Records.Add(new CapturedLog(logLevel, eventId.Id, formatter(state, exception)));
+        => Records.Add(new CapturedLog(logLevel, eventId.Id, formatter(state, exception), exception));
 }
 
 /// <summary>Reads the #186 envelope the way a test asserts on it.</summary>

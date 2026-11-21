@@ -25,6 +25,9 @@ internal sealed class MessagingComposition
     // the builders: a builder holds the IServiceCollection, and this singleton outlives it.
     private readonly List<string?> _serviceNames = [];
     private readonly List<UnloadedTypes> _unloaded = [];
+    private readonly List<StoreRegistration> _stores = [];
+    private readonly List<ILocalConsumerSource> _localSources = [];
+    private readonly List<Func<IServiceProvider, IEnumerable<string>>> _startupChecks = [];
 
     /// <summary>Gets the handler registry the declared handlers are written into.</summary>
     public MessageHandlerRegistry Handlers { get; } = new();
@@ -61,6 +64,59 @@ internal sealed class MessagingComposition
     /// is not necessarily a handler.
     /// </summary>
     public IReadOnlyList<UnloadedTypes> Unloaded => _unloaded;
+
+    /// <summary>
+    /// Gets the configured message stores, in registration order, each once. Empty means the bus
+    /// runs with no durability.
+    /// </summary>
+    public IReadOnlyList<StoreRegistration> Stores => _stores;
+
+    /// <summary>Gets the local consumer sources, in registration order, each type once (#188 D7).</summary>
+    public IReadOnlyList<ILocalConsumerSource> LocalConsumerSources => _localSources;
+
+    /// <summary>Gets the composition-wide checks run at host start, each returning the problems it found.</summary>
+    public IReadOnlyList<Func<IServiceProvider, IEnumerable<string>>> StartupChecks => _startupChecks;
+
+    /// <summary>Adds a local consumer source; a second source of the same type is ignored.</summary>
+    /// <param name="source">The source.</param>
+    public void AddLocalConsumerSource(ILocalConsumerSource source)
+    {
+        ArgumentNullException.ThrowIfNull(source);
+        if (!_localSources.Exists(s => s.GetType() == source.GetType()))
+        {
+            _localSources.Add(source);
+        }
+    }
+
+    /// <summary>Adds a composition-wide start check.</summary>
+    /// <param name="check">The check.</param>
+    public void AddStartupCheck(Func<IServiceProvider, IEnumerable<string>> check)
+    {
+        ArgumentNullException.ThrowIfNull(check);
+        _startupChecks.Add(check);
+    }
+
+    /// <summary>
+    /// Gets the registration of <paramref name="key"/>, creating it on first use: a second
+    /// registration of one key adds to the same store.
+    /// </summary>
+    /// <param name="key">The store key.</param>
+    /// <param name="created">Whether this call created the registration.</param>
+    /// <returns>The store's registration.</returns>
+    public StoreRegistration GetOrAddStore(MessageStoreKey key, out bool created)
+    {
+        ArgumentNullException.ThrowIfNull(key);
+        var existing = _stores.Find(s => s.Key == key);
+        created = existing is null;
+        if (existing is not null)
+        {
+            return existing;
+        }
+
+        var registration = new StoreRegistration(key);
+        _stores.Add(registration);
+        return registration;
+    }
 
     /// <summary>Records that a handler scan of <paramref name="assembly"/> could not load every type.</summary>
     /// <param name="assembly">The assembly's name.</param>
@@ -126,7 +182,7 @@ internal sealed class MessagingComposition
         }
 
         _handled.Add(pair);
-        Handlers.Register(messageType, handlerType.AssemblyQualifiedName!, handlerType);
+        Handlers.Register(messageType, MessageConsumerKey.Of(handlerType), handlerType);
     }
 
     private void Read(Type messageType)
@@ -160,6 +216,17 @@ internal sealed class MessagingComposition
         }
 
         return exception;
+    }
+
+    /// <summary>One configured store: its key, the assemblies bound to it and its start checks.</summary>
+    /// <param name="Key">The store key.</param>
+    internal sealed record StoreRegistration(MessageStoreKey Key)
+    {
+        /// <summary>Gets the assemblies bound to this store, each once.</summary>
+        public List<Assembly> Assemblies { get; } = [];
+
+        /// <summary>Gets the checks run at host start, each returning the problems it found.</summary>
+        public List<Func<IServiceProvider, IEnumerable<string>>> StartupChecks { get; } = [];
     }
 
     /// <summary>What a handler scan could not load from one assembly.</summary>

@@ -3,7 +3,7 @@ using Microsoft.Extensions.Time.Testing;
 namespace MicroKit.Messaging.IntegrationTests.PostgreSql;
 
 /// <summary>
-/// The transactional settlement guarantee, against a real database.
+/// The transactional settlement guarantee of a retry (#188 D6), against a real database.
 /// </summary>
 /// <remarks>
 /// <para>
@@ -33,7 +33,7 @@ public sealed class InboxLeaseExpiryTests(PostgreSqlFixture fixture)
         await using var schema = await InboxTestDatabase.CreateAsync(fixture.ConnectionString);
         var rowId = await SeedOneAsync(schema.ConnectionString);
 
-        // ---- Processor A claims, then stages the mark and writes a business side effect. ----
+        // ---- Retry A claims, then marks the row and writes a business side effect. ----
         await using var contextA = InboxTestDatabase.NewContext(schema.ConnectionString);
         var storeA = new EfInboxStore<TestMessagingDbContext>(contextA, new FakeTimeProvider(Now));
 
@@ -43,7 +43,7 @@ public sealed class InboxLeaseExpiryTests(PostgreSqlFixture fixture)
         var key = new InboxMessageKey(
             claimA.Messages[0].MessageId, claimA.Messages[0].ConsumerType);
 
-        (await storeA.StageProcessedAsync(key, claimA.Token)).ShouldBeTrue();
+        (await storeA.MarkClaimedProcessedAsync(key, claimA.Token)).ShouldBeTrue();
 
         // A's business side effect, written through the same context — which is what makes it
         // share the transaction with the mark.
@@ -98,14 +98,13 @@ public sealed class InboxLeaseExpiryTests(PostgreSqlFixture fixture)
         var claim = await store.ClaimBatchAsync(10, TimeSpan.FromMinutes(5));
         var key = new InboxMessageKey(claim.Messages[0].MessageId, claim.Messages[0].ConsumerType);
 
-        (await store.StageProcessedAsync(key, claim.Token)).ShouldBeTrue();
+        await store.BeginAsync();
+        (await store.MarkClaimedProcessedAsync(key, claim.Token)).ShouldBeTrue();
 
         var sideEffect = NewSideEffect();
         context.OutboxMessages.Add(sideEffect);
 
-        store.IsMarkUncommitted(key).ShouldBeTrue("nothing has committed yet");
-        await context.SaveChangesAsync();
-        store.IsMarkUncommitted(key).ShouldBeFalse();
+        await store.CommitAsync();
 
         await using var probe = InboxTestDatabase.NewContext(schema.ConnectionString);
         var row = await probe.InboxMessages.AsNoTracking().SingleAsync(m => m.RowId == rowId);
@@ -132,8 +131,9 @@ public sealed class InboxLeaseExpiryTests(PostgreSqlFixture fixture)
         var claim = await store.ClaimBatchAsync(10, TimeSpan.FromMinutes(5));
         var key = new InboxMessageKey(claim.Messages[0].MessageId, claim.Messages[0].ConsumerType);
 
-        await store.StageProcessedAsync(key, claim.Token);
-        await context.SaveChangesAsync();
+        await store.BeginAsync();
+        await store.MarkClaimedProcessedAsync(key, claim.Token);
+        await store.CommitAsync();
 
         // The host shuts down and the batch settles everything it did not observe as done.
         var written = await store.ApplyOutcomesAsync(claim.Token, [InboxOutcome.Released(key)]);
@@ -146,12 +146,13 @@ public sealed class InboxLeaseExpiryTests(PostgreSqlFixture fixture)
     }
 
     /// <summary>
-    /// PostgreSQL aborts the whole transaction on a constraint violation, so ingestion under an
-    /// ambient transaction depends on the savepoint. This passes vacuously on SQLite, which does
-    /// not reproduce the abort semantics, and only proves anything here.
+    /// The Failed row of a new delivery is an INSERT, never an upsert (D6e): a row already there
+    /// means another delivery owns the pair, reported as <see langword="false"/> rather than thrown,
+    /// and the context stays usable — on PostgreSQL, where a violation aborts the transaction,
+    /// which is why the insert runs in no transaction of the caller.
     /// </summary>
     [DockerRequiredFact]
-    public async Task Ambient_transaction_survives_a_deduplicated_write()
+    public async Task TryInsertFailed_WhenTheRowExists_ReportsItAndLeavesTheContextUsable()
     {
         await using var schema = await InboxTestDatabase.CreateAsync(fixture.ConnectionString);
 
@@ -159,18 +160,10 @@ public sealed class InboxLeaseExpiryTests(PostgreSqlFixture fixture)
         var store = new EfInboxStore<TestMessagingDbContext>(context, new FakeTimeProvider(Now));
 
         var message = NewMessage("OrderPlacedHandler");
-        (await store.AddAsync(message)).ShouldBe(InboxWriteResult.Added);
-
-        await using var transaction = await context.Database.BeginTransactionAsync();
-
-        var duplicate = NewMessage(message.ConsumerType, message.MessageId);
-        (await store.AddAsync(duplicate)).ShouldBe(InboxWriteResult.AlreadyPresent);
-
-        // Without the savepoint this next call fails with
-        // "current transaction is aborted, commands ignored until end of transaction block".
-        (await store.AddAsync(NewMessage("InvoiceIssuedHandler"))).ShouldBe(InboxWriteResult.Added);
-
-        await transaction.CommitAsync();
+        (await store.TryInsertFailedAsync(message)).ShouldBeTrue();
+        (await store.TryInsertFailedAsync(NewMessage(message.ConsumerType, message.MessageId))).ShouldBeFalse();
+        (await store.TryInsertFailedAsync(NewMessage("InvoiceIssuedHandler"))).ShouldBeTrue(
+            "the duplicate left nothing behind on the context");
 
         await using var probe = InboxTestDatabase.NewContext(schema.ConnectionString);
         (await probe.InboxMessages.AsNoTracking().CountAsync()).ShouldBe(2);

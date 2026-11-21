@@ -1,8 +1,11 @@
 using MicroKit.Messaging.Bus;
 using MicroKit.Messaging.Execution;
+using MicroKit.Messaging.Local;
 using MicroKit.Messaging.Outbox;
 using MicroKit.Messaging.Publishing;
+using MicroKit.Messaging.Registry;
 using MicroKit.Messaging.Serialization;
+using MicroKit.Messaging.Stores;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Options;
 
@@ -41,7 +44,8 @@ public static class ServiceCollectionExtensions
     /// <b>Validated at host start.</b> The options are validated (<c>ValidateOnStart</c>), then the
     /// composition: a published or handled type without <see cref="MessageContractAttribute"/>, two
     /// types claiming one wire type, conflicting service names, a publication with no transport,
-    /// and a store registered without the engine that drains it. Every composition problem is
+    /// a store missing one of its services or failing its provider's checks, an assembly bound to
+    /// two stores, and an unbound handler with several stores. Every composition problem is
     /// listed in one <see cref="IntegrationEventConfigurationException"/>, each with its fix.
     /// </para>
     /// <para>
@@ -59,9 +63,9 @@ public static class ServiceCollectionExtensions
     /// <para>
     /// <b>No hosted service besides the validator is registered here.</b> The bus works with no
     /// persistence: <see cref="MessagingBuilder.UseInMemoryTransport"/> registers its own consume
-    /// loop. The outbox and inbox engine is registered by the store provider that needs it,
-    /// through <see cref="Spi.OutboxInboxProcessingExtensions.AddOutboxInboxProcessing"/> (which
-    /// <c>AddEfCoreOutbox&lt;TContext&gt;()</c> calls) — a transitional step that #188 replaces.
+    /// loop. Durability is opt-in: a store provider — <c>bus.UseEntityFrameworkOutbox&lt;TContext&gt;()</c>
+    /// — adds a store through <see cref="Spi.MessageStoreRegistrationExtensions.AddMessageStore"/>,
+    /// which registers the engine that drains every store.
     /// </para>
     /// <para>
     /// <b><c>IMessageSerializer</c> IS registered here</b>, as a <c>TryAdd</c>ed
@@ -139,13 +143,13 @@ public static class ServiceCollectionExtensions
         services.TryAddScoped<IExecutionContext>(
             sp => sp.GetRequiredService<ExecutionContextHolder>().Context);
 
-        // Names the outbox row whose dispatch is running in this scope, so a notification handler
-        // that publishes an integration event stamps OriginMessageId on the contract row without
-        // the identity being threaded through IPublisher.Publish and a handler signature. Written
-        // by OutboxProcessor on the scope it received — never by the scope factory, because a host
-        // may supply its own and a dropped origin disables deduplication silently rather than
-        // throwing. See OriginMessageHolder.
-        services.TryAddScoped<OriginMessageHolder>();
+        // The stores (#188). The set and the resolver are read from the composition once the
+        // container is built; the holder names, per scope, the store of the delivery the engine
+        // runs there, so a handler's publication is enlisted in that store. Written by the engine
+        // on the scope it received — never by the scope factory, which a host may replace.
+        services.TryAddSingleton<IMessageStoreSet>(_ => new StaticMessageStoreSet(composition));
+        services.TryAddSingleton(sp => new MessageStoreResolver(composition, sp.GetRequiredService<IMessageStoreSet>()));
+        services.TryAddScoped<DeliveryStoreHolder>();
 
         // The serializer default. It belongs HERE and not on an optional builder method, because
         // the types that require it — the bus, the receive pipeline and OutboxMessageFactory — are
@@ -163,11 +167,17 @@ public static class ServiceCollectionExtensions
             composition,
             sp.GetRequiredService<IOptions<MessagingOptions>>().Value.ServiceName!));
 
-        // The receiving seam a transport provider hands arriving envelopes to, and the counters it
-        // records (#187: here rather than on a separate consumption call). Singleton: it creates
-        // its own execution scope per envelope.
+        // The receiving seam a transport provider hands arriving envelopes to — a thin adapter over
+        // the receive pipeline (#188) — and the inbox counters. Singletons: every scope they need
+        // is created per handler.
         services.TryAddSingleton<IEnvelopeReceiver, EnvelopeReceiver>();
         services.TryAddSingleton<InboxMetrics>();
+
+        // The inbox retry policy, shared by a failed delivery and a store's retry loop (#188).
+        services.TryAddSingleton(sp => new InboxRetryPolicy(
+            sp.GetRequiredService<InboxProcessorOptions>(),
+            sp.GetRequiredService<TimeProvider>(),
+            sp.GetRequiredService<Random>()));
 
         // The bus (#186). Scoped, because it reads the ambient tenant, correlation and causation
         // from the scope's IExecutionContext — never from an AsyncLocal. IMessageBus and
@@ -180,5 +190,12 @@ public static class ServiceCollectionExtensions
         // needs is created per handler through IExecutionScopeFactory.
         services.TryAddSingleton<MessageReceivePipeline>();
 
+        // The local endpoint (#188 D7): the consumers the integration packages supply, the sender
+        // they enlist or queue through, and — for a host with no store — the in-memory queue. Its
+        // worker comes with the first consumer source (AddLocalConsumerSource): a host with no
+        // local consumer runs no hosted service of the bus's own.
+        services.TryAddSingleton<LocalConsumerRegistry>();
+        services.TryAddScoped<ILocalMessageSender, LocalMessageSender>();
+        services.TryAddSingleton<LocalQueue>();
     }
 }

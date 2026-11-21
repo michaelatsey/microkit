@@ -22,4 +22,22 @@ public sealed record PublishOptions
     /// <see cref="ArgumentException"/>.
     /// </remarks>
     public IReadOnlyDictionary<string, string>? Headers { get; init; }
+
+    /// <summary>
+    /// Gets the store whose outbox the publication is enlisted in. Null lets the bus choose.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// The bus chooses a store, first match wins: this value when set; inside a scope the engine
+    /// opened for a delivery, that delivery's store; the only configured store; the store bound to
+    /// the message type's assembly. With no match, the publication fails with
+    /// <see cref="IntegrationEventConfigurationException"/>.
+    /// </para>
+    /// <para>
+    /// The value must name a configured store, and inside a delivery it must name that delivery's
+    /// store; otherwise <see cref="IntegrationEventPublishException"/> is thrown and nothing is
+    /// enlisted. With no store configured, setting it is an error too.
+    /// </para>
+    /// </remarks>
+    public MessageStoreKey? Store { get; init; }
 }

@@ -5,7 +5,8 @@ namespace MicroKit.Messaging.MediatR.IntegrationTests;
 /// <summary>
 /// The round trip, end to end: a command raises a domain event, the notification handler publishes
 /// an integration event, the contract row leaves through the transport, and the envelope comes back
-/// in through <see cref="IEnvelopeReceiver"/> to become one inbox row per consumer.
+/// in through <see cref="IEnvelopeReceiver"/> to run each consumer once, guarded by its own inbox row
+/// (#188 D6).
 /// </summary>
 /// <remarks>
 /// <para>
@@ -60,24 +61,24 @@ public sealed class ReceivingSeamTests
         await E2EHarness.DrainOnceAsync(provider, CancellationToken.None);   // sends
 
         var outbox = await E2EHarness.ReadOutboxAsync(connection);
-        var notification = outbox.Single(m => m.MessageKind == MessageKind.Notification);
-        var contract = outbox.Single(m => m.MessageKind == MessageKind.Contract);
+        var notification = outbox.Single(m => m.Endpoint == OutboxMessage.LocalEndpoint);
+        var contract = outbox.Single(m => m.Endpoint == null);
 
         var envelope = transport.Sent.ShouldHaveSingleItem();
 
-        // Nothing was written on the producing side. The in-process fan-out stays deleted, and this
-        // is what proves it end to end rather than by reading a dependency graph.
-        (await E2EHarness.ReadInboxAsync(connection)).ShouldBeEmpty();
+        // Nothing was written for the contract on the producing side: the in-process fan-out stays
+        // deleted, and this proves it end to end. The one row there is the notification's — its
+        // handler's own, written by the local delivery on the receiving side of the pipeline (#188 D7).
+        var beforeTheSeam = await E2EHarness.ReadInboxAsync(connection);
+        beforeTheSeam.ShouldHaveSingleItem().MessageId.ShouldBe(notification.Id);
 
         // ── the seam ──────────────────────────────────────────────────────────────────────────
         var receiver = provider.GetRequiredService<IEnvelopeReceiver>();
         var received = await receiver.ReceiveAsync(envelope);
 
-        received.RowsAdded.ShouldBe(2, "one row per registered consumer");
-        received.Duplicates.ShouldBe(0);
-        received.ConsumersMatched.ShouldBe(2);
+        received.Disposition.ShouldBe(ReceiveDisposition.Acknowledge);
 
-        var inbox = await E2EHarness.ReadInboxAsync(connection);
+        var inbox = await ContractRowsAsync(connection, contract.Id);
         inbox.Count.ShouldBe(2);
 
         inbox.Select(r => r.ConsumerType).Distinct().Count()
@@ -110,17 +111,13 @@ public sealed class ReceivingSeamTests
             row.OccurredOnUtc.ShouldBe(
                 contract.OccurredOnUtc, "carried from the envelope, which carried it from the row");
 
-            row.Status.ShouldBe(InboxMessageStatus.Received);
+            row.Status.ShouldBe(InboxMessageStatus.Processed, "written in the handler's own transaction (#188 D6)");
+            row.ClaimToken.ShouldBeNull();
             row.RetryCount.ShouldBe(0);
             row.TenantId.ShouldBe(envelope.Headers.GetValueOrDefault(MessageHeaders.TenantId));
         }
 
-        // ── the drain ─────────────────────────────────────────────────────────────────────────
-        await E2EHarness.DrainInboxOnceAsync(provider, CancellationToken.None);
-
-        var drained = await E2EHarness.ReadInboxAsync(connection);
-        drained.ShouldAllBe(r => r.Status == InboxMessageStatus.Processed);
-        drained.ShouldAllBe(r => r.ClaimToken == null);
+        var drained = inbox;
 
         // The assertion the whole test exists for. Every handler ran, and each recorded the
         // causation its execution context carried — which must be the DELIVERED message's id.
@@ -172,33 +169,32 @@ public sealed class ReceivingSeamTests
         var envelope = transport.Sent.ShouldHaveSingleItem();
         var receiver = provider.GetRequiredService<IEnvelopeReceiver>();
 
-        (await receiver.ReceiveAsync(envelope)).RowsAdded.ShouldBe(2);
+        (await receiver.ReceiveAsync(envelope)).Disposition.ShouldBe(ReceiveDisposition.Acknowledge);
+        ConsumerRuns(recorder).ShouldBe(2);
 
         var mark = logs.Mark();
 
         // 1. The whole envelope redelivered — an expired broker lease, or an ack that never landed.
         var replay = await receiver.ReceiveAsync(envelope);
 
-        replay.RowsAdded.ShouldBe(0);
-        replay.Duplicates.ShouldBe(2, "the unique index held for both consumers");
-        replay.ConsumersMatched.ShouldBe(2);
-
-        (await E2EHarness.ReadInboxAsync(connection)).Count
+        replay.Disposition.ShouldBe(ReceiveDisposition.Acknowledge);
+        ConsumerRuns(recorder).ShouldBe(2, "each handler's row says it already ran: neither runs again");
+        (await ContractRowsAsync(connection, MessageId.From(Guid.Parse(envelope.Id)))).Count
             .ShouldBe(2, "a redelivery writes no second row for a consumer that already has one");
 
         // 2. A PARTIAL redelivery: one consumer's row is gone — requeued by an operator, or purged
         //    by retention — while the other still holds its own. This is the property an
         //    implementation that returned on the first duplicate would fail, and the only one that
         //    needs a second consumer to be visible at all.
-        var survivor = await RemoveOneConsumersRowAsync(connection);
+        var survivor = await RemoveOneConsumersRowAsync(connection, MessageId.From(Guid.Parse(envelope.Id)));
 
         var partial = await receiver.ReceiveAsync(envelope);
 
-        partial.Duplicates.ShouldBe(1, "the surviving consumer's row was recognised");
-        partial.RowsAdded.ShouldBe(
-            1, "and the missing one was still written — a duplicate must not end the fan-out");
+        partial.Disposition.ShouldBe(ReceiveDisposition.Acknowledge);
+        ConsumerRuns(recorder).ShouldBe(
+            3, "the surviving consumer was skipped, and the missing one still ran — a skip must not end the fan-out");
 
-        var restored = await E2EHarness.ReadInboxAsync(connection);
+        var restored = await ContractRowsAsync(connection, MessageId.From(Guid.Parse(envelope.Id)));
         restored.Count.ShouldBe(2);
         restored.Select(r => r.ConsumerType).ShouldContain(survivor);
 
@@ -215,12 +211,14 @@ public sealed class ReceivingSeamTests
             .ShouldBeEmpty(
                 "a redelivery is the nominal path under at-least-once delivery, never a fault");
 
-        // 5. And the rows are still drainable — absorbing a duplicate must leave the inbox usable.
-        await E2EHarness.DrainInboxOnceAsync(provider, CancellationToken.None);
-
+        // 5. Every row is settled: nothing is left for the retry loop.
         (await E2EHarness.ReadInboxAsync(connection))
             .ShouldAllBe(r => r.Status == InboxMessageStatus.Processed);
     }
+
+    private static int ConsumerRuns(HandlerInvocationRecorder recorder)
+        => recorder.Invocations.Count(i => i.HandlerName is nameof(FirstWidgetShippedConsumer)
+                                                      or nameof(SecondWidgetShippedConsumer));
 
     private static ServiceProvider BuildProvider(
         SqliteConnection connection,
@@ -238,7 +236,6 @@ public sealed class ReceivingSeamTests
             messaging.Publishes<WidgetShipped>();
 
             messaging
-                .AddEfCoreIntegrationEvents<E2EDbContext>()
                 .AddTransportDispatcher()
                 .AddHandler<FirstWidgetShippedConsumer>()
                 .AddHandler<SecondWidgetShippedConsumer>();
@@ -264,11 +261,15 @@ public sealed class ReceivingSeamTests
     /// <i>first</i>, so an implementation that returned instead of continuing would never reach the
     /// consumer whose row is missing.
     /// </remarks>
-    private static async Task<string> RemoveOneConsumersRowAsync(SqliteConnection connection)
+    /// <summary>The inbox rows of the contract's consumers: not the notification handler's own row.</summary>
+    private static async Task<List<InboxMessage>> ContractRowsAsync(SqliteConnection connection, MessageId contract)
+        => [.. (await E2EHarness.ReadInboxAsync(connection)).Where(r => r.MessageId == contract)];
+
+    private static async Task<string> RemoveOneConsumersRowAsync(SqliteConnection connection, MessageId contract)
     {
         await using var context = E2EHarness.NewContext(connection);
 
-        var rows = await context.InboxMessages.OrderBy(r => r.ConsumerType).ToListAsync();
+        var rows = (await context.InboxMessages.ToListAsync()).Where(r => r.MessageId == contract).ToList();
         var doomed = rows.Single(r => r.ConsumerType.Contains(
             nameof(SecondWidgetShippedConsumer), StringComparison.Ordinal));
 

@@ -16,8 +16,8 @@ internal enum InboxBatchAbortReason
     Cancelled = 2,
 
     /// <summary>
-    /// A required service is not registered. Will not recover without a redeployment, so the
-    /// worker stops rather than backing off.
+    /// A required service is not registered. Will not recover without a redeployment: the loop
+    /// backs off and reports it (1402) on every cycle — only a host stop ends a loop.
     /// </summary>
     ConfigurationError = 3,
 }

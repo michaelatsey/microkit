@@ -1,13 +1,15 @@
-using Microsoft.Extensions.Time.Testing;
-
+using MicroKit.Messaging.Bus;
 using MicroKit.Messaging.Serialization;
+using MicroKit.Messaging.Stores;
 
 namespace MicroKit.Messaging.UnitTests.Processing;
 
+/// <summary>
+/// <see cref="InboxProcessor"/> — a store's retry loop (#188): the claim, the guarded retry through
+/// the real receive pipeline over <see cref="InMemoryInboxGuard"/>, and the settlement of failures.
+/// </summary>
 public sealed class InboxProcessorTests
 {
-    private static readonly DateTimeOffset Now = new(2026, 8, 21, 12, 0, 0, TimeSpan.Zero);
-
     private static InboxProcessorOptions DefaultOptions => new()
     {
         BatchSize = 10,
@@ -17,18 +19,14 @@ public sealed class InboxProcessorTests
         MaxRetryBackoff = TimeSpan.FromHours(1),
     };
 
-    // -----------------------------------------------------------------------------------
-    // Claim contract
-    // -----------------------------------------------------------------------------------
+    // ── Claim ─────────────────────────────────────────────────────────────────────────────────
 
     [Fact]
     public async Task ProcessBatch_WhenNothingClaimable_ReturnsEmptyAndSettlesNothing()
     {
-        var store = Substitute.For<IInboxProcessorStore>();
-        store.ClaimBatchAsync(Arg.Any<int>(), Arg.Any<TimeSpan>(), Arg.Any<CancellationToken>())
-            .Returns(ValueTask.FromResult(InboxClaim.Empty));
-
+        var store = StoreReturning(InboxClaim.Empty);
         var sut = Build(store, out _, out _);
+
         var result = await sut.ProcessBatchAsync(batchSize: 10, CancellationToken.None);
 
         result.ShouldBe(InboxBatchResult.Empty);
@@ -39,571 +37,430 @@ public sealed class InboxProcessorTests
     [Fact]
     public async Task ProcessBatch_ClaimsWithTheConfiguredLeaseDuration()
     {
-        var store = Substitute.For<IInboxProcessorStore>();
-        store.ClaimBatchAsync(Arg.Any<int>(), Arg.Any<TimeSpan>(), Arg.Any<CancellationToken>())
-            .Returns(ValueTask.FromResult(InboxClaim.Empty));
-
+        var store = StoreReturning(InboxClaim.Empty);
         var options = DefaultOptions;
         options.LeaseDuration = TimeSpan.FromSeconds(97);
 
         var sut = Build(store, out _, out _, options);
         await sut.ProcessBatchAsync(batchSize: 7, CancellationToken.None);
 
-        await store.Received(1).ClaimBatchAsync(
-            7, TimeSpan.FromSeconds(97), Arg.Any<CancellationToken>());
+        await store.Received(1).ClaimBatchAsync(7, TimeSpan.FromSeconds(97), Arg.Any<CancellationToken>());
     }
 
-    // -----------------------------------------------------------------------------------
-    // Success — settled inside the handler's transaction, so no outcome is written
-    // -----------------------------------------------------------------------------------
+    // ── Success: the row is written Processed in the handler's transaction ───────────────────
 
     [Fact]
-    public async Task ProcessBatch_WhenHandlerCommitsTheStagedMark_WritesNoOutcome()
+    public async Task ProcessBatch_WhenTheRetrySucceeds_MarksTheRowProcessedInItsTransaction_AndWritesNoOutcome()
     {
-        var message = InboxFixtures.Message(consumerType: ConsumerType, eventType: EventType);
-        var store = StoreReturning(InboxFixtures.Claim(message));
-
-        var sut = Build(store, out var handler, out var settlement);
-        settlement.MarkUncommitted = false;
+        var (store, claim, row) = ClaimOne();
+        var sut = Build(store, out var probe, out var harness);
+        harness.Database.Add(row);
 
         var result = await sut.ProcessBatchAsync(batchSize: 10, CancellationToken.None);
 
-        handler.InvocationCount.ShouldBe(1);
-        settlement.Staged.ShouldBe([InboxFixtures.KeyOf(message)]);
+        probe.Calls.ShouldBe(1);
         result.Processed.ShouldBe(1);
-        result.Claimed.ShouldBe(1);
+        harness.Database.Find(Key(row))!.Status.ShouldBe(InboxMessageStatus.Processed);
+        harness.Database.AttemptsBegun.ShouldBe(1);
+        await store.DidNotReceive().ApplyOutcomesAsync(
+            Arg.Any<Guid>(), Arg.Any<IReadOnlyList<InboxOutcome>>(), Arg.Any<CancellationToken>());
+        claim.Token.ShouldNotBe(Guid.Empty);
+    }
 
-        // The whole point of settling inside the handler transaction: nothing to write here.
+    // ── Lost claim ────────────────────────────────────────────────────────────────────────────
+
+    [Fact]
+    public async Task ProcessBatch_WhenTheClaimIsLostBeforeTheHandler_RunsNothingAndWritesNothing()
+    {
+        var (store, _, row) = ClaimOne();
+        var sut = Build(store, out var probe, out var harness);
+        harness.Database.Add(Copy(row, claimToken: Guid.NewGuid()));
+
+        var result = await sut.ProcessBatchAsync(batchSize: 10, CancellationToken.None);
+
+        result.LeasesLost.ShouldBe(1);
+        probe.Calls.ShouldBe(0, "another loop owns the row");
         await store.DidNotReceive().ApplyOutcomesAsync(
             Arg.Any<Guid>(), Arg.Any<IReadOnlyList<InboxOutcome>>(), Arg.Any<CancellationToken>());
     }
 
     [Fact]
-    public async Task ProcessBatch_StagesTheMarkBeforeInvokingTheHandler()
+    public async Task ProcessBatch_WhenTheClaimIsLostMidHandler_RecordsNoFailureAndCountsNoAttempt()
     {
-        // Staging first is what puts the mark inside whatever unit of work the handler commits.
-        // Staging after would reopen the crash window this design exists to close.
-        var message = InboxFixtures.Message(consumerType: ConsumerType, eventType: EventType);
-        var store = StoreReturning(InboxFixtures.Claim(message));
-
-        var sut = Build(store, out var handler, out var settlement);
-        settlement.Owned = false;
-
-        await sut.ProcessBatchAsync(batchSize: 10, CancellationToken.None);
-
-        settlement.Staged.Count.ShouldBe(1);
-        handler.InvocationCount.ShouldBe(0, "staging reported the lease lost, so the handler must not run");
-    }
-
-    // -----------------------------------------------------------------------------------
-    // Lease loss
-    // -----------------------------------------------------------------------------------
-
-    [Fact]
-    public async Task ProcessBatch_WhenLeaseLostBeforeHandler_CountsItAndLeavesTheRowAlone()
-    {
-        var message = InboxFixtures.Message(consumerType: ConsumerType, eventType: EventType);
-        var store = StoreReturning(InboxFixtures.Claim(message));
-
-        var sut = Build(store, out var handler, out var settlement);
-        settlement.Owned = false;
+        var (store, _, row) = ClaimOne(retryCount: 1);
+        var sut = Build(store, out var probe, out var harness);
+        harness.Database.Add(row);
+        probe.During = () => harness.Database.Find(Key(row))!.ClaimToken = Guid.NewGuid();
 
         var result = await sut.ProcessBatchAsync(batchSize: 10, CancellationToken.None);
 
         result.LeasesLost.ShouldBe(1);
-        result.Processed.ShouldBe(0);
         result.Retried.ShouldBe(0);
-        handler.InvocationCount.ShouldBe(0);
-
-        // Writing anything would overwrite the processor that legitimately owns the row now.
-        await store.DidNotReceive().ApplyOutcomesAsync(
-            Arg.Any<Guid>(), Arg.Any<IReadOnlyList<InboxOutcome>>(), Arg.Any<CancellationToken>());
-    }
-
-    [Fact]
-    public async Task ProcessBatch_WhenLeaseLostDuringHandler_CountsItAndConsumesNoRetry()
-    {
-        var message = InboxFixtures.Message(consumerType: ConsumerType, eventType: EventType);
-        var store = StoreReturning(InboxFixtures.Claim(message));
-        var conflict = new InvalidOperationException("concurrency token rejected the update");
-
-        var sut = Build(store, out var handler, out var settlement);
-        handler.ThrowOnHandle = conflict;
-        settlement.LeaseLost = ex => ReferenceEquals(ex, conflict);
-
-        var result = await sut.ProcessBatchAsync(batchSize: 10, CancellationToken.None);
-
-        result.LeasesLost.ShouldBe(1);
-        result.Retried.ShouldBe(0, "the row is no longer ours to write");
         result.DeadLettered.ShouldBe(0);
+        harness.Database.Find(Key(row))!.RetryCount.ShouldBe(1, "the attempt count is unchanged");
         await store.DidNotReceive().ApplyOutcomesAsync(
             Arg.Any<Guid>(), Arg.Any<IReadOnlyList<InboxOutcome>>(), Arg.Any<CancellationToken>());
     }
 
+    /// <summary>
+    /// C1: on a retry the row exists by construction, so "the row is there" proves nothing. A
+    /// handler's own conflict — a business unique violation — is the handler failing: an attempt is
+    /// counted, and it dead-letters once out of attempts.
+    /// </summary>
     [Fact]
-    public async Task ProcessBatch_WhenADomainConflictIsNotALostLease_KeepsItsRetry()
+    public async Task ProcessBatch_WhenARetriedHandlerHitsABusinessUniqueViolation_CountsTheAttempt()
     {
-        // A domain concurrency conflict and a lost lease surface from the same SaveChanges as the
-        // same exception type. The discrimination is structural — which entity failed — and a
-        // domain conflict is legitimately transient.
-        var message = InboxFixtures.Message(consumerType: ConsumerType, eventType: EventType);
-        var store = StoreReturning(InboxFixtures.Claim(message));
-
-        var sut = Build(store, out var handler, out var settlement);
-        handler.ThrowOnHandle = new InvalidOperationException("aggregate version conflict");
-        settlement.LeaseLost = _ => false;
-        settlement.MarkUncommitted = true;
+        var (store, _, row) = ClaimOne(retryCount: 0);
+        var sut = Build(store, out var probe, out var harness);
+        harness.Database.Add(row);
+        probe.Throw = new DuplicateKeyTestException();
 
         var result = await sut.ProcessBatchAsync(batchSize: 10, CancellationToken.None);
 
-        result.LeasesLost.ShouldBe(0);
+        result.LeasesLost.ShouldBe(0, "only a lost claim is a lost lease");
         result.Retried.ShouldBe(1);
-        (await CapturedOutcomes(store))[0].Kind.ShouldBe(InboxOutcomeKind.Retry);
+        (await CapturedOutcomes(store)).ShouldHaveSingleItem().RetryCount.ShouldBe(1);
     }
 
-    // -----------------------------------------------------------------------------------
-    // Permanent failures — dead-lettered on FIRST sight, never after MaxRetries
-    // -----------------------------------------------------------------------------------
+    [Fact]
+    public async Task ProcessBatch_WhenARetriedHandlerKeepsHittingABusinessUniqueViolation_DeadLettersAfterTheMax()
+    {
+        var (store, _, row) = ClaimOne(retryCount: DefaultOptions.MaxRetries - 1);
+        var sut = Build(store, out var probe, out var harness);
+        harness.Database.Add(row);
+        probe.Throw = new DuplicateKeyTestException();
+
+        var result = await sut.ProcessBatchAsync(batchSize: 10, CancellationToken.None);
+
+        result.DeadLettered.ShouldBe(1);
+        var outcome = (await CapturedOutcomes(store)).ShouldHaveSingleItem();
+        outcome.Kind.ShouldBe(InboxOutcomeKind.DeadLetter);
+        outcome.RetryCount.ShouldBe(DefaultOptions.MaxRetries);
+    }
+
+    // ── Permanent, on sight ───────────────────────────────────────────────────────────────────
 
     [Fact]
     public async Task ProcessBatch_WhenConsumerNotRegistered_DeadLettersOnFirstSight()
     {
-        var message = InboxFixtures.Message(
-            consumerType: "Unknown.Consumer, NonExistentAssembly", eventType: EventType);
-        var store = StoreReturning(InboxFixtures.Claim(message));
+        var (store, _, row) = ClaimOne(consumerType: "Unknown.Consumer, Nowhere");
+        var sut = Build(store, out var probe, out _);
 
-        var sut = Build(store, out var handler, out _);
         var result = await sut.ProcessBatchAsync(batchSize: 10, CancellationToken.None);
 
         result.DeadLettered.ShouldBe(1);
-        result.Retried.ShouldBe(0, "no number of retries resolves a missing registration");
-        handler.InvocationCount.ShouldBe(0);
-
-        var outcomes = await CapturedOutcomes(store);
-        outcomes[0].Kind.ShouldBe(InboxOutcomeKind.DeadLetter);
-        outcomes[0].RetryCount.ShouldBe(0, "the retry budget was never spent");
+        probe.Calls.ShouldBe(0);
+        var outcome = (await CapturedOutcomes(store)).ShouldHaveSingleItem();
+        outcome.Kind.ShouldBe(InboxOutcomeKind.DeadLetter);
+        outcome.RetryCount.ShouldBe(row.RetryCount, "a permanent verdict counts no attempt");
     }
 
     [Fact]
     public async Task ProcessBatch_WhenPayloadDoesNotDeserialize_DeadLettersOnFirstSight()
     {
-        var message = InboxFixtures.Message(
-            consumerType: ConsumerType, eventType: EventType, payload: "{ not json");
-        var store = StoreReturning(InboxFixtures.Claim(message));
-
+        var (store, _, _) = ClaimOne();
         var serializer = Substitute.For<IMessageSerializer>();
         serializer.Deserialize(Arg.Any<ReadOnlyMemory<byte>>(), Arg.Any<Type>())
-            .Returns(_ => throw new InvalidOperationException("malformed JSON"));
+            .Returns(_ => throw new FormatException("not JSON"));
+        var sut = Build(store, out var probe, out _, serializer: serializer);
 
-        var sut = Build(store, out var handler, out _, serializer: serializer);
         var result = await sut.ProcessBatchAsync(batchSize: 10, CancellationToken.None);
 
         result.DeadLettered.ShouldBe(1);
-        result.Retried.ShouldBe(0);
-        handler.InvocationCount.ShouldBe(0);
+        probe.Calls.ShouldBe(0);
     }
 
     [Fact]
     public async Task ProcessBatch_WhenPayloadDeserializesToNull_DeadLettersOnFirstSight()
     {
-        var message = InboxFixtures.Message(consumerType: ConsumerType, eventType: EventType);
-        var store = StoreReturning(InboxFixtures.Claim(message));
-
+        var (store, _, _) = ClaimOne();
         var serializer = Substitute.For<IMessageSerializer>();
         serializer.Deserialize(Arg.Any<ReadOnlyMemory<byte>>(), Arg.Any<Type>()).Returns((object?)null);
+        var sut = Build(store, out var probe, out _, serializer: serializer);
 
-        var sut = Build(store, out _, out _, serializer: serializer);
         var result = await sut.ProcessBatchAsync(batchSize: 10, CancellationToken.None);
 
         result.DeadLettered.ShouldBe(1);
-        result.Retried.ShouldBe(0);
+        probe.Calls.ShouldBe(0);
     }
-
-    // -----------------------------------------------------------------------------------
-    // Transient failures and the retry ceiling
-    // -----------------------------------------------------------------------------------
 
     [Fact]
     public async Task ProcessBatch_WhenTheHandlerThrowsPermanentMessageException_DeadLettersOnFirstSight()
     {
-        // The handler-raised permanent verdict (#186): a handler never references the SPI to get
-        // what InboxPayloadException gives the engine.
-        var message = InboxFixtures.Message(
-            consumerType: ConsumerType, eventType: EventType, retryCount: 0);
-        var store = StoreReturning(InboxFixtures.Claim(message));
-
-        var sut = Build(store, out var handler, out var settlement);
-        handler.ThrowOnHandle = new PermanentMessageException("violates the contract");
-        settlement.MarkUncommitted = true;
+        var (store, _, row) = ClaimOne(retryCount: 0);
+        var sut = Build(store, out var probe, out var harness);
+        harness.Database.Add(row);
+        probe.Throw = new PermanentMessageException("never");
 
         var result = await sut.ProcessBatchAsync(batchSize: 10, CancellationToken.None);
 
         result.DeadLettered.ShouldBe(1);
         result.Retried.ShouldBe(0);
-        var outcome = (await CapturedOutcomes(store))[0];
-        outcome.Kind.ShouldBe(InboxOutcomeKind.DeadLetter);
-        outcome.RetryCount.ShouldBe(0, "a permanent verdict consumes no retry");
+        (await CapturedOutcomes(store)).ShouldHaveSingleItem().RetryCount.ShouldBe(0);
+    }
+
+    // ── The handler's context ─────────────────────────────────────────────────────────────────
+
+    [Fact]
+    public async Task ProcessBatch_HandsTheHandlerTheContextOfTheFirstDelivery_RebuiltFromTheRow()
+    {
+        var correlation = CorrelationId.New();
+        var causation = CausationId.New();
+        var (store, _, row) = ClaimOne(tenantId: "tenant-z", correlationId: correlation);
+        row.CausationId = causation;
+        row.OccurredOnUtc = new DateTimeOffset(2025, 3, 4, 5, 6, 7, TimeSpan.Zero);
+        row.Source = "/partner/billing";
+        row.Headers = new Dictionary<string, string> { ["x-origin"] = "checkout" };
+        var sut = Build(store, out var probe, out var harness);
+        harness.Database.Add(row);
+
+        await sut.ProcessBatchAsync(batchSize: 10, CancellationToken.None);
+
+        var context = probe.Contexts.ShouldHaveSingleItem();
+        context.MessageId.ShouldBe(row.MessageId);
+        context.TenantId.ShouldBe("tenant-z");
+        context.CorrelationId.ShouldBe(correlation.Value.ToString());
+        context.CausationId.ShouldBe(causation.Value.ToString(), "the context COPIES the message's own cause");
+        context.OccurredOnUtc.ShouldBe(row.OccurredOnUtc);
+        context.Source.ShouldBe("/partner/billing");
+        context.Headers["x-origin"].ShouldBe("checkout");
     }
 
     [Fact]
-    public async Task ProcessBatch_HandsTheHandlerAContextBuiltFromTheRow()
+    public async Task ProcessBatch_WhenTheCorrelationIsNotAGuid_HandsTheRetryTheOneTheFirstDeliveryHad()
     {
-        // The transitional inbox path keeps working with the #186 handler signature. Causation is
-        // COPIED here: the context describes the message, whose cause the row recorded — unlike
-        // the scope's execution context, which names the message itself as the cause of its work.
-        var correlation = CorrelationId.New();
-        var causation = CausationId.New();
-        var message = InboxFixtures.Message(
-            consumerType: ConsumerType, eventType: EventType, tenantId: "tenant-z",
-            correlationId: correlation);
-        message.CausationId = causation;
-        message.OccurredOnUtc = new DateTimeOffset(2025, 3, 4, 5, 6, 7, TimeSpan.Zero);
-        var store = StoreReturning(InboxFixtures.Claim(message));
+        // The column holds a GUID only; the row's headers keep what the envelope carried.
+        var (store, _, row) = ClaimOne();
+        row.Headers = new Dictionary<string, string> { [MessageHeaders.CorrelationId] = "order-42" };
+        var sut = Build(store, out var probe, out var harness);
+        harness.Database.Add(row);
 
-        var sut = Build(store, out var handler, out _);
         await sut.ProcessBatchAsync(batchSize: 10, CancellationToken.None);
 
-        var context = handler.LastContext.ShouldNotBeNull();
-        context.MessageId.ShouldBe(message.MessageId);
-        context.TenantId.ShouldBe("tenant-z");
-        context.CorrelationId.ShouldBe(correlation.Value.ToString());
-        context.CausationId.ShouldBe(causation.Value.ToString());
-        context.OccurredOnUtc.ShouldBe(message.OccurredOnUtc);
-
-        // The row records neither source nor headers (#188 replaces this path), and the contract
-        // registry does not know the fixture type, which carries no [MessageContract].
-        context.Source.ShouldBeEmpty();
-        context.Headers.ShouldBeEmpty();
-        context.ContractName.ShouldBeEmpty();
-        context.ContractVersion.ShouldBe(0);
+        probe.Contexts.ShouldHaveSingleItem().CorrelationId.ShouldBe("order-42");
     }
+
+    [Fact]
+    public async Task ProcessBatch_NamesTheDeliveredMessageAsTheCauseOfTheHandlersWork()
+    {
+        var correlation = CorrelationId.New();
+        var (store, _, row) = ClaimOne(correlationId: correlation);
+        row.CausationId = CausationId.New(); // an ANCESTOR cause: copying it would name the grandparent
+        var sut = Build(store, out _, out var harness);
+        harness.Database.Add(row);
+
+        await sut.ProcessBatchAsync(batchSize: 10, CancellationToken.None);
+
+        harness.Scopes.Contexts.ShouldNotBeEmpty();
+        harness.Scopes.Contexts.ShouldAllBe(c =>
+            c.CausationId == row.MessageId.Value.ToString()
+            && c.CorrelationId == correlation.Value.ToString()
+            && c.TenantId == row.TenantId);
+    }
+
+    /// <summary>
+    /// C2: every attempt is a fresh scope, and the store of the delivery is written on each one — a
+    /// replayed attempt publishes into the same store as the first.
+    /// </summary>
+    [Fact]
+    public async Task ProcessBatch_NamesItsStoreOnEveryAttemptScope_ReplayedAttemptsIncluded()
+    {
+        var (store, _, row) = ClaimOne();
+        var sut = Build(store, out var probe, out var harness);
+        harness.Database.Add(row);
+        harness.Database.RetryOn = ex => ex is TimeoutException;
+        harness.Database.FailNextCommit = new TimeoutException("the commit never reached the database");
+
+        var result = await sut.ProcessBatchAsync(batchSize: 10, CancellationToken.None);
+
+        result.Processed.ShouldBe(1);
+        probe.Stores.ShouldBe([GuardHarness.Store, GuardHarness.Store], "two attempts, each naming the store");
+        probe.ScopeIds.Distinct().Count().ShouldBe(2, "each attempt runs in a scope of its own");
+    }
+
+    // ── A commit whose outcome is unknown is verified, never replayed blindly ────────────────
+
+    [Fact]
+    public async Task ProcessBatch_WhenTheCommitFailsBeforeReachingTheDatabase_TheStrategyReplaysTheAttempt()
+    {
+        var (store, _, row) = ClaimOne();
+        var sut = Build(store, out var probe, out var harness);
+        harness.Database.Add(row);
+        harness.Database.RetryOn = ex => ex is TimeoutException;
+        harness.Database.FailNextCommit = new TimeoutException("lost before the commit");
+
+        var result = await sut.ProcessBatchAsync(batchSize: 10, CancellationToken.None);
+
+        result.Processed.ShouldBe(1);
+        probe.Calls.ShouldBe(2, "the verification found no Processed row, so the attempt is replayed");
+        harness.Database.Find(Key(row))!.Status.ShouldBe(InboxMessageStatus.Processed);
+    }
+
+    [Fact]
+    public async Task ProcessBatch_WhenTheCommitFailsAfterReachingTheDatabase_TheVerificationEndsIt()
+    {
+        var (store, _, row) = ClaimOne();
+        var sut = Build(store, out var probe, out var harness);
+        harness.Database.Add(row);
+        harness.Database.RetryOn = ex => ex is TimeoutException;
+        harness.Database.FailAfterNextCommit = new TimeoutException("lost after the commit");
+
+        var result = await sut.ProcessBatchAsync(batchSize: 10, CancellationToken.None);
+
+        result.Processed.ShouldBe(1);
+        probe.Calls.ShouldBe(1, "the row is Processed: the attempt committed and is not replayed");
+    }
+
+    // ── Transient failures ────────────────────────────────────────────────────────────────────
 
     [Fact]
     public async Task ProcessBatch_WhenHandlerThrows_BelowMaxRetries_SchedulesARetry()
     {
-        var message = InboxFixtures.Message(
-            consumerType: ConsumerType, eventType: EventType, retryCount: 0);
-        var store = StoreReturning(InboxFixtures.Claim(message));
-
-        var sut = Build(store, out var handler, out var settlement);
-        handler.ThrowOnHandle = new InvalidOperationException("handler error");
-        settlement.MarkUncommitted = true;
+        var (store, _, row) = ClaimOne(retryCount: 0);
+        var sut = Build(store, out var probe, out var harness);
+        harness.Database.Add(row);
+        probe.Throw = new InvalidOperationException("handler error");
 
         var result = await sut.ProcessBatchAsync(batchSize: 10, CancellationToken.None);
 
         result.Retried.ShouldBe(1);
-        result.DeadLettered.ShouldBe(0);
-
-        var outcome = (await CapturedOutcomes(store))[0];
+        var outcome = (await CapturedOutcomes(store)).ShouldHaveSingleItem();
         outcome.Kind.ShouldBe(InboxOutcomeKind.Retry);
         outcome.RetryCount.ShouldBe(1);
-        outcome.ErrorMessage.ShouldNotBeNull().ShouldContain("handler error");
+        outcome.ErrorMessage!.ShouldContain("handler error");
+        outcome.NextRetryAtUtc.ShouldBe(GuardHarness.Now.AddSeconds(2), "no jitter: the delay is the 2^1 s ceiling");
+        harness.Database.Find(Key(row))!.Status.ShouldNotBe(InboxMessageStatus.Processed, "the attempt rolled back");
+    }
 
-        // FixedRandom.NoJitter neutralises the jitter, so the delay IS the ceiling: 2^1 = 2 s.
-        outcome.NextRetryAtUtc.ShouldBe(Now.AddSeconds(2));
+    /// <summary>
+    /// A disposed provider while the host keeps running is a failure, not a stop: a stop would
+    /// release the row with no attempt charged, and a recurring fault would be re-claimed forever.
+    /// </summary>
+    [Fact]
+    public async Task ProcessBatch_WhenTheProviderIsDisposedWhileTheHostRuns_RetriesTheRowAsAFailure()
+    {
+        var (store, _, row) = ClaimOne(retryCount: 0);
+        var sut = Build(store, out var probe, out var harness);
+        harness.Database.Add(row);
+        probe.Throw = new ObjectDisposedException(nameof(IServiceProvider));
+
+        var result = await sut.ProcessBatchAsync(batchSize: 10, CancellationToken.None);
+
+        result.AbortReason.ShouldBe(InboxBatchAbortReason.None, "the host is running: nothing was stopped");
+        result.Retried.ShouldBe(1);
     }
 
     [Fact]
     public async Task ProcessBatch_WhenHandlerThrows_AtMaxRetries_DeadLetters()
     {
-        var message = InboxFixtures.Message(
-            consumerType: ConsumerType, eventType: EventType,
-            retryCount: DefaultOptions.MaxRetries - 1);
-        var store = StoreReturning(InboxFixtures.Claim(message));
-
-        var sut = Build(store, out var handler, out var settlement);
-        handler.ThrowOnHandle = new InvalidOperationException("permanent by exhaustion");
-        settlement.MarkUncommitted = true;
+        var (store, _, row) = ClaimOne(retryCount: DefaultOptions.MaxRetries - 1);
+        var sut = Build(store, out var probe, out var harness);
+        harness.Database.Add(row);
+        probe.Throw = new InvalidOperationException("permanent by exhaustion");
 
         var result = await sut.ProcessBatchAsync(batchSize: 10, CancellationToken.None);
 
         result.DeadLettered.ShouldBe(1);
-        result.Retried.ShouldBe(0);
-
-        var outcome = (await CapturedOutcomes(store))[0];
-        outcome.Kind.ShouldBe(InboxOutcomeKind.DeadLetter);
-        outcome.RetryCount.ShouldBe(DefaultOptions.MaxRetries);
+        (await CapturedOutcomes(store)).ShouldHaveSingleItem().RetryCount.ShouldBe(DefaultOptions.MaxRetries);
     }
 
-    [Theory]
-    [InlineData(0, 1)]
-    [InlineData(1, 2)]
-    [InlineData(2, 4)]
-    [InlineData(3, 8)]
-    [InlineData(5, 32)]
-    [InlineData(10, 1024)]
-    public void ComputeBackoffCeiling_FollowsTheExponentialCurve(int retryCount, int expectedSeconds)
-    {
-        var sut = Build(Substitute.For<IInboxProcessorStore>(), out _, out _);
-
-        sut.ComputeBackoffCeiling(retryCount).ShouldBe(TimeSpan.FromSeconds(expectedSeconds));
-    }
-
-    [Fact]
-    public void ComputeBackoffCeiling_IsCappedAtMaxRetryBackoff()
-    {
-        var sut = Build(Substitute.For<IInboxProcessorStore>(), out _, out _);
-
-        sut.ComputeBackoffCeiling(20).ShouldBe(TimeSpan.FromHours(1));
-    }
-
-    [Fact]
-    public void ComputeBackoffCeiling_ClampsACorruptedRetryCount()
-    {
-        // The exponent is clamped before shifting, so a nonsense retry count cannot overflow.
-        var sut = Build(Substitute.For<IInboxProcessorStore>(), out _, out _);
-
-        Should.NotThrow(() => sut.ComputeBackoffCeiling(int.MaxValue));
-        sut.ComputeBackoffCeiling(int.MaxValue).ShouldBe(TimeSpan.FromHours(1));
-        sut.ComputeBackoffCeiling(-5).ShouldBe(TimeSpan.FromSeconds(1));
-    }
-
-    [Fact]
-    public void ApplyJitter_DrawsOverTheWholeInterval()
-    {
-        var zero = Build(
-            Substitute.For<IInboxProcessorStore>(), out _, out _, random: FixedRandom.ZeroDelay);
-        var full = Build(
-            Substitute.For<IInboxProcessorStore>(), out _, out _, random: FixedRandom.NoJitter);
-
-        zero.ApplyJitter(TimeSpan.FromSeconds(60)).ShouldBe(TimeSpan.Zero);
-        full.ApplyJitter(TimeSpan.FromSeconds(60)).ShouldBe(TimeSpan.FromSeconds(60));
-        full.ApplyJitter(TimeSpan.Zero).ShouldBe(TimeSpan.Zero);
-    }
-
-    // -----------------------------------------------------------------------------------
-    // Handler that commits nothing — detected, not degraded silently
-    // -----------------------------------------------------------------------------------
-
-    [Fact]
-    public async Task ProcessBatch_WhenHandlerCommitsNothing_WritesADeferredProcessedOutcome()
-    {
-        // Without this the staged mark is never persisted: the row replays on every pass and
-        // eventually dead-letters although every invocation succeeded.
-        var message = InboxFixtures.Message(consumerType: ConsumerType, eventType: EventType);
-        var store = StoreReturning(InboxFixtures.Claim(message));
-
-        var sut = Build(store, out var handler, out var settlement);
-        settlement.MarkUncommitted = true;
-
-        var result = await sut.ProcessBatchAsync(batchSize: 10, CancellationToken.None);
-
-        handler.InvocationCount.ShouldBe(1);
-        result.Processed.ShouldBe(1);
-        result.Retried.ShouldBe(0);
-
-        var outcome = (await CapturedOutcomes(store))[0];
-        outcome.Kind.ShouldBe(InboxOutcomeKind.Processed);
-    }
-
-    /// <summary>
-    /// A handler that commits and then throws has done its work: the row is durably Processed.
-    /// Retrying would be wrong in principle and a no-op in practice, because the committed
-    /// transaction cleared the claim token.
-    /// </summary>
-    [Fact]
-    public async Task ProcessBatch_WhenHandlerCommitsThenThrows_CountsItProcessedAndDoesNotRetry()
-    {
-        var message = InboxFixtures.Message(consumerType: ConsumerType, eventType: EventType);
-        var store = StoreReturning(InboxFixtures.Claim(message));
-
-        var sut = Build(store, out var handler, out var settlement);
-        handler.ThrowOnHandle = new InvalidOperationException("thrown after commit");
-        settlement.MarkUncommitted = false;
-
-        var result = await sut.ProcessBatchAsync(batchSize: 10, CancellationToken.None);
-
-        result.Processed.ShouldBe(1);
-        result.Retried.ShouldBe(0);
-        result.DeadLettered.ShouldBe(0);
-        await store.DidNotReceive().ApplyOutcomesAsync(
-            Arg.Any<Guid>(), Arg.Any<IReadOnlyList<InboxOutcome>>(), Arg.Any<CancellationToken>());
-    }
-
-    // -----------------------------------------------------------------------------------
-    // Batch-wide aborts
-    // -----------------------------------------------------------------------------------
+    // ── Batch-wide verdicts ───────────────────────────────────────────────────────────────────
 
     [Fact]
     public async Task ProcessBatch_WhenDependencyUnavailable_ReleasesTheRemainderWithoutRetries()
     {
-        // The failure mode this prevents: an outage failing all N rows, writing N failure rows,
-        // and consuming N retry budgets — then repeating next tick.
-        var messages = Enumerable.Range(0, 4)
-            .Select(_ => InboxFixtures.Message(consumerType: ConsumerType, eventType: EventType))
-            .ToArray();
-        var store = StoreReturning(InboxFixtures.Claim(messages));
+        var rows = Enumerable.Range(0, 3).Select(_ => Row()).ToArray();
+        var claim = InboxFixtures.Claim(rows);
+        var store = StoreReturning(claim);
+        var sut = Build(store, out var probe, out var harness);
+        foreach (var row in rows)
+        {
+            row.ClaimToken = claim.Token;
+            harness.Database.Add(row);
+        }
 
-        var sut = Build(store, out var handler, out var settlement);
-        handler.ThrowOnHandle = new InboxDependencyUnavailableException("payments API is down");
-        settlement.MarkUncommitted = true;
+        probe.Throw = new InboxDependencyUnavailableException("down");
 
         var result = await sut.ProcessBatchAsync(batchSize: 10, CancellationToken.None);
 
         result.AbortReason.ShouldBe(InboxBatchAbortReason.DependencyUnavailable);
-        result.Released.ShouldBe(4, "including the row that triggered the abort");
+        result.Released.ShouldBe(3, "the failing row and the two never reached");
         result.Retried.ShouldBe(0);
-        result.DeadLettered.ShouldBe(0);
-        handler.InvocationCount.ShouldBe(1, "the batch is abandoned, not attempted row by row");
-
-        var outcomes = await CapturedOutcomes(store);
-        outcomes.ShouldAllBe(o => o.Kind == InboxOutcomeKind.Released);
+        probe.Calls.ShouldBe(1);
     }
 
     [Fact]
-    public async Task ProcessBatch_WhenSettlementStoreMissing_SettlesReleasedThenRethrows()
+    public async Task ProcessBatch_WhenTheStoreRegistersNoGuard_ReleasesTheBatchThenRethrows()
     {
-        // A missing registration is a deployment defect. The batch must be settled first, so the
-        // worker can stop without stranding a single lease.
-        var messages = Enumerable.Range(0, 3)
-            .Select(_ => InboxFixtures.Message(consumerType: ConsumerType, eventType: EventType))
-            .ToArray();
-        var store = StoreReturning(InboxFixtures.Claim(messages));
-
-        var sut = Build(store, out _, out _, registerSettlementStore: false);
+        var (store, _, _) = ClaimOne();
+        var sut = Build(store, out var probe, out _, registerGuard: false);
 
         await Should.ThrowAsync<InboxConfigurationException>(
             async () => await sut.ProcessBatchAsync(batchSize: 10, CancellationToken.None));
 
-        var outcomes = await CapturedOutcomes(store);
-        outcomes.Count.ShouldBe(3);
-        outcomes.ShouldAllBe(o => o.Kind == InboxOutcomeKind.Released);
+        probe.Calls.ShouldBe(0);
+        (await CapturedOutcomes(store)).ShouldHaveSingleItem().Kind.ShouldBe(InboxOutcomeKind.Released);
     }
 
     [Fact]
-    public async Task ProcessBatch_WhenHandlerNotResolvable_SettlesReleasedThenRethrows()
+    public async Task ProcessBatch_WhenTheGuardCannotBeActivated_RetriesTheRowRatherThanStopping()
     {
-        var message = InboxFixtures.Message(consumerType: ConsumerType, eventType: EventType);
-        var store = StoreReturning(InboxFixtures.Claim(message));
-
-        var sut = Build(store, out _, out _, registerHandler: false);
-
-        await Should.ThrowAsync<InboxConfigurationException>(
-            async () => await sut.ProcessBatchAsync(batchSize: 10, CancellationToken.None));
-
-        (await CapturedOutcomes(store)).ShouldAllBe(o => o.Kind == InboxOutcomeKind.Released);
-    }
-
-    /// <summary>
-    /// A settlement store that is registered but cannot be activated is NOT a configuration fault.
-    /// </summary>
-    /// <remarks>
-    /// <para>
-    /// Mirrors <c>ReceiveAsync_WhenTheWriterCannotBeActivated_PropagatesRatherThanClassifying</c>,
-    /// and the consequence here is worse than at the ingestion seam.
-    /// <see cref="IInboxSettlementStore"/> resolves through a factory that activates
-    /// <c>EfInboxStore&lt;TContext&gt;</c> and, with it, the consumer's <c>DbContext</c>, so a
-    /// <c>catch (InvalidOperationException)</c> around the resolution spans that entire graph
-    /// while reading as a registration lookup. Under a tenant-aware
-    /// <see cref="IExecutionScopeFactory"/> an envelope naming an unknown tenant throws exactly
-    /// that from the per-tenant connection resolution — and because
-    /// <see cref="InboxConfigurationException"/> stops the drain worker, catching it would halt
-    /// the inbox for <b>every</b> tenant over one message's data, while reporting a registration
-    /// that is present as missing.
-    /// </para>
-    /// <para>
-    /// The exception type seeded below is <see cref="InvalidOperationException"/> on purpose: it is
-    /// the one a catch-based implementation would swallow, so any other type here would leave the
-    /// regression free to come back. THREE messages, because the discriminator is the batch's fate
-    /// rather than one row's — a catch-based implementation breaks the loop at index 0 and releases
-    /// all three, so <c>Retried == 3</c> and <c>Released == 0</c> is what says the halt is gone.
-    /// </para>
-    /// </remarks>
-    [Fact]
-    public async Task ProcessBatch_WhenSettlementStoreCannotBeActivated_PropagatesRatherThanClassifying()
-    {
-        var activationFailure = new InvalidOperationException(
-            "No connection string is configured for tenant 'tenant-a'.");
-
-        var messages = Enumerable.Range(0, 3)
-            .Select(_ => InboxFixtures.Message(consumerType: ConsumerType, eventType: EventType))
-            .ToArray();
-        var store = StoreReturning(InboxFixtures.Claim(messages));
-
-        var sut = Build(store, out _, out _, settlementActivationFailure: activationFailure);
+        // Registered but unactivatable — one tenant's connection failing — is not a configuration
+        // verdict: stopping the loop would halt the inbox for every tenant.
+        var (store, _, _) = ClaimOne();
+        var sut = Build(store, out _, out _, guardActivationFailure: new InvalidOperationException("no connection"));
 
         var result = await sut.ProcessBatchAsync(batchSize: 10, CancellationToken.None);
 
-        result.AbortReason.ShouldBe(
-            InboxBatchAbortReason.None,
-            "a registered store that fails to activate is one message's fault — most likely a " +
-            "tenant whose connection cannot be resolved — and must not stop the drain worker");
-
-        result.Retried.ShouldBe(3, "each row is retried with back-off, on its own");
-        result.Released.ShouldBe(0, "nothing was abandoned unattempted");
-
-        var outcomes = await CapturedOutcomes(store);
-        outcomes.ShouldAllBe(o => o.Kind == InboxOutcomeKind.Retry);
-        // The real fault is what gets recorded, not a guess at it.
-        outcomes[0].ErrorMessage.ShouldNotBeNull().ShouldContain("tenant-a");
-    }
-
-    /// <summary>
-    /// A handler that is registered but cannot be activated is NOT a configuration fault.
-    /// </summary>
-    /// <remarks>
-    /// The sibling of the test above, on the other resolution in the same scope. A handler's own
-    /// constructor dependencies can fail for reasons that have nothing to do with whether the
-    /// handler is registered — a connection, a client, a per-tenant option — and every one of them
-    /// arrives as <see cref="InvalidOperationException"/> from the container.
-    /// </remarks>
-    [Fact]
-    public async Task ProcessBatch_WhenHandlerCannotBeActivated_PropagatesRatherThanClassifying()
-    {
-        var activationFailure = new InvalidOperationException(
-            "Unable to resolve IReportingClient while activating RecordingInboxHandler.");
-
-        var messages = Enumerable.Range(0, 3)
-            .Select(_ => InboxFixtures.Message(consumerType: ConsumerType, eventType: EventType))
-            .ToArray();
-        var store = StoreReturning(InboxFixtures.Claim(messages));
-
-        var sut = Build(store, out _, out _, handlerActivationFailure: activationFailure);
-
-        var result = await sut.ProcessBatchAsync(batchSize: 10, CancellationToken.None);
-
-        result.AbortReason.ShouldBe(
-            InboxBatchAbortReason.None,
-            "a registered handler that fails to activate is a transient fault for one row, not a " +
-            "composition defect that should stop the worker");
-
-        result.Retried.ShouldBe(3);
-        result.Released.ShouldBe(0);
-
-        (await CapturedOutcomes(store)).ShouldAllBe(o => o.Kind == InboxOutcomeKind.Retry);
+        result.Retried.ShouldBe(1);
     }
 
     [Fact]
     public async Task ProcessBatch_WhenCancelled_ReleasesEveryUnattemptedRow()
     {
-        var messages = Enumerable.Range(0, 3)
-            .Select(_ => InboxFixtures.Message(consumerType: ConsumerType, eventType: EventType))
-            .ToArray();
-        var store = StoreReturning(InboxFixtures.Claim(messages));
-
+        var rows = Enumerable.Range(0, 3).Select(_ => Row()).ToArray();
+        var store = StoreReturning(InboxFixtures.Claim(rows));
+        var sut = Build(store, out var probe, out _);
         using var cts = new CancellationTokenSource();
         await cts.CancelAsync();
 
-        var sut = Build(store, out var handler, out _);
         var result = await sut.ProcessBatchAsync(batchSize: 10, cts.Token);
 
         result.AbortReason.ShouldBe(InboxBatchAbortReason.Cancelled);
         result.Released.ShouldBe(3);
-        handler.InvocationCount.ShouldBe(0);
+        probe.Calls.ShouldBe(0);
     }
+
+    [Fact]
+    public async Task ProcessBatch_WhenTheHostStopsMidHandler_ReleasesTheRowWithItsAttemptCountUnchanged()
+    {
+        var (store, _, row) = ClaimOne(retryCount: 2);
+        var sut = Build(store, out var probe, out var harness);
+        harness.Database.Add(row);
+        using var cts = new CancellationTokenSource();
+        probe.During = () =>
+        {
+            cts.Cancel();
+            cts.Token.ThrowIfCancellationRequested();
+        };
+
+        var result = await sut.ProcessBatchAsync(batchSize: 10, cts.Token);
+
+        result.AbortReason.ShouldBe(InboxBatchAbortReason.Cancelled);
+        result.Retried.ShouldBe(0);
+        (await CapturedOutcomes(store)).ShouldHaveSingleItem().Kind.ShouldBe(InboxOutcomeKind.Released);
+    }
+
+    // ── Settlement ────────────────────────────────────────────────────────────────────────────
 
     [Fact]
     public async Task ProcessBatch_SettlesOnATokenIndependentOfTheCallersShutdown()
     {
-        // If a shutdown cancelled the settlement write, every lease in the batch would stay held
-        // until expiry. The flush gets its own short timeout instead.
-        var message = InboxFixtures.Message(consumerType: ConsumerType, eventType: EventType);
-        var store = StoreReturning(InboxFixtures.Claim(message));
-
+        var (store, _, _) = ClaimOne();
+        var sut = Build(store, out _, out _);
         using var cts = new CancellationTokenSource();
         await cts.CancelAsync();
 
-        var sut = Build(store, out _, out _);
         await sut.ProcessBatchAsync(batchSize: 10, cts.Token);
 
         await store.Received(1).ApplyOutcomesAsync(
@@ -615,13 +472,10 @@ public sealed class InboxProcessorTests
     [Fact]
     public async Task ProcessBatch_SettlesWithTheClaimsOwnToken()
     {
-        var message = InboxFixtures.Message(consumerType: ConsumerType, eventType: EventType);
-        var claim = InboxFixtures.Claim(message);
-        var store = StoreReturning(claim);
-
-        var sut = Build(store, out var handler, out var settlement);
-        handler.ThrowOnHandle = new InvalidOperationException("boom");
-        settlement.MarkUncommitted = true;
+        var (store, claim, row) = ClaimOne();
+        var sut = Build(store, out var probe, out var harness);
+        harness.Database.Add(row);
+        probe.Throw = new InvalidOperationException("fails");
 
         await sut.ProcessBatchAsync(batchSize: 10, CancellationToken.None);
 
@@ -630,138 +484,65 @@ public sealed class InboxProcessorTests
     }
 
     [Fact]
-    public async Task ProcessBatch_WhenSettlementThrows_DoesNotTakeTheWorkerDown()
+    public async Task ProcessBatch_WhenSettlementThrows_DoesNotTakeTheLoopDown()
     {
-        // Leases expire on their own and the rows are re-claimed. Letting this escape would take
-        // down the hosting BackgroundService over a condition the inbox is designed to survive.
-        var message = InboxFixtures.Message(consumerType: ConsumerType, eventType: EventType);
-        var store = StoreReturning(InboxFixtures.Claim(message));
+        var (store, _, row) = ClaimOne();
         store.ApplyOutcomesAsync(
                 Arg.Any<Guid>(), Arg.Any<IReadOnlyList<InboxOutcome>>(), Arg.Any<CancellationToken>())
-            .Returns<ValueTask<int>>(_ => throw new InvalidOperationException("database gone"));
+            .Returns<ValueTask<int>>(_ => throw new TimeoutException("settlement timed out"));
+        var sut = Build(store, out var probe, out var harness);
+        harness.Database.Add(row);
+        probe.Throw = new InvalidOperationException("fails");
 
-        var sut = Build(store, out var handler, out var settlement);
-        handler.ThrowOnHandle = new InvalidOperationException("boom");
-        settlement.MarkUncommitted = true;
-
-        var result = default(InboxBatchResult);
-        await Should.NotThrowAsync(async () =>
-            result = await sut.ProcessBatchAsync(batchSize: 10, CancellationToken.None));
+        var result = await sut.ProcessBatchAsync(batchSize: 10, CancellationToken.None);
 
         result.Retried.ShouldBe(1);
     }
 
-    // -----------------------------------------------------------------------------------
-    // Drain contract — the processor never ingests
-    // -----------------------------------------------------------------------------------
+    // ── Helpers ───────────────────────────────────────────────────────────────────────────────
 
-    [Fact]
-    public void InboxProcessor_DependsOnTheClaimStoreOnly_NotOnTheWriter()
-    {
-        // Structural, not a convention: the processor cannot call ExistsAsync or AddAsync
-        // because IInboxProcessorStore does not expose them.
-        var parameterTypes = typeof(InboxProcessor)
-            .GetConstructors()[0]
-            .GetParameters()
-            .Select(p => p.ParameterType)
-            .ToList();
-
-        parameterTypes.ShouldContain(typeof(IInboxProcessorStore));
-        parameterTypes.ShouldNotContain(typeof(IInboxWriter));
-    }
-
-    // -----------------------------------------------------------------------------------
-    // The causation link — what makes the delivered message the cause of the handler's work
-    // -----------------------------------------------------------------------------------
-
-    /// <summary>
-    /// Everything the handler stages names the delivered message as its cause, so
-    /// <c>CausationId</c> is derived from <c>message.MessageId</c> — never copied from the row's
-    /// own <c>CausationId</c>, and never taken from <c>RowId</c>.
-    /// </summary>
-    /// <remarks>
-    /// <para>
-    /// <c>RowId</c> is the local surrogate primary key; it is meaningless outside this table and to
-    /// every other process. <c>MessageId</c> is the end-to-end identity the producer assigned, and
-    /// is what answers "which message caused this" downstream. The row is seeded so that all three
-    /// candidate values differ — otherwise the test passes under every implementation.
-    /// </para>
-    /// <para>
-    /// This is the unit-level half. <c>ReceivingSeamTests</c> asserts the same derivation end to
-    /// end, from a dispatched contract row through <c>IEnvelopeReceiver</c> to the handler's own
-    /// execution context — so nulling the derivation line turns <b>both</b> red, and only those
-    /// two.
-    /// </para>
-    /// </remarks>
-    [Fact]
-    public async Task ProcessBatch_NamesTheDeliveredMessageAsTheCauseOfTheHandlersWork()
-    {
-        var ancestorCause = CausationId.New();
-        var message = InboxFixtures.Message(consumerType: ConsumerType, eventType: EventType);
-        message.CausationId = ancestorCause;
-
-        var store = StoreReturning(InboxFixtures.Claim(message));
-        var sut = BuildRecordingScopes(store, out var scopes);
-
-        await sut.ProcessBatchAsync(batchSize: 10, CancellationToken.None);
-
-        var ctx = scopes.Contexts.ShouldHaveSingleItem();
-
-        ctx.CausationId.ShouldBe(
-            message.MessageId.Value.ToString(),
-            "the cause of the handler's work is the message being delivered");
-
-        ctx.CausationId.ShouldNotBe(
-            ancestorCause.Value.ToString(),
-            "copying the row's own causation names the grandparent, one hop too far up");
-
-        ctx.CausationId.ShouldNotBe(
-            message.RowId.ToString(),
-            "RowId is a local surrogate — it names nothing any other process can resolve");
-    }
-
-    /// <summary>
-    /// The correlation is copied through unchanged — it identifies the chain, not a hop.
-    /// </summary>
-    /// <remarks>
-    /// The mirror of the outbox's <c>ProcessBatch_PropagatesCorrelationUnchangedWhileDerivingCausation</c>,
-    /// and the asymmetry is what let this go uncovered: correlation and causation are propagated by
-    /// adjacent lines and only a test that seeds the correlation distinctly can tell one from the
-    /// other. Every other test in this file leaves <c>CorrelationId</c> null, so nulling the copy
-    /// fails none of them.
-    /// </remarks>
-    [Fact]
-    public async Task ProcessBatch_PropagatesCorrelationUnchangedWhileDerivingCausation()
-    {
-        var correlation = CorrelationId.New();
-        var message = InboxFixtures.Message(
-            consumerType: ConsumerType, eventType: EventType, correlationId: correlation);
-
-        var store = StoreReturning(InboxFixtures.Claim(message));
-        var sut = BuildRecordingScopes(store, out var scopes);
-
-        await sut.ProcessBatchAsync(batchSize: 10, CancellationToken.None);
-
-        var ctx = scopes.Contexts.ShouldHaveSingleItem();
-
-        ctx.CorrelationId.ShouldBe(
-            correlation.Value.ToString(),
-            "correlation identifies the whole chain and never advances a hop");
-
-        ctx.CausationId.ShouldBe(
-            message.MessageId.Value.ToString(),
-            "causation advances while correlation does not — asserting one without the other " +
-            "passes while the two are confused for each other");
-
-        ctx.TenantId.ShouldBe(message.TenantId);
-    }
-
-    // -----------------------------------------------------------------------------------
-    // Helpers
-    // -----------------------------------------------------------------------------------
-
-    private static readonly string ConsumerType = typeof(RecordingInboxHandler).AssemblyQualifiedName!;
+    private static readonly string ConsumerType = MessageConsumerKey.Of(typeof(RetryHandler));
     private static readonly string EventType = typeof(InboxTestEvent).AssemblyQualifiedName!;
+
+    private static InboxMessageKey Key(InboxMessage row) => new(row.MessageId, row.ConsumerType);
+
+    private static InboxMessage Row(
+        int retryCount = 0,
+        string? consumerType = null,
+        string? tenantId = "tenant-a",
+        CorrelationId? correlationId = null)
+    {
+        var row = InboxFixtures.Message(
+            consumerType: consumerType ?? ConsumerType, eventType: EventType, retryCount: retryCount,
+            tenantId: tenantId, correlationId: correlationId);
+        row.Status = InboxMessageStatus.Processing;
+        return row;
+    }
+
+    private static InboxMessage Copy(InboxMessage row, Guid claimToken) => new()
+    {
+        RowId = row.RowId,
+        MessageId = row.MessageId,
+        ConsumerType = row.ConsumerType,
+        EventType = row.EventType,
+        Payload = row.Payload,
+        Status = row.Status,
+        RetryCount = row.RetryCount,
+        ClaimToken = claimToken,
+    };
+
+    /// <summary>One claimed row: in the claim with its token, ready to be added to the database.</summary>
+    private static (IInboxProcessorStore Store, InboxClaim Claim, InboxMessage Row) ClaimOne(
+        int retryCount = 0,
+        string? consumerType = null,
+        string? tenantId = "tenant-a",
+        CorrelationId? correlationId = null)
+    {
+        var row = Row(retryCount, consumerType, tenantId, correlationId);
+        var claim = InboxFixtures.Claim(row);
+        row.ClaimToken = claim.Token;
+        return (StoreReturning(claim), claim, row);
+    }
 
     private static IInboxProcessorStore StoreReturning(InboxClaim claim)
     {
@@ -775,103 +556,58 @@ public sealed class InboxProcessorTests
         return store;
     }
 
-    private static async ValueTask<IReadOnlyList<InboxOutcome>> CapturedOutcomes(
-        IInboxProcessorStore store)
+    private static Task<IReadOnlyList<InboxOutcome>> CapturedOutcomes(IInboxProcessorStore store)
     {
         var calls = store.ReceivedCalls()
             .Where(c => c.GetMethodInfo().Name == nameof(IInboxProcessorStore.ApplyOutcomesAsync))
             .ToList();
 
         calls.Count.ShouldBe(1, "the batch settles exactly once");
-
-        return await ValueTask.FromResult((IReadOnlyList<InboxOutcome>)calls[0].GetArguments()[1]!);
+        return Task.FromResult((IReadOnlyList<InboxOutcome>)calls[0].GetArguments()[1]!);
     }
 
     private static InboxProcessor Build(
         IInboxProcessorStore store,
-        out RecordingInboxHandler handler,
-        out ScriptedInboxSettlementStore settlement,
+        out RetryProbe probe,
+        out GuardHarness harness,
         InboxProcessorOptions? options = null,
         IMessageSerializer? serializer = null,
-        Random? random = null,
-        bool registerHandler = true,
-        bool registerSettlementStore = true,
-        Exception? handlerActivationFailure = null,
-        Exception? settlementActivationFailure = null)
+        bool registerGuard = true,
+        Exception? guardActivationFailure = null)
     {
-        handler = new RecordingInboxHandler();
-        settlement = new ScriptedInboxSettlementStore();
-
-        var services = new ServiceCollection();
-
-        // REGISTERED but unactivatable — a factory that throws. Not the same as absent, and the
-        // difference is the whole subject of the two PropagatesRatherThanClassifying tests: only
-        // an absent descriptor makes GetService return null.
-        if (handlerActivationFailure is not null)
-        {
-            services.AddSingleton<RecordingInboxHandler>(_ => throw handlerActivationFailure);
-        }
-        else if (registerHandler)
-        {
-            services.AddSingleton(handler);
-        }
-
-        if (settlementActivationFailure is not null)
-        {
-            services.AddSingleton<IInboxSettlementStore>(_ => throw settlementActivationFailure);
-        }
-        else if (registerSettlementStore)
-        {
-            services.AddSingleton<IInboxSettlementStore>(settlement);
-        }
-
-        services.AddLogging();
-        var provider = services.BuildServiceProvider();
+        var shared = new RetryProbe();
+        probe = shared;
+        options ??= DefaultOptions;
 
         var registry = new MessageHandlerRegistry();
-        registry.Register(typeof(InboxTestEvent), ConsumerType, typeof(RecordingInboxHandler));
+        registry.Register(typeof(InboxTestEvent), ConsumerType, typeof(RetryHandler));
+        var contracts = Publishing.IntegrationEventContractFixtures.Registry(_ => { });
 
+        harness = GuardHarness.Build(
+            services =>
+            {
+                services.AddSingleton(shared);
+                services.AddScoped<RetryHandler>();
+                services.AddScoped<ScopeTag>();
+            },
+            registry,
+            contracts,
+            registerGuard: registerGuard,
+            guardActivationFailure: guardActivationFailure,
+            options: options);
+
+        // The claim's rows are the claim's; in the "database" the test adds what it needs.
         return new InboxProcessor(
             store,
             registry,
-            Publishing.IntegrationEventContractFixtures.Registry(_ => { }),
+            new LocalConsumerRegistry(new MessagingComposition()),
+            contracts,
             serializer ?? RoundTripSerializer(),
-            new TestExecutionScopeFactory(provider.GetRequiredService<IServiceScopeFactory>()),
-            options ?? DefaultOptions,
-            new FakeTimeProvider(Now),
-            random ?? FixedRandom.NoJitter,
-            NullLogger<InboxProcessor>.Instance);
-    }
-
-    /// <summary>
-    /// Same processor, with the scope factory handed back so a test can read the
-    /// <see cref="IExecutionContext"/> the processor built for each message.
-    /// </summary>
-    private static InboxProcessor BuildRecordingScopes(
-        IInboxProcessorStore store,
-        out TestExecutionScopeFactory scopes)
-    {
-        var services = new ServiceCollection();
-        services.AddSingleton(new RecordingInboxHandler());
-        services.AddSingleton<IInboxSettlementStore>(new ScriptedInboxSettlementStore());
-        services.AddLogging();
-
-        var provider = services.BuildServiceProvider();
-        scopes = new TestExecutionScopeFactory(provider.GetRequiredService<IServiceScopeFactory>());
-
-        var registry = new MessageHandlerRegistry();
-        registry.Register(typeof(InboxTestEvent), ConsumerType, typeof(RecordingInboxHandler));
-
-        return new InboxProcessor(
-            store,
-            registry,
-            Publishing.IntegrationEventContractFixtures.Registry(_ => { }),
-            RoundTripSerializer(),
-            scopes,
-            DefaultOptions,
-            new FakeTimeProvider(Now),
-            FixedRandom.NoJitter,
-            NullLogger<InboxProcessor>.Instance);
+            harness.Pipeline,
+            options,
+            harness.Policy,
+            NullLogger<InboxProcessor>.Instance,
+            GuardHarness.Store);
     }
 
     private static IMessageSerializer RoundTripSerializer()
@@ -881,5 +617,48 @@ public sealed class InboxProcessorTests
             .Returns(_ => new InboxTestEvent(MessageId.New(), "tenant-a"));
 
         return serializer;
+    }
+
+    /// <summary>What the retried handler saw, and what it does.</summary>
+    internal sealed class RetryProbe
+    {
+        public int Calls { get; set; }
+
+        public List<MessageContext> Contexts { get; } = [];
+
+        public List<MessageStoreKey?> Stores { get; } = [];
+
+        public List<Guid> ScopeIds { get; } = [];
+
+        public Exception? Throw { get; set; }
+
+        public Action? During { get; set; }
+    }
+
+    /// <summary>One instance per scope, so a test can tell the attempts' scopes apart.</summary>
+    internal sealed class ScopeTag
+    {
+        public Guid Id { get; } = Guid.NewGuid();
+    }
+
+    internal sealed class RetryHandler(RetryProbe probe, DeliveryStoreHolder holder, ScopeTag scope)
+        : IMessageHandler<InboxTestEvent>
+    {
+
+        public ValueTask HandleAsync(InboxTestEvent message, MessageContext context, CancellationToken ct = default)
+        {
+            probe.Calls++;
+            probe.Contexts.Add(context);
+            probe.Stores.Add(holder.Store);
+            probe.ScopeIds.Add(scope.Id);
+            probe.During?.Invoke();
+
+            if (probe.Throw is not null)
+            {
+                throw probe.Throw;
+            }
+
+            return ValueTask.CompletedTask;
+        }
     }
 }

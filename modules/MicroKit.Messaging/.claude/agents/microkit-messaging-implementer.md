@@ -126,22 +126,29 @@ public sealed class XxxYyy : IXxxYyy
 Once the human explicitly approves:
 
 1. Implement files in the order listed in section 2
-2. Follow templates from `.claude-context/templates/` for the component type
+2. Follow the patterns of the existing files in the target project (the module has no
+   `.claude-context/templates/` directory)
 3. After each file: briefly confirm what was created
 4. After all files: invoke the agents listed in section 8
-5. Run: `dotnet build` to verify no compilation errors
-6. Run: `dotnet test` to verify all tests pass
+5. Run: `dotnet build modules/MicroKit.Messaging/MicroKit.Messaging.slnx -c Release` — warnings are
+   errors in Release only
+6. Run: `CI=true dotnet test modules/MicroKit.Messaging/MicroKit.Messaging.slnx -c Release`
 
 ## Hard Constraints (never violate)
 
 - `sealed` on all records, services, handlers, processors, publishers
 - `ValueTask<T>` + `ConfigureAwait(false)` on all async paths
 - `CancellationToken ct = default` always last parameter
-- `IIntegrationEvent` — never `INotification` or MediatR types
-- `MediatR.Contracts` forbidden in all packages and tests
-- `TenantId` on all `OutboxMessage` and `InboxMessage` rows — never null
-- No silent success when publisher is null — throw, not fake
-- No `IHttpContextAccessor` in background processors — use AsyncLocal scope only
+- `IIntegrationEvent` — never `INotification` or MediatR types, except in the `MicroKit.Messaging.MediatR`
+  glue (ADR-MSG-009)
+- `MediatR` / `MediatR.Contracts` forbidden in all packages and tests except the
+  `MicroKit.Messaging.MediatR` glue and its test projects (ADR-MSG-009)
+- `TenantId` carried on every `OutboxMessage` and `InboxMessage` row — nullable: null is valid in a
+  single-tenant deployment (ADR-MSG-008 §5)
+- No silent success: a publication reaches the transport or a store's outbox, or throws
+- No `IHttpContextAccessor` in background processing — the tenant comes off the row or the
+  envelope into the message scope's `IExecutionContext`, never from an `AsyncLocal`
 - No `Version=` on `PackageReference` in `.csproj`
 - XML docs on all public members in `src/` projects
-- Do not commit anything — the human handles git
+- Git per root `.claude/CLAUDE.md`: commit on the topic branch only after the user confirms each
+  commit, the push and the PR; never merge

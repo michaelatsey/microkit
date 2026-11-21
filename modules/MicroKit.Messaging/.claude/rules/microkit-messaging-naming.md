@@ -1,184 +1,216 @@
 # microkit-messaging-naming
 
-## General Rules
-
-- `sealed record` — value objects, events, messages, options, envelopes
-- `sealed class` — services, publishers, handlers, processors, dispatchers, stores
-- `interface` prefix `I` — all contracts in Abstractions
-- No `Base` suffix — use composition, not inheritance
-- No `Helper`, `Utils`, `Manager` suffix — name by responsibility
+The public surface is pinned name by name in
+`tests/MicroKit.Messaging.ArchitectureTests/PublicSurfaceTests.cs`. A name that is not there is
+internal, or does not exist. Adding a public type means editing that list on purpose.
 
 ---
 
-## Core Contracts
+## Type shapes
 
-| Pattern | Example |
-|---------|---------|
-| `IIntegrationEvent` | **bare marker** (ADR-MSG-018) — business payload only, `IEvent` base retained. Metadata lives on the `MessageKind.Contract` **outbox row**, assigned at staging |
-| `IntegrationEventAttribute` | `[IntegrationEvent("name.v1")]` — mandatory wire contract name; the CLR type name cannot serve as one. Rejects null/empty/whitespace in its constructor, so one guard covers `Publishes<T>()` and `Consumes<T>()` alike — an empty name is a usable dictionary key and would bind, resolve and travel |
-| `IIntegrationEventPublisher` | `PublishAsync<T>` — writes a `MessageKind.Contract` row into the caller's open transaction; never commits, never delivers. A replayed publication is absorbed and returns the **existing** row's id, so a notification handler cannot observe its own redelivery |
-| `IIntegrationEventWriter` | `AddAsync(OutboxMessage)` → `IntegrationEventWriteResult`, plus `HasOpenTransaction`. Writes a `Contract` row into the outbox. It **flushes and never commits** — the replay key on `(OriginMessageId, ContractName)` can only be consulted by attempting the insert, so the answer must reach the publisher before it returns. A replayed publication is reported, never thrown |
-| `IntegrationEventRegistry` | **internal since #185**, and **bidirectional**. `ResolveContract(Type)` → the contract a type publishes under; `TryResolveLocalType(name)` / `ResolveLocalType(name)` → the local CLR type a wire name deserializes into. The reverse direction is what lets a consumer act on a payload without the producer's assembly — `Type.GetType(assemblyQualifiedName)` cannot cross a process. One local type per contract name per process; a second claimant is a boot failure. There is deliberately no `TryResolveContract`: a miss in the forward direction is a programming error, a miss in the reverse one is data off the wire |
-| `IntegrationEventSubscription` | **internal since #185.** `sealed record (Type EventType, string ContractName)` — one consumed contract. Carries **no `Source`**, structurally: a consumer has none to declare |
-| `IntegrationEventSubscriptionBuilder` | `Consumes<TEvent>()` — mirrors `Publishes<TEvent>()`, reads the same `[IntegrationEvent]` attribute, rejects its absence at registration |
-| ~~`IMessagePublisher`~~ | **deleted** (ADR-MSG-018). The seam discarded the `OutboxMessage`, forcing the fan-out to re-read metadata off the event — the sole reason `IIntegrationEvent` had members. The in-process fan-out that replaced it is itself **deleted** (ADR-MSG-019): the transport seam arrived, and a `Contract` row now leaves through `IMessageTransport` while the receiving side writes its own inbox rows |
-| `IMessageHandler<T>` | handles a specific integration event type |
-| `IOutboxWriter` | write-only outbox access for domain handlers — `AddAsync` (single) + `AddBatchAsync` (ADR-MSG-011, the path `OutboxDomainEventSink` uses) |
-| `IOutboxProcessorStore` | claim + settlement for the background processor — `ClaimBatchAsync`, `ApplyOutcomesAsync`. The per-message lease API (`GetPendingAsync`, `AcquireLeaseAsync`, `MarkPublishedAsync`, `MarkFailedAsync`, `DeadLetterAsync`) was removed by the outbox claim rewrite |
-| `IOutboxAdminStore` | dead-letter inspection and requeue for operator tooling only — `GetDeadLetteredAsync`, `RequeueAsync` |
-| `IOutboxRetentionStore` | retention for the cleanup worker only — `DeleteProcessedAsync` |
-| `IInboxWriter` | inbox ingestion — `ExistsAsync`, `AddAsync`. `AddAsync` returns `InboxWriteResult`: a redelivery is reported through the return value, never thrown (ADR-MSG-017) |
-| `IInboxProcessorStore` | claim + deferred settlement for the drain processor — `ClaimBatchAsync`, `ApplyOutcomesAsync`. The per-message lease API (`GetPendingAsync`, `MarkProcessingAsync`, `MarkProcessedAsync`, `MarkFailedAsync`, `DeadLetterAsync`) was removed by the inbox claim rewrite |
-| `IInboxSettlementStore` | `StageProcessedAsync`, `IsMarkUncommitted`, `IsLeaseLost` — resolved from the **per-message** execution scope so the processed mark commits in the handler's own transaction. Stages only; never calls `SaveChangesAsync` |
-| `IInboxAdminStore` | dead-letter inspection and requeue for operator tooling only — `GetDeadLetteredAsync`, `RequeueAsync` |
-| `IInboxRetentionStore` | retention for the inbox cleanup worker only — `DeleteProcessedAsync` |
-| `IMessageTransport` | the transport seam — `SendAsync(MessageEnvelope, ct)`. **Returning means the destination acknowledged**; the processor marks the row `Published` on that return and `Published` is terminal, so an asynchronous hand-off makes the mark a lie. **No implementation ships in any MicroKit package** — a broker provider supplies one, and owes a conformance test proving the acknowledgement rule |
-| `IEnvelopeReceiver` | the **receiving** seam — `ReceiveAsync(MessageEnvelope, ct)` → `EnvelopeReceiveResult`. The mirror of `IMessageTransport`, and it runs in the opposite direction: a provider implements the transport and Core calls it; Core implements this and a provider's consume loop calls it. **Returning means the message is durably recorded and the broker may be acknowledged** — the same conformance obligation, mirrored. Fans out contract name → local type → one `InboxMessage` per consumer. Requires no ambient transaction and commits, which is the opposite of `IIntegrationEventPublisher` and deliberately so. Singleton; it creates one execution scope per envelope internally |
-| `IOutboxDispatcher` | the dispatch seam in Core — deserializes an `OutboxMessage` and routes it. **Replaced the former `MessageDispatcher`**, which no longer exists and must not be re-introduced (pinned by `Core_DoesNotContainTypeNamedMessageDispatcher`) |
+- `sealed record` — value objects, options, store keys, message types: `MessageId`,
+  `CorrelationId`, `CausationId`, `MessageStoreKey`, `PublishOptions`, `LocalConsumer`,
+  `MessagingOptions`, `OutboxProcessorOptions`, `InboxProcessorOptions`.
+- `sealed class` with `required init` members — a type that crosses a seam and must gain members
+  without breaking a call site: `MessageEnvelope`, `MessageContext`, `MessageSendContext`,
+  `MessageReceiveContext`. No positional constructor (pinned by
+  `MessageEnvelope_HasNoPositionalConstructor_SoAddingAHeaderNeverChangesOne`).
+- `sealed record` with a private constructor and static factories when Core builds it and a
+  provider reads it: `EnvelopeReceiveResult` (`Acknowledged`, `From(...)`).
+- `readonly record struct` — small keys and outcomes: `InboxMessageKey`, `InboxRowState`,
+  `OutboxOutcome`, `InboxOutcome`.
+- `sealed class` with `{ get; set; }` — the EF rows `OutboxMessage` and `InboxMessage`: EF Core
+  change tracking needs mutable properties.
+- `sealed class` — services, handlers, processors, dispatchers, stores, exceptions.
+- `I` prefix on every interface. No `Base`, `Helper`, `Utils` or `Manager` suffix: name by
+  responsibility.
 
 ---
 
-## Value Objects and Records
+## Application surface (`MicroKit.Messaging`)
 
-| Pattern | Example |
-|---------|---------|
-| `MessageId` | strongly-typed message identifier — `sealed record MessageId(Guid Value)` |
-| `CorrelationId` | correlation chain identifier — `sealed record CorrelationId(Guid Value)` |
-| `CausationId` | causal parent identifier — `sealed record CausationId(Guid Value)` |
-| `OutboxMessage` | outbox EF Core entity — `sealed class OutboxMessage` with `{ get; set; }` |
-| `InboxMessage` | inbox EF Core entity — `sealed class InboxMessage` with `{ get; set; }` |
-| `MessageEnvelope` | the **wire format** — `sealed record`, non-generic, carrying `MessageId` / `ContractName` / `Source` / opaque `Payload` / `TenantId` / correlation / causation / `OccurredOnUtc`. A **compatibility commitment**: adding a member is additive, removing or renaming one breaks every deployed consumer. Identifiers are bare `Guid`s, not the VO records — those serialize as `{"value":…}`, and a `JsonConverter` would make the wire shape depend on which serializer is registered. Replaced `MessageEnvelope<T>`, which was generic over a *deserialized* payload and carried no `ContractName` |
-| `IntegrationEventWriteResult` | `sealed record` — `Staged(id)` / `AlreadyPublishedAs(existingId)`. Carries an id because the two paths yield different ones: on the absorbed path the row this call built does not exist, so the **existing** row's id is returned. ~~`IntegrationEventMessage`~~ and its own table are **deleted** — a contract is a `MessageKind.Contract` outbox row |
-| `EnvelopeReceiveResult` | `sealed record` — the per-consumer tally of one `ReceiveAsync`: `RowsAdded`, `Duplicates`, `ConsumersMatched`. Private constructor and a static factory, like `IntegrationEventWriteResult` and **not** a positional record: it travels outward, built by Core and read by a provider, so it can gain a member without breaking a call site. `ConsumersMatched == 0` is a legal outcome, not an error — and never a silent one |
-| `{Name}Options` | configuration record — `MessagingOptions`, `OutboxProcessorOptions` |
+| Name | What it is |
+|---|---|
+| `IIntegrationEvent` | Marker, `: IEvent`. Business payload only; identity, tenant, correlation and time are assigned when the message is published |
+| `MessageContractAttribute` | `[MessageContract("name", Version = n)]` — the wire contract. Wire type `WireType` = `"<name>.v<version>"`, `Version` defaults to 1. The constructor rejects a blank name and a name already ending in `.v<digits>`; a `Version` below 1 throws. Mandatory on every published or handled type: a CLR type name cannot cross a process |
+| `IMessageBus` / `IEventPublisher` | `PublishAsync<T>(T message, PublishOptions? options = null, CancellationToken ct = default)` → `MessageId`. The one way to publish. One scoped instance serves both interfaces |
+| `PublishOptions` | `TenantId`, `Headers`, `Store`. A reserved header in `Headers` throws |
+| `MessageStoreKey` | `sealed record MessageStoreKey(string Value)`, never blank. Names a store |
+| `IMessageHandler<T>` | `HandleAsync(T message, MessageContext context, CancellationToken ct = default)`. A handler is its subscription |
+| `MessageContext` | `MessageId`, `ContractName`, `ContractVersion`, `Source`, `OccurredOnUtc`, `TenantId`, `CorrelationId`, `CausationId`, `Headers` |
+| `IMessageSendMiddleware` / `MessageSendContext` | `InvokeAsync(context, proceed, ct)` around a publication. A middleware that does not call `proceed` makes `PublishAsync` throw |
+| `IMessageReceiveMiddleware` / `MessageReceiveContext` | `InvokeAsync(context, proceed, ct)` around a handler |
+| `IMessageScopeInitializer` | `InitializeAsync(MessageContext, IServiceProvider, ct)` — runs in each message scope before the handler and before an attempt's transaction begins |
+| `MessageId` | `sealed record MessageId(Guid Value) : IComparable<MessageId>` |
+| `PermanentMessageException`, `InboxDependencyUnavailableException` | Thrown by a handler: dead-letter now, or pause and redeliver without counting an attempt |
+| `IntegrationEventConfigurationException`, `IntegrationEventPublishException` | Composition fault (start or publication), refused publication |
+| Core: `MessagingBuilder`, `ServiceCollectionExtensions`, `MessagingDiagnostics`, `InMemoryBroker` | Composition, the inbox meter name (`InboxMeterName`), the in-memory broker a host may supply |
+| `MicroKit.Messaging.Options` | `MessagingOptions` (section `MicroKit:Messaging`), `OutboxProcessorOptions`, `InboxProcessorOptions` |
 
-> `OutboxMessage` and `InboxMessage` are `sealed class` (not `sealed record`) because
-> EF Core change tracking requires mutable `{ get; set; }` properties.
+## SPI (`MicroKit.Messaging.Spi`) — for store, transport and integration-package authors
+
+| Name | What it is |
+|---|---|
+| `IMessageTransport` | `SendAsync(MessageEnvelope, ct)`. **Returning means the destination acknowledged**: the outbox marks the row `Published` on that return and `Published` is terminal. The only implementation shipped is Core's internal in-memory one (`OnlyCoreShipsAnIMessageTransport_AndItIsTheInternalInMemoryOne`) |
+| `MessageEnvelope` | The wire form, CloudEvents-aligned: `Id` (string), `Source`, `Type` (the wire type), `Time`, `DataContentType`, `DataSchema?`, `Headers`, `Body` (`ReadOnlyMemory<byte>`). A compatibility commitment: renaming or removing a member breaks every deployed consumer |
+| `MessageHeaders` | The reserved extensions `tenantid`, `correlationid`, `causationid`, `traceparent`; `IsReserved(name)` is case-insensitive |
+| `IMessageSerializer` | `ContentType`; `Serialize(object message, Type type)` → `ReadOnlyMemory<byte>`; `Deserialize(ReadOnlyMemory<byte> body, Type type)` → `object?`. It serializes the message, never an envelope. The default is internal (`SystemTextJsonMessageSerializer`, `application/json`); only JSON is received, and the outbox refuses a non-JSON serializer |
+| `IEnvelopeReceiver` | `ReceiveAsync(MessageEnvelope, ct)` → `EnvelopeReceiveResult`. Core implements it, a provider's consume loop calls it |
+| `EnvelopeReceiveResult` / `ReceiveDisposition` | `Disposition`, `Reason`, `Error`. `Acknowledge`, `DeadLetter`, `Redeliver`, `PauseAndRedeliver`, `Unsettled`. `Unsettled` is never an acknowledgement |
+| `IMessageStoreSet` | `GetStores()` — the stores the engine drains. Static, read at start |
+| `MessageStoreBuilder` | `Key`, `Services`, `BindAssembly(Assembly)`, `AddStartupCheck(...)` |
+| `MessageStoreRegistrationExtensions` | `AddMessageStore(this MessagingBuilder, MessageStoreKey, Action<MessageStoreBuilder>)` — how any store provider adds a store; the first call registers the engine and both outbox dispatchers |
+| `IOutboxWriter` | `AddAsync`, `AddBatchAsync`. Enlists rows in the scope's unit of work; never saves |
+| `IOutboxProcessorStore` | `ClaimBatchAsync(batchSize, lockDuration, OutboxEndpoints excluded, ct)` → `OutboxClaim`, one signature, no default: the rows of an endpoint in back-off must be left out; `ApplyOutcomesAsync(claimToken, outcomes, ct)` → rows written, every `OutboxOutcomeKind` settled |
+| `OutboxEndpoints` | `[Flags]` `None`, `Transport`, `Local` — the endpoints a claim leaves out |
+| `IOutboxAdminStore` / `IOutboxRetentionStore` | `GetDeadLetteredAsync`, `RequeueAsync` / `DeleteProcessedAsync` |
+| `IInboxGuardStore` | `FindAsync`, `ExecuteAsync<TState, TResult>` (the store's execution strategy, with commit verification; the state reaches both callbacks), `BeginAsync`, `EnlistProcessedAsync` (new delivery), `MarkClaimedProcessedAsync` (retry), `CommitAsync`, `IsLeaseLost`, `TryInsertFailedAsync`. Scoped, keyed by the store key, one instance per attempt scope |
+| `InboxRowState` | `(InboxMessageStatus Status, bool DeadLettered, Guid RowId)` — what `FindAsync` reads |
+| `IInboxProcessorStore` | `ClaimBatchAsync(batchSize, leaseDuration, ct)` → `InboxClaim`; `ApplyOutcomesAsync` |
+| `IInboxAdminStore` / `IInboxRetentionStore` | `GetDeadLetteredAsync`, `RequeueAsync(InboxMessageKey)` / `DeleteProcessedAsync` |
+| `ILocalMessageSender` | `SendAsync(object message, MessageId messageId, DateTimeOffset occurredOnUtc, ct)` — a local message: never handed to a transport |
+| `MessageConsumerKey` | `Of(Type)`, `FromAssemblyQualifiedName(string)` — the version-free inbox key of a handler type: no `Version`, `Culture` or `PublicKeyToken`, generic arguments included |
+| `ILocalConsumerSource` / `LocalConsumer` | `GetConsumers()`; `LocalConsumer(MessageType, ConsumerType, HandlerType, Invoke)`. `ConsumerType` is the inbox key: keep it stable across deployments |
+| `MessagingIntegrationExtensions` | `AddLocalConsumerSource(source)`, `AddStartupCheck(check)` on `MessagingBuilder` |
+| `OutboxMessage`, `InboxMessage` | The rows. `OutboxMessage.Endpoint`: `null` = transport, `OutboxMessage.LocalEndpoint` (`"local"`) = local endpoint |
+| `OutboxClaim`, `InboxClaim`, `OutboxOutcome`, `InboxOutcome`, `InboxMessageKey` | What the stores exchange. Outcome factories: `Published`/`Processed`, `Retry`, `DeadLetter`, `Released`, and the outbox's `Deferred` (an endpoint down: next attempt set, retry count and error kept) |
+| `CorrelationId`, `CausationId` | `sealed record (Guid Value)` row columns |
+| `OutboxMessageStatus`, `InboxMessageStatus`, `OutboxOutcomeKind`, `InboxOutcomeKind` | Row and outcome state, below |
+| `OutboxPayloadException`, `OutboxTransportUnavailableException`, `OutboxConfigurationException`, `InboxPayloadException`, `InboxConfigurationException` | What a provider raises across the seam for the engine to classify |
+
+## EF Core and MediatR packages
+
+| Name | What it is |
+|---|---|
+| `MessagingBuilderExtensions.UseEntityFrameworkOutbox<TContext>(Action<EntityFrameworkOutboxBuilder>? configure = null)` | The EF store: the outbox and the inbox of `TContext`. A second call for the same context reaches the same store |
+| `EntityFrameworkOutboxBuilder` | `Key`, `ForAssemblyContaining<TMarker>()` |
+| `EntityFrameworkOutbox.KeyOf<TContext>()` | The store key, `"ef:" + typeof(TContext).FullName` |
+| `ModelBuilderExtensions.ApplyMessagingConfiguration()`, `OutboxMessageConfiguration`, `InboxMessageConfiguration` | The only model hook |
+| `MessagingMediatRExtensions.UseMediatRDomainEvents()` | Namespace `MicroKit.Messaging.MediatR.DependencyInjection`. Idempotent |
 
 ---
 
-## Outbox / Inbox State
+## Row state
 
 | Value | Meaning |
-|-------|---------|
-| `OutboxMessageStatus.Pending` | written, not yet dispatched; eligible for lease |
-| `OutboxMessageStatus.Processing` | lease acquired, in-flight (`LockedUntilUtc > now`) |
-| `OutboxMessageStatus.Published` | confirmed delivery — terminal |
-| `OutboxMessageStatus.Failed` | **always terminal** — max retries exceeded, `DeadLettered=true`; never used for transient failures |
-| `InboxMessageStatus.Received` | received, not yet processed. Reached from three places with three meanings — retried, released, or requeued — and only one costs a retry |
-| `InboxMessageStatus.Processing` | claimed; lease held until `LockedUntilUtc`, `ClaimToken` names the owner |
-| `InboxMessageStatus.Processed` | handler completed successfully — terminal |
-| `InboxMessageStatus.Failed` | **always terminal** — permanently unprocessable or past `MaxRetries`, `DeadLettered=true` set simultaneously |
+|---|---|
+| `OutboxMessageStatus.Pending` | Not yet dispatched, or back after a retry or a release. Claimable when not dead-lettered and `NextRetryAtUtc` is null or past |
+| `OutboxMessageStatus.Processing` | Claimed: `LockedUntilUtc` and `ClaimToken` set. Reclaimable once the lease expires |
+| `OutboxMessageStatus.Published` | The transport acknowledged, or the local endpoint delivered. Terminal |
+| `OutboxMessageStatus.Failed` | Always terminal, `DeadLettered = true` in the same write. There is no transient outbox failure state: a failed attempt goes back to `Pending` |
+| `InboxMessageStatus.Received` | Written by no path since #188; still claimed by the retry loop so a row from an earlier version is handled |
+| `InboxMessageStatus.Processing` | Claimed by a store's retry loop: lease until `LockedUntilUtc`, `ClaimToken` names the owner |
+| `InboxMessageStatus.Processed` | Written in the transaction that committed the handler's work. Terminal |
+| `InboxMessageStatus.Failed` | The last attempt failed. `DeadLettered = false`: retried once `NextRetryAtUtc` passes. `DeadLettered = true`: terminal. A released retry also returns to `Failed`, with nothing counted |
 
-> **`OutboxMessageStatus.Failed` = permanent, terminal.** Failed attempts reset to `Pending`
-> (not to `Failed`). The `Failed` status is only set by `DeadLetterAsync` when
-> `RetryCount >= MaxRetries`. `DeadLettered=true` is always set simultaneously.
-
----
-
-## Implementations
-
-| Pattern | Example |
-|---------|---------|
-| `{Provider}{Noun}` | `RabbitMqMessagePublisher`, `AzureServiceBusPublisher` |
-| `Ef{Noun}` | `EfOutboxStore`, `EfInboxStore` — EF Core implementations |
-| `{Noun}Processor` | `OutboxProcessor`, `InboxProcessor` — topology-agnostic batch engines |
-| `{Noun}Worker` | `OutboxWorker`, `InboxWorker`, `OutboxRetentionWorker`, `InboxRetentionWorker` — `BackgroundService` hosts. `internal sealed`; only `IServiceScopeFactory` is injected |
-| `{Noun}Dispatcher` | `TransportOutboxDispatcher`, `MediatROutboxDispatcher` — `IOutboxDispatcher` implementations, `internal sealed`, **routing on `MessageKind` and never on the payload's CLR type**. `TransportOutboxDispatcher` handles `MessageKind.Contract` and takes **no serializer and no registry**: the payload travels opaque, and it must keep `IMessageTransport` as a *constructor* dependency or a missing transport is misclassified as transient. `MediatROutboxDispatcher` handles `MessageKind.Notification` and delegates the rest to an **optional** inner resolved from `OutboxDispatcherKeys.Standard`. NOT `MessageDispatcher`, and no longer `InProcessIntegrationDispatcher`: both were eliminated and both re-introductions are blocked by architecture tests |
-| `{Noun}Receiver` | `EnvelopeReceiver` — the `IEnvelopeReceiver` implementation, `internal sealed`, in Core. **The only writer of `InboxMessage` rows in the module**, and it writes them on the RECEIVING side. A producer-side writer is the in-process fan-out returning; blocked by `NoOutboxDispatcherWritesInboxRows` |
-| `{Noun}Sink` | `OutboxDomainEventSink` — an `IDomainEventsSink` (MicroKit.MediatR.Abstractions) contributed to the core domain-event orchestrator. `internal sealed`, registered with `TryAddEnumerable` so the collection dedups on implementation type. A sink **contributes** to a sequence it does not own; a `{Noun}Dispatcher` **owns** one. Never register a sink as a rival dispatcher (ADR-MSG-016) |
-| `Fake{Noun}` | `FakeMessagePublisher` (Testing package only) |
-| `InMemory{Noun}` | `InMemoryOutboxStore`, `InMemoryInboxStore` (Testing package only) |
+One inbox row per (`MessageId`, `ConsumerType`); the unique index
+`UX_InboxMessages_MessageId_ConsumerType` is the guard. `ConsumerType` is the handler type's
+version-free key, `MessageConsumerKey.Of(handlerType)` = `Namespace.Type, AssemblyName` (a bus or
+notification handler), or another source's `LocalConsumer.ConsumerType`.
 
 ---
 
-## Integration Events
+## Internal implementation names
+
+| Pattern | Types |
+|---|---|
+| `Ef{Noun}Store<TContext>` | `EfOutboxStore<TContext>`, `EfInboxStore<TContext>` — `internal sealed`, scoped, every store interface resolving to the one instance of the scope |
+| `{Noun}Processor` | `OutboxProcessor`, `InboxProcessor` — one batch; behind internal `IOutboxProcessor` / `IInboxProcessor`, keyed by store |
+| `{Noun}Loop` | `OutboxLoop`, `InboxLoop`, `OutboxRetentionLoop`, `InboxRetentionLoop` — plain classes, one of each per store, each with its own back-off |
+| `MessageStoreEngine` | The `BackgroundService` that runs the four loops of every store. Registered by the first `AddMessageStore`, once |
+| `{Noun}Worker` | `InMemoryTransportWorker` (the in-memory consume loop), `LocalQueueWorker` (the in-memory local queue). `BackgroundService` / hosted services, `IServiceScopeFactory` only in the constructor |
+| `{Noun}Dispatcher` | `TransportOutboxDispatcher`, `LocalOutboxDispatcher` — internal `IOutboxDispatcher`, keyed `OutboxDispatchers.Transport` / `OutboxDispatchers.Local`, both registered with the first store, chosen by `OutboxDispatchers.KeyOf(row)` from `OutboxMessage.Endpoint`, never from the payload's type. `TransportOutboxDispatcher` takes no serializer: the payload travels opaque. `MessageDispatcher` and `InProcessIntegrationDispatcher` must not come back (architecture tests) |
+| `MessageReceivePipeline` | The one receive path for transport deliveries, local deliveries and retries; it holds the inbox guard |
+| `EnvelopeReceiver` | `IEnvelopeReceiver`: maps a delivery verdict to a `ReceiveDisposition` |
+| `{Noun}Registry` | `IntegrationEventRegistry` (wire type ↔ local type), `MessageHandlerRegistry`, `LocalConsumerRegistry` |
+| MediatR glue | `DomainEventNotificationSink` (an `IDomainEventsSink` sending through `ILocalMessageSender`), `DomainEventsDispatchMiddleware` (dispatches cascade events after the handler), `NotificationHandlerSource` (each `INotificationHandler` a `LocalConsumer`) |
+| Test doubles (tests only) | `Recording{Noun}`, `Scripted{Noun}`, `Capturing{Noun}`, `InMemoryInbox{Noun}` — there is no `MicroKit.Messaging.Testing` package |
+| Broker provider | `{Provider}Transport`, registered by `Add{Provider}Transport()`. The `Add{Provider}Transport()` shape is reserved for methods that wire a real broker |
+
+---
+
+## Message types
 
 ```csharp
-// ✅ Named by domain fact — past tense, domain language
-public sealed record OrderPlacedEvent : IIntegrationEvent { ... }
-public sealed record UserRegisteredEvent : IIntegrationEvent { ... }
-public sealed record InventoryReservedEvent : IIntegrationEvent { ... }
+// ✅ A past-tense domain fact, with its contract. Wire type: shop.orders.order-placed.v1
+[MessageContract("shop.orders.order-placed")]
+public sealed record OrderPlaced(Guid OrderId) : IIntegrationEvent;
 
-// ❌ Wrong naming
-public sealed record OrderMessage { ... }           // ← not an event, generic noun
-public sealed record OnOrderPlaced { ... }          // ← on- prefix is wrong
-public class OrderPlacedNotification { ... }        // ← Notification = MediatR coupling
+// ✅ A breaking change is a new version: a second contract, a second type.
+[MessageContract("shop.orders.order-placed", Version = 2)]
+public sealed record OrderPlacedV2(Guid OrderId, Guid CustomerId) : IIntegrationEvent;
+
+// ❌ Version in the name — the attribute throws: set Version instead.
+[MessageContract("shop.orders.order-placed.v1")]
+
+// ❌ Generic noun, "On" prefix, "Notification" suffix (a MediatR notification is a domain-event
+//    notification, not an integration event).
+public sealed record OrderMessage;
+public sealed record OnOrderPlaced;
 ```
+
+A consumer declares the producer's name on its **own** type. Two types claiming one wire type in
+one process fail at start.
 
 ---
 
-## DI Extension Methods
+## Composition methods
 
-| Pattern | Example |
-|---------|---------|
-| `AddMicroKitMessaging()` | on `IServiceCollection` — main registration entry point. **Owns the `IMessageSerializer` default** (ADR-MSG-019): it registers `InboxProcessor` and `OutboxMessageFactory` unconditionally and both require one, so no optional builder method may claim that job. Contributes `InboxMetrics` (internal since #185 — hosts subscribe via `MessagingDiagnostics.InboxMeterName`); it no longer contributes `InboxIngestionValidator`, deleted with the receiving seam |
-| `AddEfCoreOutbox()` | on `MessagingBuilder` — wires `EfOutboxStore` and `EfInboxStore`. Each is registered **once as scoped by concrete type**, with every interface resolving to that instance through a factory lambda, so one scope holds one store over one `DbContext`. That is also what makes `IInboxSettlementStore` transactional: resolved from the per-message execution scope it necessarily shares its `TContext` with the handler resolved from the same scope. Registering either store as anything other than scoped breaks the guarantee silently. The name is now a misnomer — it wires the inbox too |
-| ~~`AddInProcessTransport()`~~ | **deleted** (ADR-MSG-019). Its dispatcher is gone and its `IMessageSerializer` default moved to `AddMicroKitMessaging()`, which owns the two types that require one (`InboxProcessor`, `OutboxMessageFactory`). Migration: `AddTransportDispatcher()`, or nothing at all for a notification-only host |
-| `AddTransportDispatcher()` | on `MessagingBuilder` — wires `TransportOutboxDispatcher` and **nothing else**: no serializer (it never deserializes) and no `IMessageTransport` (none ships). **Two registrations**: the dispatcher `TryAddKeyedScoped` under `OutboxDispatcherKeys.Standard`, plus an unkeyed `TryAddScoped` forwarder for the seam `OutboxProcessor` resolves. The split is what makes composition order-independent — only Core writes the keyed slot, and a decorator takes the unkeyed one outright (ADR-MSG-019). ⚠ Calling it without registering an `IMessageTransport` stops **every** kind of row, notifications included. Deliberately **not** named `Add{Provider}Transport()` — that shape is reserved for methods that wire an actual broker, and a provider's own such method should call this one |
-| `AddIntegrationEventContracts()` | on `IServiceCollection` — **once per module**; declares that module's published contracts and its `source`. Accumulates (`AddSingleton`, never `TryAdd`) so every module composes into one registry, which is what makes a cross-module name collision detectable |
-| `AddIntegrationEventSubscriptions()` | on `IServiceCollection` — **once per module**; declares the contracts that module *understands* but does not publish. Takes **no `source`**: a consumer emitted nothing, and a nominal source would be false data in the one column that survives module extraction. Accumulates like the call above |
-| `AddIntegrationEventPublishing()` | on `MessagingBuilder` — **once per application**; the registry, the publisher, the startup validator and `IEnvelopeReceiver` (a monolith consumes its own contracts, and `Publishes<T>()` binds both directions). It registers **no** serializer default: `AddMicroKitMessaging()` owns that, and this is an extension on the builder that method returns, so a `TryAdd` here would be unreachable code reading like a safeguard |
-| `AddIntegrationEventConsumption()` | on `MessagingBuilder` — **once per application**; the registry, the startup validator and `IEnvelopeReceiver`, and nothing else. Exists so a consumer-only service gets the same boot-time validation a publishing one gets. Safe alongside `AddIntegrationEventPublishing()` in either order — both reach one shared private helper, so both compositions can receive. **`IEnvelopeReceiver` gets no builder method of its own**: nothing to configure, and a method whose omission is invisible until a provider fails to resolve the seam is worse than none |
-| `AddEfCoreIntegrationEvents<TContext>()` | on `MessagingBuilder` — the staging writer. Separate from the call above because Core has no EF Core dependency and must not acquire one |
-| `Add{Provider}Transport()` | on `MessagingBuilder` — **broker providers ONLY** (e.g. `AddRabbitMqTransport()`). This shape is reserved: a method that does not wire a broker must not use it. The one standing exception, `AddInProcessTransport()`, was deleted by ADR-MSG-019, so the reservation is now absolute |
-| `AddMediatRDomainEvents()` | on `MessagingBuilder` — wires the MicroKit.MediatR glue, **three** registrations: contributes the outbox `IDomainEventsSink` (`TryAddEnumerable`), takes the unkeyed `IOutboxDispatcher` seam with the notification router, and replaces `INotificationPublisher` with the cascade publisher. It requires no transport to have been registered first and no longer supplies a serializer (ADR-MSG-019). **Not a transport** — it moves nothing between processes (ADR-MEDIATR-015, ADR-MSG-016) |
-| `AddMessageHandler<THandler, TEvent>()` | on `MessagingBuilder` — registers a handler, transient, keyed in the registry by `typeof(THandler).AssemblyQualifiedName`. Reached only once rows exist: a host also needs `AddIntegrationEventConsumption()` (or `AddIntegrationEventPublishing()`) to bind the contract name, `AddEfCoreOutbox<TContext>()` to have somewhere to write, and a provider driving `IEnvelopeReceiver`. It no longer fails at startup — `InboxIngestionValidator` was deleted with the receiving seam |
+| Method | On | Notes |
+|---|---|---|
+| `AddMicroKitMessaging(Action<MessagingBuilder>)` | `IServiceCollection` | The one entry point; may be called once per module, the calls add to one composition. Registers the bus, the receive pipeline, `IEnvelopeReceiver`, the serializer default (`TryAdd`, so a host's earlier registration wins), the local sender. Its only hosted service is the composition validator |
+| `ServiceName` | `MessagingBuilder` | The `Source` of every publication and the endpoint consumed from. Blank throws; `null` leaves it unset |
+| `Publishes<T>()` | `MessagingBuilder` | Declares a publication; required to publish `T` |
+| `AddHandler<THandler>()` / `AddHandlersFromAssemblyContaining<TMarker>()` | `MessagingBuilder` | One subscription per closed `IMessageHandler<T>`; the scan is `[RequiresUnreferencedCode]` |
+| `Configure`, `ConfigureJson`, `AddSendMiddleware<T>`, `AddReceiveMiddleware<T>`, `AddScopeInitializer<T>` | `MessagingBuilder` | |
+| `UseInMemoryTransport(InMemoryBroker? broker = null)` | `MessagingBuilder` | The in-memory transport, its consume loop, and the transport dispatcher. Refuses when another `IMessageTransport` is registered |
+| `AddMessageStore(key, configure)` | `MessagingBuilder` (Spi) | Store providers. The first call registers the engine and both outbox dispatchers |
+| `AddLocalConsumerSource(source)`, `AddStartupCheck(check)` | `MessagingBuilder` (Spi) | Integration packages; the first source brings `LocalQueueWorker` |
+| `UseEntityFrameworkOutbox<TContext>()` | `MessagingBuilder` | EF package |
+| `UseMediatRDomainEvents()` | `MessagingBuilder` | MediatR package. Not a transport |
 
 ---
 
-## Test Method Naming
+## Test names
+
+PascalCase segments joined by `_`, either form:
 
 ```
-{Method}_{Scenario}_{ExpectedResult}
+{Member}_{Scenario}_{ExpectedResult}      for one member of one type
+  ClaimBatchAsync_WhenManyProcessorsRaceOnOneRow_ExactlyOneWins
+  ApplyOutcomesAsync_WithStaleToken_WritesNothing
+  ReceiveAsync_WhenOneHandlersRowExists_SkipsItAndStillRunsTheOthers
+  DispatchAsync_DoesNotDeserializeThePayload
 
-Examples — every one names an API that still exists:
-  PublishAsync_WhenEventValid_StoresInOutbox
-  PublishAsync_WithNoOpenTransaction_ThrowsAndStagesNothing
-  ClaimBatchAsync_WhenTwoProcessorsRaceOnOneRow_ExactlyOneWins
-  ApplyOutcomesAsync_WithStaleToken_WritesNothing (the lost update)
-  ExistsAsync_WhenMessageAlreadyProcessed_ReturnsTrue (dedup gate)
-  DispatchAsync_WhenKindIsContract_NeverTouchesTheSerializer
+{Situation}_{Outcome}                     for a behaviour across components
+  TwoHandlers_OneFailing_TheOtherRunsOnce_AndTheFailingOneIsRetriedToProcessed
+  AStoreWhoseDbContextIsNotRegistered_FailsAtStart
 
-⚠ Do NOT copy `GetPendingAsync` / `MarkPublishedAsync` / `MarkFailedAsync` from older examples —
-the per-message lease API was removed by the outbox and inbox claim rewrites (see the store rows
-above). A test named after a deleted method is a test nobody can write.
+❌ TestOutboxProcessor   ❌ ShouldPublishMessage   ❌ a name citing a member that no longer exists
 ```
 
 ---
 
 ## Files
 
-| Type | Convention | Example |
-|------|-----------|---------|
-| Interface | `I{Name}.cs` | `IOutboxProcessorStore.cs`, `IMessageTransport.cs` |
-| Implementation | `{Name}.cs` | `EfOutboxStore.cs`, `OutboxProcessor.cs` |
+| Kind | Convention | Example |
+|---|---|---|
+| Interface | `I{Name}.cs` | `IInboxGuardStore.cs` |
+| Implementation | `{Name}.cs` | `EfOutboxStore.cs`, `OutboxLoop.cs` |
 | Options | `{Name}Options.cs` | `OutboxProcessorOptions.cs` |
-| Extensions | `{Name}Extensions.cs` | `ServiceCollectionExtensions.cs` |
-| Tests | `{Name}Tests.cs` | `OutboxProcessorTests.cs` |
-| EF config | `{Entity}Configuration.cs` | `OutboxMessageConfiguration.cs` |
+| Extensions | `{Name}Extensions.cs` | `MessageStoreRegistrationExtensions.cs` |
+| Logging | `{Area}Logs.cs`, `[LoggerMessage]` | `InboxGuardLogs.cs` |
+| EF configuration | `{Entity}Configuration.cs` | `InboxMessageConfiguration.cs` |
+| Tests | `{Subject}Tests.cs` | `OutboxProcessorTests.cs`, `HandlerIsolationTests.cs` |
 
 ---
 
-## Prefixes and Patterns to Avoid
+## Removed in #188 — do not reintroduce or cite
 
----
-
-## Serialization
-
-| Pattern | Example |
-|---------|---------|
-| `IMessageSerializer` | `Serialize(object)` → `string` (runtime type, never `typeof(T)`); `Deserialize(string payload, string eventType)` → `object?`. It serializes the **payload**, not an envelope. `MessageEnvelope` is a separate concern: the transport dispatcher copies the already-serialized payload into one and never round-trips it, so the send path resolves no type at all |
-| `SystemTextJsonMessageSerializer` | default v1 implementation using `System.Text.Json` |
-
----
-
-## Prefixes and Patterns to Avoid
-
-```
-❌ MessageHelper, MessageUtils, MessagingManager
-❌ BaseMessageHandler, AbstractPublisher
-❌ INotification (MediatR type) — use IIntegrationEvent
-❌ Notification suffix on events — it implies MediatR
-❌ On{EventName} — use {EventName}Handler : IMessageHandler<{EventName}Event>
-```
+`IIntegrationEventPublisher`, `IIntegrationEventWriter`, `IntegrationEventWriteResult`,
+`IInboxWriter`, `IInboxSettlementStore`, `InboxWriteResult`, `MessageKind`,
+`OutboxDispatcherKeys`, `MediatROutboxDispatcher`, `DomainEventsCascadeNotificationPublisher`,
+`OutboxMessage.OriginMessageId`, `OutboxWorker`, `InboxWorker`, the coordinators,
+`AddEfCoreOutbox`, `AddEfCoreIntegrationEvents`, `AddMediatRDomainEvents`,
+`AddOutboxInboxProcessing` (`OutboxInboxProcessingExtensions`). Earlier: `IntegrationEventAttribute`, `IMessagePublisher`,
+`AddInProcessTransport`.

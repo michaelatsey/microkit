@@ -9,6 +9,7 @@
     <Project Path="tests/MicroKit.Messaging.ArchitectureTests/MicroKit.Messaging.ArchitectureTests.csproj" />
     <Project Path="tests/MicroKit.Messaging.UnitTests/MicroKit.Messaging.UnitTests.csproj" />
     <Project Path="tests/MicroKit.Messaging.IntegrationTests/MicroKit.Messaging.IntegrationTests.csproj" />
+    <Project Path="tests/MicroKit.Messaging.IntegrationTests.SecondModule/MicroKit.Messaging.IntegrationTests.SecondModule.csproj" />
     <Project Path="tests/MicroKit.Messaging.MediatR.UnitTests/MicroKit.Messaging.MediatR.UnitTests.csproj" />
     <Project Path="tests/MicroKit.Messaging.MediatR.IntegrationTests/MicroKit.Messaging.MediatR.IntegrationTests.csproj" />
   </Folder>

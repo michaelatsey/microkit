@@ -1,5 +1,5 @@
 using Microsoft.Extensions.Time.Testing;
-using MicroKit.Messaging.Outbox;
+using MicroKit.Messaging.Stores;
 
 namespace MicroKit.Messaging.UnitTests.Processing;
 
@@ -10,6 +10,7 @@ namespace MicroKit.Messaging.UnitTests.Processing;
 public sealed class OutboxProcessorTests
 {
     private static readonly DateTimeOffset Now = new(2026, 8, 21, 12, 0, 0, TimeSpan.Zero);
+    private static readonly MessageStoreKey TestStore = new("tests:outbox-store");
 
     private static OutboxProcessorOptions DefaultOptions => new()
     {
@@ -184,7 +185,7 @@ public sealed class OutboxProcessorTests
     // ---------------------------------------------------------------------------
 
     [Fact]
-    public async Task ProcessBatch_WhenTransportUnavailable_ReleasesRemainderWithoutConsumingRetries()
+    public async Task ProcessBatch_WhenTransportUnavailable_DefersItsEndpointsRemainderWithoutConsumingRetries()
     {
         var first = OutboxFixtures.Message();
         var second = OutboxFixtures.Message();
@@ -197,13 +198,13 @@ public sealed class OutboxProcessorTests
 
         result.AbortReason.ShouldBe(OutboxBatchAbortReason.TransportUnavailable);
         result.Published.ShouldBe(1);
-        result.Released.ShouldBe(2, "the message that hit the outage AND every message after it");
+        result.Released.ShouldBe(2, "the message that hit the outage AND every later row of its endpoint");
         result.Retried.ShouldBe(0, "an outage must not burn the queue's retry budget");
         result.DeadLettered.ShouldBe(0);
 
-        // The message that triggered the outage is released, not retried.
-        captured.Single(o => o.MessageId == second.Id).Kind.ShouldBe(OutboxOutcomeKind.Released);
-        captured.Single(o => o.MessageId == third.Id).Kind.ShouldBe(OutboxOutcomeKind.Released);
+        // The message that triggered the outage is deferred, its attempt count unchanged.
+        captured.Where(o => o.MessageId != first.Id).ShouldAllBe(o =>
+            o.Kind == OutboxOutcomeKind.Deferred && o.NextRetryAtUtc != null);
         dispatcher.Dispatched.Count.ShouldBe(2, "the third message is never attempted");
     }
 
@@ -229,7 +230,7 @@ public sealed class OutboxProcessorTests
         var messages = Enumerable.Range(0, 3).Select(_ => OutboxFixtures.Message()).ToArray();
         var (store, captured) = StoreReturning(OutboxFixtures.Claim(messages));
 
-        // No IOutboxDispatcher registered at all — the resolution itself is the fault.
+        // No dispatcher registered for the row's endpoint — the resolution itself is the fault.
         var sut = BuildWithoutDispatcher(store);
 
         await Should.ThrowAsync<OutboxConfigurationException>(
@@ -285,7 +286,7 @@ public sealed class OutboxProcessorTests
     /// </para>
     /// </remarks>
     [Fact]
-    public async Task ProcessBatch_WhenTheDispatcherCannotBeActivated_ReleasesTheBatchWithoutConsumingRetriesOrRethrowing()
+    public async Task ProcessBatch_WhenTheDispatcherCannotBeActivated_DefersItsEndpointsRowsWithoutConsumingRetriesOrRethrowing()
     {
         var first = OutboxFixtures.Message(retryCount: 1);
         // Its own tenant and kind, so the 1009 assertion below cannot pass on a neighbour's values.
@@ -317,19 +318,18 @@ public sealed class OutboxProcessorTests
         var activationFailure = logger.Records.Single(r => r.EventId == 1009).Message;
         activationFailure.ShouldContain(second.Id.Value.ToString());
         activationFailure.ShouldContain("tenant-b");
-        activationFailure.ShouldContain(nameof(MessageKind.Contract));
+        activationFailure.ShouldContain("endpoint", Case.Sensitive, "the row's endpoint names the dispatcher that failed");
 
         result.Published.ShouldBe(1, "message 1 was delivered before message 2's dispatcher failed");
-        result.Released.ShouldBe(2, "the message that hit the fault AND every message after it");
+        result.Released.ShouldBe(2, "the message that hit the fault AND every later row of its endpoint");
         result.Retried.ShouldBe(0, "an activation failure is not a per-message fault");
         result.DeadLettered.ShouldBe(0);
 
         captured.Single(o => o.MessageId == first.Id).Kind.ShouldBe(OutboxOutcomeKind.Published);
-        foreach (var released in captured.Where(o => o.MessageId != first.Id))
+        foreach (var deferred in captured.Where(o => o.MessageId != first.Id))
         {
-            released.Kind.ShouldBe(OutboxOutcomeKind.Released);
-            released.RetryCount.ShouldBe(0, "Released carries no retry count — the row keeps its own");
-            released.NextRetryAtUtc.ShouldBeNull();
+            deferred.Kind.ShouldBe(OutboxOutcomeKind.Deferred, "the row keeps its own count: no attempt is charged");
+            deferred.NextRetryAtUtc.ShouldNotBeNull("deferred to the end of the endpoint's back-off");
         }
 
         dispatcher.Dispatched.ShouldHaveSingleItem().Id.ShouldBe(first.Id, "message 3 is never attempted");
@@ -467,20 +467,16 @@ public sealed class OutboxProcessorTests
     }
 
     /// <summary>
-    /// A provider disposed at shutdown is not reported as an activation fault either — but it is
-    /// charged one retry, and that is pinned here as it stands.
+    /// A provider disposed at shutdown is neither an activation fault nor a failure: the row it hit
+    /// is released with its attempt count unchanged, like the rest of the batch (#128, #188 D10).
     /// </summary>
     /// <remarks>
-    /// <see cref="ObjectDisposedException"/> derives from <see cref="InvalidOperationException"/>, not
-    /// from <see cref="OperationCanceledException"/>, so once it propagates untagged it cannot reach
-    /// the cancellation arm: it reaches the transient arm, and the message it hit gets a
-    /// <c>Retry</c>. The next iteration sees the cancelled token and releases the rest. That is what
-    /// the same exception from <c>CreateScopeAsync</c> already does. Charging a retry to a message
-    /// whose only fault was meeting a clean shutdown is owed — whether shutdown should release
-    /// rather than retry is a change to the cancellation arm (ADR-MSG-019).
+    /// <see cref="ObjectDisposedException"/> derives from <see cref="InvalidOperationException"/>,
+    /// not from <see cref="OperationCanceledException"/>. Before #188 it reached the transient arm
+    /// and charged the row a retry; the shutdown arm now classifies it as shutdown.
     /// </remarks>
     [Fact]
-    public async Task ProcessBatch_WhenTheProviderIsDisposedDuringActivation_IsNotReportedAsAnActivationFault()
+    public async Task ProcessBatch_WhenTheProviderIsDisposedDuringActivation_ReleasesTheRowWithoutChargingARetry()
     {
         using var cts = new CancellationTokenSource();
         var first = OutboxFixtures.Message();
@@ -507,8 +503,38 @@ public sealed class OutboxProcessorTests
         logger.Records.ShouldNotContain(r => r.EventId == 1009, "shutdown is not an activation fault");
 
         captured.Single(o => o.MessageId == first.Id).Kind.ShouldBe(OutboxOutcomeKind.Published);
-        captured.Single(o => o.MessageId == second.Id).Kind.ShouldBe(OutboxOutcomeKind.Retry);
+        captured.Single(o => o.MessageId == second.Id).Kind.ShouldBe(
+            OutboxOutcomeKind.Released, "a host stop is never a message failure");
         captured.Single(o => o.MessageId == third.Id).Kind.ShouldBe(OutboxOutcomeKind.Released);
+        captured.ShouldNotContain(o => o.Kind == OutboxOutcomeKind.Retry);
+    }
+
+    /// <summary>
+    /// The same exception while the host keeps running is a failure of that row, not a stop
+    /// (#188 review): a stop releases with no attempt charged, so a recurring fault would be
+    /// re-claimed forever without ever reaching the dead-letter.
+    /// </summary>
+    [Fact]
+    public async Task ProcessBatch_WhenTheProviderIsDisposedWhileTheHostRuns_RetriesOnlyThatRow()
+    {
+        var first = OutboxFixtures.Message();
+        var second = OutboxFixtures.Message();
+        var third = OutboxFixtures.Message();
+        var (store, captured) = StoreReturning(OutboxFixtures.Claim(first, second, third));
+
+        var sut = BuildFailingActivationFor(
+            store,
+            new ScriptedDispatcher(),
+            second.Id,
+            () => new ObjectDisposedException(nameof(IServiceProvider)),
+            new CapturingLogger<OutboxProcessor>());
+
+        var result = await sut.ProcessBatchAsync(10, CancellationToken.None);
+
+        result.AbortReason.ShouldBe(OutboxBatchAbortReason.None, "the host is running: nothing was stopped");
+        captured.Single(o => o.MessageId == first.Id).Kind.ShouldBe(OutboxOutcomeKind.Published);
+        captured.Single(o => o.MessageId == second.Id).Kind.ShouldBe(OutboxOutcomeKind.Retry);
+        captured.Single(o => o.MessageId == third.Id).Kind.ShouldBe(OutboxOutcomeKind.Published);
     }
 
     // ---------------------------------------------------------------------------
@@ -519,7 +545,7 @@ public sealed class OutboxProcessorTests
     public async Task ProcessBatch_WhenClaimEmpty_DoesNotDispatchOrSettle()
     {
         var store = Substitute.For<IOutboxProcessorStore>();
-        store.ClaimBatchAsync(Arg.Any<int>(), Arg.Any<TimeSpan>(), Arg.Any<CancellationToken>())
+        store.ClaimBatchAsync(Arg.Any<int>(), Arg.Any<TimeSpan>(), Arg.Any<OutboxEndpoints>(), Arg.Any<CancellationToken>())
             .Returns(ValueTask.FromResult(OutboxClaim.Empty));
         var dispatcher = new ScriptedDispatcher();
 
@@ -570,7 +596,7 @@ public sealed class OutboxProcessorTests
     {
         // Leases expire on their own; taking the host down over a settlement fault would be worse.
         var store = Substitute.For<IOutboxProcessorStore>();
-        store.ClaimBatchAsync(Arg.Any<int>(), Arg.Any<TimeSpan>(), Arg.Any<CancellationToken>())
+        store.ClaimBatchAsync(Arg.Any<int>(), Arg.Any<TimeSpan>(), Arg.Any<OutboxEndpoints>(), Arg.Any<CancellationToken>())
             .Returns(ValueTask.FromResult(OutboxFixtures.Claim(OutboxFixtures.Message())));
         store.ApplyOutcomesAsync(Arg.Any<Guid>(), Arg.Any<IReadOnlyList<OutboxOutcome>>(), Arg.Any<CancellationToken>())
             .Returns(ValueTask.FromException<int>(new InvalidOperationException("db down")));
@@ -626,7 +652,7 @@ public sealed class OutboxProcessorTests
         var captured = new List<OutboxOutcome>();
         var store = Substitute.For<IOutboxProcessorStore>();
 
-        store.ClaimBatchAsync(Arg.Any<int>(), Arg.Any<TimeSpan>(), Arg.Any<CancellationToken>())
+        store.ClaimBatchAsync(Arg.Any<int>(), Arg.Any<TimeSpan>(), Arg.Any<OutboxEndpoints>(), Arg.Any<CancellationToken>())
             .Returns(ValueTask.FromResult(claim));
 
         store.ApplyOutcomesAsync(Arg.Any<Guid>(), Arg.Any<IReadOnlyList<OutboxOutcome>>(), Arg.Any<CancellationToken>())
@@ -640,101 +666,45 @@ public sealed class OutboxProcessorTests
     }
 
     // ---------------------------------------------------------------------------
-    // The origin stamp — what lets a published contract name the dispatch that produced it
+    // The delivery store — what makes a publication in a dispatch scope land in this store
     // ---------------------------------------------------------------------------
 
     /// <summary>
-    /// The row being dispatched is stamped on the scope, where <c>IIntegrationEventPublisher</c>
-    /// reads it to fill <see cref="OutboxMessage.OriginMessageId"/>.
+    /// Every dispatch scope names the store the row came from, so a notification handler's
+    /// publication is enlisted in that store (#188, D3 rule 2).
     /// </summary>
     /// <remarks>
-    /// <para>
-    /// Asserted through <b>constructor injection</b>, deliberately. That is the path the publisher
-    /// uses and the one that failed silently before the scoped-holder indirection existed (L0 #21):
-    /// Microsoft DI activates constructor dependencies from its own scope, so a value exposed only
-    /// through a wrapped <c>IServiceProvider</c> reaches a direct <c>GetService</c> call and nothing
-    /// else. A test that resolved the holder itself would pass under exactly that defect.
-    /// </para>
-    /// <para>
-    /// Failure here is silent by nature — a missing origin does not throw, it leaves the replay key
-    /// null, and nulls are distinct in the unique index — so nothing else in the suite would notice.
-    /// </para>
+    /// Asserted through <b>constructor injection</b>, the path the bus uses: Microsoft DI activates
+    /// constructor dependencies from its own scope, so a value written anywhere else would reach a
+    /// direct <c>GetService</c> call and nothing else.
     /// </remarks>
     [Fact]
-    public async Task ProcessBatch_StampsTheDispatchedRowOnTheScopesOriginHolder()
+    public async Task ProcessBatch_NamesItsStoreOnEveryDispatchScope()
     {
-        var message = OutboxFixtures.Message();
-        var (store, _) = StoreReturning(OutboxFixtures.Claim(message));
-
-        var observed = new List<MessageId?>();
+        var (store, _) = StoreReturning(OutboxFixtures.Claim(OutboxFixtures.Message(), OutboxFixtures.Message()));
+        var observed = new List<MessageStoreKey?>();
 
         var services = new ServiceCollection();
         services.AddLogging();
         services.AddSingleton(observed);
-        services.AddScoped<IOutboxDispatcher, OriginRecordingDispatcher>();
+        services.AddKeyedScoped<IOutboxDispatcher, StoreRecordingDispatcher>(OutboxDispatchers.Transport);
 
         var sut = BuildCore(store, services, options: null, random: null);
 
         await sut.ProcessBatchAsync(10, CancellationToken.None);
 
-        observed.ShouldHaveSingleItem().ShouldBe(message.Id);
+        observed.ShouldBe([TestStore, TestStore]);
     }
 
-    /// <summary>Reads the holder the way the publisher does — as a constructor dependency.</summary>
-    private sealed class OriginRecordingDispatcher(
-        OriginMessageHolder holder, List<MessageId?> observed) : IOutboxDispatcher
+    /// <summary>Reads the holder the way the bus does — as a constructor dependency.</summary>
+    private sealed class StoreRecordingDispatcher(
+        DeliveryStoreHolder holder, List<MessageStoreKey?> observed) : IOutboxDispatcher
     {
         public ValueTask DispatchAsync(OutboxMessage message, CancellationToken ct = default)
         {
-            observed.Add(holder.OriginMessageId);
+            observed.Add(holder.Store);
             return ValueTask.CompletedTask;
         }
-    }
-
-    /// <summary>
-    /// A scope whose container cannot supply <c>OriginMessageHolder</c> is a composition fault, not
-    /// a transient one: the batch is settled and released, then the fault is rethrown so the worker
-    /// stops.
-    /// </summary>
-    /// <remarks>
-    /// This pins <c>StampOrigin</c>'s null branch. Every other test in this file registers the
-    /// holder, so nothing else enters it — and what it guards is silent by nature: without the null
-    /// test, a foreign container yields a null holder, the stamp throws
-    /// <see cref="NullReferenceException"/>, and the processor classifies that as transient and
-    /// retries until the whole queue is dead-lettered.
-    /// </remarks>
-    [Fact]
-    public async Task ProcessBatch_WhenTheScopeCannotSupplyTheOriginHolder_SettlesBatchThenRethrows()
-    {
-        var messages = Enumerable.Range(0, 3).Select(_ => OutboxFixtures.Message()).ToArray();
-        var (store, captured) = StoreReturning(OutboxFixtures.Claim(messages));
-
-        var sut = BuildWithoutOriginHolder(store);
-
-        var ex = await Should.ThrowAsync<OutboxConfigurationException>(
-            async () => await sut.ProcessBatchAsync(10, CancellationToken.None));
-
-        ex.Message.ShouldContain(
-            nameof(OriginMessageHolder),
-            customMessage: "the fault must name the holder, not the dispatcher — a registered " +
-                           "dispatcher would send the operator to the wrong line");
-
-        captured.Count.ShouldBe(3, "the batch is settled BEFORE the rethrow, or leases are stranded");
-        captured.ShouldAllBe(o => o.Kind == OutboxOutcomeKind.Released);
-    }
-
-    [Fact]
-    public async Task ProcessBatch_WhenTheScopeCannotSupplyTheOriginHolder_ConsumesNoRetryBudget()
-    {
-        var message = OutboxFixtures.Message(retryCount: 0);
-        var (store, captured) = StoreReturning(OutboxFixtures.Claim(message));
-        var sut = BuildWithoutOriginHolder(store);
-
-        await Should.ThrowAsync<OutboxConfigurationException>(
-            async () => await sut.ProcessBatchAsync(10, CancellationToken.None));
-
-        captured.Single().RetryCount.ShouldBe(
-            0, "a container defect must not spend the retry budget of every queued message");
     }
 
     // ---------------------------------------------------------------------------
@@ -818,7 +788,7 @@ public sealed class OutboxProcessorTests
         Random? random = null)
     {
         var services = new ServiceCollection();
-        services.AddSingleton<IOutboxDispatcher>(dispatcher);
+        services.AddKeyedSingleton<IOutboxDispatcher>(OutboxDispatchers.Transport, dispatcher);
         services.AddLogging();
 
         return BuildCore(store, services, options, random);
@@ -833,33 +803,14 @@ public sealed class OutboxProcessorTests
     }
 
     /// <summary>
-    /// A processor over a container that cannot supply <c>OriginMessageHolder</c> — the shape a
-    /// custom <c>IExecutionScopeFactory</c> produces when it builds scopes from a container of its
-    /// own instead of the application's.
-    /// </summary>
-    /// <remarks>
-    /// A working dispatcher IS registered, so the fault under test can only be the holder. Without
-    /// that, the test would pass identically against
-    /// <c>ProcessBatch_WhenDispatcherUnregistered_*</c> and prove nothing about this path.
-    /// </remarks>
-    private static OutboxProcessor BuildWithoutOriginHolder(IOutboxProcessorStore store)
-    {
-        var services = new ServiceCollection();
-        services.AddLogging();
-        services.AddSingleton<IOutboxDispatcher>(new ScriptedDispatcher());
-
-        return BuildCore(store, services, options: null, random: null, registerOriginHolder: false);
-    }
-
-    /// <summary>
     /// A processor whose container holds a dispatcher registration that throws while being
     /// activated for one message, and activates normally for every other.
     /// </summary>
     /// <remarks>
     /// REGISTERED but unactivatable — a factory that throws, as in <c>InboxProcessorTests.Build</c>.
     /// Not the same as absent: only an absent descriptor makes <c>GetService</c> return null. The
-    /// factory reads the scope's origin holder to know which message it is being built for, which
-    /// works because the processor stamps the origin before it resolves the dispatcher.
+    /// factory reads the causation of the scope being activated — the row being dispatched — to know
+    /// which message it is being built for.
     /// </remarks>
     private static OutboxProcessor BuildFailingActivationFor(
         IOutboxProcessorStore store,
@@ -868,14 +819,22 @@ public sealed class OutboxProcessorTests
         Func<Exception> fault,
         ILogger<OutboxProcessor> logger)
     {
+        // The scope being activated is the last one created; its context names the row being
+        // dispatched as its causation.
+        TestExecutionScopeFactory? scopes = null;
         var services = new ServiceCollection();
         services.AddLogging();
-        services.AddScoped<IOutboxDispatcher>(sp =>
-            sp.GetRequiredService<OriginMessageHolder>().OriginMessageId == failOn
+        services.AddScoped<DeliveryStoreHolder>();
+        services.AddKeyedScoped<IOutboxDispatcher>(OutboxDispatchers.Transport, (_, _) =>
+            scopes!.Contexts[^1].CausationId == failOn.Value.ToString()
                 ? throw fault()
                 : dispatcher);
 
-        return BuildCore(store, services, options: null, random: null, logger: logger);
+        var provider = services.BuildServiceProvider();
+        scopes = new TestExecutionScopeFactory(provider.GetRequiredService<IServiceScopeFactory>());
+
+        return new OutboxProcessor(
+            store, scopes, DefaultOptions, new FakeTimeProvider(Now), FixedRandom.NoJitter, logger, TestStore);
     }
 
     private static OutboxProcessor BuildCore(
@@ -883,16 +842,10 @@ public sealed class OutboxProcessorTests
         ServiceCollection services,
         OutboxProcessorOptions? options,
         Random? random,
-        bool registerOriginHolder = true,
         ILogger<OutboxProcessor>? logger = null)
     {
-        // Registered by AddMicroKitMessaging() in production. The processor stamps the row being
-        // dispatched onto it, and treats a scope that cannot supply it as a composition fault
-        // rather than a transient one — so a container without it fails every test here loudly.
-        if (registerOriginHolder)
-        {
-            services.AddScoped<OriginMessageHolder>();
-        }
+        // Registered by AddMicroKitMessaging() in production; the processor names its store on it.
+        services.AddScoped<DeliveryStoreHolder>();
 
         var provider = services.BuildServiceProvider();
 
@@ -902,7 +855,8 @@ public sealed class OutboxProcessorTests
             options ?? DefaultOptions,
             new FakeTimeProvider(Now),
             random ?? FixedRandom.NoJitter,
-            logger ?? NullLogger<OutboxProcessor>.Instance);
+            logger ?? NullLogger<OutboxProcessor>.Instance,
+            TestStore);
     }
 
     /// <summary>
@@ -915,9 +869,7 @@ public sealed class OutboxProcessorTests
     {
         var services = new ServiceCollection();
         services.AddLogging();
-        services.AddSingleton<IOutboxDispatcher>(new ScriptedDispatcher());
-        services.AddScoped<OriginMessageHolder>();
-
+        services.AddKeyedSingleton<IOutboxDispatcher>(OutboxDispatchers.Transport, new ScriptedDispatcher());
         var provider = services.BuildServiceProvider();
         scopes = new TestExecutionScopeFactory(provider.GetRequiredService<IServiceScopeFactory>());
 

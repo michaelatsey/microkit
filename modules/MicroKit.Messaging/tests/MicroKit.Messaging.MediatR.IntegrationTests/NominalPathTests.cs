@@ -2,8 +2,9 @@ namespace MicroKit.Messaging.MediatR.IntegrationTests;
 
 /// <summary>
 /// The first test in the monorepo to run the whole domain-event → outbox → notification path as one
-/// system: TransactionBehavior (order 700) → DomainEventsDispatcher P1–P4 → EfOutboxStore →
-/// OutboxProcessor → MediatROutboxDispatcher → INotificationHandler.
+/// system: TransactionBehavior (order 700) → DomainEventsDispatcher P1–P4 → a local outbox row →
+/// OutboxProcessor → LocalOutboxDispatcher → the receive pipeline → INotificationHandler, guarded by
+/// its inbox row (#188 D7, D8).
 /// </summary>
 /// <remarks>
 /// Assertions read observable state only — rows through a verification <c>DbContext</c> built

@@ -24,11 +24,18 @@ The plan must cover:
 - Transport adapter: `{ProviderName}MessageTransport : IMessageTransport`
   - ⚠ **`IMessagePublisher` no longer exists** — it was deleted by ADR-MSG-018 and its in-process
     implementation by ADR-MSG-019. A provider implements `IMessageTransport.SendAsync(MessageEnvelope, ct)`
-    and nothing else. It does **not** implement `IOutboxDispatcher`: `TransportOutboxDispatcher`
-    (Core) owns that seam and feeds your transport.
-  - **No `IMessageTransport` implementation ships in any MicroKit package.** Yours is the first,
-    which is why the acknowledgement rule below is a conformance obligation rather than a
-    convention it could be checked against.
+    on the sending side. It does **not** implement `IOutboxDispatcher`, which is internal to Core
+    (ADR-MSG-020): `TransportOutboxDispatcher` (Core) serves every outbox row with a `null`
+    `Endpoint` and feeds your transport.
+  - **No broker `IMessageTransport` ships in any MicroKit package.** The only implementation is
+    Core's internal in-memory transport (`OnlyCoreShipsAnIMessageTransport_AndItIsTheInternalInMemoryOne`),
+    so yours is the first broker one — which is why the acknowledgement rule below is a
+    conformance obligation rather than a convention it could be checked against.
+- Consume loop: hands each arriving broker message, decoded into a `MessageEnvelope`, to
+  `IEnvelopeReceiver.ReceiveAsync` (implemented in Core) and settles the broker message from the
+  returned `EnvelopeReceiveResult.Disposition` (`Acknowledge`, `DeadLetter`, `Redeliver`,
+  `PauseAndRedeliver`, `Unsettled` — never acknowledge on `Unsettled`), only after the returned
+  task completes. See README *Receiving messages*.
 - Connection/channel management: `{ProviderName}ConnectionManager` (if stateful broker)
 - Options: `{ProviderName}MessagingOptions` (sealed record)
 - DI extension: `Add{ProviderName}Transport()` on `MessagingBuilder` (not `Add{ProviderName}Messaging()` on `IServiceCollection`)
@@ -36,24 +43,28 @@ The plan must cover:
 ### Serialization
 - A provider implements **`IMessageTransport`**, not `IOutboxDispatcher`. It receives a
   `MessageEnvelope` — already built from the outbox row by `TransportOutboxDispatcher` — whose
-  `Payload` is **opaque JSON**. A provider does not deserialize it and needs no
-  `IMessageSerializer`: the receiving process resolves `ContractName` to its own local type.
+  `Body` is **opaque UTF-8 JSON**. A provider does not deserialize it and needs no
+  `IMessageSerializer`: the receiving process resolves the envelope's `Type` (the wire type) to its
+  own local type.
 - **`SendAsync` must not return before the broker has acknowledged the message.** The processor
   marks the row `Published` on that return and `Published` is terminal, so an asynchronous hand-off
   makes the mark a lie. **Your provider owes a conformance test proving this**; one that fails it is
   unusable whether or not it compiles.
-- Call `AddTransportDispatcher()` from your `Add{ProviderName}Transport()` so a consumer writes one
-  line rather than two.
+- **Register the `IMessageTransport`, and nothing else on the send side.** Every store registers
+  the (internal) `TransportOutboxDispatcher`, which sends a store's transport rows through whatever
+  `IMessageTransport` the host has; `IOutboxDispatcher` and `AddTransportDispatcher()` are internal
+  and a provider never names them. Register one transport: a second is refused by
+  `UseInMemoryTransport()` and shadows the first otherwise.
 - A source-generated implementation is planned for `MicroKit.Messaging.Serialization` (v2)
 
 ### Error Handling — signal permanence with typed exceptions, never by writing state
-The provider does **not** settle messages. `OutboxProcessor` owns every state transition; a
-dispatcher's only job is to throw the right type.
+The provider does **not** settle outbox rows. `OutboxProcessor` owns every state transition; the
+transport's only job is to throw the right type, which `TransportOutboxDispatcher` lets through.
 
 | Throw | When | Processor response |
 |---|---|---|
-| `OutboxPayloadException` | the row can never be dispatched without changing — unresolvable `EventType`, malformed JSON, a contract the broker rejects outright | dead-letter on FIRST sight |
-| `OutboxTransportUnavailableException` | connection refused, broker down, auth rejected, channel closed — the next message is certain to fail too | abort batch, release remainder, **no retry consumed** |
+| `OutboxPayloadException` | the message can never be sent without changing — a body or a type the broker rejects outright | dead-letter on FIRST sight |
+| `OutboxTransportUnavailableException` | connection refused, broker down, auth rejected, channel closed — the next message is certain to fail too | the store's transport rows deferred until the transport's back-off ends, **no retry consumed**; its local rows are still delivered |
 | anything untyped | one message rejected while the transport is healthy | transient — retry with back-off |
 
 - ⚠ **Never throw `OutboxPayloadException` for** a broker nack, a timeout, a refused connection,

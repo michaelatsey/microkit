@@ -105,27 +105,18 @@ internal static class E2EHarness
             .AddTransactionBehavior());
 
         // NO TRANSPORT IS REGISTERED HERE, and that is the point of this composition rather than an
-        // omission. Every suite on this harness exercises the domain-event path, which stages
-        // MessageKind.Notification rows and fans them out in process through MediatR — so the
-        // notification-only host of ADR-MSG-019 is exactly what these tests need, and this harness
-        // is the standing proof that it composes and drains. MediatROutboxDispatcher's inner is
-        // null throughout; a MessageKind.Contract row would raise OutboxConfigurationException, and
-        // nothing here stages one.
+        // omission. Every suite on this harness exercises the domain-event path: a notification is a
+        // local message (#188 D7), drained by the store's own outbox loop into the receive pipeline,
+        // one guarded delivery per notification handler — no transport involved. A suite that needs
+        // one adds it through configureMessaging.
         //
-        // Registration order is no longer load-bearing anywhere. The standard dispatcher lives in a
-        // keyed slot only MicroKit.Messaging writes, so AddMediatRDomainEvents() never competes for
-        // the seam and no longer requires a transport to have been registered first; the glue
-        // contributes an IDomainEventsSink to the single core dispatcher rather than registering a
-        // rival one (ADR-MEDIATR-014).
-        //
-        // The hosted services — the workers and MessagingCompositionValidator — start nothing
-        // without an IHost. They are left alone; every drain goes through DrainOnceAsync or
-        // DrainInboxOnceAsync. The contract rules still apply: the registry checks them itself
-        // when it is first resolved.
+        // The hosted services start nothing without an IHost. Every drain goes through
+        // DrainOnceAsync or DrainInboxOnceAsync; the contract rules still apply, because the
+        // registry checks them itself when it is first resolved.
         services.AddMicroKitMessaging(messaging =>
         {
             messaging.ServiceName = "/tests/e2e";
-            messaging.AddEfCoreOutbox<E2EDbContext>().AddMediatRDomainEvents();
+            messaging.UseEntityFrameworkOutbox<E2EDbContext>().UseMediatRDomainEvents();
             configureMessaging?.Invoke(messaging);
         });
 
@@ -140,16 +131,17 @@ internal static class E2EHarness
     /// Runs exactly one outbox processing cycle. The only drain seam in this suite.
     /// </summary>
     /// <remarks>
-    /// The return value of <c>ExecuteAsync</c> is DISCARDED on purpose — never captured, never
-    /// asserted on. It is <see cref="Task"/> today and becomes <c>ValueTask&lt;OutboxBatchResult&gt;</c>
-    /// in a pending rewrite; a bare <c>await</c> compiles against both, whereas capturing it would
-    /// couple this harness to a signature that is about to change.
+    /// Drives the store's own processor, keyed by the store as its loop resolves it (#188). The
+    /// batch result is discarded: the suites assert on what reached the rows and the handlers.
     /// </remarks>
+    /// <summary>The E2E store's key.</summary>
+    internal static readonly MessageStoreKey Store = EntityFrameworkOutbox.KeyOf<E2EDbContext>();
+
     internal static async Task DrainOnceAsync(IServiceProvider root, CancellationToken ct)
     {
         await using var scope = root.CreateAsyncScope();
-        var coordinator = scope.ServiceProvider.GetRequiredService<IOutboxCoordinator>();
-        await coordinator.ExecuteAsync(ct);
+        var processor = scope.ServiceProvider.GetRequiredKeyedService<IOutboxProcessor>(Store);
+        await processor.ProcessBatchAsync(100, ct);
     }
 
     /// <summary>
@@ -164,7 +156,7 @@ internal static class E2EHarness
     internal static async Task DrainInboxOnceAsync(IServiceProvider root, CancellationToken ct)
     {
         await using var scope = root.CreateAsyncScope();
-        var coordinator = scope.ServiceProvider.GetRequiredService<IInboxCoordinator>();
-        await coordinator.ExecuteAsync(ct);
+        var processor = scope.ServiceProvider.GetRequiredKeyedService<IInboxProcessor>(Store);
+        await processor.ProcessBatchAsync(100, ct);
     }
 }

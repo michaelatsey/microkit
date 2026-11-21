@@ -46,8 +46,8 @@ public sealed class TransportOutboxDispatcherTests
     /// a retry by coincidence — the same payload happens to deserialize to the same value, but
     /// nothing guaranteed it — and closing it was the point of ADR-MSG-018 on the in-process path.
     /// The twin assertion lived in <c>InProcessIntegrationDispatcherTests</c>, deleted with the
-/// in-process fan-out (ADR-MSG-019). Its surviving counterpart is
-/// <c>MediatROutboxDispatcherTests.DispatchAsync_WhenKindIsContract_NeverTouchesTheSerializer</c>.
+/// in-process fan-out (ADR-MSG-019). This dispatcher takes no serializer at all, so a transport row
+/// is never deserialized on the send path.
     /// </remarks>
     [Fact]
     public async Task DispatchAsync_UsesTheRowIdAsTheMessageId()
@@ -164,52 +164,8 @@ public sealed class TransportOutboxDispatcherTests
     }
 
     // -----------------------------------------------------------------------------------------
-    // Routing
+    // Addressing — routing by endpoint is OutboxProcessor's (OutboxTransportClassificationTests)
     // -----------------------------------------------------------------------------------------
-
-    /// <summary>
-    /// A notification with no MediatR glue registered is a CONFIGURATION fault, not a poison
-    /// payload.
-    /// </summary>
-    /// <remarks>
-    /// The distinction decides whether a one-line omission in a composition root is recoverable.
-    /// <c>OutboxPayloadException</c> dead-letters on first sight, so it would silently dead-letter
-    /// every domain event in the system on the first poll.
-    /// <c>OutboxConfigurationException</c> releases the batch untouched and stops the worker, so
-    /// the rows survive and deploying the missing package drains them.
-    /// </remarks>
-    [Fact]
-    public async Task DispatchAsync_WhenKindIsNotification_ThrowsOutboxConfigurationException()
-    {
-        var message = OutboxFixtures.Message();
-        message.MessageKind = MessageKind.Notification;
-
-        var ex = await Should.ThrowAsync<OutboxConfigurationException>(
-            async () => await Build().DispatchAsync(message));
-
-        ex.Message.ShouldContain("AddMediatRDomainEvents");
-    }
-
-    /// <summary>
-    /// The negative half, and the one that matters: nothing was handed to the transport.
-    /// </summary>
-    /// <remarks>
-    /// Asserted against the recording fake's own list rather than with
-    /// <c>DidNotReceive().SendAsync(...)</c>. A negative assertion on a mock only holds if it names
-    /// a method the subject actually calls; against code that calls something else it is green
-    /// whatever happens, and no mutation exposes it.
-    /// </remarks>
-    [Fact]
-    public async Task DispatchAsync_WhenKindIsNotification_SendsNothing()
-    {
-        var message = OutboxFixtures.Message();
-        message.MessageKind = MessageKind.Notification;
-
-        await Should.ThrowAsync<OutboxConfigurationException>(
-            async () => await Build().DispatchAsync(message));
-
-        _transport.Sent.ShouldBeEmpty();
-    }
 
     [Theory]
     [InlineData(null)]
@@ -239,28 +195,6 @@ public sealed class TransportOutboxDispatcherTests
             async () => await Build().DispatchAsync(message));
 
         ex.Message.ShouldContain("Source");
-        _transport.Sent.ShouldBeEmpty();
-    }
-
-    /// <summary>
-    /// An unrecognised kind dead-letters, which is the OPPOSITE of the notification arm.
-    /// </summary>
-    /// <remarks>
-    /// The asymmetry is deliberate. A notification is a kind this build understands and cannot
-    /// serve — fixable by deploying a package, so the rows must survive. An unknown kind cannot be
-    /// interpreted at all and re-reading the row will never change that, so it is permanent for
-    /// this deployment. The cast is not contrived: <c>MessageKind</c> is persisted as a string, so
-    /// a later build or a hand edit produces exactly this.
-    /// </remarks>
-    [Fact]
-    public async Task DispatchAsync_WhenMessageKindIsUnknown_ThrowsOutboxPayloadException()
-    {
-        var message = OutboxFixtures.ContractMessage();
-        message.MessageKind = (MessageKind)99;
-
-        await Should.ThrowAsync<OutboxPayloadException>(
-            async () => await Build().DispatchAsync(message));
-
         _transport.Sent.ShouldBeEmpty();
     }
 

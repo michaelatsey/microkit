@@ -69,22 +69,43 @@ public sealed class EfInboxStoreTests
     }
 
     // ---------------------------------------------------------------------------
-    // Ingestion
+    // The guard (#188 D6)
     // ---------------------------------------------------------------------------
 
     [Fact]
-    public Task ExistsAsync_WhenNotPresent_ReturnsFalse()
+    public Task FindAsync_WhenNotPresent_ReturnsNull()
         => Task.Run(async () =>
         {
             var (conn, ctx) = CreateIsolatedDb();
             await using var _ = conn;
             await using var __ = ctx;
 
-            (await Store(ctx).ExistsAsync(MessageId.New(), "SomeConsumer")).ShouldBeFalse();
+            (await Store(ctx).FindAsync(new InboxMessageKey(MessageId.New(), "SomeConsumer"))).ShouldBeNull();
         });
 
     [Fact]
-    public Task ExistsAsync_WhenPresent_ReturnsTrue()
+    public Task FindAsync_WhenPresent_ReadsItsStateWithoutTrackingIt()
+        => Task.Run(async () =>
+        {
+            var (conn, ctx) = CreateIsolatedDb();
+            await using var _ = conn;
+            await using var __ = ctx;
+
+            var message = BuildInboxMessage(status: InboxMessageStatus.Failed, deadLettered: true);
+            await using (var seed = SecondContext(conn))
+            {
+                seed.InboxMessages.Add(message);
+                await seed.SaveChangesAsync();
+            }
+
+            var state = await Store(ctx).FindAsync(new InboxMessageKey(message.MessageId, message.ConsumerType));
+
+            state.ShouldBe(new InboxRowState(InboxMessageStatus.Failed, DeadLettered: true, message.RowId));
+            ctx.ChangeTracker.Entries().ShouldBeEmpty("the answer comes from the database, never the tracker");
+        });
+
+    [Fact]
+    public Task EnlistProcessedAsync_WritesNothingUntilTheAttemptCommits()
         => Task.Run(async () =>
         {
             var (conn, ctx) = CreateIsolatedDb();
@@ -92,14 +113,57 @@ public sealed class EfInboxStoreTests
             await using var __ = ctx;
 
             var store = Store(ctx);
-            var message = BuildInboxMessage();
-            await store.AddAsync(message);
+            var sharedMessageId = MessageId.New();
+            await store.BeginAsync();
+            await store.EnlistProcessedAsync(BuildInboxMessage(sharedMessageId, "HandlerA", InboxMessageStatus.Processed));
 
-            (await store.ExistsAsync(message.MessageId, message.ConsumerType)).ShouldBeTrue();
+            (await SecondContext(conn).InboxMessages.AsNoTracking().CountAsync()).ShouldBe(0, "nothing committed yet");
+
+            await store.CommitAsync();
+
+            var row = await SecondContext(conn).InboxMessages.AsNoTracking().SingleAsync();
+            row.Status.ShouldBe(InboxMessageStatus.Processed);
+            row.ConsumerType.ShouldBe("HandlerA");
         });
 
     [Fact]
-    public Task AddAsync_WithSameMessageIdDifferentConsumer_StoresTwoRows()
+    public Task EnlistProcessedAsync_WhenAnotherDeliveryCommittedThePairFirst_FailsTheCommit()
+        => Task.Run(async () =>
+        {
+            var (conn, ctx) = CreateIsolatedDb();
+            await using var _ = conn;
+            await using var __ = ctx;
+
+            var first = BuildInboxMessage(status: InboxMessageStatus.Processed);
+            await using (var other = SecondContext(conn))
+            {
+                other.InboxMessages.Add(first);
+                await other.SaveChangesAsync();
+            }
+
+            var store = Store(ctx);
+            await store.BeginAsync();
+            await store.EnlistProcessedAsync(BuildInboxMessage(first.MessageId, first.ConsumerType, InboxMessageStatus.Processed));
+
+            await Should.ThrowAsync<DbUpdateException>(async () => await store.CommitAsync());
+        });
+
+    [Fact]
+    public Task BeginAsync_WhenTheContextAlreadyHasATransaction_Refuses()
+        => Task.Run(async () =>
+        {
+            var (conn, ctx) = CreateIsolatedDb();
+            await using var _ = conn;
+            await using var __ = ctx;
+
+            await using var handlerTransaction = await ctx.Database.BeginTransactionAsync();
+
+            var ex = await Should.ThrowAsync<InvalidOperationException>(async () => await Store(ctx).BeginAsync());
+            ex.Message.ShouldContain("must not begin a transaction");
+        });
+
+    [Fact]
+    public Task TryInsertFailedAsync_WithSameMessageIdDifferentConsumer_StoresTwoRows()
         => Task.Run(async () =>
         {
             var (conn, ctx) = CreateIsolatedDb();
@@ -109,12 +173,27 @@ public sealed class EfInboxStoreTests
             var sharedMessageId = MessageId.New();
             var store = Store(ctx);
 
-            (await store.AddAsync(BuildInboxMessage(sharedMessageId, "HandlerA")))
-                .ShouldBe(InboxWriteResult.Added);
-            (await store.AddAsync(BuildInboxMessage(sharedMessageId, "HandlerB")))
-                .ShouldBe(InboxWriteResult.Added);
+            (await store.TryInsertFailedAsync(BuildInboxMessage(sharedMessageId, "HandlerA", InboxMessageStatus.Failed))).ShouldBeTrue();
+            (await store.TryInsertFailedAsync(BuildInboxMessage(sharedMessageId, "HandlerB", InboxMessageStatus.Failed))).ShouldBeTrue();
+            (await store.TryInsertFailedAsync(BuildInboxMessage(sharedMessageId, "HandlerA", InboxMessageStatus.Failed))).ShouldBeFalse();
 
-            (await ctx.InboxMessages.AsNoTracking().CountAsync()).ShouldBe(2);
+            (await SecondContext(conn).InboxMessages.AsNoTracking().CountAsync()).ShouldBe(2);
+        });
+
+    [Fact]
+    public Task TryInsertFailedAsync_WhenTheFailureIsNotTheGuard_Throws()
+        => Task.Run(async () =>
+        {
+            // The row is not there afterwards, so whatever failed was not another delivery owning
+            // the pair: absorbing it would lose the failure.
+            var (conn, ctx) = CreateIsolatedDb();
+            await using var _ = conn;
+            await using var __ = ctx;
+
+            var invalid = BuildInboxMessage(status: InboxMessageStatus.Failed);
+            invalid.Payload = null!;
+
+            await Should.ThrowAsync<DbUpdateException>(async () => await Store(ctx).TryInsertFailedAsync(invalid));
         });
 
     // ---------------------------------------------------------------------------
@@ -306,7 +385,7 @@ public sealed class EfInboxStoreTests
             processed.ClaimToken.ShouldBeNull();
 
             var retried = rows[keys[1].ConsumerType];
-            retried.Status.ShouldBe(InboxMessageStatus.Received);
+            retried.Status.ShouldBe(InboxMessageStatus.Failed);
             retried.RetryCount.ShouldBe(2);
             retried.NextRetryAtUtc.ShouldBe(Now.AddSeconds(4));
             retried.ErrorMessage.ShouldBe("transient");
@@ -319,7 +398,7 @@ public sealed class EfInboxStoreTests
             dead.ClaimToken.ShouldBeNull();
 
             var released = rows[keys[3].ConsumerType];
-            released.Status.ShouldBe(InboxMessageStatus.Received);
+            released.Status.ShouldBe(InboxMessageStatus.Failed);
             released.RetryCount.ShouldBe(0, "a release consumes no retry budget");
             released.NextRetryAtUtc.ShouldBeNull();
             released.ClaimToken.ShouldBeNull();
@@ -393,55 +472,71 @@ public sealed class EfInboxStoreTests
     // ---------------------------------------------------------------------------
 
     [Fact]
-    public Task StageProcessedAsync_StagesWithoutCommitting()
+    public Task MarkClaimedProcessedAsync_StagesWithoutCommitting()
         => Task.Run(async () =>
         {
-            // ExecuteUpdate would commit on its own, reopening the gap this method exists to
-            // close. The mark must ride the handler's own SaveChanges.
+            // ExecuteUpdate would commit on its own. The mark must ride the attempt's commit, with
+            // the handler's own writes.
             var (conn, ctx) = CreateIsolatedDb();
             await using var _ = conn;
             await using var __ = ctx;
 
-            ctx.InboxMessages.Add(BuildInboxMessage());
+            ctx.InboxMessages.Add(BuildInboxMessage(status: InboxMessageStatus.Failed));
             await ctx.SaveChangesAsync();
+            ctx.ChangeTracker.Clear();
 
             var store = Store(ctx);
             var claim = await store.ClaimBatchAsync(10, Lease);
-            var key = new InboxMessageKey(
-                claim.Messages[0].MessageId, claim.Messages[0].ConsumerType);
+            var key = new InboxMessageKey(claim.Messages[0].MessageId, claim.Messages[0].ConsumerType);
 
-            (await store.StageProcessedAsync(key, claim.Token)).ShouldBeTrue();
-            store.IsMarkUncommitted(key).ShouldBeTrue();
+            await store.BeginAsync();
+            (await store.MarkClaimedProcessedAsync(key, claim.Token)).ShouldBeTrue();
 
-            var beforeSave = await SecondContext(conn).InboxMessages.AsNoTracking().SingleAsync();
-            beforeSave.Status.ShouldBe(InboxMessageStatus.Processing, "nothing committed yet");
+            var beforeCommit = await SecondContext(conn).InboxMessages.AsNoTracking().SingleAsync();
+            beforeCommit.Status.ShouldBe(InboxMessageStatus.Processing, "nothing committed yet");
 
-            await ctx.SaveChangesAsync(); // the handler's unit of work
+            await store.CommitAsync();
 
-            store.IsMarkUncommitted(key).ShouldBeFalse();
-            var afterSave = await SecondContext(conn).InboxMessages.AsNoTracking().SingleAsync();
-            afterSave.Status.ShouldBe(InboxMessageStatus.Processed);
-            afterSave.ClaimToken.ShouldBeNull("a committed success clears the token");
+            var afterCommit = await SecondContext(conn).InboxMessages.AsNoTracking().SingleAsync();
+            afterCommit.Status.ShouldBe(InboxMessageStatus.Processed);
+            afterCommit.ClaimToken.ShouldBeNull("a committed success clears the token");
         });
 
     [Fact]
-    public Task StageProcessedAsync_WithAStaleToken_ReturnsFalse()
+    public Task MarkClaimedProcessedAsync_WithAStaleToken_ReturnsFalse()
         => Task.Run(async () =>
         {
             var (conn, ctx) = CreateIsolatedDb();
             await using var _ = conn;
             await using var __ = ctx;
 
-            ctx.InboxMessages.Add(BuildInboxMessage());
+            ctx.InboxMessages.Add(BuildInboxMessage(status: InboxMessageStatus.Failed));
             await ctx.SaveChangesAsync();
 
             var store = Store(ctx);
             var claim = await store.ClaimBatchAsync(10, Lease);
-            var key = new InboxMessageKey(
-                claim.Messages[0].MessageId, claim.Messages[0].ConsumerType);
+            var key = new InboxMessageKey(claim.Messages[0].MessageId, claim.Messages[0].ConsumerType);
 
-            (await store.StageProcessedAsync(key, Guid.NewGuid())).ShouldBeFalse();
-            store.IsMarkUncommitted(key).ShouldBeFalse("nothing was staged");
+            (await store.MarkClaimedProcessedAsync(key, Guid.NewGuid())).ShouldBeFalse();
+        });
+
+    [Fact]
+    public Task ClaimBatchAsync_ClaimsAFailedRowOnceItsRetryIsDue_AndNeverADeadLetteredOne()
+        => Task.Run(async () =>
+        {
+            var (conn, ctx) = CreateIsolatedDb();
+            await using var _ = conn;
+            await using var __ = ctx;
+
+            ctx.InboxMessages.AddRange(
+                BuildInboxMessage(status: InboxMessageStatus.Failed, consumerType: "Due", nextRetryAtUtc: Now.AddSeconds(-1)),
+                BuildInboxMessage(status: InboxMessageStatus.Failed, consumerType: "NotYet", nextRetryAtUtc: Now.AddSeconds(30)),
+                BuildInboxMessage(status: InboxMessageStatus.Failed, consumerType: "Dead", deadLettered: true));
+            await ctx.SaveChangesAsync();
+
+            var claim = await Store(ctx).ClaimBatchAsync(10, Lease);
+
+            claim.Messages.Select(m => m.ConsumerType).ShouldBe(["Due"]);
         });
 
     [Fact]
@@ -508,7 +603,7 @@ public sealed class EfInboxStoreTests
 
             var row = await SecondContext(conn).InboxMessages.AsNoTracking()
                 .SingleAsync(m => m.ConsumerType == "A");
-            row.Status.ShouldBe(InboxMessageStatus.Received);
+            row.Status.ShouldBe(InboxMessageStatus.Failed, "requeued: due now, nothing counted");
             row.DeadLettered.ShouldBeFalse();
             row.RetryCount.ShouldBe(0);
             row.NextRetryAtUtc.ShouldBeNull();

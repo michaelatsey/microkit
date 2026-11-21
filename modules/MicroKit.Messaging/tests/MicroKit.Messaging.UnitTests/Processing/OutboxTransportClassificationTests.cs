@@ -51,7 +51,7 @@ public sealed class OutboxTransportClassificationTests
     /// retry budgets, and repeats on every tick.
     /// </remarks>
     [Fact]
-    public async Task ProcessBatch_WhenTransportUnavailable_ReleasesEveryMessageWithoutConsumingRetries()
+    public async Task ProcessBatch_WhenTransportUnavailable_DefersEveryMessageWithoutConsumingRetries()
     {
         var messages = Enumerable.Range(0, 4)
             .Select(_ => OutboxFixtures.ContractMessage(retryCount: 1)).ToArray();
@@ -65,8 +65,8 @@ public sealed class OutboxTransportClassificationTests
 
         result.AbortReason.ShouldBe(OutboxBatchAbortReason.TransportUnavailable);
         captured.Count.ShouldBe(messages.Length, "every claimed message must carry an outcome");
-        captured.ShouldAllBe(o => o.Kind == OutboxOutcomeKind.Released);
-        captured.ShouldAllBe(o => o.RetryCount == 0, "Released consumes no retry budget");
+        captured.ShouldAllBe(o => o.Kind == OutboxOutcomeKind.Deferred && o.NextRetryAtUtc != null,
+            "a deferral consumes no retry budget");
     }
 
     [Fact]
@@ -139,38 +139,56 @@ public sealed class OutboxTransportClassificationTests
     }
 
     // -----------------------------------------------------------------------------------------
-    // A notification row with no MediatR glue — the composition this dispatcher must not absorb
+    // The row's endpoint routes it (#188 D7)
     // -----------------------------------------------------------------------------------------
 
     /// <summary>
-    /// A notification reaching the transport dispatcher releases the whole batch and stops the
-    /// worker, rather than dead-lettering the queue.
+    /// A transport row whose dispatcher is not registered at all releases the batch and rethrows —
+    /// the loop then backs off and reports it (1402) — rather than dead-lettering the queue.
     /// </summary>
     /// <remarks>
-    /// The end-to-end form of the routing decision. A host that composes
-    /// <c>AddTransportDispatcher()</c> and forgets <c>AddMediatRDomainEvents()</c> has every domain
-    /// event in the system sitting in this table; classifying that as a payload fault would
-    /// dead-letter all of them on the first poll. Here they survive as <c>Pending</c> and the
-    /// worker stops so the omission is visible.
+    /// Every store registers both dispatchers, so only a container composed outside the store engine
+    /// meets this; a host with no transport meets the activation failure instead
+    /// (<c>MessagingBuilderTransportTests.AStoreWithNoTransport_CannotActivateTheTransportDispatcher</c>).
+    /// The rows are fine: classifying a missing registration as a payload fault would dead-letter
+    /// every queued contract on the first poll.
     /// </remarks>
     [Fact]
-    public async Task ProcessBatch_WhenNotificationRowMeetsTheTransportDispatcher_ReleasesBatchThenRethrows()
+    public async Task ProcessBatch_WhenATransportRowHasNoDispatcher_ReleasesBatchThenRethrows()
     {
-        var messages = Enumerable.Range(0, 3).Select(_ => OutboxFixtures.Message()).ToArray();
-        foreach (var m in messages)
-        {
-            m.MessageKind = MessageKind.Notification;
-        }
-
+        var messages = Enumerable.Range(0, 3).Select(_ => OutboxFixtures.ContractMessage()).ToArray();
         var (store, captured) = StoreReturning(OutboxFixtures.Claim(messages));
-        var processor = Build(store, new RecordingMessageTransport());
+        var services = new ServiceCollection();
+        services.AddLogging();
+        var processor = BuildCore(store, services);
 
-        await Should.ThrowAsync<OutboxConfigurationException>(
+        var fault = await Should.ThrowAsync<OutboxConfigurationException>(
             async () => await processor.ProcessBatchAsync(10, CancellationToken.None));
 
+        fault.Message.ShouldContain("its dispatcher is not registered");
         captured.Count.ShouldBe(messages.Length);
         captured.ShouldAllBe(o => o.Kind == OutboxOutcomeKind.Released);
         captured.ShouldAllBe(o => o.RetryCount == 0);
+    }
+
+    /// <summary>
+    /// A row whose endpoint this build cannot route is dead-lettered on first sight, and only it:
+    /// the rest of the batch is dispatched.
+    /// </summary>
+    [Fact]
+    public async Task ProcessBatch_WhenARowsEndpointCannotBeRouted_DeadLettersItAndDispatchesTheRest()
+    {
+        var unroutable = OutboxFixtures.ContractMessage();
+        unroutable.Endpoint = "a-later-endpoint";
+        var routable = OutboxFixtures.ContractMessage();
+        var transport = new RecordingMessageTransport();
+        var (store, captured) = StoreReturning(OutboxFixtures.Claim(unroutable, routable));
+
+        await Build(store, transport).ProcessBatchAsync(10, CancellationToken.None);
+
+        captured.Single(o => o.MessageId == unroutable.Id).Kind.ShouldBe(OutboxOutcomeKind.DeadLetter);
+        captured.Single(o => o.MessageId == routable.Id).Kind.ShouldBe(OutboxOutcomeKind.Published);
+        transport.Sent.ShouldHaveSingleItem().Id.ShouldBe(routable.Id.Value.ToString());
     }
 
     // -----------------------------------------------------------------------------------------
@@ -204,7 +222,7 @@ public sealed class OutboxTransportClassificationTests
     /// </para>
     /// </remarks>
     [Fact]
-    public async Task ProcessBatch_WhenNoTransportRegistered_SettlesEveryMessageReleasedWithoutRethrowing()
+    public async Task ProcessBatch_WhenNoTransportRegistered_SettlesEveryMessageDeferredWithoutRethrowing()
     {
         var messages = Enumerable.Range(0, 3).Select(_ => OutboxFixtures.ContractMessage()).ToArray();
         var claim = OutboxFixtures.Claim(messages);
@@ -221,7 +239,9 @@ public sealed class OutboxTransportClassificationTests
         await store.Received(1).ApplyOutcomesAsync(
             claim.Token, Arg.Any<IReadOnlyList<OutboxOutcome>>(), Arg.Any<CancellationToken>());
         captured.Count.ShouldBe(messages.Length);
-        captured.ShouldAllBe(o => o.Kind == OutboxOutcomeKind.Released);
+        captured.ShouldAllBe(o => o.Kind == OutboxOutcomeKind.Deferred && o.NextRetryAtUtc != null, "deferred to the end of the endpoint's back-off");
+        result.Released.ShouldBe(messages.Length, "nothing was attempted on a deferred row");
+        result.Retried.ShouldBe(0);
     }
 
     /// <summary>
@@ -236,9 +256,8 @@ public sealed class OutboxTransportClassificationTests
         await BuildWithoutTransport(store).ProcessBatchAsync(10, CancellationToken.None);
 
         var outcome = captured.ShouldHaveSingleItem();
-        outcome.Kind.ShouldBe(OutboxOutcomeKind.Released);
-        outcome.RetryCount.ShouldBe(0, "Released carries no retry count — the row keeps its own");
-        outcome.NextRetryAtUtc.ShouldBeNull();
+        outcome.Kind.ShouldBe(OutboxOutcomeKind.Deferred, "the store keeps the row's own count: no attempt is charged");
+        outcome.NextRetryAtUtc.ShouldNotBeNull("the claim skips it until the endpoint's back-off ends");
     }
 
     // -----------------------------------------------------------------------------------------
@@ -250,7 +269,7 @@ public sealed class OutboxTransportClassificationTests
         var services = new ServiceCollection();
         services.AddLogging();
         services.AddSingleton(transport);
-        services.AddScoped<IOutboxDispatcher, TransportOutboxDispatcher>();
+        services.AddKeyedScoped<IOutboxDispatcher, TransportOutboxDispatcher>(OutboxDispatchers.Transport);
 
         return BuildCore(store, services);
     }
@@ -260,18 +279,13 @@ public sealed class OutboxTransportClassificationTests
     {
         var services = new ServiceCollection();
         services.AddLogging();
-        services.AddScoped<IOutboxDispatcher, TransportOutboxDispatcher>();
+        services.AddKeyedScoped<IOutboxDispatcher, TransportOutboxDispatcher>(OutboxDispatchers.Transport);
 
         return BuildCore(store, services);
     }
 
     private static OutboxProcessor BuildCore(IOutboxProcessorStore store, ServiceCollection services)
     {
-        // Registered by AddMicroKitMessaging() in production. The processor stamps the row being
-        // dispatched onto it, and treats a scope that cannot supply it as a composition fault
-        // rather than a transient one — so a container without it fails every test here loudly.
-        services.AddScoped<OriginMessageHolder>();
-
         var provider = services.BuildServiceProvider();
 
         return new OutboxProcessor(
@@ -289,7 +303,7 @@ public sealed class OutboxTransportClassificationTests
         var captured = new List<OutboxOutcome>();
         var store = Substitute.For<IOutboxProcessorStore>();
 
-        store.ClaimBatchAsync(Arg.Any<int>(), Arg.Any<TimeSpan>(), Arg.Any<CancellationToken>())
+        store.ClaimBatchAsync(Arg.Any<int>(), Arg.Any<TimeSpan>(), Arg.Any<OutboxEndpoints>(), Arg.Any<CancellationToken>())
             .Returns(ValueTask.FromResult(claim));
 
         store.ApplyOutcomesAsync(

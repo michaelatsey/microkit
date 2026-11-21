@@ -12,9 +12,10 @@ namespace MicroKit.Messaging;
 /// is the opposite direction from the exceptions in <c>MicroKit.Messaging.Spi</c>.
 /// </para>
 /// <para>
-/// The processor abandons the batch, releases every unattempted row back to <c>Received</c>,
-/// and consumes no retry budget. Turning a five-minute outage into a hundred rows pushed one
-/// step closer to dead-lettering is the failure mode this prevents.
+/// On a store's retry loop the batch is abandoned and every unattempted row released, with no
+/// attempt counted. On a delivery it writes no row and asks the transport to pause and redeliver.
+/// Turning a five-minute outage into a hundred rows pushed one step closer to dead-lettering is
+/// the failure mode this prevents.
 /// </para>
 /// <para>
 /// <b>Throw for:</b> a downstream service that is down, connection refused, authentication

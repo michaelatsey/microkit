@@ -1,781 +1,615 @@
 # microkit-messaging-outbox-inbox
 
-## Always active for any task touching OutboxProcessor, InboxProcessor, IOutboxWriter, IOutboxProcessorStore, IInboxWriter, IInboxProcessorStore, IInboxSettlementStore, OutboxMessage, or InboxMessage.
+Load before any task touching a store, the store engine (`Processing/`), the receive pipeline
+(`Bus/MessageReceivePipeline.cs`), the local endpoint (`Local/`), `OutboxMessage`, `InboxMessage`,
+or a store contract in `MicroKit.Messaging.Spi`.
+
+The bus works with no store: a publication goes straight to `IMessageTransport`, a handler runs in a
+scope of its own. A **store** — the outbox **and** the inbox of one `DbContext` — makes both durable.
+The decision is ADR-MSG-020; the user-facing description is `README.md`.
 
 ---
 
-## Outbox Pattern — Guarantee
+## Guarantees
 
-The transactional outbox guarantees **at-least-once delivery**:
-1. Integration event written to `outbox_messages` in the **same database transaction** as the domain commit
-2. Background processor (`OutboxProcessor`) polls and dispatches pending messages
-3. Message marked `Published` only after broker/handler confirms delivery
+| Side | Guarantee | Not guaranteed |
+|---|---|---|
+| Outbox | A publication enlisted in a store commits with the business data, or neither. Once committed, the row reaches its endpoint **at least once**. | Delivery to a handler. A row re-sent after a lost lease or a crash before settlement is a duplicate; the receiving inbox absorbs it. |
+| Inbox | One row per (`MessageId`, `ConsumerType`). A handler's work through the store's `DbContext`, its publications, its cascade events and its row commit in one transaction: **exactly once**. | Anything the handler does through another connection or `DbContext`, or an external call: **at least once**, because a replayed attempt reruns the handler. |
+| No store | At-least-once per the transport. A redelivered message reruns every handler of it. | Durability. |
 
-**If step 1 fails, the business transaction fails — no orphaned messages.**
-**If step 3 never happens, the message is retried — no silent loss.**
+Handlers must therefore be idempotent for every effect outside the store's `DbContext`.
 
 ---
 
-## OutboxMessage Shape
+## Stores
 
-`OutboxMessage` is a **`sealed class`** — not a `sealed record`. EF Core must mutate
-`Status`, `LockedUntilUtc`, `RetryCount`, and other fields as the message moves through
-its state machine. `init`-only record properties cannot be assigned by EF Core change tracking.
+### The SPI
+
+| Type | Role |
+|---|---|
+| `MessageStoreKey` (application namespace) | Names a store. Non-empty. The EF store's key is `EntityFrameworkOutbox.KeyOf<TContext>()` = `"ef:" + typeof(TContext).FullName`. |
+| `AddMessageStore(key, store => ...)` | The one path a store provider registers by. The first call for a key also registers the engine (`StoreEngineRegistration.AddStore`); a second call for the same key configures the same store. |
+| `MessageStoreBuilder` | `Key`, `Services`, `BindAssembly(Assembly)`, `AddStartupCheck(...)`. |
+| `IMessageStoreSet` | `GetStores()`. Core registers a static set (`StaticMessageStoreSet`), read once when the engine starts. A dynamic set is #191. |
+
+A store registers, **keyed by its `MessageStoreKey` and scoped**: `IOutboxWriter`,
+`IOutboxProcessorStore`, `IOutboxRetentionStore`, `IInboxGuardStore`, `IInboxProcessorStore`,
+`IInboxRetentionStore` (host start rejects a store missing one —
+`StoreEngineRegistration.RequiredStoreServices`), plus `IOutboxAdminStore` and `IInboxAdminStore`
+for operator tooling.
+
+> **The store instance and its key always come from the scope**, never from a type fixed at
+> registration. The EF store registers `EfOutboxStore<TContext>` and `EfInboxStore<TContext>` once
+> each as scoped, and every keyed interface resolves to that instance, so one scope holds one store
+> over the scope's `TContext` — the same context the handler resolved from that scope writes through.
+> Registering a store as anything but scoped breaks the inbox transaction silently.
+
+### Store resolution — first match wins (`MessageStoreResolver`)
+
+For a publication (`IMessageBus.PublishAsync`) and a local message (`ILocalMessageSender.SendAsync`):
+
+1. `PublishOptions.Store`, when set. It must name a configured store, and inside a delivery it may
+   only name that delivery's store; otherwise `IntegrationEventPublishException`. Set with no store
+   configured: `IntegrationEventPublishException`.
+2. Inside a scope the engine opened for a delivery, that delivery's store (`DeliveryStoreHolder`,
+   written by the pipeline and by `OutboxProcessor` on the scope they received).
+3. The only store, when there is one.
+4. The store the message type's assembly is bound to.
+5. Otherwise `IntegrationEventConfigurationException`, naming the stores and the fix. Never a guess,
+   never a direct send.
+
+No store configured: `null` — the bus sends to the transport at once.
+
+For a handler (`ForHandler`): no store → unguarded; one store → that one; several → the store its
+type's assembly is bound to. Host start rejects, with several stores, a handler or a local consumer
+whose assembly is bound to none, and an assembly bound to two.
+
+---
+
+## Outbox
+
+### Publishing is enlisting
+
+With a store, `MessageBus` builds the row with `OutboxMessageFactory.CreateContract` and calls the
+store's keyed `IOutboxWriter.AddAsync`. `EfOutboxStore` adds it to the context's change tracker and
+**never saves**. No transaction is required: the caller's `SaveChanges` commits the row with the
+business data; inside a delivery, the engine's commit does.
+
+- `PublishAsync` resolves `IMessageTransport` first and throws
+  `IntegrationEventConfigurationException` without one, store or not. Host start also rejects a
+  declared publication with no transport.
+- A send middleware that completes without calling the rest of the pipeline is
+  `IntegrationEventPublishException`: a publication never succeeds silently.
+- When the scope is disposed, `EfOutboxStore.Dispose` reports every row it enlisted: still `Added`
+  → event **4000** (`Error`) — lost, the unit of work was never saved; `Detached` → event **4001**
+  (`Debug`) — discarded with the change tracker, with the work it announced; so is a row still
+  `Added` when the scope's guarded inbox attempt never committed (`EfInboxAttempt<TContext>`, scoped,
+  marked by the inbox store; the inbox store also clears the tracker of such an attempt). Any other
+  open transaction — a host's own, through `UseTransaction` — leaves an `Added` row lost (4000). A row saved and then rolled
+  back is neither: its business data rolled back with it. Both EF stores implement `IDisposable`
+  and `IAsyncDisposable` with the same logic: a scope disposed synchronously reports too.
+- `IOutboxWriter.AddBatchAsync` stages several rows in one `AddRange`; an empty list is a no-op.
+
+### `OutboxMessage`
+
+`sealed class` with `{ get; set; }`: EF Core mutates it through its state machine, and `init`-only
+record properties cannot be assigned by change tracking. Columns, beyond the state below:
+
+| Member | Rule |
+|---|---|
+| `Id` (`MessageId`) | The end-to-end identity. A contract's is minted by the bus; a local message's is supplied by the sender (a domain event's `EventId`). |
+| `Endpoint` | `null` = transport, `OutboxMessage.LocalEndpoint` (`"local"`) = the local endpoint. Any other value is dead-lettered. |
+| `ContractName`, `Source` | Required for a transport row (wire type `<name>.v<n>`, emitting service); null on a local row. |
+| `EventType` | The payload's **runtime** type, assembly-qualified. The local deserialization key; it never travels. |
+| `Payload` | JSON text. The factory refuses a serializer whose content type is not JSON (`OutboxConfigurationException`). |
+| `Headers` | The publication's own headers, reserved ones excluded (JSON column). |
+| `TenantId` | `string?`, passed through as is. Null is valid in a single-tenant deployment; no global query filter. |
+| `CorrelationId` | Non-nullable column. An absent or non-GUID correlation is replaced by `CorrelationId.New()`. |
+| `CausationId` | Nullable. An absent or non-GUID causation is recorded as null. |
+| `TraceParent` | `Activity.Current.Id` at publication. |
+| `CreatedAtUtc` / `OccurredOnUtc` | Staging time (the claim's sort key) / business time (never claimed or ordered on). |
+
+### State machine
+
+```
+Pending ──ClaimBatchAsync──► Processing
+  Processing ─ dispatched ───────────────────► Published               terminal, ProcessedAtUtc set
+  Processing ─ OutboxPayloadException ───────► Failed + DeadLettered   terminal, RetryCount unchanged
+  Processing ─ transient, RetryCount+1 < Max ► Pending                 RetryCount++, NextRetryAtUtc
+  Processing ─ transient, RetryCount+1 ≥ Max ► Failed + DeadLettered   terminal
+  Processing ─ never attempted ──────────────► Pending                 Released: nothing counted
+  Processing ─ its endpoint down ────────────► Pending                 deferred: RetryCount unchanged, NextRetryAtUtc = end of the endpoint's back-off
+```
+
+`Failed` always means terminal, with `DeadLettered = true` set together. There is no transient
+`Failed` on the outbox. `IOutboxAdminStore.RequeueAsync` puts a dead-lettered row back to `Pending`
+with `RetryCount` 0 and returns `true` only if a row was requeued.
+
+### The atomic claim (`EfOutboxStore.ClaimBatchAsync`)
 
 ```csharp
-public sealed class OutboxMessage
-{
-    public MessageId Id { get; set; } = null!;
-    public string? TenantId { get; set; }                      // optional — null in single-tenant (ADR-MSG-008 §5)
-    public string EventType { get; set; } = null!;             // fully qualified CLR type name
-    public string Payload { get; set; } = null!;               // JSON-serialized event
-    public OutboxMessageStatus Status { get; set; }            // see state machine below
-    public int RetryCount { get; set; }                        // incremented on each failed attempt
-    public DateTimeOffset OccurredOnUtc { get; set; }
-    public DateTimeOffset CreatedAtUtc { get; set; }
-    public DateTimeOffset? ProcessedAtUtc { get; set; }        // set when Published or DeadLettered
-    public DateTimeOffset? LockedUntilUtc { get; set; }        // lease expiry — null when not locked
-    public Guid? ClaimToken { get; set; }                      // ownership proof — null when not leased
-    public DateTimeOffset? NextRetryAtUtc { get; set; }        // earliest eligible retry time
-    public string? ErrorMessage { get; set; }                  // last error message
-    public bool DeadLettered { get; set; }                     // true = terminal, max retries exceeded
-    public CorrelationId CorrelationId { get; set; } = null!;
-    public CausationId? CausationId { get; set; }              // nullable — root events have no cause
-}
-```
-
----
-
-## Outbox State Machine
-
-```
-Pending
-  └── ClaimBatchAsync (atomic UPDATE WHERE, stamps Status/LockedUntilUtc/ClaimToken)
-       └── Processing
-            ├── dispatch confirms          → Published  (terminal — ProcessedAtUtc set)
-            ├── OutboxPayloadException     → Failed + DeadLettered=true (terminal, FIRST attempt)
-            ├── batch aborted / cancelled  → Pending    (Released — NO retry consumed)
-            └── other exception
-                 ├── RetryCount + 1 < MaxRetries  → Pending (RetryCount++, NextRetryAtUtc = now + BackOff)
-                 └── RetryCount + 1 >= MaxRetries → Failed + DeadLettered=true (terminal)
-```
-
-> Every transition out of `Processing` is buffered as an `OutboxOutcome` and written by ONE
-> `ApplyOutcomesAsync` call per batch, each statement filtered on the claim token.
-
-### Status values
-
-| Status | Meaning |
-|--------|---------|
-| `Pending` | Written, not dispatched. Eligible when `NextRetryAtUtc IS NULL OR <= now`. |
-| `Processing` | Lease held — in-flight. `LockedUntilUtc > now`. |
-| `Published` | Confirmed delivery. Terminal — no further transitions. |
-| `Failed` | `RetryCount >= MaxRetries` AND `DeadLettered=true`. Terminal — no retries. |
-
-> **`Processing` is never the final failure state.** A failed attempt resets to `Pending`
-> (with back-off). `Failed` always means permanently dead — `DeadLettered=true` is always
-> set simultaneously. There is no transient `Failed` state.
-
-### State transition rules
-- `Pending → Processing`: atomic via `ClaimBatchAsync` — one `UPDATE WHERE` over the candidate ids,
-  replaying the eligibility predicate, stamping `ClaimToken`
-- `Processing → Published`: only after confirmed dispatch; clears lease and token
-- `Processing → Pending (retry)`: `RetryCount++`, lease and token cleared,
-  `NextRetryAtUtc = now + Uniform(0, min(2^RetryCount s, MaxRetryBackoff))`
-- `Processing → Pending (released)`: lease and token cleared, **nothing else** — no retry consumed
-- `Processing → Failed + DeadLettered=true`: when `RetryCount + 1 >= MaxRetries`, or immediately on
-  `OutboxPayloadException`
-- `Published` and `Failed/DeadLettered=true` are terminal
-- Every one of the above filters on `ClaimToken`: a lost lease writes zero rows
-
----
-
-## Claim / Settlement Pattern
-
-The per-message lease is gone. One atomic claim reserves a whole batch and stamps it with an
-ownership token; one settlement writes every disposition back. Round trips per batch went from
-`2N+1` to two (three when contended) plus one settlement.
-
-```csharp
-// ✅ Step 1 — candidates. A separate query, NOT OrderBy/Take inside ExecuteUpdate.
-//    Full rows, not ids: that is what lets step 3 be skipped when nothing was contended.
+// 1. Candidates — a separate query, never OrderBy/Take inside ExecuteUpdate (translation varies
+//    by provider and version). Full rows, untracked, ordered on CreatedAtUtc.
 var candidates = await Dispatchable(now).OrderBy(m => m.CreatedAtUtc).Take(batchSize).ToListAsync(ct);
-//                                                    ^^^^^^^^^^^^ the STAGING time, never the
-// business one: OccurredOnUtc is caller-supplied, so ordering on it lets a backdated event jump
-// the whole queue. GetDeadLetteredAsync still orders on OccurredOnUtc — operator triage wants the
-// business fact — and the two must not be harmonised.
+var ids = candidates.ConvertAll(m => m.Id);
+ids.Sort();   // one lock order for every processor: intersecting candidate sets cannot deadlock
 
-var candidateIds = candidates.ConvertAll(m => m.Id);
-candidateIds.Sort();   // deterministic lock order — two processors with intersecting candidate
-                       // sets must not lock in opposite orders. Requires MessageId : IComparable<T>.
+// 2. Stamp — the atomic part. The eligibility predicate is REPLAYED inside the UPDATE:
+//    UPDATE ... SET Status='Processing', LockedUntilUtc=@expiry, ClaimToken=@token
+//    WHERE Id IN @ids AND NOT DeadLettered
+//      AND (Status='Pending' OR (Status='Processing' AND LockedUntilUtc <= @now))
+//      AND (NextRetryAtUtc IS NULL OR NextRetryAtUtc <= @now)
 
-// ✅ Step 2 — the atomic part. The eligibility predicate is REPLAYED inside the UPDATE, so a row
-//    another processor claimed between step 1 and step 2 simply does not match.
-//
-//   UPDATE outbox_messages
-//   SET Status = 'Processing', LockedUntilUtc = @expiry, ClaimToken = @token
-//   WHERE Id = ANY(@candidateIds)
-//     AND NOT DeadLettered
-//     AND (Status = 'Pending' OR (Status = 'Processing' AND LockedUntilUtc <= @now))
-//     AND (NextRetryAtUtc IS NULL OR NextRetryAtUtc <= @now)
-//
-//   Under READ COMMITTED a blocked UPDATE re-evaluates its WHERE against the committed row
-//   version once the lock is released, so the loser is rejected correctly. That is the mechanism
-//   the token claim rests on instead of FOR UPDATE SKIP LOCKED — proven by the PostgreSQL
-//   concurrency suite, not assumed.
-
-// ✅ Step 3 — read back ONLY when contended. Winning every candidate means the rows already in
-//    hand ARE the claim.
-if (claimedCount == candidates.Count) { /* patch in memory, return */ }
+// 3. Read back by token — only when some candidates were lost. Winning all of them means the rows
+//    in hand ARE the claim; they are patched in memory.
 ```
 
-> ⚠ **Stale-lease recovery** — the `Status = 'Processing' AND LockedUntilUtc <= @now` arm is
-> mandatory. Without it, a crashed processor's messages are stuck until someone intervenes.
+- Under `READ COMMITTED` a blocked `UPDATE` re-evaluates its `WHERE` against the committed row
+  once the lock is released, so the loser does not match. That is what the token claim rests on
+  instead of `FOR UPDATE SKIP LOCKED` — portable, and proven by the PostgreSQL concurrency tests.
+- The `Processing AND LockedUntilUtc <= now` arm is crash recovery: without it a crashed loop's rows
+  are stuck.
+- SELECT + mutate + `SaveChanges` is **not** atomic under concurrent loops. Use `ExecuteUpdateAsync`.
+- The claim is **cross-tenant** within a store: `TenantId` travels on the row and is never a claim
+  filter.
+- The claim orders on `CreatedAtUtc`, never `OccurredOnUtc`: a caller-supplied business time would
+  let a backdated event jump the queue. `GetDeadLetteredAsync` orders on `OccurredOnUtc` on purpose —
+  triage asks when the fact happened. Do not harmonise the two.
 
-> ⚠ **Every terminal write filters on `ClaimToken`.** This is not an optimization; it is the fix
-> for a lost update. Filtering on the id alone let a processor whose lease had expired overwrite
-> the processor that legitimately re-claimed its message. Zero rows written is now a *reportable
-> outcome* — `ApplyOutcomesAsync` returns the affected-row count and the processor logs a partial
-> settlement — rather than an unconditional `Result.Success()`.
+### Settlement
 
-> ⚠ **EF Core LINQ (SELECT + foreach mutate + SaveChanges) is NOT atomic** under concurrent
-> processors. Use `ExecuteUpdateAsync`.
-
-### Options
-
-```csharp
-// ✅ The shipped shape. Note { get; set; }, not { get; init; }: with init-only accessors the
-//    Action<OutboxProcessorOptions> callback taken by AddMicroKitMessaging could not assign
-//    anything, so every outbox configuration callback was silently a no-op.
-public sealed record OutboxProcessorOptions
-{
-    public int BatchSize { get; set; } = 100;                                    // was 20
-    public TimeSpan PollingInterval { get; set; } = TimeSpan.FromSeconds(5);     // base cadence
-    public TimeSpan MaxPollingInterval { get; set; } = TimeSpan.FromMinutes(1);  // idle ceiling
-    public TimeSpan TransportUnavailableBackoff { get; set; } = TimeSpan.FromMinutes(5);
-    public TimeSpan LockDuration { get; set; } = TimeSpan.FromMinutes(5);
-    public int MaxRetries { get; set; } = 5;                                     // was 10
-    public TimeSpan MaxRetryBackoff { get; set; } = TimeSpan.FromHours(1);
-    public TimeSpan OutcomeFlushTimeout { get; set; } = TimeSpan.FromSeconds(10);
-    public int MaxErrorMessageLength { get; set; } = 2000;
-    public int RetentionDays { get; set; } = 7;          // 0 or less disables retention entirely
-    public TimeSpan RetentionInterval { get; set; } = TimeSpan.FromHours(1);
-}
-
-// ⚠ BatchSize 20→100 and MaxRetries 10→5 are BEHAVIOURAL changes, not merely new properties:
-//   both bind unchanged from existing configuration but halve the retry budget.
-```
-
-### Adaptive cadence
-
-`OutboxWorker` derives its next interval from the batch result rather than sleeping on a fixed
-timer: saturated batch → poll again immediately; idle queue → grow geometrically toward
-`MaxPollingInterval`; transport outage → grow toward `TransportUnavailableBackoff`; partial batch →
-back to `PollingInterval`.
-
-### Retention
-
-`OutboxRetentionWorker` deletes `Published` rows older than `RetentionDays` on a slow timer
-(`RetentionInterval`), across every tenant (`tenantId: null`). Before it existed,
-`DeleteProcessedAsync` had no caller and `RetentionDays` was read by nothing.
-
-
-
-## Retry Back-Off Formula
-
-Computed by `OutboxProcessor`, not by the store: back-off is retry policy, not persistence, and it
-must be unit-testable without a database.
-
-```csharp
-// ✅ Exponential ceiling, then FULL JITTER over the whole interval.
-//    NextRetryAtUtc = now + Uniform(0, min(2^retryCount seconds, MaxRetryBackoff))
-
-internal TimeSpan ComputeBackoffCeiling(int retryCount)
-{
-    var exponent = Math.Clamp(retryCount, 0, 20);          // a corrupt count cannot overflow
-    var backoff = TimeSpan.FromSeconds(1L << exponent);
-    return backoff > _options.MaxRetryBackoff ? _options.MaxRetryBackoff : backoff;
-}
-
-internal TimeSpan ApplyJitter(TimeSpan ceiling) =>
-    ceiling <= TimeSpan.Zero
-        ? TimeSpan.Zero
-        : TimeSpan.FromTicks((long)(ceiling.Ticks * _random.NextDouble()));
-
-// Ceiling: retryCount=0 → 1s, 1→2s, 2→4s, 3→8s, 5→32s, 10→1024s, 12+→3600s (default cap).
-// Actual delay: a uniform draw anywhere in [0, ceiling].
-
-// ❌ Deterministic back-off — with several processor instances, the messages that fail together
-//    (which is exactly what a broker outage produces) all retry at the same instant, and keep
-//    doing so on every subsequent attempt.
-TimeSpan delay = TimeSpan.FromSeconds(Math.Min(3600, Math.Pow(2, retryCount)));
-
-// ❌ Linear retry — causes thundering herd under load
-TimeSpan delay = TimeSpan.FromSeconds(retryCount * 30);
-```
-
-> **The clock and the jitter source are both injected** (`TimeProvider`, `Random`), which is what
-> lets the exponential curve be asserted against exact values with the jitter neutralised, rather
-> than approximated with a tolerance. Production registers `TimeProvider.System` and `Random.Shared`.
-> **The inbox uses the same formula, jitter included** — see `InboxProcessor.ComputeBackoffCeiling`
-> and `InboxProcessor.ApplyJitter`. The older deterministic inbox curve is gone (ADR-MSG-017).
-
----
-
-## InboxMessage Shape
-
-`InboxMessage` is also a **`sealed class`** for the same EF Core mutation reasons.
-
-```csharp
-public sealed class InboxMessage
-{
-    public Guid RowId { get; set; } = Guid.NewGuid();         // PRIMARY KEY — surrogate, writer-assigned
-    public MessageId MessageId { get; set; } = null!;         // dedup key — part 1 (unique INDEX, not the PK)
-    public string ConsumerType { get; set; } = null!;         // fully qualified handler type name — dedup key part 2
-    public string? TenantId { get; set; }                     // optional — null in single-tenant (ADR-MSG-008 §5)
-    public string EventType { get; set; } = null!;
-    public string Payload { get; set; } = null!;
-    public InboxMessageStatus Status { get; set; }
-    public int RetryCount { get; set; }
-    public DateTimeOffset ReceivedAtUtc { get; set; }          // local receipt — the claim's SORT KEY
-    public DateTimeOffset OccurredOnUtc { get; set; }          // producer's business clock, carried
-                                                              //   from the envelope. NEVER indexed,
-                                                              //   claimed or ordered on
-    public DateTimeOffset? ProcessedAtUtc { get; set; }
-    public DateTimeOffset? LockedUntilUtc { get; set; }       // lease expiry for concurrent processors
-    public Guid? ClaimToken { get; set; }                     // ownership proof — EF CONCURRENCY TOKEN
-    public DateTimeOffset? NextRetryAtUtc { get; set; }       // earliest eligible retry time
-    public bool DeadLettered { get; set; }                    // true = terminal
-    public string? ErrorMessage { get; set; }
-    public CorrelationId? CorrelationId { get; set; }          // nullable — inbound messages from external systems may lack correlation context
-    public CausationId? CausationId { get; set; }             // nullable — root events have no cause
-}
-```
-
-> **Two clocks, and they are not interchangeable.** `ReceivedAtUtc` is this process's relay clock
-> and the claim orders on it. `OccurredOnUtc` is the producer's business clock, carried verbatim
-> from `MessageEnvelope`, and it is read-only data: it enters no index, no claim and no ordering.
-> It is caller-supplied at the far end of a wire, so ordering on it lets a backdated event jump the
-> whole queue and keep jumping it — the defect the outbox claim left behind when it moved its sort
-> key to `CreatedAtUtc`. Without the column the business time would exist nowhere on the receiving
-> side, because `IIntegrationEvent` is a bare marker and a payload need carry no timestamp.
-
-> **Nullability asymmetry:** `OutboxMessage.CorrelationId` is non-nullable (`= null!`) because
-> outbound messages must always be traceable — set to `CorrelationId.New()` if no upstream context.
-> `InboxMessage.CorrelationId` is nullable because inbound messages arrive from external systems
-> that may not carry correlation context. Do NOT "fix" this asymmetry — it is intentional.
->
-> Note the column stays nullable although **the shipped `EnvelopeReceiver` never writes null**: it
-> mints one when the envelope carries none (see the receiving-seam rule below). The nullability
-> describes what the schema permits — a row written by some other means, or one predating the
-> mint — not what ingestion produces.
-
----
-
-## Inbox Dedup Pattern (Idempotency Gate)
-
-```csharp
-// ✅ Compound dedup key = (MessageId + ConsumerType), enforced by a UNIQUE INDEX.
-// One envelope can be consumed by multiple handlers independently — each gets its own row,
-// and those rows advance independently: one handler may succeed while another retries.
-//
-// ✅ The unique index is the SOLE AUTHORITY. ExistsAsync is a fast-path read, never the guard:
-// under concurrent load two ingesters can both see false and then race on AddAsync.
-//
-// ✅ The store recognises the duplicate by POST-HOC VERIFICATION — it asks the database whether
-// the row is there NOW, rather than decoding a provider error code. That answers the question
-// the decision depends on ("is the message recorded?") instead of the syntactic one a detector
-// answers ("was that error a unique violation?"), and it keeps working on providers that do not
-// exist yet. It is a check AFTER the failed insert, never a guard before it, so there is no
-// time-of-check-to-time-of-use window.
-
-catch (DbUpdateException)
-{
-    entry.State = EntityState.Detached;   // or the next SaveChanges retries the same insert
-    if (savepoint is not null)
-        await ambient.RollbackToSavepointAsync(savepoint, ct);   // PostgreSQL aborts the whole txn
-
-    if (await ExistsAsync(message.MessageId, message.ConsumerType, ct))
-        return InboxWriteResult.AlreadyPresent;
-
-    throw;   // not the dedup gate — a real fault, and absorbing it would be silent data loss
-}
-```
-
-> ⚠ **The savepoint is required on every provider, not just PostgreSQL,** and its name is capped
-> at **24 characters**: SQL Server rejects savepoint identifiers over 32, so a `Guid:N` with any
-> prefix overflows. PostgreSQL tolerates 63, so a Testcontainers-only suite would never catch it.
-> Where a provider truncates rather than rejects, two savepoints can share a name and a rollback
-> unwinds to the wrong one silently. SQL Server also rejects savepoints inside a distributed
-> transaction.
-
-### The ingestion side — one line carries the fix
-
-```csharp
-var result = await inboxWriter.AddAsync(message, ct);
-metrics.Record(result, message.ConsumerType);
-
-if (result is InboxWriteResult.AlreadyPresent)
-{
-    InboxIngestionLogs.Deduplicated(logger, message.MessageId.Value, message.ConsumerType);
-    continue;   // next consumer — NOT a dispatch failure, and NOT an early return
-}
-```
-
-The `continue` is the repair, and it lives in `EnvelopeReceiver` — the shape above is that method's
-loop, not a sketch. Consumers after a duplicated one still get their row; when the duplicate escaped
-as an exception it ended the whole fan-out, so a partial redelivery became permanent loss for
-consumers 3..N. Pinned by `ReceiveAsync_WhenOneConsumerIsADuplicate_StillWritesTheOthers` and, end
-to end, by `Redelivery_ThroughTheSeam_CostsNoConsumerItsRow`, which deletes the **second**
-consumer's row so the duplicate is met first — an early exit would then never reach the one that is
-missing.
-
-```csharp
-// ❌ FORBIDDEN — reporting the nominal path as a failure
-await _inboxStore.AddAsync(message, ct);   // throws on redelivery; nothing catches it;
-                                           // OutboxProcessor calls it transient and dead-letters
-                                           // a message that was delivered correctly
-```
-
-> **A redelivery is not an error.** Reported through the return value, logged at `Debug`, counted
-> as `microkit.inbox.messages.deduplicated`. The **rate** is the signal: a steady low level is
-> healthy, a sustained climb means a lease set too short, a stalling consumer, or a broker
-> replaying. Note EF Core independently logs the rejected `INSERT` at `Error` — that setting lives
-> on the consumer's `DbContext`, so a library cannot silence it.
-
----
-
-## IOutboxWriter Contract (Abstractions, namespace `MicroKit.Messaging.Spi` since #185 — domain handlers only)
-
-```csharp
-/// <summary>
-/// Write-only outbox access for domain handlers.
-/// Resolved from the same DbContext as the domain aggregate to guarantee atomicity.
-/// </summary>
-public interface IOutboxWriter
-{
-    /// <summary>
-    /// Adds an outbox message in the current domain transaction.
-    /// Throws on database error — the exception propagates through the unit of work.
-    /// </summary>
-    ValueTask AddAsync(OutboxMessage message, CancellationToken ct = default);
-
-    /// <summary>
-    /// Adds multiple outbox messages in one EF Core AddRange call (ADR-MSG-011).
-    /// Used by DomainEventsDispatcher P4 for single-round-trip batch writes.
-    /// An empty list is a no-op.
-    /// </summary>
-    ValueTask AddBatchAsync(IReadOnlyList<OutboxMessage> messages, CancellationToken ct = default);
-}
-```
-
----
-
-## Outbox Store Contracts (Abstractions, namespace `MicroKit.Messaging.Spi` since #185 — split by consumer, ISP)
-
-One class may implement all three; three interfaces so a DLQ console never sees `ClaimBatchAsync`
-and the processor never sees `RequeueAsync`.
-
-```csharp
-/// <summary>Claim and settlement. Background processor only.</summary>
-public interface IOutboxProcessorStore
-{
-    /// <summary>
-    /// Atomically reserves up to batchSize dispatchable messages and stamps them with a lease
-    /// and an ownership token. Two concurrent processors must never both win the same row.
-    /// Dispatchable = pending, or processing with an expired lease (crash recovery), not
-    /// dead-lettered, and past NextRetryAtUtc.
-    /// </summary>
-    ValueTask<OutboxClaim> ClaimBatchAsync(
-        int batchSize, TimeSpan lockDuration, CancellationToken ct = default);
-
-    /// <summary>
-    /// Persists the disposition of every message from the matching claim, in ONE CALL at the
-    /// end of the batch — one call, not one statement. The set-based dispositions collapse into
-    /// two statements; retries and dead-letters carry per-message values and cost one each,
-    /// so the statement count scales with FAILURES, not with batch size. All inside one
-    /// transaction.
-    /// EVERY write filters on claimToken. Returns the affected-row count: a value below
-    /// outcomes.Count means leases were lost mid-batch, which the caller logs rather than
-    /// assuming success.
-    /// The token is a SHORT INDEPENDENT timeout, deliberately NOT the caller's shutdown token —
-    /// cancelling this write strands every lease in the batch.
-    /// </summary>
-    ValueTask<int> ApplyOutcomesAsync(
-        Guid claimToken, IReadOnlyList<OutboxOutcome> outcomes, CancellationToken ct = default);
-}
-
-/// <summary>Dead-letter inspection and requeueing. Operator tooling only.</summary>
-public interface IOutboxAdminStore
-{
-    // tenantId null = every tenant, and the ONLY value that reaches rows in a single-tenant
-    // deployment where TenantId is itself null. The old non-nullable signature matched nothing.
-    ValueTask<IReadOnlyList<OutboxMessage>> GetDeadLetteredAsync(
-        int batchSize, string? tenantId = null, CancellationToken ct = default);
-
-    /// <summary>Returns true only if a row was actually requeued — never unconditional success.</summary>
-    ValueTask<bool> RequeueAsync(MessageId id, CancellationToken ct = default);
-}
-
-/// <summary>Retention. The cleanup worker only.</summary>
-public interface IOutboxRetentionStore
-{
-    ValueTask<int> DeleteProcessedAsync(
-        DateTimeOffset olderThan, string? tenantId = null, CancellationToken ct = default);
-}
-```
-
-### Outcome model
-
-`OutboxOutcome` is a `readonly record struct` buffered in memory during the batch and applied in one
-write. Four kinds, and the difference between the last two is load-bearing:
+Every disposition is buffered as an `OutboxOutcome` (`readonly record struct`) and written by **one**
+`ApplyOutcomesAsync` call per batch:
 
 | Kind | Persisted | Retry budget |
 |---|---|---|
-| `Published` | `Status=Published`, `ProcessedAtUtc`, lease + token cleared | — |
-| `Retry` | `Status=Pending`, `RetryCount++`, `NextRetryAtUtc`, error text | consumed |
+| `Published` | `Status=Published`, `ProcessedAtUtc`, lease and token cleared | — |
+| `Retry` | `Status=Pending`, `RetryCount`, `NextRetryAtUtc`, error text | consumed |
 | `DeadLetter` | `Status=Failed`, `DeadLettered=true`, `ProcessedAtUtc`, error text | terminal |
-| `Released` | `Status=Pending`, lease + token cleared, nothing else | **not consumed** |
+| `Released` | `Status=Pending`, lease and token cleared, nothing else | **not consumed** |
+| `Deferred` | `Status=Pending`, `NextRetryAtUtc` = the end of the endpoint's back-off, lease and token cleared; `RetryCount` and error text untouched | **not consumed** |
 
-> `Released` is what stops a broker outage from burning the retry allowance of every message in the
-> queue. A message claimed but never attempted — because the batch aborted on
-> `OutboxTransportUnavailableException`, a cancellation, a missing registration, or a dispatcher
-> that could not be activated — goes back untouched.
+- **Every write filters on `ClaimToken`.** A loop whose lease expired matches zero rows instead of
+  overwriting the loop that re-claimed the row. `ApplyOutcomesAsync` returns the affected-row count;
+  fewer than the outcomes is logged as a partial settlement, never assumed to be success.
+- `Published` and `Released` are one set-based statement each, `Deferred` one per distinct next
+  attempt (in practice one per down endpoint); `Retry` and `DeadLetter` carry per-row values and cost
+  one statement each, so the count scales with failures, not batch size or the length of an outage.
+  A store provider settles all five kinds.
+- The settlement runs as one operation of the context's execution strategy, in its own transaction
+  (`SettlementTransaction`) — a retrying strategy refuses a transaction begun outside it — and joins
+  an ambient transaction if one is open. An unknown commit is verified by the claim token, which the
+  commit clears.
+- Its token is an **independent** `OutcomeFlushTimeout`, never the host's stopping token: a
+  cancelled settlement strands every lease of the batch. A settlement failure is logged and
+  swallowed; leases expire and the batch is re-claimed.
+- `Released` is what keeps an outage from spending the retry budget of messages it never reached.
 
-### Dispatcher failure classification
+### Dispatch (`OutboxProcessor`)
 
-`IOutboxDispatcher` implementations signal permanence with typed exceptions:
+One execution scope **per row**, never shared across a batch. The scope's context is built from the
+row: `TenantId` from the row, `CorrelationId` copied, `CausationId` = the row's `Id`. The processor
+writes its store key on the scope's `DeliveryStoreHolder`, so a publication made there enlists in
+the same store. Scope creation sits inside the per-row `try`: a tenant-aware factory may do I/O, and
+its failure is that row's failure.
 
-| Exception | Processor response |
+`IOutboxDispatcher` is **internal**. It is resolved keyed by `OutboxDispatchers.KeyOf(row)`:
+`Endpoint == null` → `"microkit.outbox.transport"` (`TransportOutboxDispatcher`, registered with the
+first store, and by `UseInMemoryTransport()`); `"local"` → `"microkit.outbox.local"` (`LocalOutboxDispatcher`, registered
+with the first store); any other value → `OutboxPayloadException`.
+
+| Outcome of a row | Verdict |
 |---|---|
-| `OutboxPayloadException` | dead-letter **on first sight** — unresolvable `EventType`, malformed JSON, payload matching no known contract |
-| `OutboxTransportUnavailableException` | abort the batch, release the remainder, consume no retries |
-| `OutboxConfigurationException` | settle the batch (all released), then rethrow so the worker stops |
-| anything else | transient — retry with back-off until `MaxRetries` |
+| dispatched | `Published` |
+| `OutboxPayloadException` — unroutable endpoint, transport row without `ContractName` or `Source`, local payload no process can read | dead-letter **on first sight** |
+| `OutboxTransportUnavailableException` — also a local consumer's dependency outage | **defer** that row's endpoint: the row and its endpoint's later rows are settled `Deferred` — `NextRetryAtUtc` at the end of the endpoint's back-off, `RetryCount` and error text untouched — no retry consumed, the claim skips them; the other endpoint's rows are still dispatched |
+| no dispatcher registered for the key (`GetKeyedService` returns null) → `OutboxConfigurationException` | release the rest of the batch (earlier rows keep their outcomes), settle it, **rethrow**: that store's outbox loop backs off on the idle curve and reports it each time (event 1402, `Critical`) — it never ends a loop. Every store registers both dispatchers, so a host composed through `AddMessageStore` never meets it: a missing transport is the activation row below |
+| `GetKeyedService` throws `InvalidOperationException` (not `ObjectDisposedException`) | **defer** the endpoint as above, **not** rethrown: `DispatcherActivationFailed`, event 1009 per failed activation (row's `MessageId`, `TenantId`, `Endpoint`; with no transport, its message names the call to add). A store with no transport still delivers its local rows |
+| `OperationCanceledException` / `ObjectDisposedException` **while the host stops** (`HostStop`) | release the rest, nothing counted |
+| anything else | transient: retry with back-off until `MaxRetries` |
 
-The processor adds one verdict of its own, before any dispatcher runs, and **the container decides it,
-not an exception type**. `GetService<IOutboxDispatcher>()` returning null is
-`OutboxConfigurationException` (above). `GetService` *throwing `InvalidOperationException`* — a
-registered dispatcher that cannot be activated, most often a transport dispatcher with no
-`IMessageTransport` — aborts the batch, releases the remainder, consumes no retries and is **not**
-rethrown (`OutboxBatchAbortReason.DispatcherActivationFailed`, event 1009, which names the row's
-`MessageId`, `TenantId` and `MessageKind`); the worker backs off and the next cycle retries. It is
-batch-wide so that a cause every message shares — a missing transport — cannot spend the whole
-queue's retry budget.
+- **Null and throwing are separate verdicts, decided by the container.** `GetKeyedService` returns
+  null only when nothing is registered; it throws when something is registered and cannot be built.
+  A `catch` around `GetRequiredService` would read a missing `IMessageTransport` behind the
+  dispatcher as a missing registration and stop the loop.
+- **Only `InvalidOperationException` is tagged as an activation failure.** Any other type thrown
+  while the graph is built reaches the loop as if the dispatcher threw it. Widening that catch moves
+  a per-tenant failure with its own type from a per-row retry into the endpoint-wide verdict.
+- **Each endpoint has its own back-off** (`OutboxEndpointBackoff`, a singleton keyed by the store,
+  outliving each cycle's scoped processor): it starts at `PollingInterval`, doubles on each failed
+  attempt up to `TransportUnavailableBackoff`, and is cleared by the first row the endpoint
+  dispatches; a failure a whole `TransportUnavailableBackoff` past its end starts a new outage from
+  the base delay. While it runs, the processor passes the endpoint to the claim
+  (`ClaimBatchAsync(…, OutboxEndpoints excluded, …)`) and the store leaves its rows out: they are
+  neither claimed nor rewritten, a down broker is tried once per back-off period, and however many
+  rows wait for it, the other endpoint's are claimed and delivered. The filter is part of the claim's
+  contract — one signature, no default implementation. Rows a store hands over whose endpoint is
+  in back-off are deferred unattempted: those of an endpoint the claim excluded (a store breaking the
+  contract — this alone sets `HandedOverInBackOff`), and those of a back-off begun after the claim.
+  Events: 1004 / 1009 why the endpoint is down, 1010 what is deferred and until when.
+- **Known defect (#124).** Activation runs in the row's scope, built from its `TenantId`, so an
+  `InvalidOperationException` can be tenant-scoped. One that never clears fails each time the
+  endpoint is tried — its back-off grows toward the ceiling, or restarts from the base delay whenever
+  another tenant's row of the endpoint gets through first — and the row never dead-letters; the
+  other endpoint's rows still go out. Do not copy the endpoint-wide verdict into the inbox: there, a guard
+  that cannot be activated fails that one delivery or retry, never the batch.
+- **Never throw `OutboxPayloadException`** for a broker nack, a timeout, a refused connection, an
+  HTTP 503 or a database timeout. Only proven permanence dead-letters.
 
-**Only `InvalidOperationException` is tagged.** It is the type the container throws for an
-unsatisfiable dependency, and the one type the old `catch` read as a missing registration. Any other
-type thrown during activation reaches the loop as if the dispatcher had thrown it — typed exceptions
-keep their arms above, the rest is transient per message — and widening the catch past it is a
-regression, pinned by `…WhenActivationThrowsAnythingButInvalidOperationException_…`: a tenant lookup
-failing with its own type would leave the per-message path for the stall below.
-`ObjectDisposedException` derives from it and is excluded — shutdown, not activation.
-`OperationCanceledException` never matches.
+### `TransportOutboxDispatcher`
 
-> ⚠ **Known defect — do not copy this verdict** into the inbox or a per-tenant coordinator
-> (ADR-MSG-019). A dispatcher is **not** independent of its message: it is activated in the
-> message's own scope, built from its `TenantId`, so a tenant-scoped `InvalidOperationException`
-> fails for some rows only.
-> One that never clears — a de-provisioned tenant — leaves its row oldest, heading every claim, and
-> stalls the outbox for every tenant with no dead-letter exit. The fix is owed.
+- Builds a `MessageEnvelope` from the columns — `Id`, `Source`, `Type` = `ContractName`, `Time` =
+  `OccurredOnUtc`, `DataContentType` = `application/json`, `Body` = UTF-8 of `Payload` — with the
+  row's own headers, then `tenantid`, `correlationid`, `causationid`, `traceparent` from the columns.
+- Takes **no serializer and no registry**: the payload travels opaque, so the send path never
+  depends on the producer's type graph. Consequence: a corrupt payload is not detected on the way out;
+  it dead-letters at the consumer.
+- `IMessageTransport` stays a **constructor** dependency. Resolved lazily, a missing transport would
+  throw inside the dispatch and be classified transient — spending every row's retry budget.
+- No `try`/`catch` around `SendAsync`: the transport's exception type is the classification.
+- `SendAsync` returning means **the destination acknowledged**. `Published` is terminal; an
+  asynchronous hand-off makes the mark a lie.
 
-> ⚠ **Never throw `OutboxPayloadException` for** a broker nack, a timeout, a refused connection, an
-> HTTP 503 or a database timeout. Only proven permanence dead-letters; everything unrecognised stays
-> transient. A library that guesses permanence wrongly loses messages.
-
-### Routing verdicts — `TransportOutboxDispatcher` (Core, `AddTransportDispatcher()`)
-
-The standard dispatcher routes on `MessageKind` and builds a `MessageEnvelope` from the row. It
-takes **no serializer and no registry**: the payload travels opaque, and `IMessageTransport` must
-stay a *constructor* dependency or a missing transport is misclassified as transient.
-
-| Row | Verdict |
-|---|---|
-| `Contract`, with `ContractName` and `Source` | envelope → `IMessageTransport.SendAsync` |
-| `Contract`, missing either | `OutboxPayloadException` — unaddressable, dead-letter on first sight |
-| `Notification` | **`OutboxConfigurationException`** — batch released, worker stops, rows survive |
-| unknown `MessageKind` | `OutboxPayloadException` |
-
-> ⚠ **The asymmetry between the last two is deliberate and must not be harmonised.** A notification
-> is a kind this build *understands* and cannot serve: the row is fine and dispatches the moment
-> `AddMediatRDomainEvents()` is called, so it is a missing registration. Classifying it as a payload
-> fault would dead-letter every domain event in the system on the first poll after a one-line
-> omission in a composition root, recoverable only by operator requeue. An unknown kind cannot be
-> interpreted at all and re-reading the row will never change that — permanent for this deployment,
-> so it dead-letters. Loud and reversible where a redeployment fixes it; terminal where nothing can.
-
-**`OutboxConfigurationException` therefore has two origins, not one**, and any log or message about
-it must name neither specifically: something the processor resolves from the scope is not registered
-at all (`IOutboxDispatcher`, or `OriginMessageHolder`); or a dispatcher handed a row it structurally
-cannot serve. A *dependency* of a registered dispatcher that is missing — a transport dispatcher with
-no `IMessageTransport`, the commonest composition fault — is **not** one of them: the container
-throws `InvalidOperationException` while activating the dispatcher, and that is the batch-fatal,
-no-budget, no-rethrow verdict above. A transport implementation must never raise `OutboxConfigurationException` — by the time one
-runs, the composition is already proven.
-
-## Inbox Store Contracts (Abstractions, namespace `MicroKit.Messaging.Spi` since #185 — split by consumer, ISP)
-
-One class may implement all five; five interfaces so a publisher never sees `ClaimBatchAsync` and
-the drain processor never sees `AddAsync`.
+### Back-off — full jitter, both sides
 
 ```csharp
-/// <summary>Ingestion. The receiving seam and broker adapters only.</summary>
-public interface IInboxWriter
+// n = the attempt count after this failure (outbox: RetryCount + 1; inbox: attempts)
+// NextRetryAtUtc = now + Uniform(0, min(2^n seconds, MaxRetryBackoff))
+TimeSpan ComputeBackoffCeiling(int n)
 {
-    ValueTask<bool> ExistsAsync(MessageId messageId, string consumerType, CancellationToken ct = default);
-
-    /// <summary>
-    /// Redelivery is reported through the RETURN VALUE, never through an exception. Under
-    /// at-least-once delivery a redelivery needs no failure at all — one expired lease after a
-    /// crash is enough — so an exception made the nominal path an error. An exception from this
-    /// method means a REAL failure and the caller must treat it as one.
-    /// </summary>
-    ValueTask<InboxWriteResult> AddAsync(InboxMessage message, CancellationToken ct = default);
+    var exponent = Math.Clamp(n, 0, 20);                  // a corrupt count cannot overflow
+    var backoff = TimeSpan.FromSeconds(1L << exponent);
+    return backoff > MaxRetryBackoff ? MaxRetryBackoff : backoff;
 }
-
-/// <summary>Claim and deferred settlement. Batch-scoped; the drain processor only.</summary>
-public interface IInboxProcessorStore
-{
-    ValueTask<InboxClaim> ClaimBatchAsync(
-        int batchSize, TimeSpan leaseDuration, CancellationToken ct = default);
-
-    /// <summary>
-    /// EVERY write filters on claimToken. Returns the affected-row count: a value below
-    /// outcomes.Count means those rows no longer carry this batch's token, which the caller logs
-    /// rather than assuming success. The token is a SHORT INDEPENDENT timeout, deliberately NOT
-    /// the caller's shutdown token — cancelling this write strands every lease in the batch.
-    /// </summary>
-    ValueTask<int> ApplyOutcomesAsync(
-        Guid claimToken, IReadOnlyList<InboxOutcome> outcomes, CancellationToken ct = default);
-}
-
-/// <summary>
-/// Marks a row processed INSIDE THE HANDLER'S OWN UNIT OF WORK. Resolved from the per-message
-/// execution scope, so the mark is staged on the same DbContext the handler wrote through.
-/// </summary>
-public interface IInboxSettlementStore
-{
-    /// <summary>Stages only. NEVER calls SaveChangesAsync — the handler's UoW owns the boundary.</summary>
-    ValueTask<bool> StageProcessedAsync(
-        InboxMessageKey key, Guid claimToken, CancellationToken ct = default);
-
-    /// <summary>True when the handler committed nothing, so the mark needs a deferred write.</summary>
-    bool IsMarkUncommitted(InboxMessageKey key);
-
-    /// <summary>
-    /// Whether an exception from the handler's commit is this processor's lease being lost.
-    /// Structural — which entity failed — never a guess at the message. It lives on the store
-    /// because only the implementation knows its provider's exception types, which is what keeps
-    /// MicroKit.Messaging free of any EF Core reference.
-    /// </summary>
-    bool IsLeaseLost(Exception exception);
-}
-
-/// <summary>Dead-letter inspection and requeueing. Operator tooling only.</summary>
-public interface IInboxAdminStore
-{
-    ValueTask<IReadOnlyList<InboxMessage>> GetDeadLetteredAsync(
-        int batchSize, string? tenantId = null, CancellationToken ct = default);
-
-    /// <summary>Returns true only if a row was actually requeued — never unconditional success.</summary>
-    ValueTask<bool> RequeueAsync(InboxMessageKey key, CancellationToken ct = default);
-}
-
-/// <summary>Retention. The inbox cleanup worker only.</summary>
-public interface IInboxRetentionStore
-{
-    ValueTask<int> DeleteProcessedAsync(
-        DateTimeOffset olderThan, string? tenantId = null, CancellationToken ct = default);
-}
+TimeSpan ApplyJitter(TimeSpan ceiling) =>
+    ceiling <= TimeSpan.Zero ? TimeSpan.Zero : TimeSpan.FromTicks((long)(ceiling.Ticks * random.NextDouble()));
 ```
 
-### Why the inbox is NOT a mirror of the outbox
+- Outbox: `OutboxProcessor.ComputeBackoffCeiling` / `ApplyJitter`. Inbox: `InboxRetryPolicy`, shared
+  by a failed first delivery and the retry loop. Same formula.
+- Deterministic back-off resynchronises every row that failed together — exactly what an outage
+  produces — on every later attempt. Linear back-off is a thundering herd.
+- `TimeProvider` and `Random` are injected (`TryAddSingleton(TimeProvider.System)`,
+  `TryAddSingleton(Random.Shared)`), so tests assert the curve against exact values.
 
-The outbox settles a whole batch at once. That is tolerable there **only to the extent that its
-consumers sit behind this inbox**, where a redelivery costs duplication the unique index absorbs.
-For the inbox there is no downstream — the inbox **is** the deduplication. A crash between a
-handler returning and its row being marked reruns the handler, with its business side effects.
-Batching that settlement would turn one possible replay into N, with nothing underneath to absorb
-them.
+---
 
-> ⚠ **Do not read the outbox's batching as safe in general — it is not, and that is a known
-> defect, not a property to copy.** Where the outbox dispatches to an in-process handler with no
-> inbox row — which is exactly what `MediatROutboxDispatcher` does when it publishes a
-> notification through `IPublisher.Publish` — a batch replay re-runs every notification handler
-> and re-writes whatever they wrote. The outbox needs the counterpart of
-> `IInboxSettlementStore`: a settlement that stages the `Published` mark into the transaction the
-> dispatch target commits. Recorded as **L0 finding #23** and on `OutboxProcessor`'s class
-> remarks; until it is built, notification handlers on that path **must** be idempotent.
+## The receive pipeline (`MessageReceivePipeline`)
 
-| | Scope | Rationale |
+One pipeline for a transport delivery (`IEnvelopeReceiver` and the in-memory consume loop), a local
+delivery (`DeliverLocalAsync`) and a store's retry (`RetryAsync`). Nothing is queued for a later
+drain.
+
+### Stages
+
+1. **Once per message, before any scope:** resolve the wire type to a local type, parse `Id` as a
+   GUID, deserialize the body. Any failure here is permanent — dead-lettered, no handler reached.
+   `EnvelopeReceiver` also dead-letters a non-JSON `DataContentType` before the pipeline.
+2. No handler registered: success, logged at `Warning` (3001) and counted as
+   `microkit.inbox.envelopes.unconsumed`. Correct, and never silent.
+3. **Per handler, in its own scope** (`IExecutionScopeFactory`): the execution context is written
+   (tenant from `tenantid`, correlation from `correlationid` — minted once per delivery when absent —
+   causation = the incoming message id) and, for a guarded handler, the delivery's store; then every
+   `IMessageScopeInitializer` runs, in registration order; then the `IMessageReceiveMiddleware`
+   chain; then the handler, resolved last.
+4. With a store, each handler is **guarded** (below). Without one, it simply runs.
+
+### The inbox guard — a new delivery (`DeliverGuardedAsync`)
+
+1. An outer scope; resolve the store's keyed `IInboxGuardStore`. `FindAsync` the
+   (`MessageId`, `ConsumerType`) row, untracked. **A row in any state** — processed, failed,
+   retrying, dead-lettered — **skips the handler** (2200, counted deduplicated): a redelivery never
+   starts a second attempt.
+2. `IInboxGuardStore.ExecuteAsync` runs the attempt as **one operation of the store's execution
+   strategy**. Each attempt is a **fresh scope**: initializers, then `BeginAsync`, then
+   `EnlistProcessedAsync(row)` (the row already `Processed`), then middlewares and handler, then
+   `CommitAsync` (save, then commit). The row, the handler's saves, its publications and its cascade
+   events commit together.
+3. A commit whose outcome is unknown is **verified by reading the row** (`Processed` → committed),
+   never replayed blindly.
+4. On failure, unless it is a dependency outage, read the row again:
+   - this attempt's own `RowId` → it committed, then faulted (2206): success;
+   - another row → a concurrent delivery committed first and this save hit the unique index (2201):
+     rolled back, success;
+   - none → record the failure.
+5. **Recording a failure** (`RecordFailureAsync`): the handler's transaction has rolled back; a new
+   scope inserts the row `Failed` with `TryInsertFailedAsync` — its own transaction, never an upsert.
+   Only once that row is committed is the delivery a success for the transport. From then on the
+   store's inbox loop owns the retries.
+   - **Permanent** (`PermanentMessageException`, `InboxPayloadException`): written dead-lettered,
+     `RetryCount` 0, `ProcessedAtUtc` set (2203). A permanent verdict counts no attempt.
+   - **Transient**: `RetryCount` 1, `NextRetryAtUtc` from the back-off (2202) — or dead-lettered at
+     once if `MaxRetries` is 1.
+   - **Dependency unavailable** (`InboxDependencyUnavailableException`): **no row**; the transport
+     pauses and redelivers, nothing counted.
+   - A row already there → another delivery owns it (2208): success.
+   - The `Failed` row cannot be written (2204): transient — the transport redelivers, counted.
+   - **The store reports itself unreachable** — `FindAsync` or `TryInsertFailedAsync` throws
+     `InboxDependencyUnavailableException` (2209): a dependency outage, nothing charged; the transport
+     pauses and redelivers, a local row is deferred under the local endpoint's back-off, never
+     dead-lettered. Only the store can tell an outage from a write that fails on its data (a value
+     too long for its column fails every time, and must dead-letter, not pause for ever). The EF store
+     raises it when its connection cannot be opened, or when the provider calls the fault transient
+     (`DbException.IsTransient`).
+6. The guard not registered for the store (2207) is transient here; host start rejects it first.
+
+> **Scope initializers run before the attempt's transaction.** They configure the scope the store's
+> `DbContext` is built from — a tenant's connection, say — and that context begins the transaction.
+> Everything that writes (middlewares, handler) runs inside it.
+
+### Verdicts and dispositions
+
+`DeliveryVerdict`, ordered least to most redeliverable; several handlers yield the maximum.
+
+| Verdict | Raised by | `ReceiveDisposition` |
 |---|---|---|
-| Claim | batch-scoped | Cross-tenant reservation, ADR-MSG-002 preserved |
-| Settle success | per-message scope | Joins the handler's transaction — the replay window closes |
-| Settle failures and releases | batch-scoped | A failed handler rolled back; there is nothing to join |
+| `Succeeded` | every handler done, skipped, or its failure recorded on its row; or no handler | `Acknowledge` |
+| `Permanent` | unknown wire type, non-GUID id, unreadable body; an **unguarded** handler's permanent exception (`EnvelopeReceiver` also answers `DeadLetter` for non-JSON content, before the pipeline) | `DeadLetter` |
+| `Transient` | an unguarded handler's other exception; a guarded failure that could not be recorded | `Redeliver` |
+| `DependencyUnavailable` | `InboxDependencyUnavailableException` | `PauseAndRedeliver` |
+| `Unsettled` | host stop | `Unsettled` — never an acknowledgement |
 
-`StageProcessedAsync` therefore uses the tracked change pipeline rather than `ExecuteUpdateAsync`,
-**precisely because it must not execute immediately**.
+- A guarded handler whose failure is recorded yields **success**: the store retries it, not the
+  transport.
+- `EnvelopeReceiveResult` carries `Disposition`, `Reason`, `Error`; built by `From(...)`, with the
+  shared `Acknowledged` instance.
+- `Acknowledge` means every handler's outcome is durable. A provider settles the broker message only
+  after `ReceiveAsync` has completed — the mirror of `SendAsync`'s rule.
+- **Shutdown is not a failure** (`IsShutdown`): an `OperationCanceledException` while the host token
+  is cancelled, or an `ObjectDisposedException` while it is cancelled or naming `IServiceProvider`,
+  stops the delivery with `Unsettled`, never classified, never counted. One raised by a handler's
+  own object while the host runs is an ordinary failure.
 
-> **Guarantee, stated plainly rather than hidden:** with a handler that writes through the scope's
-> `DbContext`, inbox processing is **transactionally atomic** — mark and side effects commit
-> together or not at all. It is NOT exactly-once in general: a handler that calls an external
-> endpoint and then rolls back calls it again on replay. A handler that commits no unit of work at
-> all is **detected and reported**, not degraded silently.
+### `IInboxGuardStore` — the contract a store implements
+
+Scoped, keyed by the store. One instance per scope, one scope per attempt.
+
+| Member | Contract |
+|---|---|
+| `FindAsync(key)` | Reads the row's state (`InboxRowState`: `Status`, `DeadLettered`, `RowId`) **from the database**, untracked — never from a cache or tracker: it answers "did an unknown commit land?". Throws `InboxDependencyUnavailableException` when the database cannot be reached. |
+| `ExecuteAsync(state, op, verify, verified)` | One operation of the execution strategy; `state` is handed to both callbacks, so the engine passes static lambdas; after an unknown-outcome fault, `verify` first. The last fault propagates **unwrapped** (no `RetryLimitExceededException`). |
+| `BeginAsync` | Begins the attempt's transaction. The EF store throws if the context already has one. |
+| `EnlistProcessedAsync(row)` | Adds a new delivery's row, already `Processed`. Writes nothing. The unique index is the guard. |
+| `MarkClaimedProcessedAsync(key, token)` | Marks a retry's claimed row `Processed`, **conditioned on the claim token**; `false` when the row no longer carries it — the handler must not run. Must hold under a context whose queries do not track by default. |
+| `CommitAsync` | Saves, then commits. The EF store re-stages the row if the handler cleared the tracker, and only if this attempt did not already write it. |
+| `IsLeaseLost(ex)` | Structural: the conditioned write matched no row (EF: `DbUpdateConcurrencyException` on an `InboxMessage` entry). Any other exception, a business unique violation included, is the handler's failure. |
+| `TryInsertFailedAsync(row)` | Inserts a failed row and commits it alone; `false` when a row of that pair exists. Throws `InboxDependencyUnavailableException` when the database cannot be reached; any other fault propagates as is. |
+
+### Handler rules with a store
+
+- **Do not begin a transaction on the store's context.** The engine's is open;
+  `ITransactionalContext.ExecuteAsync` joins it and its commit is the engine's.
+- `IResultUnitOfWork.TryCommitAsync` throws `InvalidOperationException` inside a guarded handler (an
+  open transaction); `TryExecuteAsync` joins it and converts nothing. Save with
+  `IUnitOfWork.CommitAsync`, or let the engine save.
+- `LeaseDuration` must exceed the worst-case handler duration: a retry that loses its claim
+  mid-handler (2205) records nothing and counts nothing.
+
+---
+
+## Inbox
+
+### `InboxMessage`
+
+`sealed class`, `{ get; set; }`, for the same reason as `OutboxMessage`.
+
+| Member | Rule |
+|---|---|
+| `RowId` (`Guid`) | **Primary key**, writer-assigned, `ValueGeneratedNever`. The claim selects on it alone: a compound-key `UPDATE` filtered by two `Contains` selects the cross product and breaks the `batchSize` bound. |
+| `MessageId` + `ConsumerType` | Unique index `UX_InboxMessages_MessageId_ConsumerType` — **the sole authority** for deduplication. `ConsumerType` is the handler type's version-free key, `Namespace.Type, AssemblyName` (`MessageConsumerKey`): an assembly-version bump never changes it. |
+| `EventType` | The local type the message was delivered as, assembly-qualified. |
+| `Payload`, `Source`, `Headers` | What a retry rebuilds its `MessageContext` from. |
+| `TenantId` | `string?`, no filter, never a claim filter. |
+| `CorrelationId` | Nullable; a correlation that is not a GUID is not recorded in the column and survives in `Headers`. |
+| `CausationId` | **Copied** from the envelope — the incoming message's own cause, as data. |
+| `ReceivedAtUtc` / `OccurredOnUtc` | Local receipt (the claim's sort key) / producer's business time (never indexed, claimed or ordered on). |
+| `ClaimToken` | **EF concurrency token** (`IsConcurrencyToken()`). |
+
+`OutboxMessage.CorrelationId` is non-nullable and `InboxMessage.CorrelationId` nullable. The
+asymmetry is deliberate; do not "fix" it.
+
+### Status machine — one row per (message, handler), written once
+
+```
+new delivery ─ success ─────────► Processed                   in the handler's transaction
+new delivery ─ failure ─────────► Failed (RetryCount 1)        own transaction, after rollback
+new delivery ─ permanent ───────► Failed + DeadLettered (0)    own transaction
+Failed ─ ClaimBatchAsync ───────► Processing
+  Processing ─ success ─────────► Processed                   MarkClaimedProcessedAsync, handler's transaction
+  Processing ─ transient ───────► Failed, RetryCount++         or Failed + DeadLettered at MaxRetries
+  Processing ─ permanent ───────► Failed + DeadLettered        RetryCount unchanged
+  Processing ─ never attempted ─► Failed                      Released: nothing counted
+```
+
+`Received` is written by no path; the claim still picks it up so a row from an earlier version is
+handled. Terminal = `Processed`, or `Failed` with `DeadLettered = true`.
+`IInboxAdminStore.RequeueAsync` sets `Failed`, `DeadLettered = false`, `RetryCount` 0 and clears
+the back-off, so the loop picks it up.
+
+### The retry loop (`InboxProcessor`)
+
+It never invokes a handler itself. It claims a batch, reads each row back (registry lookup of the
+(`ConsumerType`, message type) pair — bus handlers first, then local consumers — deserialization,
+`MessageContext` rebuilt from the row), and runs it through `MessageReceivePipeline.RetryAsync`. A
+success commits its own row and produces **no** outcome; only failures and releases are buffered and
+settled in one `ApplyOutcomesAsync`.
+
+| Result of a row | Effect on the row | Effect on the batch |
+|---|---|---|
+| processed | committed by the attempt | continues |
+| lease lost (`MarkClaimedProcessedAsync` false, or `IsLeaseLost`) — 2205 | untouched, owned elsewhere | continues |
+| permanent — `PermanentMessageException`, `InboxPayloadException`, unknown consumer, type that no longer resolves, unreadable payload | dead-letter **now**, `RetryCount` unchanged | continues |
+| transient (anything unrecognised) | `Retry` with back-off; `DeadLetter` at `MaxRetries` | continues |
+| `InboxDependencyUnavailableException` | released, nothing counted | abandoned; back-off toward `DependencyUnavailableBackoff` |
+| `InboxConfigurationException` (no guard for the store) | released | abandoned, rethrown: that store's inbox loop backs off on the idle curve (1402), and never ends |
+| host stop | released, nothing counted | abandoned |
+
+- An `ObjectDisposedException` naming the provider while the host **runs** is a failed attempt on a
+  retry (only `HostStop` is a stop), unlike on the transport path.
+- **Never throw `InboxPayloadException`** for a timeout, a refused connection, an HTTP 503, a
+  database timeout or a deadlock.
+
+### Inbox claim and settlement (`EfInboxStore`)
+
+Same shape as the outbox — candidates by `RowId` ordered on `ReceivedAtUtc`, sorted, stamped with the
+eligibility predicate replayed (`NOT DeadLettered AND (Status IN (Failed, Received) OR (Processing
+AND LockedUntilUtc <= now)) AND NextRetryAtUtc` reached) — with two differences:
+
+- The read-back by token always runs, and fills a key → `RowId` map. **Settlement must run on the
+  same store instance that claimed** (the loop's scope): an outcome whose key is not in the map is
+  skipped.
+- `Retry` and `Released` set `Status = Failed`, not a pending state: `Failed` with
+  `DeadLettered = false` *is* the awaiting-retry state.
 
 ### The claim token does two jobs
 
-1. **Fencing** — every write filters on it, so a processor whose lease expired matches zero rows
-   instead of overwriting its successor.
-2. **Settled marker** — a committed handler transaction leaves it null, so every deferred write for
-   that row (including a `Released` issued during shutdown) filters to zero rows and becomes a
-   no-op. Nothing has to check for that case; it is structurally impossible.
+1. **Fencing.** Every write filters on it, so a loop whose lease expired matches zero rows.
+2. **Settled marker.** A committed retry leaves it null, so any later write for that row — a
+   `Released` issued while the host stops, after the handler had committed — filters to zero rows.
 
-> ⚠ Job 1 works only because **`ClaimToken` is mapped as an EF concurrency token**
-> (`InboxMessageConfiguration`). Without it the `UPDATE` that `SaveChanges` emits carries the
-> primary key alone, ownership is checked at read time only, and the lost update returns. Removing
-> that line breaks no test that does not exercise concurrency — treat it as part of the contract,
-> and note it is pinned by `PostgreSql/InboxLeaseExpiryTests`.
+Job 1 for the success write works only because `ClaimToken` is mapped as an **EF concurrency
+token**: `MarkClaimedProcessedAsync` is a tracked update that `SaveChanges` emits, and without the
+token that `UPDATE` carries the primary key alone and the lost update returns. Removing the mapping
+breaks no test that does not exercise concurrency. The outbox needs no such mapping: all its writes
+are `ExecuteUpdateAsync` with an explicit token filter.
 
-### Inbox failure classification
+---
 
-| Kind | Raised for | Effect on this row | Effect on the batch |
-|---|---|---|---|
-| **Permanent** (`InboxPayloadException`) | unknown consumer, unreadable payload | dead-letter **immediately** | continues |
-| **Transient** (anything unrecognised) | — | retry, full-jitter back-off | continues |
-| **Dependency** (`InboxDependencyUnavailableException` — the one exception here that lives in the *application* namespace `MicroKit.Messaging`, because a handler is its only source) | downstream service unreachable | **released**, no retry spent | abandoned |
-| **Configuration** (`InboxConfigurationException`) | handler or settlement store not registered | released, no retry spent | abandoned, **worker stops** |
-| **Lease lost** | expired mid-handler | untouched, owned elsewhere | continues |
+## The local endpoint (`Local/`)
 
-> ⚠ **Never throw `InboxPayloadException` for** a timeout, a refused connection, an HTTP 503, a
-> database timeout or a deadlock. Only proven permanence dead-letters; everything unrecognised
-> stays transient. A library that guesses permanence wrongly loses messages.
+An in-process message, never handed to a transport and needing no `[MessageContract]` — today, a
+domain-event notification sent by `MicroKit.Messaging.MediatR` through `ILocalMessageSender`. Its
+consumers come from `ILocalConsumerSource` (`LocalConsumer`: message type, consumer name, handler
+type, invoker), read once into `LocalConsumerRegistry` and matched by **exact** runtime type.
 
-### Inbox retention — not housekeeping
+- **With a store:** `LocalMessageSender` resolves the store as a publication does and enlists an
+  outbox row with `Endpoint = "local"` (`OutboxMessageFactory.CreateLocal`; tenant, correlation and
+  causation from the scope's `IExecutionContext`). The store's outbox loop dispatches it through
+  `LocalOutboxDispatcher` → `DeliverLocalAsync`: one **guarded** delivery per consumer, each under
+  its own inbox row. Returning marks the outbox row `Published`. A verdict the pipeline could not
+  record becomes the outbox's: permanent → dead-letter the row; dependency → defer the local
+  endpoint (its transport rows still go out);
+  failure no inbox row could hold → retry the row (consumers already done skip on their rows).
+- **Without a store:** `LocalQueue`, in memory — one entry per (message, consumer), each with its
+  own attempt count (`MaxDeliveryAttempts` 5), dead letter (2302) and dependency pause (5 s, 2304),
+  delivered by `LocalQueueWorker` (registered with the first `AddLocalConsumerSource`). Queued
+  **before the sender's work commits** — a rolled-back command still notifies — and lost if the
+  process stops. No consumer at all: counted unconsumed, never queued.
+- A local delivery's `MessageContext` has an empty `ContractName` and `ContractVersion` 0.
 
-`InboxRetentionWorker` deletes `Processed` rows older than `RetentionDays` across every tenant
-(`tenantId: null`). **`RetentionDays` defaults to 30, not the outbox's 7, and harmonising the two
-would be a defect.** On the outbox, deleting early loses history; on the inbox it loses the
-deduplication guarantee, because the table only deduplicates messages it still holds. The window
-must exceed the maximum plausible redelivery delay of every upstream transport.
+A batch replay costs a re-send, never a re-run: every consumer of a transport row sits behind the
+receiving inbox, and every consumer of a local row behind its own row.
 
-## The per-message context — correlation is copied, causation is DERIVED
+---
 
-Both processors build an `IExecutionContext` for the message's own scope. The two trace values are
-not treated the same way, and conflating them is how the chain was dead for the module's whole life.
+## The per-message context — correlation copied, causation derived
 
-```csharp
-// ✅ REQUIRED — the row being processed is the CAUSE of everything staged in its scope.
-var ctx = new ExecutionContext
-{
-    TenantId      = message.TenantId,                          // off the row, never ambient
-    CorrelationId = message.CorrelationId?.Value.ToString(),    // COPIED — identifies the chain
-    CausationId   = message.Id.Value.ToString(),                // DERIVED — advances one hop
-};
-
-// ❌ FORBIDDEN — copying the row's own causation names the GRANDPARENT, one hop too far up.
-CausationId = message.CausationId?.Value.ToString();
-```
-
-> **Why this was invisible.** Nothing in the module assigns a causation at the root, so copy-through
-> propagated null forever: `CausationId` was null on every row of every path, while the column, the
-> value object and `MessageEnvelope.CausationId` all documented a link that was never built. Every
-> causation test fed a value in through a stubbed `IExecutionContext` and asserted it survived
-> serialization — the plumbing, never the derivation. A test must seed a **different** ancestor
-> causation, or it passes under both implementations.
-
-| Processor | The cause is | Never |
+| Where | Execution context `CausationId` | Never |
 |---|---|---|
-| `OutboxProcessor` | `message.Id` | `message.CausationId` |
-| `InboxProcessor` | `message.MessageId` | `message.CausationId`, and never `message.RowId` |
-| `EnvelopeReceiver` | `envelope.MessageId` | `envelope.CausationId` — which the ROW copies, one hop behind |
+| `OutboxProcessor` (dispatch scope) | the row's `Id` | the row's `CausationId` — the grandparent |
+| Pipeline, transport delivery | the envelope's `Id` | the envelope's `causationid` header |
+| Pipeline, local delivery and retry | the message's `MessageId` | the row's `CausationId`, and never `RowId` |
 
-> **Correlation at the receiving seam is copied when the producer had one and MINTED ONCE when it
-> did not.** `EnvelopeReceiver` is the last point at which a single id still covers the whole
-> fan-out: downstream, `OutboxMessageFactory.ResolveCorrelation` substitutes a fresh id per staging
-> call, so leaving null here puts N consumers of one delivery on N unrelated chains, none reaching
-> back to the delivery that caused all of them. One id for the rows and the scope alike.
-
-`RowId` is the surrogate primary key ADR-MSG-017 introduced so the inbox claim filters on a single
-column. It is meaningless outside its own table; `MessageId` is the end-to-end identity the producer
-assigned, and the only one that answers "which message caused this" downstream.
-
-**Do not merge this with `OriginMessageId`, although the outbox derives both from `message.Id`.**
-They coincide in value and differ in obligation: `OriginMessageId` is half of a unique key and may
-**never** degrade — a null switches deduplication off in silence — while `CausationId` is diagnostic
-and degrades to null rather than failing when it cannot be parsed
-(`OutboxMessageFactory.ResolveCausation`). One is carried by `OriginMessageHolder` and stamped by
-the processor; the other travels in the execution context.
+- `CorrelationId` is copied everywhere. At the receiving end it is **minted once per delivery** when
+  absent, so every handler of the message — and everything they publish — shares one chain.
+- The inbox row's `CausationId` and `MessageContext.CausationId` are the incoming message's own
+  cause, copied as data. Deriving them would overwrite the producer's link.
+- A test of causation must seed a **different** ancestor causation, or copy-through passes too.
+- `RowId` is meaningless outside its table; `MessageId` is the identity that answers "which message
+  caused this" downstream.
 
 ---
 
-## Batch Processing Conventions
+## The engine
 
-```csharp
-// ✅ One scope per message — failure in one does not affect others
-foreach (var message in batch)
-{
-    await using var scope = _scopeFactory.CreateAsyncScope();
-    // IOutboxDispatcher, resolved per message. NOT IMessagePublisher — that seam was deleted by
-    // ADR-MSG-018 and its in-process implementation by ADR-MSG-019.
-    var dispatcher = scope.ServiceProvider.GetRequiredService<IOutboxDispatcher>();
+`MessageStoreEngine` (`BackgroundService`, `IServiceScopeFactory` only) reads the store set once and
+runs, **per store**, four independent loops: `OutboxLoop`, `InboxLoop`, `OutboxRetentionLoop`,
+`InboxRetentionLoop` (event 1403 lists the stores). Each loop creates its own scope per cycle and
+resolves its store's keyed processor or retention store from it, so **a store whose database is
+down backs off alone**.
 
-    await ProcessSingleAsync(dispatcher, message, ct).ConfigureAwait(false);
-}
+| Cadence (outbox; the inbox the same, plus its outage arm) | Next delay |
+|---|---|
+| inbox only: dependency unavailable | grow toward `DependencyUnavailableBackoff` |
+| cancelled | unchanged |
+| outbox only: rows handed over in back-off (`HandedOverInBackOff`) | `PollingInterval` |
+| saturated (claimed ≥ `BatchSize`) | 0 — poll again at once |
+| empty | grow toward `MaxPollingInterval` |
+| partial | `PollingInterval` |
+| the cycle threw (claim failed: database unreachable) — 1401 | grow toward `MaxPollingInterval` |
 
-// ❌ Shared scope across batch — DbContext state from message N bleeds into message N+1
-await using var shared = _scopeFactory.CreateAsyncScope();
-foreach (var message in batch)
-{
-    await ProcessSingleAsync(shared, message, ct); // ← isolation bug
-}
-```
+Grow = double, starting from `PollingInterval`, capped. The outbox has no outage arm: a down endpoint
+backs off on its own rows (above), so a batch that hit one is sized like any other — a full one
+cannot re-claim the rows it deferred. One exception, before saturation: a batch carrying rows handed
+over in back-off (`OutboxBatchResult.HandedOverInBackOff` — a store breaking the claim's contract by
+not honouring its endpoint filter) waits `PollingInterval`, whatever its endpoint verdict
+(cancellation aside) and even if it delivered something, or it would rewrite the down endpoint's
+backlog back to back. Such a store still pays a rewrite of the down endpoint's backlog each back-off
+period, and holds the other endpoint to one batch per `PollingInterval` while it keeps handing that
+backlog over: the filter is required. A back-off that began within the batch sets no flag: its
+deferred rows wait out their next attempt, a conforming store leaves the endpoint out of the next
+claim, and a non-conforming one's next batch sets the flag if it comes within the back-off (after a
+saturated batch). The EF store filters with `IX_OutboxMessages_Endpoint_Dispatchable`
+(`Status, Endpoint, CreatedAtUtc`), and the local exclusion is a `UNION ALL` of ranges around
+`'local'`: `<> 'local'` walks the local backlog (`EndpointExclusionPlanTests`, both directions,
+asserted on buffers). A processor that cannot be activated (1400) grows toward
+`TransportUnavailableBackoff`.
 
-> **One scope per message is mandatory.** A shared scope means a DbContext exception on
-> message N will corrupt the DbContext state for message N+1. Per-message scopes also
-> ensure that `TenantId` context is fresh for each message.
+- **Activation is not registration.** A store missing a required service fails at start. An
+  exception while resolving a registered processor or retention store is logged as an activation
+  failure (1400) with back-off; the loop keeps running.
+- **A configuration fault backs off, and never ends a loop** (1402, `Critical`, logged on every
+  cycle): the processor settles first — the rest of the batch released, earlier rows keeping their
+  outcomes — then rethrows, and the loop grows its delay toward `MaxPollingInterval`. It cannot clear
+  without a fix; start validation rejects the compositions that raise it.
+- **A host stop is never a failure.** The loop ends only on the host's token; a processor
+  interrupted by it releases what it claimed with attempt counts unchanged (`HostStop`).
+- **One loop guard** (`GuardedLoop`) runs every long-running loop — the four store loops,
+  `LocalQueueWorker`, `InMemoryTransportWorker`: a thrown exception ends the loop only when
+  `HostStop` says so; any other is a failed cycle with that loop's back-off, and is logged (1401 for
+  a store loop, 1402 a configuration fault, 2305 the local queue, 3017 the in-memory transport). An
+  unsettled delivery while the host runs is, in the in-memory workers, a dependency outage (requeued,
+  nothing charged, paused) only when the root container cannot create a scope — disposed, or the
+  probe failing any other way, which never escapes — and otherwise a counted failure (a handler's own disposed provider), never a busy loop; logging goes through
+  `GuardedLoop.Log`, so a logging provider that throws never ends a loop. No loop keeps a catch shape
+  of its own.
+
+### Retention — not housekeeping
+
+| | Deletes | `RetentionDays` default | Why |
+|---|---|---|---|
+| Outbox | `Published` rows with `ProcessedAtUtc` older than the cutoff, every tenant (`tenantId: null`) | 7 | early deletion loses history only |
+| Inbox | `Processed` rows, same rule | **30** | the table only deduplicates what it still holds: the window must exceed the longest plausible redelivery delay of every upstream transport |
+
+Do not harmonise the two. `RetentionDays <= 0` disables the loop. Failed and dead-lettered rows are
+never deleted by retention. `tenantId: null` means every tenant, and is the only value that matches
+rows in a single-tenant deployment.
+
+### Options
+
+`MessagingOptions` (section `MicroKit:Messaging`) carries `Outbox` (`OutboxProcessorOptions`) and
+`Inbox` (`InboxProcessorOptions`), both `sealed record` with `{ get; set; }` — `init` would make the
+`bus.Configure(...)` callback a no-op. Global: every store's loops use them. Validated at start.
+
+| | Outbox | Inbox |
+|---|---|---|
+| `BatchSize` | 100 | 100 |
+| `PollingInterval` / `MaxPollingInterval` | 5 s / 1 min | 5 s / 1 min |
+| outage back-off | `TransportUnavailableBackoff` 5 min — the ceiling of each endpoint's back-off | `DependencyUnavailableBackoff` 5 min — the loop's |
+| lease | `LockDuration` 5 min | `LeaseDuration` 5 min |
+| `MaxRetries` / `MaxRetryBackoff` | 5 / 1 h | 5 / 1 h |
+| `OutcomeFlushTimeout` | 10 s | 10 s |
+| `MaxErrorMessageLength` | 2000 | 2000 |
+| `RetentionDays` / `RetentionInterval` | 7 / 1 h | 30 / 1 h |
 
 ---
 
-## Silent Success Prohibition
+## Removed in #188
 
-A path that cannot deliver must say so. Returning as if it had is the failure mode this module
-treats as blocking, because nothing downstream can detect it.
-
-```csharp
-// ❌ FORBIDDEN — a row written with no transaction to govern it
-public async ValueTask<MessageId> PublishAsync<T>(T evt, ...)
-{
-    await _writer.AddAsync(message, ct);   // ← the writer FLUSHES, so with no open transaction the
-    return message.Id;                     //   provider's implicit one commits it: an event
-}                                          //   announced permanently, for a fact that may roll back
-
-// ✅ REQUIRED — refuse loudly, BEFORE staging
-if (!_writer.HasOpenTransaction)
-    throw new IntegrationEventPublishException(
-        $"'{typeof(T).Name}' was published with no open transaction. ...");
-```
-
-> The guard runs **before** any other work, and the order is the contract: a guard placed after the
-> write would have nothing left to prevent — the row is already committed by then, irrevocably.
-> `PublishAsync_WithNoOpenTransaction_ThrowsAndStagesNothing` asserts both halves.
-
-> ⚠ **`IIntegrationEventWriter.AddAsync` flushes, and that is not a violation of "never commit".**
-> The replay key on `(OriginMessageId, ContractName)` can only be consulted by attempting the
-> insert, and the answer must reach the publisher before it returns, or a replayed dispatch fails
-> the caller's commit instead of being absorbed. The write is inside the caller's transaction and a
-> rollback still erases it. It also flushes the caller's other pending changes — EF has no
-> per-entity save — which changes when their own violations surface, not whether they commit.
-
-> ⚠ `IUnitOfWork.CommitAsync` is **not** an open transaction. It is a bare `SaveChangesAsync`
-> running under the provider's implicit per-call transaction, which never appears in
-> `Database.CurrentTransaction`. Publishing belongs inside `ITransactionalContext.ExecuteAsync`.
-
-A missing **subscriber**, by contrast, is not an error: it is valid for a multi-service deployment
-where an event has no local consumer. That judgement belongs to the receiving side, and
-`EnvelopeReceiver` makes it: a contract name that resolves to a local type with no registered
-handler writes zero rows and throws nothing — but logs at `Warning` (event 2102) and counts
-`microkit.inbox.envelopes.unconsumed`. Correct behaviour is not the same as silent behaviour, and
-zero rows is otherwise indistinguishable from a healthy delivery. A contract name that resolves to
-**no** local type is the opposite verdict: permanent, `InboxPayloadException`, and a provider must
-dead-letter rather than nack — there is no row to dead-letter, so the verdict has nowhere to live
-but the broker.
+Do not reintroduce or name as current: `IIntegrationEventPublisher`, `IIntegrationEventWriter`
+(`HasOpenTransaction`), `IntegrationEventWriteResult`, `IInboxWriter`, `InboxWriteResult`,
+`IInboxSettlementStore`, `MessageKind`, `OutboxDispatcherKeys`, `MediatROutboxDispatcher`,
+`DomainEventsCascadeNotificationPublisher`, `OutboxMessage.OriginMessageId` and the index
+`UX_OutboxMessages_Origin_ContractName`, the outbox/inbox workers and coordinators,
+`AddEfCoreOutbox`, `AddEfCoreIntegrationEvents`, `AddMediatRDomainEvents`.

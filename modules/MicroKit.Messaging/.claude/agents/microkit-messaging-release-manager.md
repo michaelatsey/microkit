@@ -18,7 +18,7 @@ correctly, and all v1 packages are consistent before any tag is pushed.
 - Verify all tests pass (0 failures)
 - Verify API reviewer has approved
 - Verify dependency guardian has approved all `.csproj` changes
-- Verify no MediatR.Contracts reference anywhere
+- Verify MediatR is referenced only by MicroKit.Messaging.MediatR and its test projects (ADR-MSG-009)
 - Produce the exact git commands for the release (human executes)
 
 ---
@@ -42,12 +42,6 @@ Packages — Phase 1
 [ ] (MicroKit.Messaging.Testing — NOT built; L0 finding #19. Do not block the release on it, and
     do not list it as a published package until the project exists.)
 
-v2 Provider Scaffolds
-[ ] MicroKit.Messaging.RabbitMQ — IsPackable=false (not published)
-[ ] MicroKit.Messaging.AzureServiceBus — IsPackable=false (not published)
-[ ] MicroKit.Messaging.Kafka — IsPackable=false (not published)
-[ ] MicroKit.Messaging.OpenTelemetry — IsPackable=false (not published)
-[ ] MicroKit.Messaging.Serialization — IsPackable=false (not published)
 
 Tests
 [ ] dotnet test → 0 failures
@@ -60,7 +54,7 @@ Review
 [ ] microkit-messaging-dependency-guardian: PASS
 [ ] microkit-messaging-distributed-context-specialist: PASS (for processor changes)
 [ ] No uncommitted changes
-[ ] No MediatR.Contracts reference anywhere (grep verification)
+[ ] MediatR referenced only by MicroKit.Messaging.MediatR and its tests (grep verification)
 
 Version
 [ ] version.json correct
@@ -72,8 +66,9 @@ Version
 ## Pre-Release Verification Commands
 
 ```bash
-# Verify no MediatR.Contracts reference
-grep -r "MediatR.Contracts" modules/MicroKit.Messaging/ --include="*.csproj" --include="*.cs"
+# Verify MediatR stays in the glue
+grep -rlE 'Include="(MicroKit\.)?MediatR' modules/MicroKit.Messaging/src/MicroKit.Messaging.Abstractions modules/MicroKit.Messaging/src/MicroKit.Messaging modules/MicroKit.Messaging/src/MicroKit.Messaging.EntityFrameworkCore --include="*.csproj"
+# must return no output: only MicroKit.Messaging.MediatR and its tests reach MediatR (ADR-MSG-009)
 
 # Verify no FluentAssertions
 grep -r "FluentAssertions" modules/MicroKit.Messaging/ --include="*.csproj" --include="*.cs"
