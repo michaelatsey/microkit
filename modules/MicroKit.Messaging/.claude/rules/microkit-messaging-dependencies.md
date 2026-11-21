@@ -1,60 +1,82 @@
 # microkit-messaging-dependencies
 
-## Dependency Graph (authoritative)
+## Dependency Graph (as the `.csproj` files declare it)
 
 ```
 MicroKit.Messaging.Abstractions
-    ← MicroKit.Result
-    ← MicroKit.Domain            (ADR-MSG-010: IIntegrationEvent : IEvent — canonical event taxonomy root
-                                  from MicroKit.Domain.Events; supersedes ADR-MSG-001 standalone stance)
+    ← MicroKit.Result                                 cross-module, CIReleaseBuild pattern
+    ← MicroKit.Domain                                 cross-module, CIReleaseBuild pattern
+                                                      (ADR-MSG-010: IIntegrationEvent : IEvent)
+    (no PackageReference)
 
 MicroKit.Messaging (Core)
-    ← MicroKit.Messaging.Abstractions
+    ← MicroKit.Messaging.Abstractions                 same module, unconditional
+    ← MicroKit.Execution.Abstractions                 cross-module, CIReleaseBuild pattern (ADR-EXEC-001)
     ← Microsoft.Extensions.DependencyInjection.Abstractions
     ← Microsoft.Extensions.Hosting.Abstractions
     ← Microsoft.Extensions.Logging.Abstractions
-    ← Microsoft.Extensions.Options                   (ConfigureJson is backed by IOptions — #186)
+    ← Microsoft.Extensions.Options                    (ConfigureJson is backed by IOptions — #186)
+    ← Microsoft.Extensions.Options.ConfigurationExtensions
+                                                      (MessagingOptions binds "MicroKit:Messaging" — #187;
+                                                       EnableConfigurationBindingGenerator=true)
 
 MicroKit.Messaging.EntityFrameworkCore
-    ← MicroKit.Messaging (Core)
-    ← MicroKit.Persistence.EntityFrameworkCore       ← cross-module (Level 2)
-    ← Microsoft.EntityFrameworkCore.Relational       ← ToTable/HasIndex + ExecuteUpdateAsync/DeleteAsync SQL generation
+    ← MicroKit.Messaging (Core)                       same module, unconditional
+    ← MicroKit.Persistence.EntityFrameworkCore        cross-module, CIReleaseBuild pattern
+    ← Microsoft.EntityFrameworkCore.Relational        ToTable/HasIndex + ExecuteUpdateAsync/DeleteAsync SQL generation
+    ← Microsoft.Extensions.DependencyInjection.Abstractions
 
-MicroKit.Messaging.MediatR                          ← the ADR-MSG-009 carve-out
-    ← MicroKit.Messaging (Core)
-    ← MicroKit.MediatR + MicroKit.MediatR.Abstractions
-    ← MediatR / MediatR.Contracts                    ← permitted HERE ONLY
-
-MicroKit.Messaging.Testing                          ← PLANNED, not built (L0 finding #19)
-    ← MicroKit.Messaging.Abstractions                ← Abstractions only, never Core
-
-── v2 providers (IsPackable=false) ─────────────────────────────────────────────
-MicroKit.Messaging.RabbitMQ             [Phase 2]
-    ← MicroKit.Messaging (Core)
-    ← RabbitMQ.Client (v7+)
-
-MicroKit.Messaging.AzureServiceBus      [Phase 2]
-    ← MicroKit.Messaging (Core)
-    ← Azure.Messaging.ServiceBus
-
-MicroKit.Messaging.Kafka                [Phase 2]
-    ← MicroKit.Messaging (Core)
-    ← Confluent.Kafka
-
-MicroKit.Messaging.OpenTelemetry        [Phase 2]
-    ← MicroKit.Messaging (Core)
-    ← OpenTelemetry.Api
-
-MicroKit.Messaging.Serialization        [Phase 2]
-    ← MicroKit.Messaging.Abstractions
-    ← System.Text.Json (BCL — no extra package needed for net10.0)
+MicroKit.Messaging.MediatR                            the ADR-MSG-009 carve-out
+    ← MicroKit.Messaging (Core)                       same module, unconditional
+    ← MicroKit.MediatR                                cross-module, CIReleaseBuild pattern
+    ← MicroKit.Domain                                 cross-module, CIReleaseBuild pattern
+    ← Microsoft.Extensions.DependencyInjection.Abstractions
+    ← Microsoft.Extensions.Logging.Abstractions
+    (MediatR and MicroKit.MediatR.Abstractions arrive transitively through MicroKit.MediatR;
+     there is no direct PackageReference to MediatR or MediatR.Contracts)
 ```
+
+`src/` holds exactly these four projects. No broker provider and no `MicroKit.Messaging.Testing`
+project exists; the in-memory transport ships in Core, and no broker transport ships.
+
+The glue is built on the public SPI only: `MicroKit.Messaging` grants it no `InternalsVisibleTo`.
+
+> `MicroKit.Messaging.Abstractions` → `MicroKit.Domain` disagrees with the root graph
+> (ADR-MSG-001: Messaging does not depend on Domain). ADR-MSG-010 made the edge; the root
+> CLAUDE.md tracks the reconciliation in #151. `IIntegrationEvent` extends
+> `MicroKit.Domain.Events.IEvent` only — not `IDomainEvent`, not `INotification`.
+
+### Test projects
+
+| Project | ProjectReference | Notable PackageReference |
+|---|---|---|
+| `MicroKit.Messaging.UnitTests` | Abstractions, Core | `Microsoft.Extensions.DependencyInjection`, `.Logging`, `.Hosting` (the generic host of the verification tests, #187), `.TimeProvider.Testing` |
+| `MicroKit.Messaging.IntegrationTests` | Abstractions, Core, EntityFrameworkCore, `IntegrationTests.SecondModule` | `Microsoft.EntityFrameworkCore.Sqlite`, `Npgsql.EntityFrameworkCore.PostgreSQL`, `Testcontainers.PostgreSql`, `Microsoft.Extensions.Hosting`, `.TimeProvider.Testing` |
+| `MicroKit.Messaging.IntegrationTests.SecondModule` | Abstractions | none (`IsTestProject=false`: a second assembly for the multi-store tests) |
+| `MicroKit.Messaging.ArchitectureTests` | Abstractions, Core, EntityFrameworkCore, MediatR | `NetArchTest.Rules` |
+| `MicroKit.Messaging.MediatR.UnitTests` | MediatR | `Microsoft.Extensions.DependencyInjection` |
+| `MicroKit.Messaging.MediatR.IntegrationTests` | Abstractions, Core, EntityFrameworkCore, MediatR; cross-module: `MicroKit.MediatR`, `MicroKit.MediatR.Behaviors`, `MicroKit.Persistence.EntityFrameworkCore`, `MicroKit.Domain`, `MicroKit.Result` | `Microsoft.EntityFrameworkCore`, `.Sqlite`, `Npgsql.EntityFrameworkCore.PostgreSQL`, `Testcontainers.PostgreSql`, `Microsoft.Extensions.Hosting`, `.Logging`, `.DependencyInjection` |
+
+Every test project also takes the test stack: `Microsoft.NET.Test.Sdk`, `xunit`,
+`xunit.runner.visualstudio`, `Shouldly`, `coverlet.collector`, and `NSubstitute` (all except
+ArchitectureTests and SecondModule). `MicroKit.Messaging.MediatR.IntegrationTests` compiles the
+core suite's PostgreSQL fixture and Docker gate (`PostgreSqlFixture.cs`,
+`DockerRequiredFactAttribute.cs`, `StoreDatabase.cs`) as linked files.
+
+### InternalsVisibleTo
+
+| From | To |
+|---|---|
+| `MicroKit.Messaging` | `MicroKit.Messaging.UnitTests`, `MicroKit.Messaging.IntegrationTests`, `MicroKit.Messaging.MediatR.IntegrationTests`, `DynamicProxyGenAssembly2` (NSubstitute) |
+| `MicroKit.Messaging.EntityFrameworkCore` | `MicroKit.Messaging.IntegrationTests` |
+| `MicroKit.Messaging.MediatR` | `MicroKit.Messaging.MediatR.UnitTests` |
 
 ---
 
-## Cross-Module References — Mandatory Pattern
+## Reference Patterns — what each project uses
 
-Any cross-module dependency MUST use the two-ItemGroup CIReleaseBuild pattern:
+- **Cross-module references from a `src/` project** use the two-ItemGroup `CIReleaseBuild`
+  pattern. All four `src/` projects do, for every cross-module edge in the graph above:
 
 ```xml
 <!-- DEV: source ProjectReferences — CI/Release: published NuGet packages -->
@@ -69,28 +91,29 @@ Any cross-module dependency MUST use the two-ItemGroup CIReleaseBuild pattern:
 </ItemGroup>
 ```
 
-> ADR-MSG-010: `IIntegrationEvent : IEvent` where `IEvent` is `MicroKit.Domain.Events.IEvent`
-> (canonical event taxonomy root). `IIntegrationEvent` does NOT extend `IDomainEvent` — it is a
-> standalone transport contract. The `MicroKit.Domain` dep is required only for the `IEvent` root.
-> `IIntegrationEvent` carries no domain event semantics (no `EventId`, no `OccurredAt` from IDomainEvent).
+- **References inside the module** (Core → Abstractions, EntityFrameworkCore → Core,
+  MediatR → Core) are unconditional `ProjectReference` (ADR-GLOBAL-002 D5).
+- **Test projects** (`IsPackable=false`) use unconditional `ProjectReference` for everything,
+  cross-module included (`MicroKit.Messaging.MediatR.IntegrationTests`), and no `CIReleaseBuild`
+  group.
+- `MicroKit.Messaging.slnx` lists, under `/deps/`, every project of another module reached through
+  a `ProjectReference`.
 
-See monorepo root `.claude/rules/cross-module-references.md` for the full canonical pattern.
+See the monorepo root `.claude/rules/cross-module-references.md` for the full canonical pattern.
 
 ---
 
 ## Allowed Package Matrix
 
-| Project | Allowed packages |
+| Project | Allowed references |
 |---------|-----------------|
-| `Abstractions` | `MicroKit.Result` + `MicroKit.Domain` (ADR-MSG-010: `IIntegrationEvent : IEvent`) |
-| `Core` | Abstractions + `Microsoft.Extensions.{DI,Hosting,Logging}.Abstractions` + `Microsoft.Extensions.Options` (`ConfigureJson`, #186) |
-| `EntityFrameworkCore` | Core + `MicroKit.Persistence.EntityFrameworkCore` + `Microsoft.EntityFrameworkCore.Relational` |
-| `Testing` | Abstractions only — `xunit`, `Shouldly`, `NSubstitute` belong in the consumer's test project, NOT in this library |
-| `RabbitMQ` | Core + `RabbitMQ.Client` |
-| `AzureServiceBus` | Core + `Azure.Messaging.ServiceBus` |
-| `Kafka` | Core + `Confluent.Kafka` |
-| `OpenTelemetry` | Core + `OpenTelemetry.Api` |
-| `Serialization` | Abstractions (System.Text.Json is BCL in net10.0) |
+| `Abstractions` | `MicroKit.Result`, `MicroKit.Domain` (ADR-MSG-010). No package |
+| `Core` | Abstractions, `MicroKit.Execution.Abstractions`, `Microsoft.Extensions.{DependencyInjection,Hosting,Logging}.Abstractions`, `Microsoft.Extensions.Options`, `Microsoft.Extensions.Options.ConfigurationExtensions` |
+| `EntityFrameworkCore` | Core, `MicroKit.Persistence.EntityFrameworkCore`, `Microsoft.EntityFrameworkCore.Relational`, `Microsoft.Extensions.DependencyInjection.Abstractions` |
+| `MediatR` | Core, `MicroKit.MediatR`, `MicroKit.Domain`, `Microsoft.Extensions.{DependencyInjection,Logging}.Abstractions` |
+| test projects | the `src/` projects they test, the test stack above, and the packages in the table above |
+
+A new edge is a change to this matrix, approved before it is made.
 
 ---
 
@@ -101,57 +124,45 @@ See monorepo root `.claude/rules/cross-module-references.md` for the full canoni
 > relational databases; the in-memory provider is never a target, so depending on `.Relational`
 > directly is the correct choice.
 >
-> ⚠ **Supported relational providers are PostgreSQL and SQLite. SQL Server is NOT supported for the
-> outbox**, and this is a real narrowing rather than a footnote: `UX_OutboxMessages_Origin_ContractName`
-> is unique over `(OriginMessageId, ContractName)`, every `MessageKind.Notification` row carries
-> `(NULL, NULL)`, and SQL Server compares nulls as equal — so the second notification row ever
-> written is rejected, in production, on the second insert. The index carries a model invariant and
-> cannot be dropped to make the provider work. Declared on `ApplyMessagingConfiguration`,
-> `OutboxMessageConfiguration`, the README and the CHANGELOG. Note that SQL Server is still
-> accommodated elsewhere — `EfInboxStore` caps savepoint names at 24 characters for it — so do not
-> read this as the module dropping the provider wholesale.
+> **Tested providers:** PostgreSQL (through Testcontainers) and SQLite. SQL Server is not tested.
 
 ---
 
 ## Forbidden Dependencies (non-negotiable)
 
-> **ADR-MSG-009 carve-out:** the `MicroKit.Messaging.MediatR` glue package is the SINGLE exception
-> to the `MediatR` / `MediatR.Contracts` bans below — it bridges domain-event notifications onto the
-> outbox via `IPublisher.Publish`. The bans still apply to Abstractions, Core, EFCore, Testing,
-> broker providers, and all test projects.
+> **ADR-MSG-009 carve-out:** `MicroKit.Messaging.MediatR` is the SINGLE package that reaches
+> `MediatR` / `MediatR.Contracts`, through `MicroKit.MediatR`. Its two test projects reach it too,
+> and `MicroKit.Messaging.ArchitectureTests` receives it transitively through its reference to the
+> glue, which it inspects. The architecture tests pin the rest: no MediatR in Core
+> (`Core_HasNoMediatRDependency`), no MediatR.Contracts in Abstractions, Core or EntityFrameworkCore
+> (`AllAssemblies_HaveNoMediatRContractsDependency`), no MediatR in EntityFrameworkCore
+> (`EfCore_HasNoMediatRDependency`).
 
 ```
-❌ MediatR.Contracts — in ANY package EXCEPT the MicroKit.Messaging.MediatR glue (ADR-MSG-009)
-❌ MediatR — in ANY package EXCEPT the MicroKit.Messaging.MediatR glue (ADR-MSG-009)
+❌ MediatR / MediatR.Contracts — directly or through MicroKit.MediatR, in any project EXCEPT
+            MicroKit.Messaging.MediatR and its test projects (ADR-MSG-009)
             (messaging has its own IIntegrationEvent, not INotification)
-❌ MicroKit.Auth — in any package
-❌ MicroKit.Multitenancy — in any package
-❌ MicroKit.Http — in any package
-❌ Microsoft.EntityFrameworkCore — in Abstractions or Core
+❌ MicroKit.Auth — in any project
+❌ MicroKit.Tenancy — in any project (ADR-EXEC-001: the host composes a tenant-aware
+            IExecutionScopeFactory)
+❌ MicroKit.Http — in any project
+❌ Microsoft.EntityFrameworkCore (any package) — in Abstractions, Core or MediatR
 ❌ RabbitMQ.Client — in Core or Abstractions
 ❌ Azure.Messaging.ServiceBus — in Core or Abstractions
 ❌ Confluent.Kafka — in Core or Abstractions
-❌ MicroKit.Persistence.EntityFrameworkCore — outside of .EntityFrameworkCore package
-❌ Circular dependency between any two packages
-❌ FluentAssertions — commercial licence (Xceed EULA v8+)
-```
-
----
-
-## Test Projects — Unconditional References
-
-Test projects (`IsPackable=false`) use unconditional `ProjectReference`:
-
-```xml
-<!-- ✅ Test projects — always unconditional, never packed -->
-<ProjectReference Include="../../src/MicroKit.Messaging.Abstractions/MicroKit.Messaging.Abstractions.csproj" />
-<ProjectReference Include="../../src/MicroKit.Messaging/MicroKit.Messaging.csproj" />
+❌ MicroKit.Persistence.EntityFrameworkCore — in any src/ project other than
+            MicroKit.Messaging.EntityFrameworkCore (MicroKit.Messaging.MediatR.IntegrationTests
+            references it, test-only)
+❌ Circular dependency between any two projects
+❌ FluentAssertions — in any project; commercial licence (Xceed EULA v8+). Shouldly is the
+            assertion library
 ```
 
 ---
 
 ## Directory.Packages.props
 
-All version pins live in the monorepo root `Directory.Packages.props`.
+All version pins live in the monorepo root `Directory.Packages.props`
+(`CentralPackageTransitivePinningEnabled=true`).
 Never add `Version=` attribute directly in `.csproj` files.
 Any new package requires an entry there first.

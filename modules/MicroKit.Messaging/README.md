@@ -1,32 +1,40 @@
 # MicroKit.Messaging
 
-Transactional outbox, idempotent inbox, and a broker-agnostic transport seam for .NET 10 — without coupling your domain to a broker.
+A message bus for .NET 10 — publish, consume, retry — with a transactional outbox and an idempotent
+inbox as **opt-in durability**, and a broker-agnostic transport seam.
 
 ---
 
 ## Overview
 
-Your code publishes a fact. This module guarantees it is delivered at least once, even if the process
-dies between the database commit and the broker call — the problem a plain `publish()` after
-`SaveChanges()` cannot solve.
+The bus works with no database: a publication goes to the transport, a handler runs in a scope of
+its own. A **store** makes it durable. A store is the outbox **and** the inbox of one `DbContext`:
 
 ```
-command handler ──► outbox row  ┐
-                                ├─ ONE transaction, ONE SaveChanges
+command handler ──► publication ┐  enlisted, never saved by the bus
+                                ├─ ONE SaveChanges commits both — or neither
 aggregate changes ──────────────┘
-                                        ▼ (after commit, background)
-                            OutboxProcessor ──► handlers / broker
+                                        ▼ (after commit, the store's loop)
+                            outbox ──► transport ──► receiving host
+                                                        │
+                            handler work + its inbox row ┘  ONE transaction per handler
 ```
 
-The row and the aggregate commit together or not at all. Nothing is published until the business
-transaction is durable, and nothing durable goes unpublished.
+- **The outbox** guarantees delivery **to the transport**, at least once, for a fact that committed —
+  not delivery to a handler. A row re-sent after its lease expired is a duplicate, and the receiving
+  inbox absorbs it.
+- **The inbox** guards each handler with its own row, one per (message, handler): a redelivery is
+  skipped, and a handler's work, its publications and its row commit together.
+- **Local messages.** A domain-event notification never goes to a transport: with a store it is an
+  outbox row delivered by the store's own loop, under each handler's inbox row.
 
 **Key design points:**
-- Broker-agnostic core — it defines `IMessageTransport` and ships no implementation; brokers are separate v2 packages
-- Outbox claim is one atomic `UPDATE … WHERE` carrying an ownership token; a lost lease writes zero rows
-- Retries use full jitter (`Uniform(0, min(2^n s, cap))`), so a broker outage does not resynchronise the queue
-- One DI scope per message — a failure on message N cannot corrupt message N+1
-- Tenant-aware: `TenantId` travels on the row, never on an ambient HTTP context
+- Broker-agnostic core — it defines `IMessageTransport` and ships no broker implementation
+- Atomic claims (one `UPDATE … WHERE` carrying an ownership token); a lost claim writes zero rows
+- Full-jitter retries (`Uniform(0, min(2^n s, cap))`), so an outage does not resynchronise the queue
+- One scope per handler — a failure in one handler cannot corrupt another
+- One loop per store, each with its own back-off: a store whose database is down never delays another
+- Tenant-aware: `TenantId` travels on the message, never on an ambient HTTP context
 
 ---
 
@@ -34,22 +42,22 @@ transaction is durable, and nothing durable goes unpublished.
 
 | Package | Description |
 |---------|-------------|
-| `MicroKit.Messaging.Abstractions` | Contracts, in two layers. **`MicroKit.Messaging`** — what an application names: `IIntegrationEvent`, `MessageContractAttribute`, `IMessageBus`, `IIntegrationEventPublisher`, `IMessageHandler<T>`, `MessageId`, `IntegrationEventPublishException`, `IntegrationEventConfigurationException`, `InboxDependencyUnavailableException`. **`MicroKit.Messaging.Spi`** — what an author of a store, transport or dispatcher implements: `IMessageTransport`, `MessageEnvelope`, `IEnvelopeReceiver`, `IOutboxDispatcher`, `IOutboxWriter` and the other store interfaces, `OutboxMessage`, `InboxMessage`, `IntegrationEventWriteResult` |
-| `MicroKit.Messaging` | The bus and its in-memory transport, the outbox/inbox processors and workers, the transport dispatcher, integration-event publishing, `AddMicroKitMessaging` |
-| `MicroKit.Messaging.EntityFrameworkCore` | `EfOutboxStore`, `EfInboxStore`, entity configuration for your `DbContext` |
-| `MicroKit.Messaging.MediatR` | Glue: puts MicroKit.MediatR domain events on the outbox as notifications |
+| `MicroKit.Messaging.Abstractions` | Contracts, in two layers. **`MicroKit.Messaging`** — what an application names: `IIntegrationEvent`, `MessageContractAttribute`, `IMessageBus`, `IEventPublisher`, `PublishOptions`, `MessageStoreKey`, `IMessageHandler<T>`, `MessageContext`, `MessageId`, the receive and send middleware, the exceptions. **`MicroKit.Messaging.Spi`** — what an author of a store, a transport or an integration package implements: `IMessageTransport`, `MessageEnvelope`, `IEnvelopeReceiver`, `ReceiveDisposition`, the store interfaces (`IOutboxWriter`, `IInboxGuardStore`, …), `IMessageStoreSet`, `ILocalMessageSender`, `ILocalConsumerSource`, `OutboxMessage`, `InboxMessage` |
+| `MicroKit.Messaging` | The bus, the in-memory transport, the receive pipeline and its inbox guard, the store engine, `AddMicroKitMessaging`, and the store SPI (`AddMessageStore`) |
+| `MicroKit.Messaging.EntityFrameworkCore` | The EF Core store: `UseEntityFrameworkOutbox<TContext>()`, `ApplyMessagingConfiguration()` |
+| `MicroKit.Messaging.MediatR` | Puts MicroKit.MediatR domain events on the bus as local messages: `UseMediatRDomainEvents()` |
 
 ---
 
 ## Installation
 
 ```bash
-dotnet add package MicroKit.Messaging                      # the bus, the in-memory transport, the outbox and inbox engine
-dotnet add package MicroKit.Messaging.EntityFrameworkCore  # only for the outbox and inbox stores
-dotnet add package MicroKit.Messaging.MediatR              # only to put MicroKit.MediatR domain events on the outbox
+dotnet add package MicroKit.Messaging                      # the bus and the in-memory transport
+dotnet add package MicroKit.Messaging.EntityFrameworkCore  # a store: the outbox and the inbox of a DbContext
+dotnet add package MicroKit.Messaging.MediatR              # MicroKit.MediatR domain events on the bus
 ```
 
-The bus needs nothing else: no database, no broker. Persistence is a feature you add, not a
+The bus needs nothing else: no database, no broker. Durability is a feature you add, not a
 prerequisite.
 
 ---
@@ -110,8 +118,8 @@ public sealed class Checkout(IMessageBus bus)
   handler implements, so a handler of two message types is registered once. The contract comes from
   each type's `[MessageContract]`, with no separate declaration. Registering a handler twice is a
   no-op.
-- **`bus.UseInMemoryTransport()`** registers the in-memory transport and its consume loop, and the
-  dispatcher that routes outbox contract rows to it.
+- **`bus.UseInMemoryTransport()`** registers the in-memory transport, its consume loop, and the
+  dispatcher that sends a store's outbox rows to it.
 
 ### A service consuming another service's contract
 
@@ -204,6 +212,7 @@ services.AddMicroKitMessaging(bus =>
 - **Read once.** Configuration is read when the options are first resolved. There is no reload: a
   changed value takes effect on the next start. A container without an `IConfiguration` keeps the
   defaults.
+- **Global.** `Outbox` and `Inbox` apply to every store; each store runs its own loops with them.
 - **Validated at start** (`ValidateOnStart`). Every value is range-checked: positive sizes and
   intervals, `PollingInterval` not above `MaxPollingInterval`, and no delay beyond what
   `Task.Delay` accepts. Each failure names its key and the accepted range, e.g.
@@ -211,20 +220,27 @@ services.AddMicroKitMessaging(bus =>
 
 ### What fails at host start
 
-The composition is checked before any worker runs. Every problem is listed in one
+The composition is checked before any loop runs. Every problem is listed in one
 `IntegrationEventConfigurationException`, each with its fix:
 
 - a published or handled type without `[MessageContract]`, or with one whose arguments are invalid;
 - two types claiming one wire type (`<name>.v<version>`). Two versions of one name are two contracts;
 - two `AddMicroKitMessaging` calls setting different `bus.ServiceName` values;
 - a publication with no `IMessageTransport` registered;
-- an `IOutboxProcessorStore` or `IInboxProcessorStore` registered without the engine that drains it.
+- a store whose `DbContext` is not registered, or whose model lacks the messaging entities
+  (`ApplyMessagingConfiguration()`), or a store missing one of its services;
+- with several stores: a handler — or a local consumer — whose assembly is bound to none, and an
+  assembly bound to two;
+- `UseMediatRDomainEvents()` without MicroKit.MediatR, and a notification handler that cannot be a
+  consumer of its own: an open generic, a factory or an instance registration, or a handler of an
+  abstract notification.
 
-The last two are structural checks: they verify that a service is registered, not that it can be
-activated. `AddMicroKitMessaging` may be called once per module of a modular monolith; the calls add
-to one composition.
+`AddMicroKitMessaging` may be called once per module of a modular monolith; the calls add to one
+composition.
 
-### With persistence — the outbox and domain events
+---
+
+## Durability — a store
 
 <!-- snippet: durable-context -->
 ```csharp
@@ -263,37 +279,122 @@ services.AddMicroKitMessaging(bus =>
 The durable calls live in their packages' namespaces: `MicroKit.Messaging.EntityFrameworkCore`
 (`UseEntityFrameworkOutbox`, `ApplyMessagingConfiguration`), `MicroKit.Messaging.MediatR.DependencyInjection`
 (`UseMediatRDomainEvents`) and `MicroKit.MediatR.Behaviors.DependencyInjection`
-(`AddTransactionBehavior`).
+(`AddTransactionBehavior`). **Nothing composes in a required order**, and a host whose only messages
+are domain events registers no transport at all.
 
-> **PostgreSQL and SQLite only.** `ApplyMessagingConfiguration()` declares a unique index over
-> `(OriginMessageId, ContractName)` on the outbox, and that index is a model invariant rather than
-> an index you may skip. **SQL Server is not supported for it**: it compares nulls as equal in a
-> unique index, and every notification row carries `(NULL, NULL)` — so the second notification row
-> your application ever writes is rejected. Not at DDL time, not on the first row: in production, on
-> the second insert. See *State* below for the workaround you would own.
+**Hosts own their migrations; none ships.** The EF Core configuration is the schema's definition,
+and `dotnet ef migrations add` produces it. The CHANGELOG carries each schema change a host must
+migrate, with the statements a host that owns its DDL applies.
 
-**Nothing here composes in a required order.** `UseInMemoryTransport()` — or a broker provider's
-`Add{Provider}Transport()` — goes before or after `UseMediatRDomainEvents()`; either works.
+### Publishing is enlisting
 
-A host that publishes only domain-event notifications registers no transport at all, as above. Do
-**not** add one "just in case": it declares an intent to send contracts, and without a working
-`IMessageTransport` behind it the outbox cannot dispatch a row of any kind — loudly, with every
-batch released, nothing lost and no retry budget spent, but nothing delivered either.
+With a store, `PublishAsync` adds the outbox row to the store's `DbContext` **of the current scope**
+— and saves nothing. No transaction is required: the caller's `SaveChanges` commits the row with
+the business data it announces, or neither; inside a delivery, the engine's save does.
 
-> ⚠ **The inbox path needs a receiving transport.** Inbox rows are written by `IEnvelopeReceiver`,
-> which a broker provider's consume loop calls — and no broker provider ships yet. A consuming host
-> registers its handlers with `bus.AddHandler<THandler>()` and `AddEfCoreOutbox<TContext>()` so
-> there is somewhere to write.
+- **A row still unsaved when its scope ends is lost, and reported:** event 4000 at `Error` names the
+  message, its contract and its store. A row discarded with the change tracker (`DiscardChanges`,
+  `ChangeTracker.Clear()`) is reported at `Debug` (4001): the caller chose to drop it.
+- With no store configured, `PublishAsync` sends to the transport at once (#186). With stores
+  configured there is never a direct send.
 
-A host built with `Host.CreateApplicationBuilder()` or `WebApplication.CreateBuilder()` already has
-logging. A bare `ServiceCollection` does not, and several types here require `ILogger<T>` — call
-`AddLogging()` yourself if you compose by hand.
+### Several stores
+
+A host may have one store per `DbContext`. A publication's store is, first match wins:
+
+1. `PublishOptions.Store`, when set — it must name a configured store; inside a delivery, that
+   delivery's store, else `IntegrationEventPublishException`;
+2. inside a scope the engine opened for a delivery, that delivery's store;
+3. the only store, when there is one;
+4. the store the message type's assembly is bound to;
+5. otherwise `IntegrationEventConfigurationException`, naming the stores and the fix.
+
+A handler's inbox store: the only store, else the store its type's assembly is bound to — checked
+at start. Binding is needed only with several stores:
+
+```csharp
+services.AddMicroKitMessaging(bus =>
+{
+    bus.ServiceName = "shop";
+    bus.UseEntityFrameworkOutbox<OrdersDbContext>(store => store.ForAssemblyContaining<OrdersModule>());
+    bus.UseEntityFrameworkOutbox<BillingDbContext>(store => store.ForAssemblyContaining<BillingModule>());
+    bus.UseInMemoryTransport();
+});
+```
+
+**A domain event is enlisted in the store its notification type is bound to**, so that store's
+context must be saved by the same unit of work. A notification bound to `BillingDbContext`, raised
+by a command whose unit of work saves `OrdersDbContext`, is never saved — and is reported (4000).
+
+### What the inbox guarantees
+
+With a store, each handler runs under its inbox row, keyed (`MessageId`, consumer type):
+
+- a row in any state — processed, failed, retrying — skips a new delivery: a redelivery never starts
+  a second attempt;
+- a first delivery runs as **one operation of the store's execution strategy**, in a transaction the
+  engine begins: the row, the handler's own saves, its publications and its cascade events commit
+  together, whether or not the handler saved first. A commit whose outcome is unknown is verified by
+  reading the row, never replayed blindly;
+- a concurrent delivery that commits the row first makes this one a duplicate: rolled back, success;
+- a handler that fails rolls back everything it did; its row is then written `Failed` in a
+  transaction of its own, and only once that row is committed is the delivery acknowledged. From
+  there the store's loop retries it. A permanent failure is dead-lettered at once, counting no
+  attempt; a dependency outage writes no row and redelivers.
+
+**Exactly-once covers every database effect written through the store's `DbContext`.** A replayed
+attempt reruns the handler, so what it does through another connection or `DbContext`, and every
+external call, is **at-least-once**: make those idempotent.
+
+Rules for a handler with a store:
+
+- **Do not begin your own transaction on the store's context.** The engine's transaction is open;
+  `ITransactionalContext.ExecuteAsync` joins it, and its commit is the engine's.
+- **`IResultUnitOfWork.TryCommitAsync` refuses inside a guarded handler** — the engine's
+  transaction is open on the store's context, so it throws `InvalidOperationException`.
+  `TryExecuteAsync` joins that transaction and converts nothing: a conflict propagates as an
+  exception, which fails the handler and is recorded on its row. Save with `IUnitOfWork.CommitAsync`,
+  or let the engine save.
+
+`LeaseDuration` must comfortably exceed your worst-case handler duration: a retry whose claim is lost
+mid-handler (event 2205) records no failure and leaves its attempt count unchanged, and a recurring
+rate of it is the signal the lease is too short.
+
+**Inbox retention is not housekeeping.** `RetentionDays` defaults to 30, deliberately unlike the
+outbox's 7: the table only deduplicates messages it still holds, so the window must exceed the
+maximum plausible redelivery delay of every upstream transport.
+
+### Domain events — the local endpoint
+
+`UseMediatRDomainEvents()` turns each domain event's notification into a **local message**: never
+handed to a transport, no `[MessageContract]` needed.
+
+- **With a store**, the notification is an outbox row routed to the local endpoint
+  (`OutboxMessage.Endpoint = "local"`), committed with the aggregate. The store's loop delivers it to
+  each `INotificationHandler` as a **consumer of its own**, under its own inbox row: one handler
+  failing is retried alone while the others are done.
+- **Without a store**, the notification is queued in memory when it is published — one entry per
+  handler, each with its own retries and dead letter. It is queued **before the command commits**:
+  a command that rolls back still notifies, and a message still queued is lost if the process
+  stops. **Durability needs a store.**
+- **Cascade events are delivered.** A domain event a handler raises — a notification handler's or a
+  bus handler's — is dispatched after the handler and before the engine saves its work, so it
+  commits with that work and is delivered in turn.
+- **A notification handler is activated per delivery from its implementation type**: a transient or
+  scoped registration yields one instance per delivery, disposed with it, and a sibling that cannot
+  be built never fails it; a singleton is the container's. A decorated registration is a factory
+  registration, rejected at start: a consumer is keyed by its handler's type.
+- A handler never runs in the scope that raised the event.
 
 > **Handlers must be idempotent.** Delivery is at-least-once by design. Without a store, a bus
 > message redelivered because one handler failed runs every handler again (#186). With a store, each
 > handler is guarded by its own inbox row and only the failing one is retried — but what a handler
 > does outside its store's `DbContext` is still at-least-once. A notification handler is always a
 > consumer of its own: a retry re-runs only the one that failed.
+
+A host built with `Host.CreateApplicationBuilder()` or `WebApplication.CreateBuilder()` already has
+logging. A bare `ServiceCollection` does not, and several types here require `ILogger<T>` — call
+`AddLogging()` yourself if you compose by hand.
 
 ---
 
@@ -329,7 +430,7 @@ the contracts its handlers handle. `PublishAsync` returns once the transport acc
 `OrderPlacedHandler` runs in its own message scope, with the tenant, correlation and causation of
 the message.
 
-With persistence, a domain fact goes through the outbox instead:
+With a store, a domain fact goes through the outbox instead:
 
 <!-- snippet: durable-end-to-end -->
 ```csharp
@@ -364,8 +465,9 @@ public sealed class ProjectOrderHandler(IReadModel readModel)
 }
 ```
 
-Sending the command writes the aggregate and one outbox row in a single transaction. `OutboxWorker`
-picks the row up on its next poll and publishes it; `ProjectOrderHandler` runs then, not before.
+Sending the command writes the aggregate and one local outbox row in a single transaction. The
+store's loop picks the row up on its next pass and delivers it to `ProjectOrderHandler` under its
+inbox row; the handler runs then, not before.
 
 ---
 
@@ -383,9 +485,6 @@ contexts, and it is a different type on purpose — an aggregate should never re
 public sealed record OrderPlaced(Guid OrderId, Guid CustomerId) : IIntegrationEvent;
 ```
 
-Composition — the publication is declared like any other, and `AddEfCoreIntegrationEvents<TContext>()`
-registers both the outbox writer and `IIntegrationEventPublisher`:
-
 <!-- snippet: publishing-composition -->
 ```csharp
 services.AddMicroKitMessaging(bus =>
@@ -397,189 +496,103 @@ services.AddMicroKitMessaging(bus =>
 });
 ```
 
-### Consuming a contract you do not publish
-
-A service that consumes a contract registers a handler of its own local type carrying the
-producer's wire name — see *A service consuming another service's contract* above. There is no
-separate subscription declaration: a handler is its subscription, and a consumer declares **no
-source**, since it emitted nothing.
-
-Publishing a contract also binds its name for receiving, so a modular monolith routes its own
-contracts with no second declaration, and a service may handle what it publishes. What *is*
-rejected, at startup, is two different types claiming one wire type.
-
-The call site is a notification handler — the point where a domain fact becomes a published
-contract:
+The call site is any scoped service — a command handler, or a notification handler where a domain
+fact becomes a published contract:
 
 ```csharp
-public sealed class PublishOrderPlacedHandler(
-    IIntegrationEventPublisher publisher,
-    ITransactionalContext transaction,
-    IUnitOfWork unitOfWork)
-    : INotificationHandler<OrderPlacedNotification>
+public sealed class PublishOrderPlacedHandler(IMessageBus bus) : INotificationHandler<OrderPlacedNotification>
 {
-    public Task Handle(OrderPlacedNotification n, CancellationToken ct) =>
-        transaction.ExecuteAsync(
-            static async (state, token) =>
-            {
-                await state.Publisher.PublishAsync(
-                    new OrderPlaced(state.OrderId, state.CustomerId),
-                    occurredOnUtc: state.OccurredAt,
-                    token);
-
-                await state.UnitOfWork.CommitAsync(token);
-            },
-            (Publisher: publisher,
-             UnitOfWork: unitOfWork,
-             n.DomainEvent.OrderId,
-             CustomerId: n.DomainEvent.CustomerId,
-             OccurredAt: n.DomainEvent.OccurredAt),
-            ct);
+    public async Task Handle(OrderPlacedNotification n, CancellationToken ct)
+        => await bus.PublishAsync(new OrderPlaced(n.DomainEvent.OrderId, n.DomainEvent.CustomerId), ct: ct);
 }
 ```
 
-> ⚠ **`ExecuteAsync` is not decoration.** Publishing writes a row into the caller's transaction and
-> never commits it — so without an open transaction the row would be committed on its own by the
-> provider's implicit per-statement transaction: an event announced permanently, for a business fact
-> the caller may still roll back. `IUnitOfWork.CommitAsync` **alone is not enough**: it is a bare
-> `SaveChangesAsync` under that same implicit transaction, and never appears as an open one. The
-> publisher refuses rather than accept a publication it cannot honour, and
-> `IntegrationEventPublishException` says exactly this.
-
-> **Why it writes rather than merely tracking the row.** The publication is guarded by a unique key
-> on `(OriginMessageId, ContractName)`, and a unique key can only be consulted by attempting the
-> insert. Doing that inside `PublishAsync` is what lets a replayed dispatch be absorbed silently —
-> the handler is told nothing, and gets back the identifier of the row that already exists. Deferring
-> the insert to the caller's commit would surface the collision one stack frame too late, where every
-> notification handler would need a `try`/`catch` on a database exception to survive its own
-> redelivery. One consequence worth knowing: the flush is not partial, so anything else you had
-> pending on the same unit of work is written at that point too — inside your transaction, with the
-> same rollback semantics as before.
-
-Pass `occurredOnUtc` when you have it. The row keeps two timestamps — when the fact happened and
-when it was staged — and they are not the same instant: staging happens one relay later, minutes
-under load. Omitted, a consumer reads the relay's clock as the business time.
-
-**What happens next.** After the commit the event is durable and has been sent nowhere, which is
-the correct intermediate state: nothing is announced for a fact that did not happen, and the row
-survives a crash. The outbox processor then claims it on a later pass — the same claim, lease,
-back-off and dead-letter machinery the domain-event path uses — and hands it to `IMessageTransport`
-as a `MessageEnvelope`. That second pass is why the outbox is called **reentrant**: one table, two
-natures of row, the second produced by dispatching the first.
-
-**A redelivered dispatch does not duplicate.** If the processor crashes between dispatching a
-notification and recording it, the notification is redelivered and its handlers re-run — including
-the one that publishes. The republication collides on `(OriginMessageId, ContractName)` and is
-absorbed: `PublishAsync` returns the existing row's identifier and the handler never learns it
-happened. This is bounded by retention, and the bound is enforced rather than assumed — a contract
-row is never purged while the row that produced it can still be dispatched again.
+Inside a delivery the publication is enlisted in the delivery's store and commits with the
+handler's inbox row: a handler that is replayed or retried never publishes twice. Outside one, the
+caller's `SaveChanges` commits it.
 
 ---
 
 ## Sending to a broker
 
-An outbox row carries one of two natures, declared in its `MessageKind` column. A `Contract` row is
-handed to a transport; a `Notification` row is fanned out in process by `MicroKit.Messaging.MediatR`.
-Registering a transport wires the dispatcher for the first of those: `UseInMemoryTransport()` does,
-and a broker provider's `Add{Provider}Transport()` is meant to, so composing a broker is one line.
-No broker provider ships yet; with one, the composition would read:
+An outbox row is dispatched by its `Endpoint`: `null` sends it to the transport, `"local"` delivers it
+in process (see *Domain events*); any other value is dead-lettered. Every store comes with both
+dispatchers, so a transport row is sent through whatever `IMessageTransport` the host registers —
+the in-memory one (`UseInMemoryTransport()`) or a provider's. No broker provider ships yet; with
+one, the composition would read:
 
 ```csharp
 services.AddMicroKitMessaging(bus =>
 {
     bus.ServiceName = "shop.orders";
-    bus.AddEfCoreOutbox<AppDbContext>();
-    bus.AddRabbitMqTransport();      // hypothetical: wires the transport AND the dispatcher that feeds it
+    bus.UseEntityFrameworkOutbox<AppDbContext>();
+    bus.AddRabbitMqTransport();      // hypothetical: registers an IMessageTransport
 });
 ```
 
-**No `IMessageTransport` implementation ships in MicroKit.** A provider package supplies one, and
-owes a conformance test that `SendAsync` does not return before its broker has acknowledged. The
-receiving half is the other way round: `IEnvelopeReceiver` **is** implemented here, and a provider
-calls it rather than writing one — see *Receiving messages* below.
+**No broker `IMessageTransport` ships in MicroKit.** A provider package supplies one, and owes a
+conformance test that `SendAsync` does not return before its broker has acknowledged. The receiving
+half is the other way round: `IEnvelopeReceiver` **is** implemented here, and a provider calls it —
+see *Receiving messages* below.
 
 ### What `SendAsync` returning means
 
 > **The destination has acknowledged the message.** Not that it was enqueued for background
 > delivery, not that it was buffered locally.
 
-`OutboxProcessor` marks the row `Published` on that return, and `Published` is terminal. A transport
-that hands off asynchronously makes the mark a lie in exactly the way an outbox exists to prevent.
-Writing a transport? Return after the publisher confirm (RabbitMQ), after `SendMessagesAsync`
-(Azure Service Bus), after the delivery report (Kafka) — and see the conformance obligation in
-`IMessageTransport`'s docs.
+The store's outbox loop marks the row `Published` on that return, and `Published` is terminal. A
+transport that hands off asynchronously makes the mark a lie in exactly the way an outbox exists to
+prevent. Writing a transport? Return after the publisher confirm (RabbitMQ), after
+`SendMessagesAsync` (Azure Service Bus), after the delivery report (Kafka) — and see the conformance
+obligation in `IMessageTransport`'s docs.
 
 Failures are classified by exception type, and the type is a statement about scope:
 
 | Thrown | Meaning | Effect |
 |---|---|---|
-| `OutboxTransportUnavailableException` | the broker is unreachable, so the next message will fail too | batch released, **no retry consumed**, worker backs off |
+| `OutboxTransportUnavailableException` | the broker is unreachable, so the next message will fail too | the store's transport rows deferred until the broker's back-off ends, **no retry consumed**; its local rows are still delivered |
 | *anything untyped* | this one message failed while the transport is healthy | retried with jittered back-off |
 | `OutboxPayloadException` | the destination rejects this content permanently | dead-lettered on first sight |
 
-The first row is what stops an hour-long outage from dead-lettering the whole queue.
+### With no transport, or one that cannot be built
 
-### With no transport registered
+A publication needs a transport registered, with or without a store: a declared publication with
+none fails at host start (#187), and `PublishAsync` throws. A transport row reaching a host with no
+transport — written by an earlier deployment, say — or a transport that cannot be built, its own
+dependencies missing, fails **loudly and reversibly**: the transport rows are deferred untouched, no
+retry is consumed, and an error (event 1009, naming the call to add) is logged each time the transport
+is tried (`OutboxBatchAbortReason.DispatcherActivationFailed`) until one is deployed.
 
-A declared publication with no transport fails at host start, on the bus and through the outbox
-alike (#187): `UseInMemoryTransport()`, or a provider's transport registration, registers the
-outbox's transport dispatcher with the transport. A `Contract` row reaching a host with no
-dispatcher at all — staged by an earlier deployment, say — is a missing registration: the batch is
-released untouched, no retry budget is consumed, and the worker stops (see the last paragraph).
+Only the transport rows wait. A down endpoint has a back-off of its own: it starts at
+`Outbox.PollingInterval`, doubles on each failed attempt up to `Outbox.TransportUnavailableBackoff`,
+and clears on the first row the endpoint sends. Until it ends, the endpoint's rows are left out of
+the claim — neither attempted nor rewritten — and the batch that met the failure is settled back to
+`Pending` with its next attempt at the end of the back-off, so the store's local rows, behind them in
+the queue or not, are delivered at the normal cadence. Event 1010 (`Warning`) says what is deferred
+and until when. A broker outage works the same way, and a local consumer's dependency outage
+(`OutboxTransportUnavailableException` from a local consumer) defers the local rows while the
+transport rows go out. That verdict follows the exception's type: any
+`InvalidOperationException` except `ObjectDisposedException` thrown while the dispatcher is built —
+the type Microsoft.Extensions.DependencyInjection reports a missing dependency with. Any other type
+thrown there is treated like a failed send.
 
-The rest of this section is about a transport that **is** registered but whose dispatcher cannot
-be built — a transport whose own dependencies are missing. A `Contract` row then fails **loudly and
-reversibly**: the batch is released untouched, no retry
-budget is consumed, the rows stay `Pending`, and an error (event 1009) is logged on every cycle.
-The worker does **not** stop — it backs off and tries again, reporting
-`OutboxBatchAbortReason.DispatcherActivationFailed` — so the rows drain on the first cycle after a
-build that registers a transport is deployed. A cause that clears on its own drains them with no
-intervention at all.
-
-That verdict follows the exception's type, not who throws it. It applies to any
-`InvalidOperationException` except `ObjectDisposedException` thrown while the dispatcher is built,
-whether it comes from Microsoft DI or from a constructor or factory in the graph.
-
-A missing transport reaches it because Microsoft.Extensions.DependencyInjection reports a missing
-dependency as `InvalidOperationException`; that is the only container this has been verified against.
-Another container may report a missing dependency with a different exception type, and there a
-missing transport is treated like any failed send: retried per message, and dead-lettered at
-`MaxRetries`.
-
-An exception of any other type thrown while the dispatcher is built, such as a broker client failing
-to connect in its constructor with its own exception type, is treated like a failed send too: see
-the table above.
-
-A dispatcher that is **not registered at all** is different and stays fatal: the batch is released
-and the worker stops, because nothing but a redeployment can fix it.
-
-A declared publication (`bus.Publishes<T>()`) with no transport fails at host start (#187). An
-application that publishes only domain-event notifications declares none and composes legitimately
-without a transport; for it, whether a transport is needed depends on whether any contract row
-exists, which is data rather than composition. A host that validates its container when it is built,
-which the default host builders do in the `Development` environment, also fails at startup on a
-transport dispatcher with no transport behind it.
-
-### A known defect: one tenant's row can stall the whole outbox
+### A known defect: one tenant's row can stall a store's outbox (#124)
 
 The dispatcher is activated inside the scope of the row being dispatched, and that scope carries the
 row's `TenantId`. If your composition resolves something per tenant while that graph is built — a
-`DbContext` whose connection string is looked up from the tenant, a transport with per-tenant
-credentials — and that lookup throws `InvalidOperationException`, activation fails for one tenant
-only and is still handled as above: the whole batch is released. (Thrown as any other untyped
-exception, the same failure is retried per message and dead-letters at `MaxRetries`, and no other
-tenant waits.)
-When the cause never clears, as with a de-provisioned tenant, the outbox does not just wait one
-cycle:
+transport with per-tenant credentials — and that lookup throws `InvalidOperationException`,
+activation fails for one tenant only and is still handled as above: the transport is put in back-off.
+When the cause never clears, as with a de-provisioned tenant:
 
-- the claim orders on `CreatedAtUtc` and a released row keeps its place, so the failing row heads
-  every claim and every batch aborts before anything is published;
-- the outbox makes **no progress for any tenant**, notifications included;
+- the claim orders on `CreatedAtUtc` and a deferred row keeps its place, so each time the back-off
+  ends the failing row is tried first, fails again, and the back-off grows to its ceiling;
+- that store's transport rows make **no progress for any tenant** (its local rows still go out);
 - no retry budget moves, so the row never dead-letters, and no API steps past a `Pending` row.
 
-The fix is owed (ADR-MSG-019). Until it ships, event 1009 (`Error`, every cycle) names the blocking
-row's `MessageId`, `TenantId` and `MessageKind`, and **the way out is SQL**: dead-letter that tenant's
-pending rows. That takes them out of the claim, and every other tenant drains on the next cycle.
+The fix is owed (#124). Until it ships, event 1009 (`Error`, each time the transport is tried) names the blocking row's
+`MessageId`, `TenantId` and `Endpoint`, and **the way out is SQL**: dead-letter that tenant's
+pending rows. That takes them out of the claim, and every other tenant drains once the transport's
+current back-off ends — at most `Outbox.TransportUnavailableBackoff` later.
 
 ```sql
 -- PostgreSQL, default mapping: table "OutboxMessages", enums stored as strings.
@@ -598,8 +611,8 @@ Event 1009 renders a null `TenantId` as `(null)`, and that string matches no row
 single-tenant deployment every row's tenant is null, so the cause cannot be tenant-scoped, and the
 statement would park the whole queue: fix the composition instead.
 
-- A row a processor holds at that instant is `Processing` and is left alone. The batch releases it,
-  so run the statement again if the next 1009 still names that tenant.
+- A row a loop holds at that instant is `Processing` and is left alone. The batch settles it back to
+  `Pending`, so run the statement again if the next 1009 still names that tenant.
 - Once the tenant is restored, bring its rows back one at a time with
   `IOutboxAdminStore.RequeueAsync`, which also resets their retry count.
 - If the next 1009 names a row from a **different** tenant, the cause is not tenant-scoped. Fix the
@@ -609,49 +622,53 @@ statement would park the whole queue: fix the composition instead.
 
 The transport dispatcher never deserializes the payload — it travels opaque, which is what lets a
 consumer holding a different CLR type read it. The consequence is that a **corrupt payload is not
-detected on the way out**. It travels, and dead-letters at the consumer, in the consumer's inbox.
-That is the right place for it to fail, but it means a producer-side operator can see a perfectly
-healthy queue while a consumer is dead-lettering.
+detected on the way out**. It travels, and dead-letters at the consumer. That is the right place for
+it to fail, but a producer-side operator can see a perfectly healthy queue while a consumer is
+dead-lettering.
 
 ---
 
 ## Receiving messages
 
 The other end of the wire. A broker provider's consume loop hands each arriving message to
-`IEnvelopeReceiver`, which records one `InboxMessage` per registered consumer; `InboxProcessor`
-drains them.
+`IEnvelopeReceiver`, which runs it through the receive pipeline — every handler of its contract, each
+guarded by its inbox row when it has a store — and answers what the transport must do:
 
 ```csharp
 // Inside a provider's consume loop.
 var envelope = Decode(brokerMessage);
+var result = await receiver.ReceiveAsync(envelope, ct);
 
-try
+switch (result.Disposition)
 {
-    var result = await receiver.ReceiveAsync(envelope, ct);
-
-    // Only now. Everything the result counts is already committed.
-    await broker.AcknowledgeAsync(brokerMessage, ct);
-}
-catch (InboxPayloadException)
-{
-    // Permanent: this process has no local type bound to that contract name, and no redelivery
-    // will change that. Nothing was recorded, so the verdict has nowhere to live but the broker.
-    await broker.DeadLetterAsync(brokerMessage, ct);
+    case ReceiveDisposition.Acknowledge:         // every handler's outcome is durable
+        await broker.AcknowledgeAsync(brokerMessage, ct);
+        break;
+    case ReceiveDisposition.DeadLetter:          // never deliverable by this process
+        await broker.DeadLetterAsync(brokerMessage, result.Reason, ct);
+        break;
+    case ReceiveDisposition.Redeliver:           // not settled: the transport's retry policy
+        await broker.RejectAsync(brokerMessage, requeue: true, ct);
+        break;
+    case ReceiveDisposition.PauseAndRedeliver:   // a dependency is down: pause, then redeliver
+        await PauseAsync(ct);
+        await broker.RejectAsync(brokerMessage, requeue: true, ct);
+        break;
+    case ReceiveDisposition.Unsettled:           // the host is stopping: settle nothing
+        return;
 }
 ```
 
-> **`ReceiveAsync` returning means the message is durably recorded.** Acknowledge *after* it
-> completes, never alongside it. A transport that acknowledges early turns every row it has not yet
-> written into a message that exists nowhere — the broker considers it delivered, this process never
-> recorded it, and nothing logs the loss. It is `SendAsync`'s rule, in the opposite direction.
+> **`Acknowledge` means every handler's outcome is durable** — committed with its row, or its
+> failure recorded on its row. Acknowledge *after* `ReceiveAsync` completes, never alongside it, and
+> never on `Unsettled`: an acknowledgement that runs early turns a message this process never
+> recorded into one that exists nowhere. It is `SendAsync`'s rule, in the opposite direction.
 
 ### The rule is about your client's configuration, not just your call order
 
-The sample above shows an explicit acknowledgement, and moving it after the `await` is necessary but
-not sufficient — because **the acknowledgement that loses the message is usually one nobody wrote**.
-Stated so it cannot be satisfied vacuously: *nothing may settle the broker message except code that
-runs after the returned task has completed.* A consume loop with no ack call at all can agree with
-the ordering and violate the contract.
+**The acknowledgement that loses the message is usually one nobody wrote.** Stated so it cannot be
+satisfied vacuously: *nothing may settle the broker message except code that runs after the returned
+task has completed.*
 
 | Broker | What settles the message implicitly | What to do |
 |---|---|---|
@@ -660,57 +677,34 @@ the ordering and violate the contract.
 | **Azure Service Bus** | `ReceiveMode.ReceiveAndDelete` — settles at receive | use `PeekLock` |
 
 `ServiceBusProcessor.AutoCompleteMessages` also defaults to true and **is safe**: it completes after
-the message handler returns, so awaiting `ReceiveAsync` inside that handler satisfies the rule. The
-safe default and the unsafe one both read as "auto", which is why both are named.
+the message handler returns, so awaiting `ReceiveAsync` inside that handler satisfies the rule.
 
 ### The conformance test a provider owes here
 
 `IMessageTransport` owes one too, and **it is not the same test**. That one asserts a *callee's*
-return — drive `SendAsync`, observe it did not return early. This one asserts a *caller's* ordering,
-so it instruments the acknowledgement rather than the seam. Neither can be enforced from this
-repository: no test here can observe whether somebody else's consume loop settled before calling.
+return; this one asserts a *caller's* ordering, so it instruments the acknowledgement rather than
+the seam.
 
 - Fail an `IEnvelopeReceiver` — a stub whose returned task does not complete until the test releases
   it — and assert that **nothing has been settled at the broker** while it is outstanding: no ack,
   no offset commit, no lock release, no delete.
-- Run it against the **real client configuration the provider ships**, not a hand-rolled loop. Every
-  defect in the table above lives in client settings, so a test that mocks the client away sees none
-  of them.
-- **A consume loop that fails it is unusable** — regardless of whether it compiles, and regardless
-  of what its other tests show.
+- Run it against the **real client configuration the provider ships**, not a hand-rolled loop.
+- **A consume loop that fails it is unusable**, regardless of its other tests.
 
-The fan-out is **contract name → local type → consumers**: the registry resolves the wire name to
-*your* type, and the handler registry resolves that type to every `IMessageHandler<T>` you
-registered for it. Each consumer gets its own row, keyed on `(MessageId, ConsumerType)`, and those
-rows advance independently — one handler may succeed while another retries.
-
-A redelivery is nominal, not a failure. The unique index absorbs it, `EnvelopeReceiveResult.Duplicates`
-counts it, and the consumers *after* a duplicated one still get their rows.
-
-### The transaction, and why it is the opposite of publishing
-
-`IIntegrationEventPublisher` requires a transaction you already own and never commits.
-`IEnvelopeReceiver` requires none and commits before returning. Both are right: publishing has
-business writes in flight that the contract row must be atomic with, while a consume loop is the
-outer boundary with nothing to join — and the broker cannot be acknowledged until the row is
-already durable.
-
-There is no atomicity *across* the fan-out, and none is wanted: a failure after the second
-consumer's row means the first is recorded, the message is redelivered, the first is absorbed as a
-duplicate and the rest are written.
+The fan-out is **contract name → local type → handlers**: each handler is guarded on its own, so one
+may succeed while another is retried from its row. A redelivery is nominal, not a failure: each
+handler's row skips it.
 
 ### A contract nobody consumes
 
-A name you understand with no `IMessageHandler<T>` registered — since #187, a contract this service
-publishes and does not handle itself — writes nothing and throws nothing: a legitimate composition.
-But it is also what forgetting `bus.AddHandler<THandler>()` for a type you publish produces, and the
-two look identical from outside, so it is logged at `Warning` and counted as
-`microkit.inbox.envelopes.unconsumed`. Alert on a sustained non-zero value.
+A name you understand with no `IMessageHandler<T>` registered — a contract this service publishes
+and does not handle itself — runs nothing and is acknowledged: a legitimate composition. But it is
+also what forgetting `bus.AddHandler<THandler>()` produces, so it is logged at `Warning` (3001) and
+counted as `microkit.inbox.envelopes.unconsumed`. Alert on a sustained non-zero value.
 
-All three inbox counters — `microkit.inbox.messages.added`,
-`microkit.inbox.messages.deduplicated` and `microkit.inbox.envelopes.unconsumed` — are published
-on the meter named by `MessagingDiagnostics.InboxMeterName`.
-Subscribe to it or you receive nothing:
+The inbox counters — `microkit.inbox.messages.added`, `microkit.inbox.messages.deduplicated` and
+`microkit.inbox.envelopes.unconsumed` — are published on the meter named by
+`MessagingDiagnostics.InboxMeterName`. Subscribe to it or you receive nothing:
 
 ```csharp
 builder.Services.AddOpenTelemetry()
@@ -721,56 +715,20 @@ builder.Services.AddOpenTelemetry()
 
 ## State
 
-**Stable.** The outbox: atomic batch claim with an ownership token, buffered outcomes settled in one
-write, full-jitter retry, dead-lettering, and the retention worker. **The inbox: the same atomic
-claim, the dedup gate actually implemented, and success settled inside the handler's own
-transaction.** The EF Core stores. The `MessageKind`-routed dispatch seam. The MicroKit.MediatR
-glue and the domain-event → notification → outbox path.
+**Stable.** The bus and its in-memory transport. The outbox: atomic batch claim with an ownership
+token, buffered outcomes settled in one write, full-jitter retry, dead-lettering, retention. The
+inbox guard on one receive pipeline for transport deliveries, local deliveries and retries. The EF
+Core store, several stores per host, one loop per store. The local endpoint and the MicroKit.MediatR
+bridge.
 
-**Not shipping yet.** No `IMessageTransport` implementation — broker providers are v2. That is the
-one missing piece of the round trip: both seams exist and both are proven end to end, so a provider
-supplies a `SendAsync` and drives a consume loop into `IEnvelopeReceiver`, and writes no messaging
-machinery of its own.
+**Not shipping yet.** No broker `IMessageTransport`: no broker provider exists yet. Both seams exist and are proven end to end, so a provider supplies a `SendAsync` and
+drives a consume loop into `IEnvelopeReceiver`, and writes no messaging machinery of its own.
 
-### What the inbox guarantees
+**Known defects.**
+- One tenant's row can stall a store's outbox (#124) — see *Sending to a broker*.
+- The store set is read once, at start: a store per tenant database is #191.
 
-**Transactionally atomic processing for database-backed handlers.** The processed mark and any
-database side effects your handler writes through the execution scope's `DbContext` commit together
-or not at all — the mark is staged into your unit of work, not written after it.
-
-It is **not** exactly-once in general. A handler that calls an external endpoint and then rolls back
-calls it again on replay: database effects happen effectively once, external effects at least once.
-A handler that commits no unit of work at all is **detected and reported**, not degraded silently.
-
-`LeaseDuration` is the setting that matters: it must comfortably exceed your worst-case handler
-duration. The processor logs every lease it loses at `Warning` — event 2007 when the lease was
-already gone before the handler ran, 2008 when it expired while the handler was running — and a
-recurring rate of either is the signal that it does not. Without them, a lease set too short is
-invisible, and the system stays correct while quietly doing less work than it
-appears to.
-
-**Inbox retention is not housekeeping.** `RetentionDays` defaults to 30, deliberately unlike the
-outbox's 7: the table only deduplicates messages it still holds, so the window must exceed the
-maximum plausible redelivery delay of every upstream transport. Deleting too eagerly reopens the
-door to reprocessing.
-
-**Still moving.**
-- **Broker providers** (RabbitMQ, Azure Service Bus, Kafka) are scaffolded but unimplemented — v2.
-- **Schema ownership.** There is still no published canonical SQL for the outbox and inbox tables;
-  the only full definition is the EF Core entity configuration, so a consumer who owns their own DDL
-  is reverse-engineering it. The CHANGELOG publishes the *migration* for the inbox claim rewrite
-  (including the primary-key move, which is not optional) and for the outbox message-kind columns —
-  that is a step, not the fix.
-- **Provider support for the outbox replay key.** `UX_OutboxMessages_Origin_ContractName`, unique
-  over `(OriginMessageId, ContractName)`, is what stops a redelivered dispatch from writing a
-  duplicate integration message. It is a **model invariant, not an index you may skip**, and it is
-  supported on **PostgreSQL and SQLite**, where nulls are distinct in a unique index — every
-  notification row carries `(NULL, NULL)`, so unlimited such rows must coexist. **SQL Server is not
-  supported for this constraint**: it compares nulls as equal, so the second notification row ever
-  written is rejected — not at DDL time and not on the first row, but on the second insert in
-  production. The CHANGELOG carries the filtered-index workaround for anyone who must run there
-  anyway; it is a workaround you own, not a supported configuration.
-- Domain events raised by a notification handler are staged but never flushed, so cascade events are
-  currently lost. Tracked; do not rely on cascade dispatch.
+**Tested providers.** PostgreSQL (through Testcontainers) and SQLite. The outbox schema no longer
+carries the replay index that excluded SQL Server, but SQL Server is not tested.
 
 All packages are `1.0.0-preview.*`. Contracts may still change between previews.

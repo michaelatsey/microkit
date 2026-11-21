@@ -1,594 +1,352 @@
 # microkit-messaging-testing
 
+How the suite is built and which tests carry the design. Running and filtering:
+`.claude/skills/microkit-messaging-testing/SKILL.md`.
+
+---
+
 ## Libraries
 
-| Library | Role | Status |
-|---------|------|--------|
-| `xUnit` | Test runner | ✅ Required |
-| `Shouldly` | Assertions | ✅ Required |
-| `NSubstitute` | Mocking | ✅ Required |
-| `NetArchTest` | Architecture tests | ✅ Required |
-| `FluentAssertions` | — | ❌ Banned (Xceed commercial licence) |
-| `MediatR.Contracts` | — | ❌ Banned everywhere EXCEPT the `MicroKit.Messaging.MediatR` glue (ADR-MSG-009 carve-out) |
+| Library | Use |
+|---|---|
+| xUnit (v2: the `xunit` package) | Runner. `[Fact]`, `[Theory]`; `[DockerRequiredFact]` derives from `FactAttribute` |
+| Shouldly | Assertions |
+| NSubstitute | Doubles for seams with no negative assertion to make |
+| NetArchTest.Rules | Dependency tests (`MicroKit.Messaging.ArchitectureTests`) |
+| Testcontainers.PostgreSql | The PostgreSQL suites |
+| Microsoft.Extensions.TimeProvider.Testing | `FakeTimeProvider` |
+| Microsoft.EntityFrameworkCore.Sqlite | The fast store suite |
+| **FluentAssertions** | **Banned** (commercial licence). No `.Should()` |
+| **MediatR / MediatR.Contracts** | Only `MicroKit.Messaging.MediatR` and its two test projects reach them, through `MicroKit.MediatR`; no `.csproj` references either package directly (ADR-MSG-009). `MicroKit.Messaging.ArchitectureTests` receives them transitively through the glue it inspects |
+
+There is no `MicroKit.Messaging.Testing` package. `tests/MicroKit.Messaging.PerformanceTests/` is
+an empty directory, absent from `MicroKit.Messaging.slnx`.
 
 ---
 
-## Test doubles
-
-> ⚠ **`MicroKit.Messaging.Testing` does not exist.** `src/` holds four projects and none of them
-> is it (L0 finding #19). `FakeMessagePublisher`, `InMemoryOutboxStore` and `InMemoryInboxStore`
-> are planned types, not available ones. Do not write a test against them, and do not treat a
-> reference to them elsewhere in the docs as current.
-
-Until that package is built, the suite uses two mechanisms and nothing else:
-
-```csharp
-// ✅ Seams → NSubstitute. Every processor, coordinator and worker takes interfaces.
-var store = Substitute.For<IOutboxProcessorStore>();
-store.ClaimBatchAsync(Arg.Any<int>(), Arg.Any<TimeSpan>(), Arg.Any<CancellationToken>())
-     .Returns(new OutboxClaim(token, [message]));
-
-// ✅ Clock and jitter → injected, so the back-off curve is asserted against EXACT values.
-//    FixedRandom.NoJitter (draw 1.0) yields the ceiling; FixedRandom.ZeroDelay (0.0) yields zero.
-new OutboxProcessor(store, scopeFactory, options,
-                    new FakeTimeProvider(Now), FixedRandom.NoJitter, NullLogger<OutboxProcessor>.Instance);
-
-// ✅ Store behaviour → the REAL EF store on a fresh isolated SQLite connection, NOT a double.
-//    The claim carries no provider-specific SQL, so the production path is what runs.
-var store = new EfOutboxStore<TestMessagingDbContext>(ctx, new FakeTimeProvider(Now));
-
-// ✅ Inbox ingestion returns a result — a redelivery is reported, never thrown (ADR-MSG-017)
-var result = await inboxWriter.AddAsync(inboxMessage, ct);
-result.ShouldBe(InboxWriteResult.Added);
-
-var redelivered = await inboxWriter.AddAsync(Clone(inboxMessage), ct);
-redelivered.ShouldBe(InboxWriteResult.AlreadyPresent);   // the nominal path, not an error
-```
-
-> **Why the real store rather than a hand-written double.** The claim and the dedup gate are both
-> *database* behaviour — an atomic `UPDATE … WHERE` and a unique index. A double asserts the
-> behaviour it was written to have, which is exactly the bug class these tests exist to catch.
-
----
-
-## Test Categories
-
-### Unit Tests (`MicroKit.Messaging.UnitTests`)
-- `MediatROutboxDispatcher` routing by `MessageKind`, and the notification-only composition
-  (`IMessagePublisher` ingestion is **gone** — the seam was deleted by ADR-MSG-018 and the
-  in-process fan-out behind it by ADR-MSG-019; do not write a test against either)
-- `EnvelopeReceiver` — the receiving seam: contract-name resolution, the per-consumer fan-out, the
-  duplicate that must not end it, and the resolvable-but-unconsumed contract
-- `OutboxDispatcherKeys.Standard` value snapshot, and the `IMessageSerializer` default's owner
-- `OutboxProcessor` state transitions (Pending → Processing → Published/Failed)
-- `InboxProcessor` claim, settlement and failure classification (drives `FakeTimeProvider`)
-- `OutboxMessage` retry back-off formula verification
-- `InboxMessage` compound dedup key isolation (unique index; the PK is the `RowId` surrogate)
-- `MessageEnvelope` wire shape (property names and bare-string identifiers — a rename is a
-  breaking change for every deployed consumer) and verbatim payload carriage
-- `TransportOutboxDispatcher` routing by `MessageKind`, and the no-transport case failing as a
-  configuration fault rather than a transient one
-- Inbox claim/settlement contracts via `EfInboxStore` on SQLite (the claim carries no
-  provider-specific SQL, so the production path is what runs)
-
-### Integration Tests (`MicroKit.Messaging.IntegrationTests`)
-- Full outbox → dispatch → inbox cycle with EF Core (SQLite in-memory)
-- Lease/lock acquisition preventing double-processing (two concurrent OutboxProcessors)
-- Dead-letter flow (MaxRetries exceeded)
-- Tenant isolation (messages from TenantA not visible to TenantB queries)
-- CorrelationId preserved end-to-end
-
-### Architecture Tests (`MicroKit.Messaging.ArchitectureTests`)
-- Abstractions has zero ASP.NET Core / EF Core / broker dependency
-- Core has zero EF Core / broker dependency
-- Testing package has zero Core / EF Core dependency (Abstractions only)
-- `MediatR.Contracts` absent from all assemblies EXCEPT the `MicroKit.Messaging.MediatR` glue (ADR-MSG-009)
-- Broker provider packages do not depend on each other
-- No circular dependencies
-
-### Performance Tests — **not implemented**
-`tests/MicroKit.Messaging.PerformanceTests/` is an empty directory and is absent from
-`MicroKit.Messaging.slnx`. Do not put it in a run command until it holds a project. When it is
-written, the paths worth measuring are `ClaimBatchAsync` (the hottest query in the module),
-`ApplyOutcomesAsync` at batch sizes above the default 100, and `EfInboxStore.AddAsync` on the
-redelivery path, where the savepoint and the verification query are pure overhead.
-
----
-
-## Mandatory Test Cases Per Component
-
-### OutboxProcessor (claim / settlement)
-```
-ProcessBatch_WhenClaimEmpty_DoesNotDispatchOrSettle
-ProcessBatch_WhenAllSucceed_PublishesEveryMessageAndSettlesOnce
-ProcessBatch_SettlesWithTheClaimsOwnToken
-ProcessBatch_SettlesOnATokenIndependentOfTheCallersShutdown       (a cancelled settle strands leases)
-ProcessBatch_WhenDispatchThrows_BelowThreshold_SchedulesExactRetryInstant
-ProcessBatch_WhenDispatchThrows_AtThreshold_DeadLettersInsteadOfRetrying
-ProcessBatch_WhenPayloadPermanentlyUndeliverable_DeadLettersWithoutConsumingRetries
-ProcessBatch_WhenOneMessageIsPoison_TheRestOfTheBatchStillRuns
-ProcessBatch_WhenTransportUnavailable_ReleasesRemainderWithoutConsumingRetries
-ProcessBatch_WhenTransportUnavailable_StillSettlesEveryClaimedMessage
-ProcessBatch_WhenCancelledMidBatch_ReleasesRemainderWithoutConsumingRetries
-ProcessBatch_WhenDispatcherUnregistered_SettlesBatchThenRethrows
-ProcessBatch_WhenDispatcherUnregistered_ConsumesNoRetryBudget
-ProcessBatch_WhenTheDispatcherCannotBeActivated_ReleasesTheBatchWithoutConsumingRetriesOrRethrowing
-                                                    ← fails activation for ONE message — the shape a
-                                                      tenant-scoped cause really has, and the only one
-                                                      that separates batch-wide from per-message. It
-                                                      pins today's verdict, KNOWN DEFECT included
-                                                      (ADR-MSG-019). Its outcomes do NOT discriminate
-                                                      against the old catch — the absent rethrow and
-                                                      the abort reason do
-ProcessBatch_WhenTheDispatcherItselfThrowsInvalidOperationException_RetriesOnlyThatMessage
-                                                    ← keeps the activation arm from being a bare catch
-ProcessBatch_WhenActivationThrowsAnythingButInvalidOperationException_RetriesOnlyThatMessage
-                                                    ← keeps the tagging catch from widening past
-                                                      InvalidOperationException: a tenant lookup
-                                                      throwing its own type must stay per message,
-                                                      or it joins the KNOWN DEFECT's stall
-ProcessBatch_WhenDispatcherActivationIsCancelled_ReleasesAsCancelledRatherThanAsAnActivationFault
-                                                    ← pins the type hierarchy, not a filter term:
-                                                      OperationCanceledException is not an
-                                                      InvalidOperationException
-ProcessBatch_WhenTheProviderIsDisposedDuringActivation_IsNotReportedAsAnActivationFault
-                                                    ← pins a retry charged at shutdown — owed, not a design
-ProcessBatch_WhenTheScopeCannotSupplyTheOriginHolder_SettlesBatchThenRethrows   ← a foreign container
-ProcessBatch_WhenTheScopeCannotSupplyTheOriginHolder_ConsumesNoRetryBudget
-ProcessBatch_NamesTheDispatchedRowAsTheCauseOfWorkInItsScope     ← seed a DIFFERENT ancestor cause,
-ProcessBatch_WhenTheDispatchedRowIsARoot_StillNamesItAsTheCause     or copy-through passes too
-ProcessBatch_PropagatesCorrelationUnchangedWhileDerivingCausation
-ProcessBatch_WhenSettlementThrows_DoesNotTakeTheWorkerDown
-ProcessBatch_WhenErrorMessageExceedsLimit_TruncatesIt
-ComputeBackoffCeiling_BelowCap_IsTwoToThePowerOfRetryCountSeconds  (exact values, FixedRandom)
-ComputeBackoffCeiling_AboveCap_IsClampedToMaxRetryBackoff
-ComputeBackoffCeiling_ClampsACorruptedRetryCount
-ApplyJitter_DrawsOverTheWholeInterval
-```
-
-### Integration Tests (outbox claim — requires a real DB)
-```
-ClaimBatchAsync_TwoProcessors_ShareNoMessageAndLoseNone
-ClaimBatchAsync_UnderRealConcurrency_NeverOverlapsAndNeverLoses
-ClaimBatchAsync_WhenManyProcessorsRaceOnOneRow_ExactlyOneWins
-```
-
-### InboxProcessor (claim / settlement — ADR-MSG-017)
-```
-ProcessBatch_WhenNothingClaimable_ReturnsEmptyAndSettlesNothing
-ProcessBatch_WhenHandlerCommitsTheStagedMark_WritesNoOutcome   (success settles itself)
-ProcessBatch_StagesTheMarkBeforeInvokingTheHandler
-ProcessBatch_WhenLeaseLostBeforeHandler_CountsItAndLeavesTheRowAlone
-ProcessBatch_WhenLeaseLostDuringHandler_CountsItAndConsumesNoRetry
-ProcessBatch_WhenADomainConflictIsNotALostLease_KeepsItsRetry
-ProcessBatch_WhenConsumerNotRegistered_DeadLettersOnFirstSight
-ProcessBatch_WhenPayloadDoesNotDeserialize_DeadLettersOnFirstSight
-ProcessBatch_WhenHandlerThrows_BelowMaxRetries_SchedulesARetry
-ProcessBatch_WhenHandlerThrows_AtMaxRetries_DeadLetters
-ProcessBatch_WhenHandlerCommitsNothing_WritesADeferredProcessedOutcome
-ProcessBatch_WhenHandlerCommitsThenThrows_CountsItProcessedAndDoesNotRetry
-ProcessBatch_WhenDependencyUnavailable_ReleasesTheRemainderWithoutRetries
-ProcessBatch_WhenSettlementStoreMissing_SettlesReleasedThenRethrows
-ProcessBatch_WhenCancelled_ReleasesEveryUnattemptedRow
-ProcessBatch_NamesTheDeliveredMessageAsTheCauseOfTheHandlersWork  (MessageId, never RowId — seed all
-                                                                   three candidates differently)
-ComputeBackoffCeiling_FollowsTheExponentialCurve                (exact values, FixedRandom)
-```
-
-### Inbox ingestion (the dedup gate)
-```
-First_delivery_inserts_the_row
-Redelivery_is_reported_as_already_present_and_does_not_throw
-Context_remains_usable_after_a_deduplicated_write
-A_duplicate_for_one_consumer_does_not_block_the_others
-A_non_duplicate_persistence_failure_still_throws                (NOT NULL, every provider)
-The_unique_index_is_what_rejects_the_duplicate
-```
-
-> `A_non_duplicate_persistence_failure_still_throws` uses a **NOT NULL** violation deliberately.
-> A max-length overflow is the obvious alternative and is wrong: SQLite does not enforce length
-> constraints, so the insert would succeed and the one test standing between the dedup fix and
-> silent data loss would not run on the provider the fast suite uses.
-
-### Outbox stores (EfOutboxStore, SQLite)
-
-> The per-message lease API these used to cover — `GetPendingAsync`, `AcquireLeaseAsync`,
-> `MarkPublishedAsync`, `MarkFailedAsync`, `DeadLetterAsync` — was removed by the outbox claim
-> rewrite. It has no replacement to test; the claim and the settlement are the surface now.
-
-```
-AddAsync_StagesMessage_NotPersistedUntilSaveChanges
-AddBatchAsync_StagesEveryMessage_InOneSaveChanges
-ClaimBatchAsync_ReturnsOnlyEligibleMessages
-ClaimBatchAsync_ExcludesDeadLettered
-ClaimBatchAsync_ExcludesLiveLease
-ClaimBatchAsync_IncludesExpiredLease_RecoveringACrashedProcessor    (crash recovery)
-ClaimBatchAsync_ExcludesMessageWithFutureNextRetryAtUtc
-ClaimBatchAsync_RespectsBatchSize_AndClaimsOldestFirst
-ClaimBatchAsync_StampsStatusLeaseAndTokenOnEveryClaimedRow
-ClaimBatchAsync_WhenTwoProcessorsRaceOnOneRow_ExactlyOneWins
-ApplyOutcomesAsync_Published_SetsTerminalStateAndClearsTheLease
-ApplyOutcomesAsync_Retry_PersistsRetryCountAndNextAttempt
-ApplyOutcomesAsync_DeadLetter_SetsFailedAndDeadLettered
-ApplyOutcomesAsync_Released_ReturnsToPendingWithoutConsumingRetries  (the retry-budget guard)
-ApplyOutcomesAsync_WithStaleToken_WritesNothing                      (the lost update)
-ApplyOutcomesAsync_WithStaleToken_RejectsFailureWritesToo
-ApplyOutcomesAsync_ReportsPartialSettlementViaRowCount
-RequeueAsync_WhenNotDeadLettered_ReturnsFalse
-GetDeadLetteredAsync_WithNullTenant_ReturnsEveryTenantIncludingNullTenantRows
-DeleteProcessedAsync_WithNullTenant_ReachesNullTenantRows
-DefaultErrorMessageLength_FitsTheMappedColumn                        (cross-package coupling)
-```
-
-### Inbox stores (EfInboxStore, SQLite)
-```
-ClaimBatchAsync_OrdersOnReceivedAtUtc_NotOnOccurredOnUtc  ← the two clocks seeded in OPPOSITE
-                                                            directions. Seeded together, an
-                                                            implementation ordering on either
-                                                            passes and the test proves nothing
-NoIndexTouchesOccurredOnUtc_AndTheClaimIndexSortsOnReceivedAtUtc   (the schema half — adding the
-                                                            business clock to the claim index
-                                                            costs no correctness and breaks no
-                                                            test, it just makes the column look
-                                                            like a legitimate sort key)
-ClaimBatchAsync_StampsStatusLeaseAndToken
-ClaimBatchAsync_RecoversAnExpiredLease
-ClaimBatchAsync_DoesNotStealALiveLease
-ClaimBatchAsync_NeverExceedsBatchSize                    (the cross-product bound)
-ClaimBatchAsync_TwoProcessorsNeverWinTheSameRow
-ApplyOutcomesAsync_WithTheOwningToken_WritesEveryDisposition
-ApplyOutcomesAsync_WithAStaleToken_WritesNothing         (the lost update)
-ApplyOutcomesAsync_DoesNotTouchASiblingConsumersRow
-StageProcessedAsync_StagesWithoutCommitting
-StageProcessedAsync_WithAStaleToken_ReturnsFalse
-GetDeadLetteredAsync_WithNullTenant_MatchesRowsThatHaveNoTenant
-DeleteProcessedAsync_WithNullTenant_DeletesRowsThatHaveNoTenant
-```
-
-### Inbox — PostgreSQL only (`[DockerRequiredFact]`, `PostgreSqlSuite`)
-
-Two tests decide whether the design is correct, and neither can be replaced by reading code:
-```
-InboxLeaseExpiryTests.WhenTheLeaseExpiresMidHandler_TheLoserRollsBackEntirelyAndTheWinnerStands
-InboxClaimConcurrencyTests.ClaimBatchAsync_TwoProcessorsOverAFannedOutQueue_AreDisjointAndBounded
-```
-> The first fails if `ClaimToken` is not mapped as an EF concurrency token — verified by mutation,
-> not assumed. The second seeds rows sharing a `MessageId` across `ConsumerType` values and asserts
-> **neither claim exceeds `batchSize`**; that assertion is the one the cross-product bug failed,
-> and nothing else in the suite would have caught it.
-
-> ⚠ **OWED: `EfInboxStore.AddAsync`'s savepoint rollback is unpinned.** Deleting
-> `RollbackToSavepointAsync` from it turns **nothing** red — confirmed by mutation, 2026-09-06.
-> `Ambient_transaction_survives_a_deduplicated_write` runs with EF's automatic savepoints ON, where
-> the explicit one is redundant. `EfIntegrationEventWriter` keeps **both** cases for exactly this
-> reason (see *The replay key*, above), and the inbox store carries the same reasoning in its own
-> remarks but only the auto-savepoints-on half of the coverage. It needs the
-> `WithoutAutoSavepoints` twin, setting `Database.AutoSavepointsEnabled = false`, which is an
-> ordinary consumer setting.
-
-### Outbox dispatch routing (MediatROutboxDispatcher)
-
-> ⚠ **The in-process fan-out is gone, and it is not what `EnvelopeReceiver` is.**
-> `IMessagePublisher` and `InProcessMessagePublisher` went with ADR-MSG-018;
-> `InProcessIntegrationDispatcher` went with ADR-MSG-019, and its test file with it. Inbox rows are
-> written on the **receiving** side now, from an envelope that crossed a transport — never by a
-> dispatcher. Re-introduction of the type is blocked by
-> `Core_DoesNotContainTypeNamedInProcessIntegrationDispatcher`, and a producer-side writer by
-> `NoOutboxDispatcherWritesInboxRows` (which replaced `Core_DoesNotDependOnIInboxWriter` when the
-> seam landed — see the step-7 implementation note on ADR-MSG-019).
-
-Routing is now decided by `OutboxMessage.MessageKind`, never by the payload's CLR type. The two
-tests that carry the design are marked; the rest would each pass under the old implementation.
-
-```
-DispatchAsync_WhenKindIsNotification_PublishesViaMediatR
-DispatchAsync_WhenKindIsContract_DelegatesToTheInner
-DispatchAsync_WhenKindIsContract_NeverTouchesTheSerializer        ← recording fake, empty call log
-DispatchAsync_WhenKindIsContract_AndPayloadIsANotification_StillDelegates   ← kills a CLR-type router
-DispatchAsync_WhenKindIsNotification_AndPayloadIsNotANotification_ThrowsOutboxPayloadException
-DispatchAsync_WhenKindIsNotification_AndPayloadDoesNotDeserialize_ThrowsOutboxPayloadException
-DispatchAsync_WhenKindIsUnknown_DelegatesToTheInner
-DispatchAsync_WhenContractAndNoInner_ThrowsOutboxConfigurationException
-DispatchAsync_WhenUnknownKindAndNoInner_IsReleasedRatherThanDeadLettered
-DispatchAsync_WhenNotificationAndNoInner_StillPublishes
-```
-
-> **Why a recording fake for the serializer and not `DidNotReceive()`.** The assertion is that a
-> contract row is never deserialized — deserializing in front of `TransportOutboxDispatcher` would
-> reinstate the producer-type-graph coupling that class exists to avoid. A mock's
-> `DidNotReceive().Deserialize(...)` stays green the moment the subject calls `Serialize` instead.
-> An empty call log cannot.
-
-### Composition and registration order (AddMediatRDomainEvents)
-
-> These are the tests for the failure mode that has already shipped once: a second
-> `IOutboxDispatcher` descriptor, DI resolving the last one, the decorator bypassed with no
-> exception and no log. Descriptor assertions prove *shape*; only the last one proves the *chain*.
-
-```
-Registration_WithTransportFirst_ResolvesTheDecorator
-Registration_WithGlueFirst_ResolvesTheDecorator
-Registration_WithGlueFirst_StillRegistersTheKeyedStandardDispatcher
-Registration_InEitherOrder_LeavesExactlyOneUnkeyedDispatcher                (Theory, both orders)
-Registration_InEitherOrder_TheDecoratorActuallyReachesTheTransport          ← recording transport
-AddMediatRDomainEvents_CalledTwice_ContributesTheSinkOnce
-AddMediatRDomainEvents_CalledTwice_LeavesOneDispatcher
-Registration_WithNoTransportDispatcher_ComposesAndDispatchesNotifications   (notification-only host)
-Registration_WithNoTransportDispatcher_ContractRowIsAConfigurationFault
-```
-
-> A fixture that RESOLVES the decorator while a transport dispatcher is registered must also
-> register an `IMessageTransport`: the keyed inner is activated when the decorator is constructed,
-> so a missing transport fails the whole resolution, notifications included. That is the deliberate
-> consequence recorded in ADR-MSG-019, not a fixture defect — the notification-only tests register
-> no transport dispatcher at all rather than working around it.
-
-### The receiving seam (EnvelopeReceiver)
-
-Three of these cover a column the envelope does **not** carry, which is where the design actually
-lives. The rest are the fan-out.
-
-```
-ReceiveAsync_WhenContractNameIsUnbound_ThrowsPermanentlyAndWritesNothing   (both halves: it throws
-                                                                            AND nothing was recorded,
-                                                                            or a provider that
-                                                                            dead-letters is discarding
-                                                                            something real)
-ReceiveAsync_WritesOneRowPerRegisteredConsumer
-ReceiveAsync_CopiesTheEnvelopeOntoEveryRow                (CausationId is COPIED here — deriving it
-                                                           would overwrite the producer's link)
-ReceiveAsync_StampsEventTypeFromTheResolvedLocalType_NotFromTheEnvelope  ← asserted through the REAL
-                                                           serializer, not Type.GetType: that is the
-                                                           path the drain takes
-ReceiveAsync_StampsReceivedAtUtcFromTheClock_NotFromOccurredOnUtc   (seed them years apart, or a
-                                                           copy of the wrong one passes — and
-                                                           assert BOTH columns now that both
-                                                           clocks are recorded: either assertion
-                                                           alone misses a swap of the two)
-ReceiveAsync_WhenOneConsumerIsADuplicate_StillWritesTheOthers   ← needs TWO consumers to be visible
-ReceiveAsync_WhenEveryConsumerIsADuplicate_ReportsItAndDoesNotThrow
-ReceiveAsync_WhenNoHandlerIsRegistered_WritesNothingAndWarns
-ReceiveAsync_WhenNoHandlerIsRegistered_CountsIt           (a MeterListener — a log carries an event,
-                                                           a counter carries the rate)
-ReceiveAsync_BuildsOneScopeCarryingTheTenantCorrelationAndDerivedCausation
-ReceiveAsync_WhenTheInboxWriterIsNotRegistered_FailsAsAConfigurationFault
-ReceiveAsync_WhenTheWriterCannotBeActivated_PropagatesRatherThanClassifying  ← registered but
-                                                           unactivatable is NOT a configuration
-                                                           fault: it is one tenant's connection
-                                                           failing, and classifying it stops the
-                                                           consume loop for every tenant
-ReceiveAsync_WhenTheEnvelopeCarriesNoCorrelation_MintsOneForTheWholeFanOut   ← two consumers, or
-                                                           "shared" is invisible
-ReceiveAsync_WhenTheEnvelopeCarriesACorrelation_CopiesItRatherThanMinting
-```
-
-> **The writer resolution is a `GetService` null test, not a `catch` around `GetRequiredService`.**
-> `IInboxWriter` resolves through a factory that activates the consumer's `DbContext`, so a catch
-> spans that whole graph while reading as a registration lookup. Only `null` means unregistered.
-> The activation test seeds an `InvalidOperationException` deliberately — it is the one type a
-> catch-based implementation swallows, so no other type would keep the regression out.
-
-> **Two consumers, always.** Three properties are invisible with one — one row per consumer, a
-> duplicate not costing the next consumer its row, and the sibling isolation of the compound dedup
-> key. A single-consumer test passes under an implementation that returns on the first duplicate,
-> which is the defect ADR-MSG-017 §6 exists to prevent.
-
-> Use the **recording** `RecordingInboxWriter` rather than a mock. Several of these assert that
-> nothing was written, and a negative assertion against a mock only holds if it names a method the
-> subject actually calls. Its `ExistsAsync` throws on purpose: nothing on the ingestion path may
-> guard `AddAsync` with it, and a throw pins that without a separate test.
-
-### The round trip through the seam (`MicroKit.Messaging.MediatR.IntegrationTests`)
-
-```
-AnEnvelopeCrossingTheSeam_CausesTheHandlersWorkThroughTheInboxRow
-Redelivery_ThroughTheSeam_CostsNoConsumerItsRow
-```
-
-> The first is the end-to-end causation assertion ADR-MSG-019 recorded as owed and step 5 could not
-> write. **Copied and derived are asserted separately**: the row's `CausationId` is the notification
-> that caused the contract, carried inbound; the handler's execution context names the inbox row's
-> own `MessageId`, derived one hop forward. Seed them differently, or an implementation confusing
-> the two passes. Nulling the derivation turns **three** tests red — this one and the two
-> `InboxProcessorTests` cases that cover the same line — and all three name it in their own titles.
-
-> The second carries the five properties the deleted `InboxRedeliveryTests` proved, now over the
-> path they belong to. Its fourth step deletes **the second** consumer's row before replaying, so
-> the duplicate is met *first* — an implementation that returned instead of continuing would never
-> reach the consumer whose row is missing. Its log assertion is scoped to MicroKit's own categories:
-> EF Core logs the rejected `INSERT` at `Error` from its own category on every absorbed duplicate,
-> and that setting lives on the consumer's `DbContext`.
-
-> The two halves are genuinely separate. The only thing crossing between them is a
-> `MessageEnvelope` taken out of `RecordingMessageTransport.Sent` and handed back to
-> `IEnvelopeReceiver` — no shared type resolution, no producer-side write. Without that, it is a
-> fan-out wearing a wire's clothes.
-
-### Integration event publishing (ADR-MSG-018, completed by step 5)
-
-A contract is a `MessageKind.Contract` **outbox row**. `IntegrationEventMessage` and its table are
-deleted — do not write a test against either; their return is blocked by
-`NoAssemblyStillCarriesTheDedicatedIntegrationEventTable`.
-
-Three properties matter more than the rest and none can be replaced by reading code:
-
-```
-PublishAsync_WithNoOpenTransaction_ThrowsAndStagesNothing   (unit — asserts the row never reached
-                                                             the writer, not merely that it threw.
-                                                             The writer FLUSHES, so a guard placed
-                                                             after it would have nothing left to
-                                                             prevent: the row is already committed)
-PublishAsync_WritesTheRowInsideTheTransaction_AndARollbackErasesIt
-                                                            (integration — BOTH halves. An entry left
-                                                             Unchanged proves the write happened;
-                                                             the rollback proves it was not committed.
-                                                             Either alone passes while the other is
-                                                             broken)
-AbsorbedDuplicate_LeavesTheCallersOwnWritesIntact           (PostgreSQL, ×2 — see below)
-```
-
-> Use a **recording fake** for `IIntegrationEventWriter`, never a mock. A negative assertion against
-> a mock only holds if it names a method the subject actually calls — `DidNotReceive().AddAsync(...)`
-> against code calling something else is green whatever happens, and no mutation exposes it.
-
-```
-PublishAsync_WhenEventNotRegistered_ThrowsAndNamesTheType
-PublishAsync_StagesAContractRow_WithKindContractNameSourceAndOrigin
-PublishAsync_OutsideADispatch_StagesANullOrigin              (null origin ⇒ no dedup, deliberately)
-PublishAsync_WhenTheWriterReportsAlreadyPublished_ReturnsTheExistingId
-PublishAsync_WhenCorrelationIdIsUnparseable_SubstitutesAFreshOne  (NOT null — the column is required)
-PublishAsync_WhenOccurrenceTimeNotSupplied_FallsBackToTheStagingTime
-PublishAsync_RecordsOccurrenceTimeSeparatelyFromStagingTime
-PublishAsync_ResolvesTheContractFromTheRuntimeType_NotTheGenericArgument
-PublishAsync_CapturesTheTraceParent
-ProcessBatch_StampsTheDispatchedRowOnTheScopesOriginHolder   (via CONSTRUCTOR injection — the path
-                                                              that failed silently as L0 #21)
-TheWriterAndTheCallersUnitOfWorkShareOneDbContext            (the guard reads the WRITER's context;
-                                                              if they diverge it passes while the row
-                                                              commits elsewhere)
-ThePublisherReadsTheMessageScopesExecutionContext
-Registry_KeepsEachModulesOwnSource
-Registry_WhenTwoModulesClaimOneContractName_IsRejected
-Registry_ContractSurface_MatchesTheSnapshot                  (a contract name is public API)
-RegistryValidator_OnStart_FailsOnADuplicatedContractName
-```
-
-### The replay key — PostgreSQL only (`[DockerRequiredFact]`, `PostgreSqlSuite`)
-
-SQLite proves the constraint is declared. It does not reproduce what this suite exists for: on
-PostgreSQL a violation aborts the **whole transaction**, so a bare `catch (DbUpdateException)`
-passes on SQLite and destroys the caller's transaction here.
-
-```
-Replay_IsAbsorbedAndTheTransactionRemainsUsable              (the third write is the assertion)
-AbsorbedDuplicate_LeavesTheCallersOwnWritesIntact_WithAutoSavepoints
-AbsorbedDuplicate_LeavesTheCallersOwnWritesIntact_WithoutAutoSavepoints
-Publish_WithNoOrigin_DoesNotDeduplicate
-A_non_duplicate_write_failure_still_throws                   (NOT NULL, never absorbed)
-DeleteProcessedAsync_TranslatesTheOriginGuard_AndHonoursIt   (SQLite translating it proves nothing
-                                                              about the provider anyone deploys)
-```
-
-> **Keep BOTH auto-savepoint cases.** They cover different things and only running both
-> distinguishes them: with EF's automatic savepoints ON the writer's explicit savepoint is belt and
-> braces and the test passes without it, so a reader seeing only that case concludes it is dead code.
-> With them OFF — an ordinary consumer setting — it is load-bearing, and deleting
-> `RollbackToSavepointAsync` fails that case with PostgreSQL `25P02`. Verified by mutation.
-
-> These drive `EfIntegrationEventWriter` itself, never a copy of its body. A test that reimplements
-> the mechanism it verifies is green for the wrong reason — it keeps passing after the shipped
-> writer stops taking a savepoint at all.
-
-### The reentrant hop, end to end (`MicroKit.Messaging.MediatR.IntegrationTests`)
-
-```
-ANotificationHandlersPublication_BecomesAContractRow_AndReachesTheTransport
-Redelivery_ProducesNoDuplicateContract    (the test ADR-MSG-019 recorded as owed by this step)
-```
-
-> The first of the two also carries the **causal chain**: the notification row is asserted a root
-> (`CausationId` null — a command-scope publication has nothing above it) and the contract asserted
-> to name it, while `CorrelationId` is asserted **unchanged** across the hop. Both halves are
-> required. Causation advances one hop per dispatch and correlation never does; a test asserting
-> only one of them passes while the other is confused for it — which is precisely how
-> `CausationId` stayed null on every row of every path without a red test.
-
-> `Redelivery_ProducesNoDuplicateContract` asserts the handler **did** re-run. Without that, a
-> passing test proves only that nothing happened. It also scopes its "no `Warning`" assertion to
-> MicroKit's own log categories: EF Core logs the rejected `INSERT` at `Error` on every absorbed
-> replay, from a category a library cannot silence because the setting lives on the consumer's
-> `DbContext`.
-
-### Claim ordering
-
-```
-ClaimBatchAsync_RespectsBatchSize_AndClaimsOldestByCreatedAtUtc   (CreatedAtUtc and OccurredOnUtc
-                                                                   seeded in OPPOSITE orders, or the
-                                                                   test passes under both impls)
-GetDeadLetteredAsync_StillOrdersOnOccurredOnUtc                   (the deliberate asymmetry)
-TheDispatchableIndex_SortsOnCreatedAtUtc                          (a mismatch costs no correctness
-                                                                   and no test — only every poll)
-```
-
-### Retention — the replay key's real bound
-
-```
-DeleteProcessedAsync_KeepsAContractWhoseOriginCanStillBeDispatched
-DeleteProcessedAsync_PurgesAContractWhoseOriginIsTerminal
-DeleteProcessedAsync_PurgesAContractWithNoOrigin
-```
-
----
-
-## Architecture Test Pattern
-
-```csharp
-[Fact]
-public void Abstractions_ShouldHave_ZeroEfCoreDependency()
-{
-    Types.InAssembly(typeof(IIntegrationEvent).Assembly)
-        .ShouldNot()
-        .HaveDependencyOn("Microsoft.EntityFrameworkCore")
-        .GetResult()
-        .IsSuccessful
-        .ShouldBeTrue();
-}
-
-[Fact]
-public void AllAssemblies_ShouldNot_ReferenceMediatRContracts()
-{
-    // ADR-MSG-009: the MicroKit.Messaging.MediatR glue is intentionally EXCLUDED — it is the
-    // single package permitted to reference MediatR / MediatR.Contracts.
-    var assemblies = new[]
-    {
-        typeof(IIntegrationEvent).Assembly,       // Abstractions
-        typeof(MessagingBuilder).Assembly,         // Core
-        typeof(EfOutboxStore<>).Assembly,          // EntityFrameworkCore (generic in TContext)
-        // MicroKit.Messaging.Testing goes here once it exists — it does not today.
-    };
-
-    foreach (var assembly in assemblies)
-    {
-        Types.InAssembly(assembly)
-            .ShouldNot()
-            .HaveDependencyOn("MediatR.Contracts")
-            .GetResult()
-            .IsSuccessful
-            .ShouldBeTrue($"{assembly.GetName().Name} must not reference MediatR.Contracts");
-    }
-}
-```
-
----
-
-## Naming Convention
-
-```
-{Method}_{Scenario}_{ExpectedResult}
-
-✅ PublishAsync_WhenNoSubscriberRegistered_LogsWarningAndReturns
-✅ ExistsAsync_WhenPresent_ReturnsTrue
-✅ ProcessBatch_WhenMaxRetriesExceeded_DeadLettersMessage
-❌ TestOutboxProcessor
-❌ ShouldPublishMessage
-```
+## Test doubles — what the suite uses
+
+| For | Use | Why |
+|---|---|---|
+| Store behaviour (claim, settlement, guard, unique index) | The real `EfOutboxStore<TContext>` / `EfInboxStore<TContext>` over `TestMessagingDbContext` on an isolated SQLite in-memory connection; PostgreSQL when concurrency or uniqueness is the point | They are database behaviour — an atomic `UPDATE … WHERE`, a unique index, a concurrency token. A double asserts what it was written to do |
+| The pipeline's guard in unit tests | `InMemoryInboxGuard` over `InMemoryInboxDatabase` (`GuardHarness`) | Scripts the faults a real store raises: `FailNextCommit`, `FailAfterNextCommit`, `FailInsertFailed`, `FailReads`, `RetryOn` |
+| A seam whose calls matter in order, or fail per message | Hand-written recording or scripted fakes: `ScriptedDispatcher`, `RecordingMessageTransport`, `RecordingInboxHandler`, `RecordingLocalSender`, `RecordingSerializer`, `CapturingLogger<T>` / `CapturingLoggerProvider` | See below |
+| A seam with a canned answer | `Substitute.For<IOutboxProcessorStore>()` and the like | |
+| Clock and jitter | `FakeTimeProvider`; `FixedRandom.NoJitter` (draw 1.0 → the ceiling) and `FixedRandom.ZeroDelay` (0.0 → zero) | Back-off is asserted against exact values, not a range |
+| A host | `BusTestHost` (bus over the in-memory transport), `GuardHost` (PostgreSQL), `E2EHarness` (MediatR end to end) | |
+
+> **A recording fake, never `DidNotReceive()`, for a negative assertion.** `DidNotReceive().SendAsync(...)`
+> holds only if it names the member the subject would call; against code calling something else it
+> is green whatever happens, and no mutation exposes it. An empty `Sent` list cannot be satisfied
+> that way (`RecordingMessageTransport`).
+
+Internal types are reachable from `MicroKit.Messaging.UnitTests`, `MicroKit.Messaging.IntegrationTests`
+and `MicroKit.Messaging.MediatR.IntegrationTests` (`InternalsVisibleTo`); `OutboxProcessorTests`
+builds the processor directly with a `ServiceCollection` holding a keyed `IOutboxDispatcher`.
 
 ---
 
 ## Rules
 
-1. **No `MediatR.Contracts`** in any test project `.csproj` — zero tolerance. (The glue's own test
-   project, `MicroKit.Messaging.MediatR.UnitTests`, transitively references MediatR via the glue
-   under test — that is the ADR-MSG-009 carve-out, not a violation.)
-2. **Fresh substitute and fresh database per test** — never share an NSubstitute mock or a
-   `DbContext` across tests. Store tests use a fresh isolated SQLite connection per test rather
-   than an in-memory double: the claim and the dedup gate are both database behaviour, and a
-   hand-written double would assert the behaviour it was written to have
-3. **`TenantId` set explicitly** in test fixtures — never left to a default. A `null` tenant is
-   *valid* in production (single-tenant, ADR-MSG-008 §5) and is the only value that matches rows
-   there, so any query filtering on tenant must be tested with `null` as well as a real tenant
-4. **SQLite isolation** — integration tests: each `Task.Run` must use its own isolated connection
-5. **No `Thread.Sleep` in tests** — use `Task.Delay` with `CancellationToken` if timing matters
-6. **`ConfigureAwait(false)` in test helpers** — not in test methods themselves
-7. **`GenerateDocumentationFile=false`** in all test `.csproj` files
-8. **`NoWarn CS1591;CA1707`** in all test `.csproj` files
+1. **Fresh state per test.** Never share a substitute, a `DbContext` or a database across tests.
+   Each SQLite test opens its own `Data Source=:memory:` connection (`CreateIsolatedDb()`); a second
+   processor is a **second context on the same connection** (`SecondContext(conn)`), so one change
+   tracker cannot see the other's work.
+2. **Uniqueness and concurrency run on PostgreSQL.** SQLite serializes writers and does not
+   reproduce a blocked `UPDATE` re-evaluating its `WHERE`, two transactions racing on a unique index,
+   or a concurrency-token conflict. `[DockerRequiredFact]`, `[Collection(PostgreSqlSuite.Name)]`.
+3. **Set `TenantId` explicitly.** `null` is valid in production and the only value that matches rows
+   in a single-tenant deployment: a query filtering on tenant is tested with `null` and a real one.
+4. **Two consumers whenever fan-out is the subject.** One row per handler, a skipped handler not
+   costing the next its delivery, a correlation minted once and shared — all invisible with one.
+5. **Seed the values a bug would confuse differently.** Two clocks in opposite orders; a different
+   ancestor causation than the message id; copied and derived causation asserted separately.
+6. **No `Thread.Sleep`.** Drive `FakeTimeProvider`, or wait on a condition (`Eventually`).
+7. **No `ConfigureAwait(false)` in test methods.**
+8. **Every test `.csproj`:** `GenerateDocumentationFile=false`, `NoWarn` including `CS1591;CA1707`,
+   `IsPackable=false`, unconditional `ProjectReference`s.
+9. **A test names a member that exists.** A name citing a removed type is a test nobody can maintain.
+
+---
+
+## Mutation checks
+
+A test that guards a line is shown red with that line broken, before it is trusted:
+
+- Break the guarded path (delete the token filter, the concurrency-token mapping, the `Contains`
+  on `RowId`…), run the test, see it fail, restore.
+- Back the file up first and restore with plain `cp` from the backup — never `git checkout`, which
+  also wipes the branch's uncommitted work. Not `cp -p`: a restored file keeping its old mtime makes
+  the next run execute the mutated binary. Prove the rebuild (grep a marker, prefer a full build).
+- Change only the property under test: keep exception text and event ids verbatim, or an unrelated
+  assertion goes red.
+- A mutation that turns nothing red is a finding: coverage is missing.
+
+`MicroKit.Messaging.UnitTests/Readme/ReadmeSnippetTests` is the same idea for documentation: every
+`<!-- snippet: name -->` block of the README must equal a compiled region of a `ReadmeSnippets.cs`.
+
+---
+
+## Tests that carry the design, by component
+
+Grep the test projects for the full list. These are the ones whose removal or weakening loses a
+guarantee.
+
+### The bus (`UnitTests/Bus`)
+```
+MessageBusTests.PublishAsync_BuildsTheEnvelopeFromTheContractTheClockAndTheSerializer
+MessageBusTests.PublishAsync_WithNoTransport_ThrowsAConfigurationFault
+MessageBusTests.PublishAsync_WhenTheExplicitTenantContradictsTheAmbientOne_ThrowsAndSendsNothing
+MessageBusTests.PublishAsync_WhenASendMiddlewareDoesNotProceed_ThrowsRatherThanSucceedingSilently
+MessageBusTests.PublishAsync_ReservedHeadersSetByASendMiddleware_AreOverwrittenByTheAmbientContext
+BusEndToEndTests.PublishAsync_WithATenant_PropagatesTenantCorrelationAndCausationThroughAHandlersPublication
+BusEndToEndTests.HostShutdown_MidHandler_RedeliversToTheNextHostWithoutCountingAFailedAttempt
+BusEndToEndTests.ScopeInitializer_RunsBeforeTheHandlersConstructorDependenciesAreCreated
+InMemoryTransportTests.ADependencyUnavailable_PausesTheEndpoint_AndRedeliversWithoutCountingAnAttempt
+InMemoryTransportTests.AddMicroKitMessaging_RegistersNoHostedServiceButItsValidator
+MalformedEnvelopeTests.ASerializerThrowingOperationCanceledDuringShutdown_RequeuesWithTheAttemptCountUnchanged
+SafetyNetTests.WithAThrowingLogger_AFaultInTheDeliveryPath_DeadLettersOnce_AndTheLoopKeepsConsuming
+```
+
+### The receive pipeline and the guard (`UnitTests/Bus`, `UnitTests/Processing`)
+```
+MessageReceivePipelineTests.DeliverAsync_WithTwoHandlers_RunsBothAndReturnsTheMostRedeliverableVerdict
+MessageReceivePipelineTests.DeliverAsync_WhenTheHostIsStopping_IsUnsettledAndStopsBeforeTheNextHandler
+MessageReceivePipelineTests.DeliverAsync_WhenTheEnvelopeHasNoCorrelation_MintsOneSharedByEveryHandler
+EnvelopeReceiverTests.ReceiveAsync_WhenContractNameIsUnbound_DeadLettersAndRunsNothing
+EnvelopeReceiverTests.ReceiveAsync_WhenOneHandlersRowExists_SkipsItAndStillRunsTheOthers     ← two handlers
+EnvelopeReceiverTests.ReceiveAsync_WhenTheRowExistsInAnyState_NeverStartsASecondAttempt
+EnvelopeReceiverTests.ReceiveAsync_WhenAHandlerFails_WritesItsRowFailed_RunsTheOthers_AndAcknowledges
+EnvelopeReceiverTests.ReceiveAsync_WhenTheFailedRowCannotBeWritten_AsksForARedelivery
+EnvelopeReceiverTests.ReceiveAsync_WhenAHandlerThrowsPermanently_DeadLettersItsRow_AndAcknowledges
+EnvelopeReceiverTests.ReceiveAsync_WhenADependencyIsDown_WritesNoRow_AndAsksToPauseAndRedeliver
+EnvelopeReceiverTests.ReceiveAsync_WhenTheHostIsStopping_LeavesTheMessageUnsettled
+EnvelopeReceiverTests.ReceiveAsync_StampsEventTypeFromTheResolvedLocalType_NotFromTheEnvelope ← through the real serializer
+EnvelopeReceiverTests.ReceiveAsync_StampsReceivedAtUtcFromTheClock_NotFromOccurredOnUtc
+EnvelopeReceiverTests.ReceiveAsync_BuildsEachScopeWithTheTenantCorrelationAndDerivedCausation
+EnvelopeReceiverTests.ReceiveAsync_WhenTheGuardCannotBeActivated_AsksForARedelivery_RatherThanAConfigurationVerdict
+EnvelopeReceiverTests.ReceiveAsync_RunsTheScopeInitializersBeforeTheStoreIsBuilt_InEveryScope
+EnvelopeReceiverTests.ReceiveAsync_WhenItsOwnCommitLandedAndThenFaulted_IsNotCountedAsAConcurrentDuplicate
+EnvelopeReceiverTests.ReceiveAsync_WhenNoHandlerIsRegistered_CountsIt                         ← a MeterListener
+```
+
+### The guard on PostgreSQL (`IntegrationTests/PostgreSql`)
+```
+HandlerIsolationTests.TwoHandlers_OneFailing_TheOtherRunsOnce_AndTheFailingOneIsRetriedToProcessed
+HandlerIsolationTests.ARedeliveryWhileTheRowIsFailed_IsSkipped_AndTheRetryRunsOnce
+HandlerIsolationTests.AHandlerThatSavesPublishesThenThrows_CommitsNothing_AndItsRowIsFailed
+HandlerIsolationTests.AHandlerThatSavesThenPublishes_CommitsItsDataItsPublicationAndItsRowTogether
+HandlerIsolationTests.ARetryWhoseClaimIsLostMidHandler_RecordsNoFailure_AndLeavesTheAttemptCount
+HandlerIsolationTests.AFailedRowThatCannotBeWritten_LeavesTheDeliveryUnacknowledged_AndItIsRedelivered
+HandlerIsolationTests.ARetriedHandlerHittingABusinessUniqueKey_CountsEachAttempt_AndDeadLettersAfterTheMax
+ExactlyOnceTests.TwoConcurrentDeliveries_BothPastTheRead_GiveOneEffect         ← the unique index under a real race
+ExactlyOnceTests.AHostLostBetweenTheCommitAndTheDispatch_IsDrainedByAnother_AndEachEffectAppliesOnce
+ExactlyOnceTests.WithARetryingStrategy_AFaultBeforeTheCommit_IsReplayed_AndEveryEffectAppliesOnce
+ExactlyOnceTests.WithARetryingStrategy_AFaultAfterTheCommit_IsVerified_AndNothingIsReplayed
+```
+
+### Outbox enlistment and stores (`IntegrationTests/Stores`, `UnitTests/Stores`, `IntegrationTests/PostgreSql`)
+```
+OutboxEnlistmentTests.PublishAsync_EnlistsTheRowWithoutSaving_AndTheCallersSaveCommitsIt
+OutboxEnlistmentTests.PublishAsync_WhenTheCallersTransactionRollsBack_LeavesNeitherTheRowNorTheBusinessData
+OutboxEnlistmentTests.AnEnlistedRowItsScopeNeverSaved_IsReportedAsLost                       (event 4000)
+OutboxEnlistmentTests.AnEnlistedRowDiscardedWithTheTracker_IsReportedAtDebugOnly             (event 4001)
+StoreResolutionTests.*                       — every rule of the first-match order, and its refusals
+StoreCompositionTests.AnAssemblyBoundToTwoStores_IsAProblem
+TwoStoresTests.InsideADelivery_OnAReplayedAttempt_APublicationStillLandsInTheDeliverysStore
+TwoStoresTests.WithTwoStores_AnUnboundHandler_FailsAtStart
+StoreIsolationTests.WithOneStoresDatabaseStopped_TheOtherKeepsItsCadence_AndTheStoppedOneBacksOffAndRecovers
+EfStoreStartupCheckTests.AStoreWhoseModelLacksTheMessagingEntities_FailsAtStart
+EfCoreOutboxRegistrationTests.UseEntityFrameworkOutbox_RegistersTheEngineOnce_AndTheStoreServicesUnderItsKey
+```
+
+### OutboxProcessor (`UnitTests/Processing`)
+```
+ProcessBatch_WhenDispatchThrows_BelowThreshold_SchedulesExactRetryInstant       (FixedRandom, exact)
+ProcessBatch_WhenDispatchThrows_AtThreshold_DeadLettersInsteadOfRetrying
+ProcessBatch_WhenPayloadPermanentlyUndeliverable_DeadLettersWithoutConsumingRetries
+ProcessBatch_WhenOneMessageIsPoison_TheRestOfTheBatchStillRuns
+ProcessBatch_WhenTransportUnavailable_DefersItsEndpointsRemainderWithoutConsumingRetries
+ProcessBatch_WhenCancelledMidBatch_ReleasesRemainderWithoutConsumingRetries
+ProcessBatch_WhenDispatcherUnregistered_SettlesBatchThenRethrows
+ProcessBatch_WhenTheDispatcherCannotBeActivated_DefersItsEndpointsRowsWithoutConsumingRetriesOrRethrowing
+ProcessBatch_WhenTheDispatcherItselfThrowsInvalidOperationException_RetriesOnlyThatMessage
+ProcessBatch_WhenActivationThrowsAnythingButInvalidOperationException_RetriesOnlyThatMessage
+ProcessBatch_WhenDispatcherActivationIsCancelled_ReleasesAsCancelledRatherThanAsAnActivationFault
+ProcessBatch_WhenTheProviderIsDisposedDuringActivation_ReleasesTheRowWithoutChargingARetry
+ProcessBatch_WhenTheProviderIsDisposedWhileTheHostRuns_RetriesOnlyThatRow
+ProcessBatch_SettlesUnderTheClaimToken
+ProcessBatch_WhenSettlementThrows_DoesNotPropagate
+ProcessBatch_NamesItsStoreOnEveryDispatchScope
+ProcessBatch_NamesTheDispatchedRowAsTheCauseOfWorkInItsScope   ← seed a different ancestor cause
+ProcessBatch_PropagatesCorrelationUnchangedWhileDerivingCausation
+ComputeBackoffCeiling_BelowCap_IsTwoToThePowerOfRetryCountSeconds / _AboveCap_ / _WithCorruptRetryCount_DoesNotOverflow
+OutboxTransportClassificationTests.ProcessBatch_WhenATransportRowHasNoDispatcher_ReleasesBatchThenRethrows
+OutboxTransportClassificationTests.ProcessBatch_WhenARowsEndpointCannotBeRouted_DeadLettersItAndDispatchesTheRest
+EndpointIsolationTests.AMixedBatchWithNoTransport_DeliversItsLocalRows_AndDefersOnlyItsTransportRows
+EndpointIsolationTests.ADownEndpoint_IsTriedOncePerBackOffPeriod_NotOncePerCycle_AndItsBackOffGrows
+IntegrationTests EndpointOutageClaimTests.ABrokerOutageLongerThanABatch_NeverStarvesTheLocalRows_AndTriesTheBrokerOncePerBackOff
+```
+The activation tests fail activation for **one** row — the shape a tenant-scoped cause has (#124);
+the `InvalidOperationException` boundary is pinned on both sides.
+
+### InboxProcessor and the inbox retry policy (`UnitTests/Processing`)
+```
+ProcessBatch_WhenTheRetrySucceeds_MarksTheRowProcessedInItsTransaction_AndWritesNoOutcome
+ProcessBatch_WhenTheClaimIsLostBeforeTheHandler_RunsNothingAndWritesNothing
+ProcessBatch_WhenTheClaimIsLostMidHandler_RecordsNoFailureAndCountsNoAttempt
+ProcessBatch_WhenARetriedHandlerHitsABusinessUniqueViolation_CountsTheAttempt   ← not a lost lease
+ProcessBatch_WhenConsumerNotRegistered_DeadLettersOnFirstSight
+ProcessBatch_WhenTheHandlerThrowsPermanentMessageException_DeadLettersOnFirstSight
+ProcessBatch_HandsTheHandlerTheContextOfTheFirstDelivery_RebuiltFromTheRow
+ProcessBatch_NamesTheDeliveredMessageAsTheCauseOfTheHandlersWork               (MessageId, never RowId)
+ProcessBatch_WhenTheCommitFailsAfterReachingTheDatabase_TheVerificationEndsIt
+ProcessBatch_WhenDependencyUnavailable_ReleasesTheRemainderWithoutRetries
+ProcessBatch_WhenTheStoreRegistersNoGuard_ReleasesTheBatchThenRethrows
+ProcessBatch_WhenTheGuardCannotBeActivated_RetriesTheRowRatherThanStopping
+ProcessBatch_WhenTheHostStopsMidHandler_ReleasesTheRowWithItsAttemptCountUnchanged
+ProcessBatch_SettlesOnATokenIndependentOfTheCallersShutdown                    (a cancelled settle strands leases)
+InboxRetryPolicyTests.ComputeBackoffCeiling_FollowsTheExponentialCurve
+```
+
+### The loops (`UnitTests/Processing`, `IntegrationTests/PostgreSql`)
+```
+OutboxLoopTests / InboxLoopTests: NextDelay_* (saturated, idle, partial, outage, cancelled, from zero) — the outbox has no outage arm: a down endpoint backs off on its own rows
+OutboxLoopTests.RunAsync_WhenTheProcessorCannotBeActivated_LogsAnActivationFailureAndKeepsRunning
+OutboxLoopTests.RunAsync_WhenTheProcessorThrowsAConfigurationException_StopsTheLoop
+InboxRetentionLoopTests.DefaultRetentionWindow_IsLongerThanTheOutboxs
+OutboxRetentionLoopTests.ExecuteAsync_DeletesAcrossEveryTenant
+ShutdownReleaseTests.AHostStoppedMidOutboxBatch_ReleasesEveryClaimedRowWithItsAttemptCountUnchanged
+ShutdownReleaseTests.AHostStoppedMidInboxBatch_ReleasesEveryClaimedRowWithItsAttemptCountUnchanged
+```
+
+### Dispatchers (`UnitTests/Dispatch`, `UnitTests/Local`, `UnitTests/DI`)
+```
+TransportOutboxDispatcherTests.DispatchAsync_DoesNotDeserializeThePayload
+TransportOutboxDispatcherTests.DispatchAsync_UsesTheStagedSource_NotOneResolvedAtDispatch
+TransportOutboxDispatcherTests.DispatchAsync_CarriesTheRowsStagedTraceParent_NotTheRelaysTrace
+TransportOutboxDispatcherTests.DispatchAsync_PropagatesTransportUnavailable / _PropagatesPayloadRejection / _PropagatesAnUnclassifiedFailure
+LocalOutboxDispatcherTests.ARowWhoseTypeResolvesNowhere_IsPermanent
+MessagingBuilderTransportTests.TheRowsEndpoint_NamesItsDispatcher
+MessagingBuilderTransportTests.AStore_RegistersBothDispatchers_WhateverTheTransport
+MessagingBuilderTransportTests.AStoreWithAProvidersOwnTransport_SendsItsTransportRowsThroughIt
+```
+`DoesNotDeserializeThePayload` is structural first — the dispatcher's constructor has no
+serializer, so adding one breaks the file at compile time — and behavioural second: a body that is
+not JSON reaches the transport unchanged.
+
+### EF stores on SQLite (`IntegrationTests/Stores`)
+```
+EfOutboxStoreTests.ClaimBatchAsync_IncludesExpiredLease_RecoveringACrashedProcessor
+EfOutboxStoreTests.ClaimBatchAsync_RespectsBatchSize_AndClaimsOldestByCreatedAtUtc   ← clocks seeded opposite
+EfOutboxStoreTests.GetDeadLetteredAsync_StillOrdersOnOccurredOnUtc                   (the deliberate asymmetry)
+EfOutboxStoreTests.ApplyOutcomesAsync_Released_ReturnsToPendingWithoutConsumingRetries
+EfOutboxStoreTests.ApplyOutcomesAsync_WithStaleToken_WritesNothing / _RejectsFailureWritesToo
+EfOutboxStoreTests.ApplyOutcomesAsync_ReportsPartialSettlementViaRowCount
+EfOutboxStoreTests.DeleteProcessedAsync_WithNullTenant_ReachesNullTenantRows
+EfOutboxStoreTests.DefaultErrorMessageLength_FitsTheMappedColumn                     (cross-package coupling)
+EfOutboxStoreTests.TheOutboxTable_HasNoUniqueIndexBesideItsKey
+EfOutboxStoreTests.TheDispatchableIndex_SortsOnCreatedAtUtc
+EfInboxStoreTests.EnlistProcessedAsync_WhenAnotherDeliveryCommittedThePairFirst_FailsTheCommit
+EfInboxStoreTests.BeginAsync_WhenTheContextAlreadyHasATransaction_Refuses
+EfInboxStoreTests.TryInsertFailedAsync_WhenTheFailureIsNotTheGuard_Throws
+EfInboxStoreTests.ClaimBatchAsync_NeverExceedsBatchSize                               (the cross-product bound)
+EfInboxStoreTests.ClaimBatchAsync_OrdersOnReceivedAtUtc_NotOnOccurredOnUtc            ← clocks seeded opposite
+EfInboxStoreTests.ClaimBatchAsync_ClaimsAFailedRowOnceItsRetryIsDue_AndNeverADeadLetteredOne
+EfInboxStoreTests.ApplyOutcomesAsync_DoesNotTouchASiblingConsumersRow
+EfInboxStoreTests.MarkClaimedProcessedAsync_WithAStaleToken_ReturnsFalse
+EfInboxStoreTests.IsLeaseLost_DiscriminatesStructurally
+EfInboxStoreTests.NoIndexTouchesOccurredOnUtc_AndTheClaimIndexSortsOnReceivedAtUtc
+InboxSettlementGuaranteeTests.TheGuardAndTheHandlerScopeShareOneUnitOfWork
+InboxSettlementGuaranteeTests.CommitAsync_WritesTheRow_WhenTheHandlerClearedTheTracker
+InboxSettlementGuaranteeTests.ProcessBatch_SettlesTheRow_WhenTheContextDefaultsToNoTracking
+```
+
+### Claims and settlement on PostgreSQL (`IntegrationTests/PostgreSql`)
+```
+InboxLeaseExpiryTests.WhenTheLeaseExpiresMidHandler_TheLoserRollsBackEntirelyAndTheWinnerStands
+InboxClaimConcurrencyTests.ClaimBatchAsync_TwoProcessorsOverAFannedOutQueue_AreDisjointAndBounded
+InboxClaimConcurrencyTests.ClaimBatchAsync_WhenManyProcessorsRaceOnOneRow_ExactlyOneWins
+OutboxClaimConcurrencyTests.ClaimBatchAsync_UnderRealConcurrency_NeverOverlapsAndNeverLoses
+OutboxClaimConcurrencyTests.ApplyOutcomesAsync_WithStaleToken_IsRejectedByTheTokenGuard
+SettlementStrategyTests.UnderEnableRetryOnFailure_AnOutboxBatchIsSettled_AndNothingIsResentAfterTheLease
+SettlementStrategyTests.{Outbox,Inbox}Settlement_WhenItsCommitLandsAndThenFaults_IsVerified_AndReportsTheCountItWrote
+```
+- `WhenTheLeaseExpiresMidHandler…` is the test that decides whether the ownership mechanism is
+  real: without `ClaimToken` mapped as a concurrency token the loser overwrites the winner and every
+  other test still passes.
+- `…OverAFannedOutQueue_AreDisjointAndBounded` seeds rows sharing a `MessageId` across
+  `ConsumerType` values and asserts no claim exceeds `batchSize` — the assertion the compound-key
+  cross-product claim failed.
+
+### The local endpoint and the MediatR glue
+```
+LocalEndpointWithoutStoreTests.TwoConsumers_OneFailingTransiently_TheOtherRunsExactlyOnce_AndTheFailingOneIsRetriedUntilItSucceeds
+LocalEndpointWithoutStoreTests.ALocalMessage_IsDeliveredToEachConsumer_EachInAScopeOfItsOwn_NeverTheSenders
+LocalEndpointWithoutStoreTests.WithTwoStores_ALocalConsumerBoundToNeither_FailsAtStart_NamingItAndTheFix
+MessagingMediatRRegistrationTests.RegistersNoDomainEventsDispatcher_NoNotificationPublisher_AndNoSerializer
+MessagingMediatRRegistrationTests.AtStart_AHandlerThatCannotBeAConsumer_FailsNamingIt_EvenWhenRegisteredAfterTheGlue
+NotificationHandlerSourceTests.AConsumer_IsNotFailedByASiblingThatCannotBeBuilt_AndDisposesItsOwnHandler
+NotificationHandlerSourceTests.AFactoryRegisteredHandler_IsReported_NamingItsNotification
+DomainEventNotificationSinkTests.ReceiveAsync_SendsOnlyTheMappedEvents_InDrainOrder_EachUnderItsEventsIdentityAndTime
+MediatR.IntegrationTests PostgreSql/LocalEndpointTests.TwoHandlers_OneFailing_TheOtherRunsOnce_AndTheFailingOneIsRetriedFromItsRow
+MediatR.IntegrationTests PostgreSql/LocalEndpointTests.ACascadeRaisedByABusHandler_IsDeliveredOnce_AndARedeliveryRunsNothing
+MediatR.IntegrationTests PostgreSql/TwoStoreDomainEventTests.ANotificationBoundToStoreB_RaisedInAUnitOfWorkThatSavesStoreA_IsReportedUnsaved
+MediatR.IntegrationTests CascadeDeliveryTests.ACascadeEvent_RaisedByANotificationHandler_CommitsWithItsWork_AndIsDeliveredOnce
+MediatR.IntegrationTests ReceivingSeamTests.AnEnvelopeCrossingTheSeam_CausesTheHandlersWorkThroughTheInboxRow
+MediatR.IntegrationTests ReceivingSeamTests.Redelivery_ThroughTheSeam_CostsNoConsumerItsRow
+MediatR.IntegrationTests ReentrantOutboxTests.ANotificationHandlersPublication_BecomesAContractRow_AndReachesTheTransport
+```
+- `AnEnvelopeCrossingTheSeam…` asserts copied and derived causation **separately**: the row's
+  `CausationId` is the notification that caused the contract (copied inbound); the handler's
+  context names the message itself (derived). The two values differ on purpose.
+- The two halves of a seam test share nothing but a `MessageEnvelope` taken from
+  `RecordingMessageTransport.Sent` and handed to `IEnvelopeReceiver`. Anything more is a fan-out
+  wearing a wire's clothes.
+- A "nothing at `Warning`" assertion is scoped to MicroKit's own log categories: EF Core logs a
+  rejected `INSERT` from its own category, which a library cannot silence.
+
+### Composition, contracts and the wire (`UnitTests/DI`, `/Publishing`, `/Transport`, `/Serialization`)
+```
+SingleEntryPointTests.EveryCompositionProblem_IsListedInOneExceptionAtHostStart
+SingleEntryPointTests.AnInvalidComposition_BindsNoEndpoint
+SingleEntryPointTests.APublicationWithNoTransport_FailsAtHostStart
+SingleEntryPointTests.AStoreMissingItsServices_FailsAtHostStart
+MessagingSerializerDefaultTests.AddMicroKitMessaging_IsWhatRegistersTheDefault_NotABuilderMethod
+IntegrationEventRegistryTests.Registry_ContractSurface_MatchesTheSnapshot          (a contract name is public API)
+IntegrationEventRegistryTests.Registry_WhenTwoModulesClaimOneWireType_IsRejected
+IntegrationEventRegistryTests.ResolvedLocalType_RoundTripsThroughTheSerializer
+MessageContractAttributeTests.Constructor_WhenTheNameAlreadyEndsInAVersionSuffix_Throws
+MessageEnvelopeTests.MessageEnvelope_HasNoPositionalConstructor_SoAddingAHeaderNeverChangesOne
+MessageEnvelopeTests.MessageHeaders_AreTheFourLowerCaseCloudEventsExtensions
+OutboxMessageFactoryTests.CreateContract_WithANonJsonSerializer_RefusesRatherThanCorruptingTheRow
+EndpointBindingTests.APublicationBeforeHostStart_ReachesTheHostsOwnHandlerOnceItStarts
+```
+
+---
+
+## Architecture tests (`MicroKit.Messaging.ArchitectureTests`)
+
+- `PublicSurfaceTests` — the full exported surface of all four assemblies, both directions (an
+  unexpected type fails, a listed type that no longer exists fails). Uses
+  `Assembly.GetExportedTypes()`, not NetArchTest, which breaks under coverlet instrumentation.
+- `MessagingAbstractionsArchitectureTests` — no EF Core / ASP.NET Core / MediatR in Abstractions;
+  no EF Core / MediatR / broker client in Core; no MediatR / ASP.NET Core in EntityFrameworkCore; no
+  EF Core / ASP.NET Core / broker client in the glue; `AllAssemblies_HaveNoMediatRContractsDependency`
+  over Abstractions, Core and EntityFrameworkCore;
+  `OnlyCoreShipsAnIMessageTransport_AndItIsTheInternalInMemoryOne`;
+  `NoOutboxDispatcherWritesInboxRows` (no dispatcher depends on `IInboxGuardStore`; the glue does not
+  name `IOutboxDispatcher`); `Core_DependsOnTheStaticStoreSet_OnlyThroughIMessageStoreSet` (#191);
+  `Core_DoesNotContainTypeNamedMessageDispatcher`,
+  `Core_DoesNotContainTypeNamedInProcessIntegrationDispatcher`,
+  `NoAssemblyStillCarriesTheDedicatedIntegrationEventTable`.
+- An emptiness assertion carries a **control**: first assert the query can match something, or it
+  is green for the wrong reason.
+
+---
+
+## Naming
+
+`{Member}_{Scenario}_{ExpectedResult}` for one member, `{Situation}_{Outcome}` for a behaviour
+across components; PascalCase segments joined by `_` (`CA1707` is suppressed in test projects).
+See `microkit-messaging-naming.md`.

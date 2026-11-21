@@ -213,7 +213,7 @@ See ADR-MSG-013 for the accepted cascade dispatch design.
 
 ## ADR-MSG-013: DomainEventsCascadeNotificationPublisher — Cascade Event Dispatch on the Notification Path
 
-**Status:** Accepted  
+**Status:** Superseded by ADR-MSG-020 — the publisher is deleted; cascade events are dispatched by a receive middleware, after each handler and before the engine's save, and are delivered  
 **Date:** 2026-06-22  
 **Amended by:** ADR-MSG-016 — the publisher and its registration stand, under the new name `AddMediatRDomainEvents()`. The Consequences claim that installing the glue yields working cascade dispatch is **known false**: cascade rows are staged and never flushed. See ADR-MSG-016 §Known-false consequence.
 
@@ -413,6 +413,7 @@ between two conventions in tension the one with a live justification wins.
 **Date:** 2026-08-22
 **Amends:** ADR-MSG-010 (phase ownership), ADR-MSG-011 (caller name), ADR-MSG-013 (registration name, and one consequence that was never true).
 **Requires:** MicroKit.MediatR from the same release — the glue does not compile against a core without `IDomainEventsSink`.
+**Amended by:** ADR-MSG-020 — the sink stands (it sends through `ILocalMessageSender` now); `AddMediatRDomainEvents()` is replaced by `UseMediatRDomainEvents()`, and the decorator and the cascade publisher it registered are deleted.
 
 ### Context
 
@@ -560,6 +561,7 @@ place is silent.
 **Date:** 2026-08-23
 **Supersedes (in part):** ADR-MSG-014 — its two remaining inbox return-type lines, which ADR-MSG-015 explicitly left to "the inbox lot".
 **Amends:** ADR-MSG-003 (the inbox delivery guarantee is narrowed, not replaced), ADR-MSG-006 (the inbox store splits the way the outbox store already did).
+**Amended by:** ADR-MSG-020 — its four-transaction model (ingestion, claim, the handler's transaction with the staged mark, the deferred settlement) is replaced by one transaction per handler on one receive pipeline; `IInboxWriter`, `IInboxSettlementStore` and `InboxWriteResult` are deleted for `IInboxGuardStore`. The atomic claim, the token fencing, the `RowId` key and the retention rule stand.
 
 ### Context
 
@@ -813,7 +815,8 @@ dropped.
 
 ## ADR-MSG-018: Integration Events Are a Marker Contract, and the In-Process Transport Is Withdrawn
 
-**Status:** Accepted — **superseded in part by ADR-MSG-019 (three points, enumerated there)**
+**Status:** Accepted — **superseded in part by ADR-MSG-019 (three points, enumerated there) and by ADR-MSG-020 (§4)**
+**Superseded (in part) by:** ADR-MSG-020 — §4, "`IIntegrationEventPublisher` requires an open transaction": the publisher is deleted, and a publication through `IMessageBus` is *enlisted* in the store's `DbContext`, with no transaction required; a row its scope never saves is reported (event 4000).
 **Date:** 2026-08-24
 **Supersedes (in part):** ADR-MSG-010 — the `IIntegrationEvent : IEvent` line stands; nothing else about the interface does
 **Superseded (in part) by:** ADR-MSG-019 — §3's relocation of the fan-out into
@@ -998,6 +1001,7 @@ occurred. Versioning stays additive-only. Revisit under the rule of three.
 **Date:** 2026-08-25
 **Supersedes (in part):** ADR-MSG-018 — three specific points, enumerated below; the rest stands
 **Related:** ADR-MSG-002, ADR-MSG-009, ADR-MSG-016, ADR-MSG-017, ADR-MEDIATR-014/-015
+**Superseded (in part) by:** ADR-MSG-020 — §1, routing by `MessageKind` (the column is replaced by `Endpoint`, and a dispatcher is resolved keyed by it); the decorator and the keyed `OutboxDispatcherKeys.Standard` slot (deleted); §7, the replay natural key `(OriginMessageId, ContractName)`, its unique index and its savepoint path (removed: a redelivered handler's publications commit or skip with its inbox row). One table, the reentrant hop and the opaque transport payload stand.
 
 ### Context
 
@@ -2041,3 +2045,87 @@ specialist review's documentation edits, with the same result and no compiled in
   and the narrowing paragraph now say so). Its constraints on the deferral lot, the XML-doc
   qualifier it scoped to the next api-reviewed lot, and its notes are carried in trace 029, §7
   and §10.
+
+---
+
+## ADR-MSG-020: Opt-In Durability on the Bus — Stores, the Inbox Guard and the Local Endpoint
+
+**Status:** Accepted
+**Date:** 2026-11-21
+**Issue:** #188
+**Supersedes:** ADR-MSG-013. **Supersedes (in part):** ADR-MSG-017 (the transaction model), ADR-MSG-018 §4, ADR-MSG-019 §1 and §7. **Amends:** ADR-MSG-016.
+
+### Context
+
+#186 made the bus publish and consume with no persistence. The outbox and the inbox were still a
+separate API — `IIntegrationEventPublisher`, which required a transaction the caller opened, and an
+inbox fed by ingestion and drained by a processor that settled in four transactions — and one
+`DbContext` per host. Domain-event notifications were fanned out by a MediatR decorator with no
+per-handler inbox, so a replay re-ran every handler, and cascade events were staged and never saved.
+
+### Decision
+
+1. **A store is opt-in durability of the bus**, the outbox and the inbox of one `DbContext`,
+   configured with `bus.UseEntityFrameworkOutbox<TContext>()`; a host may have several. One
+   publication API: `IMessageBus` / `IEventPublisher.PublishAsync`.
+2. **A store SPI** (`MessageStoreKey`, `IMessageStoreSet`, `AddMessageStore`, `MessageStoreBuilder`):
+   the EF store is built on it alone; the store set is static here, dynamic in #191.
+3. **Store resolution, first match:** `PublishOptions.Store`; the delivery's store; the only store;
+   the store bound to the message type's assembly; else a configuration exception. A handler's store:
+   the only one, else its assembly's binding, checked at start. The instance and key always come
+   from the scope.
+4. **Outbox by enlistment:** the row is added to the store's `DbContext` of the scope and never
+   saved by the bus; a row unsaved at scope end is reported (4000), one discarded by a tracker clear
+   at `Debug` (4001). The replay key is removed.
+5. **The inbox guard, on one receive pipeline** for transport deliveries, local deliveries and
+   retries: one row per (message, handler); an existing row skips a new delivery; an attempt is one
+   operation of the store's execution strategy, its row, the handler's work, its publications and
+   its cascade events committing together, an unknown commit verified by reading the row; a failure
+   rolls back and is written on the row in its own transaction before the delivery is acknowledged;
+   the store's loop owns the retries. Exactly-once covers what is written through the store's
+   context; everything else is at-least-once. Two amendments to the issue's text: the scope
+   initializers run before the attempt's transaction begins (they configure the scope the store's
+   context is built from), and a permanent verdict counts no attempt (a first delivery is written
+   dead-lettered, `RetryCount` 0).
+6. **The local endpoint:** an in-process message never handed to a transport. With a store, an
+   outbox row routed `Endpoint = "local"`, drained by the store's loop into the pipeline, one guarded
+   delivery per consumer; without one, an in-memory queue of one entry per (message, consumer),
+   each with its own retries — queued before the sender's work commits, and lost if the process stops.
+7. **The MediatR bridge** (`bus.UseMediatRDomainEvents()`) on the public SPI: a sink that sends
+   through `ILocalMessageSender`; each `INotificationHandler` a consumer of its own; a receive
+   middleware that dispatches cascade events before the engine's save. A notification handler that
+   cannot be a consumer of its own is a start failure, never a silent skip.
+8. **One engine loop per store** (outbox, inbox retries, their retention), each with its own
+   back-off; a host stop releases what it claimed with attempts unchanged; an activation failure is
+   reported as such, never as "not registered". Within a store's outbox, **each endpoint has its own
+   back-off**: a row whose endpoint is down — its transport unreachable or absent, a local consumer's
+   dependency out — is deferred to the end of that back-off with no attempt counted, and the claim
+   leaves the endpoint's rows out while it runs (`IOutboxProcessorStore.ClaimBatchAsync` with
+   `OutboxEndpoints`), so the other endpoint's rows keep flowing, the down endpoint's are not
+   rewritten, and it is tried once per back-off period. Deferral has its own event, 1010, as
+   ADR-MSG-019 required; 1004 and 1009 keep their event names and say why the endpoint is down. They
+   lose `ReleasedCount` — an endpoint outage releases nothing any more (cancellation, a host stop and
+   a configuration fault still release, and say so in their own events) — and 1009 carries
+   `Endpoint` where it carried `MessageKind`. The claim's endpoint filter has its own index,
+   `IX_OutboxMessages_Endpoint_Dispatchable`, measured on PostgreSQL.
+
+### Consequences
+
+- `IIntegrationEventPublisher`, `IIntegrationEventWriter`, `IntegrationEventWriteResult`,
+  `IInboxWriter`, `IInboxSettlementStore`, `InboxWriteResult`, `OutboxInboxProcessingExtensions`,
+  `MessageKind`, `OutboxDispatcherKeys`, `MediatROutboxDispatcher` and
+  `DomainEventsCascadeNotificationPublisher` are deleted; `IOutboxDispatcher` is internal. The
+  glue has no access to Core's internals.
+- Schema: `OutboxMessages` loses `MessageKind`, `OriginMessageId` and the replay index, and gains
+  `Endpoint` and `Headers`; `InboxMessages` gains `Source` and `Headers`. Hosts own the migration,
+  in the CHANGELOG — `Endpoint` must be set from `MessageKind` before it is dropped.
+- A notification handler, a bus handler's cascade and a retry all run under the same guard, so the
+  in-process path no longer re-runs a handler that succeeded.
+- Prior art. NServiceBus's outbox stores the incoming message id, the outgoing messages and the
+  business state in one transaction, on the handler's own connection, and excludes from its
+  guarantee whatever does not enlist in it (<https://docs.particular.net/nservicebus/outbox/>) —
+  the split of decision 5. MassTransit's EF Core outbox tracks an `InboxState` per received message
+  for each endpoint (<https://masstransit.io/documentation/patterns/transactional-outbox>). Both
+  deduplicate per message and endpoint; this module keys the inbox per handler, so one handler that
+  fails is retried alone while the others of the message are done.
+

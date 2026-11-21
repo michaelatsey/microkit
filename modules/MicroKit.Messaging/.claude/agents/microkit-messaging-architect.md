@@ -39,11 +39,16 @@ graph changes. You never write implementation code — you produce architectural
 
 These are non-negotiable. Any proposal that violates them is auto-rejected:
 
-1. **`IOutboxStore` in Abstractions** — never in `MicroKit.Persistence.Abstractions`
+1. **The store interfaces in Abstractions** (`MicroKit.Messaging.Spi`: `IOutboxWriter`,
+   `IOutboxProcessorStore`, `IInboxGuardStore`, `IInboxProcessorStore`, admin, retention) — never in
+   `MicroKit.Persistence.Abstractions`
 2. **`IIntegrationEvent` only** — no `INotification`, no `MediatR.Contracts` dependency anywhere
+   except the `MicroKit.Messaging.MediatR` glue (ADR-MSG-009)
 3. **Tenant-aware mandatory** — `TenantId` on every `OutboxMessage` and `InboxMessage` row
 4. **No broker coupling in Core** — `MicroKit.Messaging` must compile without any broker package
-5. **Background processor scoping** — processors run as `IHostedService`, create their own DI scopes, never capture request-scoped services
+5. **Background processing scoping** — `MessageStoreEngine` is the hosted service and runs, per
+   store, its own loops; each loop creates a scope per cycle and resolves the store's keyed
+   processor there; nothing hosted captures a scoped service
 6. **Outbox state machine is append-only** — states `Pending → Processing → Published/Failed` are ordered and irreversible (except retry back to Pending)
 7. **Inbox dedup is compound** — `(MessageId, ConsumerType)` must be a unique key — single-field dedup is a bug
 
@@ -84,7 +89,9 @@ When reviewing outbox/inbox proposals, always verify:
 ### At-least-once delivery
 ```
 OutboxMessage lifecycle must guarantee:
-  Pending    → message written atomically with the domain commit (via IOutboxWriter, staged only)
+  Pending    → row enlisted in the store's DbContext of the scope (IOutboxWriter, never saved by
+               the bus) and committed by the caller's SaveChanges — or, inside a delivery, the
+               engine's — with the business data (ADR-MSG-020 §4)
   Processing → claimed by ClaimBatchAsync: ONE UPDATE WHERE over the candidate ids, replaying the
                eligibility predicate inside the UPDATE, stamping Status + LockedUntilUtc +
                ClaimToken. There is no per-message AcquireLeaseAsync — it was deleted.
@@ -105,32 +112,46 @@ Any proposal that conflates Released with Retry is REJECT — an outage would bu
   queue's retry budget.
 ```
 
-### Idempotency gate (Inbox) — ingestion and drain are SEPARATE paths
+### Idempotency gate (Inbox) — the inbox guard (ADR-MSG-020 §5)
 
 ```
-INGESTION (publisher / broker adapter — never the processor):
-  1. AddAsync UNCONDITIONALLY. Read the InboxWriteResult.
-  2. Added          → carry on
-  3. AlreadyPresent → log Debug, count the metric, `continue` to the NEXT consumer
-  The UNIQUE INDEX on (MessageId, ConsumerType) is the sole authority. The PK is the RowId
-  surrogate. The store recognises a duplicate by POST-HOC verification after the failed insert,
-  never by decoding a provider error code.
+ONE receive pipeline (MessageReceivePipeline) for a transport delivery (IEnvelopeReceiver), a local
+delivery and a store's retry. With a store, each handler is guarded by its own row, keyed
+(MessageId, ConsumerType):
 
-DRAIN (processor — never calls ExistsAsync or AddAsync):
-  1. ClaimBatchAsync — atomic, selects candidates by single-column RowId, stamps ClaimToken
-  2. per-message execution scope
-  3. StageProcessedAsync — stages the mark BEFORE the handler runs; false ⇒ lease lost, do not invoke
-  4. handler.HandleAsync — its SaveChanges commits side effects AND the mark together
-  5. IsMarkUncommitted ⇒ the handler committed nothing: deferred outcome + warning
-  Failures and releases only are buffered and written by one ApplyOutcomesAsync.
+FIRST DELIVERY, per handler:
+  1. IInboxGuardStore.FindAsync — a row in ANY state skips the handler: a redelivery never starts
+     a second attempt
+  2. IInboxGuardStore.ExecuteAsync — the attempt is ONE operation of the store's execution
+     strategy; each attempt in a fresh scope:
+       scope initializers → BeginAsync → EnlistProcessedAsync (row, Processed) → middlewares +
+       handler → CommitAsync. The row, the handler's own saves, its publications and its cascade
+       events commit together. An unknown commit is verified by reading the row, never replayed
+       blindly
+  3. a concurrent delivery that committed the row first → this one is a duplicate: rolled back,
+     a success
+  4. the handler failed → everything rolled back; TryInsertFailedAsync writes the row Failed in a
+     transaction of its own, and only then is the delivery acknowledged. A permanent verdict
+     counts no attempt; a dependency outage writes no row and redelivers
 
-Any proposal that guards AddAsync with ExistsAsync is REJECT — time-of-check-to-time-of-use race.
-Any proposal that makes a redelivery throw is REJECT — it is the NOMINAL path under at-least-once,
-  and treating it as a dispatch failure dead-letters correctly delivered messages (ADR-MSG-017).
-Any proposal that returns early instead of continuing to the next consumer is REJECT — consumers
-  after a duplicated one would silently lose their row.
-Any proposal that batches the SUCCESS settlement is REJECT — it turns one possible replay into N,
-  and the inbox has no downstream to absorb them.
+RETRY (the store's inbox loop → InboxProcessor; it never invokes a handler itself):
+  1. IInboxProcessorStore.ClaimBatchAsync — atomic, selects candidates by single-column RowId,
+     stamps ClaimToken
+  2. per row, the pipeline's guarded retry: MarkClaimedProcessedAsync in the attempt's own
+     transaction, conditioned on the claim; false ⇒ claim lost, the handler does not run.
+     A success settles itself
+  3. failures and releases only are buffered and written by one ApplyOutcomesAsync
+
+The UNIQUE INDEX on (MessageId, ConsumerType) is the sole authority. The PK is the RowId surrogate.
+
+Any proposal that treats FindAsync as the guard — skipping the unique index or not absorbing the
+  concurrent winner — is REJECT: time-of-check-to-time-of-use race.
+Any proposal that makes a redelivery throw is REJECT — it is the NOMINAL path under at-least-once.
+Any proposal where one handler's duplicate or failure stops another handler of the same message is
+  REJECT — each handler is guarded on its own.
+Any proposal that acknowledges a delivery before the failed row is committed is REJECT.
+Any proposal that batches the SUCCESS settlement is REJECT — success commits in the handler's own
+  transaction, and the inbox has no downstream to absorb a replay.
 Any proposal that drops the ClaimToken concurrency-token mapping is REJECT — ownership would be
   checked at read time only and the lost update returns.
 Any proposal that claims by filtering an UPDATE on the compound key with two Contains is REJECT —
@@ -163,11 +184,17 @@ A proposal that reads tenant from IHttpContextAccessor in a processor is REJECT 
 
 ### Background worker scoping
 ```
-OutboxProcessor and InboxProcessor are IHostedService singletons.
-They must call IServiceScopeFactory.CreateAsyncScope() per MESSAGE (not per batch).
-They must never capture a scoped service in a field.
-TenantId is read from OutboxMessage.TenantId / InboxMessage.TenantId — never IHttpContextAccessor.
-A shared scope across a batch is REJECT — DbContext state from one message bleeds into the next.
+MessageStoreEngine is the BackgroundService singleton (IServiceScopeFactory only). Per store it
+runs four loops — outbox, inbox retries, and their two retentions — each with its own back-off.
+Each loop creates a scope per CYCLE and resolves the store's keyed IOutboxProcessor /
+IInboxProcessor (scoped, keyed by MessageStoreKey) and their batch-scoped store there.
+OutboxProcessor creates one execution scope per MESSAGE through IExecutionScopeFactory; the
+receive pipeline creates one per HANDLER (and per attempt).
+Nothing hosted captures a scoped service in a field.
+TenantId is read from OutboxMessage.TenantId / InboxMessage.TenantId or the envelope — never
+IHttpContextAccessor.
+A shared scope across a batch's messages or a message's handlers is REJECT — DbContext state from
+one bleeds into the next.
 ```
 
 ---
@@ -175,7 +202,7 @@ A shared scope across a batch is REJECT — DbContext state from one message ble
 ## Hard Constraints (never override)
 
 - Abstractions has zero framework dependency — ABSOLUTE
-- `MediatR.Contracts` forbidden in every package — ABSOLUTE
+- `MediatR.Contracts` forbidden in every package except the `MicroKit.Messaging.MediatR` glue (ADR-MSG-009) — ABSOLUTE
 - Broker providers never depend on each other — ABSOLUTE
-- Tenant isolation never implicit — always explicit TenantId filter — ABSOLUTE
+- Tenant isolation never implicit — `TenantId` always explicit, on the row and in the message's execution scope (never a filter on the claim, see above) — ABSOLUTE
 - Phase 1 scope is fixed: v2 broker providers do not get approved in Phase 1 implementation

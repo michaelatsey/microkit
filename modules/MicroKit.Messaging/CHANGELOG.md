@@ -1,5 +1,129 @@
 # Changelog — MicroKit.Messaging
 
+## [Unreleased] — the outbox and the inbox are opt-in durability on the bus (#188)
+
+The bus publishes and consumes without persistence (#186); a store makes both durable. A store is
+the outbox **and** the inbox of one `DbContext`, configured on the bus, and a host may have several.
+
+### Breaking
+
+- **Composition.** `bus.UseEntityFrameworkOutbox<TContext>(store => ...)` replaces
+  `AddEfCoreOutbox<TContext>()` and `AddEfCoreIntegrationEvents<TContext>()`: one store per
+  `DbContext`, and calling it again for the same context configures that store.
+  `bus.UseMediatRDomainEvents()` replaces `AddMediatRDomainEvents()`.
+  `OutboxInboxProcessingExtensions.AddOutboxInboxProcessing()` is removed: a store provider calls
+  `AddMessageStore`, which registers the engine. `modelBuilder.ApplyMessagingConfiguration()` stays
+  the only model hook.
+- **One way to publish: `IMessageBus` / `IEventPublisher.PublishAsync`.** With a store the
+  publication is *enlisted* in the store's `DbContext` of the current scope — added, never saved,
+  and no open transaction is required: the caller's `SaveChanges` commits it with the business data.
+  Removed: `IIntegrationEventPublisher`, `IIntegrationEventWriter` (`HasOpenTransaction` included),
+  `IntegrationEventWriteResult`.
+- **The inbox guard replaces ingestion.** Removed: `IInboxWriter`, `IInboxSettlementStore`,
+  `InboxWriteResult`; added: `IInboxGuardStore`, `InboxRowState`. `IEnvelopeReceiver` stays the
+  receiving seam and runs the receive pipeline; `EnvelopeReceiveResult` now carries a
+  `ReceiveDisposition` (`Acknowledge`, `DeadLetter`, `Redeliver`, `PauseAndRedeliver`, `Unsettled`)
+  instead of row counts. `Unsettled` is never an acknowledgement.
+- **Removed: `MessageKind`, `OutboxDispatcherKeys`, `MediatROutboxDispatcher`,
+  `DomainEventsCascadeNotificationPublisher`, `OutboxMessage.OriginMessageId`.**
+  `OutboxMessage.MessageKind` is replaced by `OutboxMessage.Endpoint` (`null` for the transport,
+  `"local"` for the local endpoint). `IOutboxDispatcher` is internal.
+- **`MicroKit.Messaging.MediatR` no longer replaces MediatR's `INotificationPublisher`**, and no
+  longer has access to `MicroKit.Messaging`'s internals: it is built on the public SPI.
+
+### Added
+
+- **Stores, as an SPI** (`MicroKit.Messaging.Spi`): `MessageStoreKey`, `IMessageStoreSet`,
+  `MessageStoreBuilder` and `AddMessageStore`, the path any store provider registers its store's
+  services by; `UseEntityFrameworkOutbox` is built on it alone. `EntityFrameworkOutbox.KeyOf<TContext>()`
+  names an EF Core store.
+- **`PublishOptions.Store`** names the store of a publication. Otherwise, first match: the store of
+  the delivery the scope runs, the only store, the store bound to the message type's assembly
+  (`store.ForAssemblyContaining<TMarker>()`). No rule matching is an
+  `IntegrationEventConfigurationException` naming the fix — never a guess, never a direct send.
+- **The inbox guard.** With a store, each handler runs under its inbox row, one row per
+  (message, handler): a redelivery while the row exists in any state is skipped; a first delivery
+  runs as one operation of the store's execution strategy, its row, its work, its publications and
+  its cascade events committing together, the outcome of an unknown commit verified by reading the
+  row; a failure rolls everything back and is recorded on the row in its own transaction before the
+  delivery is acknowledged; the store's loop owns the retries.
+- **The local endpoint.** A domain-event notification is a local message: never handed to a
+  transport, no `[MessageContract]` needed. With a store it is an outbox row routed `"local"`,
+  delivered by the store's loop to each `INotificationHandler` as a consumer of its own, under its
+  own inbox row. Without a store it is queued in memory, one entry per (message, handler), each
+  with its own retries and dead letter. `ILocalMessageSender`, `ILocalConsumerSource`,
+  `LocalConsumer` and `MessagingIntegrationExtensions` are the SPI an integration package builds on.
+- **Cascade events are delivered.** A domain event raised by a handler is dispatched after it and
+  before the engine saves its work, so it commits with that work and is delivered. The known defect
+  that lost it is closed.
+- **One engine loop per store** (outbox, inbox retries, their retention), each with its own back-off:
+  a store whose database is unreachable never delays another.
+- **Start checks**, each naming its fix: a store whose `DbContext` is not registered; a model
+  without the messaging entities; several stores and an unbound handler or local consumer; an
+  assembly bound to two stores; `UseMediatRDomainEvents()` without MicroKit.MediatR; a notification
+  handler registered as an open generic, a factory or an instance, or for an abstract notification.
+- **Events:** 4000 (`Error`) an enlisted row its scope never saved — lost, and never silent; 4001
+  (`Debug`) an enlisted row discarded with the change tracker; 1400 a store service that cannot be
+  activated; 1401 a failed loop cycle with its back-off; 1402 a loop stopped on a configuration
+  fault; 1403 the stores the engine drains; 1010 (`Warning`) an endpoint's rows deferred, with the
+  endpoint, the count and the next attempt; 2200–2208 the inbox guard; 2300–2304 the local endpoint.
+  Events 1004 and 1009 keep their names and say why an endpoint is down; they no longer carry
+  `ReleasedCount`, and 1009 carries `Endpoint` instead of `MessageKind`.
+
+### Fixed
+
+- A host stop anywhere between scope creation and settlement releases every claimed row, outbox and
+  inbox, with its attempt count unchanged (#128).
+- A registered service whose constructor throws is reported as an activation failure (1400), with
+  back-off, never as "not registered"; a missing registration is rejected at start (#127).
+- A notification handler with a dependency that cannot be built no longer fails its siblings: each
+  is activated on its own.
+- A broker provider's `IMessageTransport` now sends a store's transport rows: every store registers
+  the transport dispatcher, which a provider had no public way to register. With no transport at
+  all, a transport row is deferred (event 1009, naming the call to add) instead of stopping the
+  store's loop.
+- An endpoint that is down never holds back the other. When a store's transport rows cannot be sent
+  (no transport, or the broker unreachable), they are deferred to the end of the transport's own
+  back-off — `Outbox.PollingInterval` doubling up to `Outbox.TransportUnavailableBackoff`, cleared by
+  the first row sent — with no retry counted; while it runs the claim leaves the endpoint's rows out,
+  so the local rows are delivered at the normal cadence however many transport rows are waiting, and
+  the waiting rows are not rewritten. The reverse holds for a local consumer's dependency outage. A
+  down broker is tried once per back-off period, not once per cycle. SPI for store providers:
+  `OutboxOutcomeKind.Deferred` and `OutboxOutcome.Deferred(messageId, nextAttemptAtUtc)` — settle it
+  as `Pending` at that next attempt, leaving the retry count and the error text alone — and
+  `IOutboxProcessorStore.ClaimBatchAsync(batchSize, lockDuration, OutboxEndpoints excluded, ct)`,
+  whose default implementation ignores the filter (correct, but every claim then carries the down
+  endpoint's rows).
+
+### Migration
+
+Hosts own their migrations (none ships). With EF Core, `dotnet ef migrations add` after upgrading
+produces the column changes; **edit it before applying it**, so the rows still pending are routed,
+not dead-lettered — a pending domain-event row with no `Endpoint` is read as a transport row:
+
+```sql
+-- OutboxMessages
+ALTER TABLE "OutboxMessages" ADD "Endpoint" character varying(64) NULL;
+UPDATE "OutboxMessages" SET "Endpoint" = 'local' WHERE "MessageKind" = 'Notification';
+ALTER TABLE "OutboxMessages" DROP COLUMN "MessageKind";
+DROP INDEX "UX_OutboxMessages_Origin_ContractName";
+ALTER TABLE "OutboxMessages" DROP COLUMN "OriginMessageId";
+ALTER TABLE "OutboxMessages" ADD "Headers" text NULL;      -- the publication's own headers, JSON
+CREATE INDEX "IX_OutboxMessages_Endpoint_Dispatchable"   -- the claim that leaves a down endpoint out
+    ON "OutboxMessages" ("Status", "Endpoint", "CreatedAtUtc");
+
+-- InboxMessages
+ALTER TABLE "InboxMessages" ADD "Source" text NULL;        -- what a retry rebuilds its context from
+ALTER TABLE "InboxMessages" ADD "Headers" text NULL;
+```
+
+The statements are PostgreSQL's; the names are the mapped table, column and index names. The order
+of the first three matters: set `Endpoint` before `MessageKind` is dropped. In code: replace each
+`IIntegrationEventPublisher.PublishAsync` with `IMessageBus.PublishAsync` — and drop the transaction
+it required: the caller's `SaveChanges` is enough — `AddEfCoreOutbox<TContext>()` with
+`bus.UseEntityFrameworkOutbox<TContext>()`, and `AddMediatRDomainEvents()` with
+`bus.UseMediatRDomainEvents()`.
+
 ## [Unreleased] — one configuration entry point, handler discovery and validated options (#187)
 
 ### Breaking
