@@ -28,6 +28,18 @@ the outbox **and** the inbox of one `DbContext`, configured on the bus, and a ho
   `DomainEventsCascadeNotificationPublisher`, `OutboxMessage.OriginMessageId`.**
   `OutboxMessage.MessageKind` is replaced by `OutboxMessage.Endpoint` (`null` for the transport,
   `"local"` for the local endpoint). `IOutboxDispatcher` is internal.
+- **Store providers: `IOutboxProcessorStore.ClaimBatchAsync(batchSize, lockDuration, OutboxEndpoints
+  excluded, ct)`** is the one claim signature, with no default implementation: a store must leave out
+  the rows of the excluded endpoints — those in back-off — or a broker outage starves the local rows
+  again. Filter on `OutboxMessage.Endpoint` with an index led by the status, then the endpoint (the EF
+  store's `IX_OutboxMessages_Endpoint_Dispatchable`). A store must also settle the new
+  `OutboxOutcomeKind.Deferred` (`OutboxOutcome.Deferred(messageId, nextAttemptAtUtc)`): `Pending` at
+  that next attempt, the retry count and the error text left alone.
+- **Log events.** 1004 and 1009 no longer carry `ReleasedCount` — an endpoint outage releases
+  nothing any more — and 1009 carries `Endpoint` instead of `MessageKind`. Both keep their event
+  names and now say why an endpoint is down; what it defers is the new 1010 (`Warning`: the
+  endpoint, the count, the earliest and the latest next attempt). An alert on 1004/1009 grouping by
+  `ReleasedCount` or `MessageKind` needs the new properties.
 - **`MicroKit.Messaging.MediatR` no longer replaces MediatR's `INotificationPublisher`**, and no
   longer has access to `MicroKit.Messaging`'s internals: it is built on the public SPI.
 
@@ -65,10 +77,8 @@ the outbox **and** the inbox of one `DbContext`, configured on the bus, and a ho
 - **Events:** 4000 (`Error`) an enlisted row its scope never saved — lost, and never silent; 4001
   (`Debug`) an enlisted row discarded with the change tracker; 1400 a store service that cannot be
   activated; 1401 a failed loop cycle with its back-off; 1402 a loop stopped on a configuration
-  fault; 1403 the stores the engine drains; 1010 (`Warning`) an endpoint's rows deferred, with the
-  endpoint, the count and the next attempt; 2200–2208 the inbox guard; 2300–2304 the local endpoint.
-  Events 1004 and 1009 keep their names and say why an endpoint is down; they no longer carry
-  `ReleasedCount`, and 1009 carries `Endpoint` instead of `MessageKind`.
+  fault; 1403 the stores the engine drains; 2200–2208 the inbox guard; 2300–2304 the local endpoint.
+  1010 and the 1004/1009 changes are under *Breaking*.
 
 ### Fixed
 
@@ -88,12 +98,8 @@ the outbox **and** the inbox of one `DbContext`, configured on the bus, and a ho
   the first row sent — with no retry counted; while it runs the claim leaves the endpoint's rows out,
   so the local rows are delivered at the normal cadence however many transport rows are waiting, and
   the waiting rows are not rewritten. The reverse holds for a local consumer's dependency outage. A
-  down broker is tried once per back-off period, not once per cycle. SPI for store providers:
-  `OutboxOutcomeKind.Deferred` and `OutboxOutcome.Deferred(messageId, nextAttemptAtUtc)` — settle it
-  as `Pending` at that next attempt, leaving the retry count and the error text alone — and
-  `IOutboxProcessorStore.ClaimBatchAsync(batchSize, lockDuration, OutboxEndpoints excluded, ct)`,
-  whose default implementation ignores the filter (correct, but every claim then carries the down
-  endpoint's rows).
+  down broker is tried once per back-off period, not once per cycle. What a store provider must do
+  for it is under *Breaking*.
 
 ### Migration
 

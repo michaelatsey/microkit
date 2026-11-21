@@ -7,7 +7,7 @@ namespace MicroKit.Messaging.Spi;
 /// </summary>
 /// <remarks>
 /// Part of the SPI (<c>MicroKit.Messaging.Spi</c>). The processor passes the endpoints in back-off to
-/// <see cref="IOutboxProcessorStore.ClaimBatchAsync(int, TimeSpan, OutboxEndpoints, CancellationToken)"/>,
+/// <see cref="IOutboxProcessorStore.ClaimBatchAsync"/>,
 /// so a down endpoint's rows are not claimed while it is down and the other endpoint's rows are
 /// (#188).
 /// </remarks>

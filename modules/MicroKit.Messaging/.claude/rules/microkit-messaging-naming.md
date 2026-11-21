@@ -61,7 +61,7 @@ internal, or does not exist. Adding a public type means editing that list on pur
 | `MessageStoreBuilder` | `Key`, `Services`, `BindAssembly(Assembly)`, `AddStartupCheck(...)` |
 | `MessageStoreRegistrationExtensions` | `AddMessageStore(this MessagingBuilder, MessageStoreKey, Action<MessageStoreBuilder>)` — how any store provider adds a store; the first call registers the engine and both outbox dispatchers |
 | `IOutboxWriter` | `AddAsync`, `AddBatchAsync`. Enlists rows in the scope's unit of work; never saves |
-| `IOutboxProcessorStore` | `ClaimBatchAsync(batchSize, lockDuration, ct)` → `OutboxClaim`, and the overload with `OutboxEndpoints excluded` (rows of an endpoint in back-off left out; the default ignores it); `ApplyOutcomesAsync(claimToken, outcomes, ct)` → rows written |
+| `IOutboxProcessorStore` | `ClaimBatchAsync(batchSize, lockDuration, OutboxEndpoints excluded, ct)` → `OutboxClaim`, one signature, no default: the rows of an endpoint in back-off must be left out; `ApplyOutcomesAsync(claimToken, outcomes, ct)` → rows written, every `OutboxOutcomeKind` settled |
 | `OutboxEndpoints` | `[Flags]` `None`, `Transport`, `Local` — the endpoints a claim leaves out |
 | `IOutboxAdminStore` / `IOutboxRetentionStore` | `GetDeadLetteredAsync`, `RequeueAsync` / `DeleteProcessedAsync` |
 | `IInboxGuardStore` | `FindAsync`, `ExecuteAsync` (the store's execution strategy, with commit verification), `BeginAsync`, `EnlistProcessedAsync` (new delivery), `MarkClaimedProcessedAsync` (retry), `CommitAsync`, `IsLeaseLost`, `TryInsertFailedAsync`. Scoped, keyed by the store key, one instance per attempt scope |

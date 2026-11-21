@@ -126,11 +126,6 @@ internal sealed class EfOutboxStore<TContext>(
     // ---------- IOutboxProcessorStore ----------
 
     /// <inheritdoc/>
-    public ValueTask<OutboxClaim> ClaimBatchAsync(
-        int batchSize, TimeSpan lockDuration, CancellationToken ct = default)
-        => ClaimBatchAsync(batchSize, lockDuration, OutboxEndpoints.None, ct);
-
-    /// <inheritdoc/>
     public async ValueTask<OutboxClaim> ClaimBatchAsync(
         int batchSize, TimeSpan lockDuration, OutboxEndpoints excluded, CancellationToken ct = default)
     {

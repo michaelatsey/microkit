@@ -270,9 +270,9 @@ public sealed class OutboxLoopTests
     }
 
     /// <summary>
-    /// A full batch of rows handed over while their endpoint is in back-off — a store whose claim
-    /// ignores the endpoint filter — waits the polling interval rather than rewriting the down
-    /// endpoint's backlog back to back.
+    /// A full batch of rows handed over while their endpoint is in back-off — a store that does not
+    /// honour the claim's endpoint filter, against its contract — waits the polling interval rather
+    /// than rewriting the down endpoint's backlog back to back.
     /// </summary>
     [Fact]
     public void NextDelay_WhenAFullBatchCarriedRowsHandedOverInBackOff_WaitsThePollingInterval()
@@ -287,7 +287,7 @@ public sealed class OutboxLoopTests
         handedOver.IsSaturated(CadenceOptions.BatchSize).ShouldBeTrue();
         sut.NextDelay(handedOver, TimeSpan.Zero).ShouldBe(CadenceOptions.PollingInterval);
         sut.NextDelay(mixed, TimeSpan.Zero).ShouldBe(CadenceOptions.PollingInterval,
-            "one delivered row must not send a filterless store round the down endpoint's backlog at once");
+            "one delivered row must not send a store that breaks the filter contract round the down endpoint's backlog at once");
     }
 
     [Fact]

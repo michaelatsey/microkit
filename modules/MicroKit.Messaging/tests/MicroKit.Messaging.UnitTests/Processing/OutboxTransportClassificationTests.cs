@@ -303,7 +303,7 @@ public sealed class OutboxTransportClassificationTests
         var captured = new List<OutboxOutcome>();
         var store = Substitute.For<IOutboxProcessorStore>();
 
-        store.ClaimBatchAsync(Arg.Any<int>(), Arg.Any<TimeSpan>(), Arg.Any<CancellationToken>())
+        store.ClaimBatchAsync(Arg.Any<int>(), Arg.Any<TimeSpan>(), Arg.Any<OutboxEndpoints>(), Arg.Any<CancellationToken>())
             .Returns(ValueTask.FromResult(claim));
 
         store.ApplyOutcomesAsync(

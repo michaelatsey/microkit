@@ -2100,8 +2100,9 @@ per-handler inbox, so a replay re-ran every handler, and cascade events were sta
    reported as such, never as "not registered". Within a store's outbox, **each endpoint has its own
    back-off**: a row whose endpoint is down — its transport unreachable or absent, a local consumer's
    dependency out — is deferred to the end of that back-off with no attempt counted, and the claim
-   leaves the endpoint's rows out while it runs (`IOutboxProcessorStore.ClaimBatchAsync` with
-   `OutboxEndpoints`), so the other endpoint's rows keep flowing, the down endpoint's are not
+   leaves the endpoint's rows out while it runs (`IOutboxProcessorStore.ClaimBatchAsync` takes
+   `OutboxEndpoints excluded` in its one signature, with no default implementation: a store that
+   ignored it would starve the local rows during a broker outage), so the other endpoint's rows keep flowing, the down endpoint's are not
    rewritten, and it is tried once per back-off period. Deferral has its own event, 1010, as
    ADR-MSG-019 required; 1004 and 1009 keep their event names and say why the endpoint is down. They
    lose `ReleasedCount` — an endpoint outage releases nothing any more (cancellation, a host stop and

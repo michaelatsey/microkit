@@ -32,11 +32,11 @@ internal readonly record struct OutboxBatchResult(
 {
     /// <summary>
     /// Gets a value indicating whether the store handed over rows of an endpoint the claim asked it to
-    /// leave out — a store whose claim ignores the endpoint filter — whatever endpoint verdict
-    /// <see cref="AbortReason"/> holds (cancellation aside): the loop waits rather than polling again at
-    /// once. A back-off that began within the batch does not set it: the rows it deferred wait out
-    /// their next attempt, and a filterless store's next batch sets it if it comes within the back-off
-    /// (after a saturated batch, which polls again at once).
+    /// leave out — a store that does not honour the claim's endpoint filter, against its contract —
+    /// whatever endpoint verdict <see cref="AbortReason"/> holds (cancellation aside): the loop waits
+    /// rather than polling again at once. A back-off that began within the batch does not set it:
+    /// the rows it deferred wait out their next attempt, and such a store's next batch sets it if it
+    /// comes within the back-off (after a saturated batch, which polls again at once).
     /// </summary>
     public bool HandedOverInBackOff { get; init; }
 

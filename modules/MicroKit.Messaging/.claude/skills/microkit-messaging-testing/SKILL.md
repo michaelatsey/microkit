@@ -89,7 +89,7 @@ strategy or an EF configuration.** SQLite cannot reproduce a blocked `UPDATE` re
 ```csharp
 // ✅ A seam with a canned answer → NSubstitute.
 var store = Substitute.For<IOutboxProcessorStore>();
-store.ClaimBatchAsync(Arg.Any<int>(), Arg.Any<TimeSpan>(), Arg.Any<CancellationToken>())
+store.ClaimBatchAsync(Arg.Any<int>(), Arg.Any<TimeSpan>(), Arg.Any<OutboxEndpoints>(), Arg.Any<CancellationToken>())
      .Returns(new OutboxClaim(Guid.NewGuid(), [message]));
 
 // ✅ The processor over a keyed dispatcher, a fixed clock and a fixed jitter draw

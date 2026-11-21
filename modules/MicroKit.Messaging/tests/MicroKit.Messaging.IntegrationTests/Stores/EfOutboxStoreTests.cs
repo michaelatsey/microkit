@@ -188,7 +188,7 @@ public sealed class EfOutboxStoreTests
             ctx.OutboxMessages.AddRange(pending, BuildOutboxMessage(OutboxMessageStatus.Published));
             await ctx.SaveChangesAsync();
 
-            var claim = await Store(ctx).ClaimBatchAsync(10, Lease);
+            var claim = await Store(ctx).ClaimBatchAsync(10, Lease, OutboxEndpoints.None);
 
             claim.Count.ShouldBe(1);
             claim.Messages[0].Id.ShouldBe(pending.Id);
@@ -209,7 +209,7 @@ public sealed class EfOutboxStoreTests
             ctx.OutboxMessages.Add(stale);
             await ctx.SaveChangesAsync();
 
-            var claim = await Store(ctx).ClaimBatchAsync(10, Lease);
+            var claim = await Store(ctx).ClaimBatchAsync(10, Lease, OutboxEndpoints.None);
 
             claim.Count.ShouldBe(1);
             claim.Messages[0].ClaimToken.ShouldBe(claim.Token, "the new owner's token replaces the dead one");
@@ -227,7 +227,7 @@ public sealed class EfOutboxStoreTests
                 OutboxMessageStatus.Processing, lockedUntilUtc: Now.AddMinutes(5)));
             await ctx.SaveChangesAsync();
 
-            (await Store(ctx).ClaimBatchAsync(10, Lease)).Count.ShouldBe(0);
+            (await Store(ctx).ClaimBatchAsync(10, Lease, OutboxEndpoints.None)).Count.ShouldBe(0);
         });
 
     [Fact]
@@ -241,7 +241,7 @@ public sealed class EfOutboxStoreTests
             ctx.OutboxMessages.Add(BuildOutboxMessage(nextRetryAtUtc: Now.AddMinutes(5)));
             await ctx.SaveChangesAsync();
 
-            (await Store(ctx).ClaimBatchAsync(10, Lease)).Count.ShouldBe(0);
+            (await Store(ctx).ClaimBatchAsync(10, Lease, OutboxEndpoints.None)).Count.ShouldBe(0);
         });
 
     [Fact]
@@ -255,7 +255,7 @@ public sealed class EfOutboxStoreTests
             ctx.OutboxMessages.Add(BuildOutboxMessage(OutboxMessageStatus.Failed, deadLettered: true));
             await ctx.SaveChangesAsync();
 
-            (await Store(ctx).ClaimBatchAsync(10, Lease)).Count.ShouldBe(0);
+            (await Store(ctx).ClaimBatchAsync(10, Lease, OutboxEndpoints.None)).Count.ShouldBe(0);
         });
 
     [Fact]
@@ -266,7 +266,7 @@ public sealed class EfOutboxStoreTests
             await using var _ = conn;
             await using var __ = ctx;
 
-            var claim = await Store(ctx).ClaimBatchAsync(10, Lease);
+            var claim = await Store(ctx).ClaimBatchAsync(10, Lease, OutboxEndpoints.None);
 
             claim.Count.ShouldBe(0);
             claim.Token.ShouldBe(Guid.Empty);
@@ -287,7 +287,7 @@ public sealed class EfOutboxStoreTests
             ctx.OutboxMessages.AddRange(BuildOutboxMessage(), BuildOutboxMessage(), BuildOutboxMessage());
             await ctx.SaveChangesAsync();
 
-            var claim = await Store(ctx).ClaimBatchAsync(10, Lease);
+            var claim = await Store(ctx).ClaimBatchAsync(10, Lease, OutboxEndpoints.None);
 
             claim.Count.ShouldBe(3);
             claim.Token.ShouldNotBe(Guid.Empty);
@@ -341,7 +341,7 @@ public sealed class EfOutboxStoreTests
             ctx.OutboxMessages.AddRange(stagedThird, stagedFirst, stagedSecond);
             await ctx.SaveChangesAsync();
 
-            var claim = await Store(ctx).ClaimBatchAsync(2, Lease);
+            var claim = await Store(ctx).ClaimBatchAsync(2, Lease, OutboxEndpoints.None);
 
             claim.Count.ShouldBe(2);
             claim.Messages.Select(m => m.Id).ShouldBe(
@@ -404,7 +404,7 @@ public sealed class EfOutboxStoreTests
 
             // Not wrapped in Should.NotThrowAsync: an InvalidOperationException from Sort()
             // escaping here fails the test just as loudly, and keeps the claim value usable.
-            var claim = await Store(ctx).ClaimBatchAsync(25, Lease);
+            var claim = await Store(ctx).ClaimBatchAsync(25, Lease, OutboxEndpoints.None);
 
             claim.Count.ShouldBe(25);
         });
@@ -426,8 +426,8 @@ public sealed class EfOutboxStoreTests
 
             await using var ctxB = SecondContext(conn);
 
-            var claimA = await Store(ctx).ClaimBatchAsync(10, Lease);
-            var claimB = await Store(ctxB).ClaimBatchAsync(10, Lease);
+            var claimA = await Store(ctx).ClaimBatchAsync(10, Lease, OutboxEndpoints.None);
+            var claimB = await Store(ctxB).ClaimBatchAsync(10, Lease, OutboxEndpoints.None);
 
             var idsA = claimA.Messages.Select(m => m.Id).ToHashSet();
             var idsB = claimB.Messages.Select(m => m.Id).ToHashSet();
@@ -453,7 +453,7 @@ public sealed class EfOutboxStoreTests
             await ctx.SaveChangesAsync();
 
             var store = Store(ctx);
-            var claim = await store.ClaimBatchAsync(10, Lease);
+            var claim = await store.ClaimBatchAsync(10, Lease, OutboxEndpoints.None);
             var written = await store.ApplyOutcomesAsync(
                 claim.Token, [OutboxOutcome.Published(claim.Messages[0].Id)]);
 
@@ -479,7 +479,7 @@ public sealed class EfOutboxStoreTests
             await ctx.SaveChangesAsync();
 
             var store = Store(ctx);
-            var claim = await store.ClaimBatchAsync(10, Lease);
+            var claim = await store.ClaimBatchAsync(10, Lease, OutboxEndpoints.None);
             await store.ApplyOutcomesAsync(claim.Token, [OutboxOutcome.Released(claim.Messages[0].Id)]);
 
             await using var probe = SecondContext(conn);
@@ -544,7 +544,7 @@ public sealed class EfOutboxStoreTests
             await ctx.SaveChangesAsync();
 
             var store = Store(ctx);
-            var claim = await store.ClaimBatchAsync(10, Lease);
+            var claim = await store.ClaimBatchAsync(10, Lease, OutboxEndpoints.None);
             var transportUntil = Now.AddSeconds(5);
             var localUntil = Now.AddSeconds(10);
             var written = await store.ApplyOutcomesAsync(claim.Token,
@@ -563,7 +563,7 @@ public sealed class EfOutboxStoreTests
             rows[claim.Messages[0].Id].NextRetryAtUtc.ShouldBe(transportUntil);
             rows[claim.Messages[1].Id].NextRetryAtUtc.ShouldBe(transportUntil);
             rows[claim.Messages[2].Id].NextRetryAtUtc.ShouldBe(localUntil, "each next attempt is its own");
-            (await store.ClaimBatchAsync(10, Lease)).Messages.ShouldBeEmpty("a deferred row is not claimable before its next attempt");
+            (await store.ClaimBatchAsync(10, Lease, OutboxEndpoints.None)).Messages.ShouldBeEmpty("a deferred row is not claimable before its next attempt");
         });
 
     [Fact]
@@ -578,7 +578,7 @@ public sealed class EfOutboxStoreTests
             await ctx.SaveChangesAsync();
 
             var store = Store(ctx);
-            var claim = await store.ClaimBatchAsync(10, Lease);
+            var claim = await store.ClaimBatchAsync(10, Lease, OutboxEndpoints.None);
             var id = claim.Messages[0].Id;
             var written = await store.ApplyOutcomesAsync(
                 claim.Token, [new OutboxOutcome(id, OutboxOutcomeKind.Deferred, 0, null, null)]);
@@ -603,7 +603,7 @@ public sealed class EfOutboxStoreTests
             await ctx.SaveChangesAsync();
 
             var store = Store(ctx);
-            var claim = await store.ClaimBatchAsync(10, Lease);
+            var claim = await store.ClaimBatchAsync(10, Lease, OutboxEndpoints.None);
             var nextAttempt = Now.AddSeconds(4);
 
             await store.ApplyOutcomesAsync(
@@ -632,7 +632,7 @@ public sealed class EfOutboxStoreTests
             await ctx.SaveChangesAsync();
 
             var store = Store(ctx);
-            var claim = await store.ClaimBatchAsync(10, Lease);
+            var claim = await store.ClaimBatchAsync(10, Lease, OutboxEndpoints.None);
 
             await store.ApplyOutcomesAsync(
                 claim.Token, [OutboxOutcome.DeadLetter(claim.Messages[0].Id, 5, "max retries exceeded")]);
@@ -663,7 +663,7 @@ public sealed class EfOutboxStoreTests
             await ctx.SaveChangesAsync();
 
             var store = Store(ctx);
-            var claim = await store.ClaimBatchAsync(10, Lease);
+            var claim = await store.ClaimBatchAsync(10, Lease, OutboxEndpoints.None);
             var ids = claim.Messages.Select(m => m.Id).ToList();
 
             var written = await store.ApplyOutcomesAsync(claim.Token,
@@ -704,13 +704,13 @@ public sealed class EfOutboxStoreTests
             await ctx.SaveChangesAsync();
 
             var storeA = Store(ctx);
-            var staleClaim = await storeA.ClaimBatchAsync(10, Lease);
+            var staleClaim = await storeA.ClaimBatchAsync(10, Lease, OutboxEndpoints.None);
             var messageId = staleClaim.Messages[0].Id;
 
             // The lease expires and processor B takes the message over.
             await using var ctxB = SecondContext(conn);
             var storeB = Store(ctxB, Now.Add(Lease).AddMinutes(1));
-            var freshClaim = await storeB.ClaimBatchAsync(10, Lease);
+            var freshClaim = await storeB.ClaimBatchAsync(10, Lease, OutboxEndpoints.None);
             freshClaim.Count.ShouldBe(1, "the expired lease must be re-claimable");
             freshClaim.Token.ShouldNotBe(staleClaim.Token);
 
@@ -739,11 +739,11 @@ public sealed class EfOutboxStoreTests
             await ctx.SaveChangesAsync();
 
             var storeA = Store(ctx);
-            var staleClaim = await storeA.ClaimBatchAsync(10, Lease);
+            var staleClaim = await storeA.ClaimBatchAsync(10, Lease, OutboxEndpoints.None);
             var messageId = staleClaim.Messages[0].Id;
 
             await using var ctxB = SecondContext(conn);
-            await Store(ctxB, Now.Add(Lease).AddMinutes(1)).ClaimBatchAsync(10, Lease);
+            await Store(ctxB, Now.Add(Lease).AddMinutes(1)).ClaimBatchAsync(10, Lease, OutboxEndpoints.None);
 
             var written = await storeA.ApplyOutcomesAsync(staleClaim.Token,
             [
@@ -770,7 +770,7 @@ public sealed class EfOutboxStoreTests
             await ctx.SaveChangesAsync();
 
             var store = Store(ctx);
-            var claim = await store.ClaimBatchAsync(10, Lease);
+            var claim = await store.ClaimBatchAsync(10, Lease, OutboxEndpoints.None);
             var ids = claim.Messages.Select(m => m.Id).ToList();
 
             // One of the two is stolen back before settlement.

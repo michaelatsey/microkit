@@ -141,8 +141,6 @@ public sealed class MessagingBuilderTransportTests
         var key = new MessageStoreKey("tests:backoff");
         var row = OutboxFixtures.ContractMessage();
         var store = Substitute.For<IOutboxProcessorStore>();
-        store.ClaimBatchAsync(Arg.Any<int>(), Arg.Any<TimeSpan>(), Arg.Any<CancellationToken>())
-            .Returns(_ => ValueTask.FromResult(OutboxFixtures.Claim(row)));
         store.ClaimBatchAsync(Arg.Any<int>(), Arg.Any<TimeSpan>(), Arg.Any<OutboxEndpoints>(), Arg.Any<CancellationToken>())
             .Returns(_ => ValueTask.FromResult(OutboxFixtures.Claim(row)));
         var logs = new CapturingLogger<OutboxProcessor>();

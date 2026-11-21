@@ -31,7 +31,10 @@ public sealed class SettlementStrategyTests(PostgreSqlFixture fixture)
         await using var db = await NewDatabase();
         var transport = new CountingTransport();
         var logs = new CapturingLoggerProvider();
-        using var host = BuildHost(db, transport, logs);
+        // The host's clock is driven: "after the lease" is a step of this clock, not a wall-clock wait
+        // that a backward step of the wall clock could cut short.
+        var clock = new FakeTimeProvider(DateTimeOffset.UtcNow);
+        using var host = BuildHost(db, transport, logs, clock);
 
         var sent = new SettleEvent(Guid.NewGuid());
         var failing = new SettleEvent(Guid.NewGuid());
@@ -59,7 +62,11 @@ public sealed class SettlementStrategyTests(PostgreSqlFixture fixture)
         deadLettered.RetryCount.ShouldBe(1, "the failed attempt is counted");
         deadLettered.ClaimToken.ShouldBeNull();
 
-        await Task.Delay(Lease * 2);
+        published.LockedUntilUtc.ShouldBeNull("settled: no lease left");
+        deadLettered.LockedUntilUtc.ShouldBeNull("settled: no lease left");
+
+        // Past every lease the first batch stamped, by the host's own clock.
+        clock.Advance(Lease + TimeSpan.FromSeconds(1));
         var second = await ProcessOnceAsync(host);
 
         second.Claimed.ShouldBe(0, "a settled row is never claimed again");
@@ -81,7 +88,7 @@ public sealed class SettlementStrategyTests(PostgreSqlFixture fixture)
         var faults = new CommitFaultInjector();
         await using var context = RetryingContext(db, faults);
         var store = new EfOutboxStore<TestMessagingDbContext>(context, new FakeTimeProvider(Now));
-        var claim = await store.ClaimBatchAsync(10, TimeSpan.FromMinutes(5));
+        var claim = await store.ClaimBatchAsync(10, TimeSpan.FromMinutes(5), OutboxEndpoints.None);
         claim.Messages.Count.ShouldBe(2);
 
         faults.Arm(CommitFaultPoint.AfterCommit);
@@ -104,7 +111,7 @@ public sealed class SettlementStrategyTests(PostgreSqlFixture fixture)
         var faults = new CommitFaultInjector();
         await using var context = RetryingContext(db, faults);
         var store = new EfOutboxStore<TestMessagingDbContext>(context, new FakeTimeProvider(Now));
-        var claim = await store.ClaimBatchAsync(10, TimeSpan.FromMinutes(5));
+        var claim = await store.ClaimBatchAsync(10, TimeSpan.FromMinutes(5), OutboxEndpoints.None);
 
         faults.Arm(CommitFaultPoint.BeforeCommit, times: 10);
         await Should.ThrowAsync<InjectedCommitFaultException>(
@@ -218,9 +225,10 @@ public sealed class SettlementStrategyTests(PostgreSqlFixture fixture)
             .ProcessBatchAsync(10);
     }
 
-    private static IHost BuildHost(StoreDatabase db, CountingTransport transport, CapturingLoggerProvider logs)
+    private static IHost BuildHost(StoreDatabase db, CountingTransport transport, CapturingLoggerProvider logs, TimeProvider clock)
     {
         var builder = Host.CreateApplicationBuilder(new HostApplicationBuilderSettings { DisableDefaults = true });
+        builder.Services.AddSingleton(clock);
         builder.Logging.SetMinimumLevel(LogLevel.Debug).AddProvider(logs);
         builder.Services.AddDbContext<TestMessagingDbContext>(o => o
             .UseNpgsql(db.ConnectionString, npgsql => npgsql.EnableRetryOnFailure()));

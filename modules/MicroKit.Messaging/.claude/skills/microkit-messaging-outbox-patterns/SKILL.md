@@ -307,7 +307,8 @@ No outage arm on the outbox: a down endpoint's rows are deferred by the processo
 endpoint's own back-off, and while it runs the claim leaves the endpoint's rows out
 (`ClaimBatchAsync(…, OutboxEndpoints excluded, …)`), so the other endpoint keeps this cadence and the
 waiting rows are not rewritten. A batch carrying rows handed over in back-off (`HandedOverInBackOff`,
-a store that ignores the filter) waits `PollingInterval`, whatever its abort reason and even if it
+a store breaking the claim's contract by not honouring the filter) waits `PollingInterval`, whatever
+its endpoint verdict and even if it
 delivered something.
 
 Grow = double from `PollingInterval`, capped.

@@ -219,8 +219,10 @@ with the first store); any other value → `OutboxPayloadException`.
   the base delay. While it runs, the processor passes the endpoint to the claim
   (`ClaimBatchAsync(…, OutboxEndpoints excluded, …)`) and the store leaves its rows out: they are
   neither claimed nor rewritten, a down broker is tried once per back-off period, and however many
-  rows wait for it, the other endpoint's are claimed and delivered. Rows of the excluded endpoint a
-  store hands over anyway (the interface's default ignores the filter) are deferred unattempted.
+  rows wait for it, the other endpoint's are claimed and delivered. The filter is part of the claim's
+  contract — one signature, no default implementation. Rows a store hands over whose endpoint is
+  in back-off are deferred unattempted: those of an endpoint the claim excluded (a store breaking the
+  contract — this alone sets `HandedOverInBackOff`), and those of a back-off begun after the claim.
   Events: 1004 / 1009 why the endpoint is down, 1010 what is deferred and until when.
 - **Known defect (#124).** Activation runs in the row's scope, built from its `TenantId`, so an
   `InvalidOperationException` can be tenant-scoped. One that never clears fails each time the
@@ -529,14 +531,15 @@ down backs off alone**.
 Grow = double, starting from `PollingInterval`, capped. The outbox has no outage arm: a down endpoint
 backs off on its own rows (above), so a batch that hit one is sized like any other — a full one
 cannot re-claim the rows it deferred. One exception, before saturation: a batch carrying rows handed
-over in back-off (`OutboxBatchResult.HandedOverInBackOff` — a store whose claim ignores the endpoint
-filter) waits `PollingInterval`, whatever its endpoint verdict (cancellation aside) and even if it
-delivered something, or it would rewrite the down endpoint's backlog back to back. Such a store still
-pays a rewrite of the down endpoint's backlog each back-off period, and holds the other endpoint to
-one batch per `PollingInterval` while it keeps handing that backlog over: a store should filter. A
-back-off that began within the batch sets no flag: its deferred rows wait out their next attempt, a
-filtering store leaves the endpoint out of the next claim, and a filterless one's next batch sets the
-flag if it comes within the back-off (after a saturated batch). The EF store filters with `IX_OutboxMessages_Endpoint_Dispatchable`
+over in back-off (`OutboxBatchResult.HandedOverInBackOff` — a store breaking the claim's contract by
+not honouring its endpoint filter) waits `PollingInterval`, whatever its endpoint verdict
+(cancellation aside) and even if it delivered something, or it would rewrite the down endpoint's
+backlog back to back. Such a store still pays a rewrite of the down endpoint's backlog each back-off
+period, and holds the other endpoint to one batch per `PollingInterval` while it keeps handing that
+backlog over: the filter is required. A back-off that began within the batch sets no flag: its
+deferred rows wait out their next attempt, a conforming store leaves the endpoint out of the next
+claim, and a non-conforming one's next batch sets the flag if it comes within the back-off (after a
+saturated batch). The EF store filters with `IX_OutboxMessages_Endpoint_Dispatchable`
 (`Status, Endpoint, CreatedAtUtc`), and the local exclusion is a `UNION ALL` of ranges around
 `'local'`: `<> 'local'` walks the local backlog (`EndpointExclusionPlanTests`, both directions,
 asserted on buffers). A processor that cannot be activated (1400) grows toward

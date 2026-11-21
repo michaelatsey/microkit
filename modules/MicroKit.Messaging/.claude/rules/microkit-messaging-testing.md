@@ -143,7 +143,19 @@ ExactlyOnceTests.TwoConcurrentDeliveries_BothPastTheRead_GiveOneEffect         �
 ExactlyOnceTests.AHostLostBetweenTheCommitAndTheDispatch_IsDrainedByAnother_AndEachEffectAppliesOnce
 ExactlyOnceTests.WithARetryingStrategy_AFaultBeforeTheCommit_IsReplayed_AndEveryEffectAppliesOnce
 ExactlyOnceTests.WithARetryingStrategy_AFaultAfterTheCommit_IsVerified_AndNothingIsReplayed
+ExactlyOnceTests.ARetryAbandonedWithItsClaim_IsRecoveredAfterTheLease_AndTheEffectAppliesOnce
+ExactlyOnceTests.ARetryAbandonedWithItsClaim_IsRecoveredAfterTheLease_WhenTheWallClockStepsBack   ← B's clock 5 s behind
+ExactlyOnceTests.ARetryAbandonedWithItsClaim_IsRecoveredAfterTheLease_WhenTheClockStepsBackBeforeTheClaim
 ```
+- A lease is wall-clock time, stamped from the system clock and compared with it. Wait for the
+  condition (the stamped lease past by the claimer's clock), never for a fixed multiple of the lease,
+  and keep deadlines on `Stopwatch`: WSL2 stepped this machine's clock back 402–619 ms every ~32 s,
+  which once failed the fixed-wait version of `…AndTheEffectAppliesOnce` under full-suite load;
+  `…WhenTheWallClockStepsBack` replays that step before B waits, `…BeforeTheClaim` between B's check
+  and its claim. B runs on a recording clock: an empty claim is retried only when the `now` that claim
+  read was not past A's lease, and anything else fails; the offset variant first proves the claim
+  reads B's clock, the step variant that the claim right after its step was empty. Their failure message carries the row's timeline, wall and
+  monotonic side by side.
 
 ### Outbox enlistment and stores (`IntegrationTests/Stores`, `UnitTests/Stores`, `IntegrationTests/PostgreSql`)
 ```
@@ -327,6 +339,8 @@ EndpointBindingTests.APublicationBeforeHostStart_ReachesTheHostsOwnHandlerOnceIt
 
 ## Architecture tests (`MicroKit.Messaging.ArchitectureTests`)
 
+- `StoreContractTests.IOutboxProcessorStore_HasOneClaim_TakingTheEndpointFilter_WithNoDefaultImplementation`
+  — a default that ignored the filter would let a store provider bring back local-row starvation.
 - `PublicSurfaceTests` — the full exported surface of all four assemblies, both directions (an
   unexpected type fails, a listed type that no longer exists fails). Uses
   `Assembly.GetExportedTypes()`, not NetArchTest, which breaks under coverlet instrumentation.

@@ -138,9 +138,9 @@ internal sealed class OutboxProcessor : IOutboxProcessor
         // An endpoint in back-off is left out of the claim (#188): its rows are neither claimed nor
         // rewritten while it is down, and the other endpoint's rows behind them are reached.
         var excluded = _endpointBackoff.BlockedAt(_timeProvider.GetUtcNow());
-        var claim = excluded is OutboxEndpoints.None
-            ? await _store.ClaimBatchAsync(batchSize, _options.LockDuration, cancellationToken).ConfigureAwait(false)
-            : await _store.ClaimBatchAsync(batchSize, _options.LockDuration, excluded, cancellationToken).ConfigureAwait(false);
+        var claim = await _store
+            .ClaimBatchAsync(batchSize, _options.LockDuration, excluded, cancellationToken)
+            .ConfigureAwait(false);
 
         if (claim.Count == 0)
         {
@@ -178,14 +178,15 @@ internal sealed class OutboxProcessor : IOutboxProcessor
             if (endpointKey is not null
                 && _endpointBackoff.IsBlocked(endpointKey, _timeProvider.GetUtcNow(), out var blockedUntil))
             {
-                // Handed over although its endpoint is in back-off: by a store whose claim ignores the
-                // filter, or a back-off that began after the claim.
+                // Handed over although its endpoint is in back-off: by a back-off that began after the
+                // claim, or by a store that does not honour the claim's endpoint filter.
                 abortReason = FirstOf(abortReason, OutboxBatchAbortReason.EndpointInBackOff);
 
                 // Only a row whose endpoint the claim was asked to leave out tells the loop to wait:
-                // a store that ignores the filter. A back-off that began in this batch does not: its
-                // deferred rows wait out their NextRetryAtUtc, a filtering store leaves the endpoint out
-                // of the next claim, and a filterless one hands over the rest of its backlog, which
+                // a store that does not honour the filter, against the claim's contract. A back-off
+                // that began in this batch does not: its deferred rows wait out their NextRetryAtUtc,
+                // a conforming store leaves the endpoint out of the next claim, and a store that does
+                // not honour the filter hands over the rest of its backlog, which
                 // sets the flag then if that batch comes within the back-off — at most one immediate
                 // batch more per back-off start.
                 handedOver |= (excluded & EndpointOf(endpointKey)) != 0;

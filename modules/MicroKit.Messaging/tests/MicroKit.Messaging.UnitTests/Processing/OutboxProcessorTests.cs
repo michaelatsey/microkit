@@ -545,7 +545,7 @@ public sealed class OutboxProcessorTests
     public async Task ProcessBatch_WhenClaimEmpty_DoesNotDispatchOrSettle()
     {
         var store = Substitute.For<IOutboxProcessorStore>();
-        store.ClaimBatchAsync(Arg.Any<int>(), Arg.Any<TimeSpan>(), Arg.Any<CancellationToken>())
+        store.ClaimBatchAsync(Arg.Any<int>(), Arg.Any<TimeSpan>(), Arg.Any<OutboxEndpoints>(), Arg.Any<CancellationToken>())
             .Returns(ValueTask.FromResult(OutboxClaim.Empty));
         var dispatcher = new ScriptedDispatcher();
 
@@ -596,7 +596,7 @@ public sealed class OutboxProcessorTests
     {
         // Leases expire on their own; taking the host down over a settlement fault would be worse.
         var store = Substitute.For<IOutboxProcessorStore>();
-        store.ClaimBatchAsync(Arg.Any<int>(), Arg.Any<TimeSpan>(), Arg.Any<CancellationToken>())
+        store.ClaimBatchAsync(Arg.Any<int>(), Arg.Any<TimeSpan>(), Arg.Any<OutboxEndpoints>(), Arg.Any<CancellationToken>())
             .Returns(ValueTask.FromResult(OutboxFixtures.Claim(OutboxFixtures.Message())));
         store.ApplyOutcomesAsync(Arg.Any<Guid>(), Arg.Any<IReadOnlyList<OutboxOutcome>>(), Arg.Any<CancellationToken>())
             .Returns(ValueTask.FromException<int>(new InvalidOperationException("db down")));
@@ -652,7 +652,7 @@ public sealed class OutboxProcessorTests
         var captured = new List<OutboxOutcome>();
         var store = Substitute.For<IOutboxProcessorStore>();
 
-        store.ClaimBatchAsync(Arg.Any<int>(), Arg.Any<TimeSpan>(), Arg.Any<CancellationToken>())
+        store.ClaimBatchAsync(Arg.Any<int>(), Arg.Any<TimeSpan>(), Arg.Any<OutboxEndpoints>(), Arg.Any<CancellationToken>())
             .Returns(ValueTask.FromResult(claim));
 
         store.ApplyOutcomesAsync(Arg.Any<Guid>(), Arg.Any<IReadOnlyList<OutboxOutcome>>(), Arg.Any<CancellationToken>())

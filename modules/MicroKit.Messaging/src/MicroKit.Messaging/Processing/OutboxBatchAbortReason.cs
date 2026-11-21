@@ -13,7 +13,8 @@ namespace MicroKit.Messaging.Processing;
 /// values a default arm rather than treat the switch as exhaustive, and should test
 /// <see cref="Cancelled"/> and <see cref="OutboxBatchResult.HandedOverInBackOff"/> before
 /// <see cref="OutboxBatchResult.IsSaturated"/>: a released row can be claimed at once, and a
-/// filterless store keeps handing over the down endpoint's backlog, a batch at a time.
+/// store that does not honour the claim's endpoint filter keeps handing over the down endpoint's
+/// backlog, a batch at a time.
 /// </remarks>
 internal enum OutboxBatchAbortReason
 {
@@ -61,8 +62,9 @@ internal enum OutboxBatchAbortReason
     DispatcherActivationFailed = 4,
 
     /// <summary>
-    /// Rows of an endpoint already in back-off were handed over — by a store whose claim ignores the
-    /// endpoint filter, or because the back-off began after the claim — and deferred unattempted.
+    /// Rows of an endpoint already in back-off were handed over — because the back-off began after the
+    /// claim, or by a store that does not honour the claim's endpoint filter — and deferred
+    /// unattempted.
     /// </summary>
     EndpointInBackOff = 5,
 }

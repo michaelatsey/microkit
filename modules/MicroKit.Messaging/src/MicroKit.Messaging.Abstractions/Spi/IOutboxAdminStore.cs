@@ -11,7 +11,7 @@ namespace MicroKit.Messaging.Spi;
 /// imports this namespace to call it.
 /// </para>
 /// Split out of <see cref="IOutboxProcessorStore"/> to enforce ISP: one class may implement both,
-/// but a DLQ console has no business seeing <see cref="IOutboxProcessorStore.ClaimBatchAsync(int, TimeSpan, CancellationToken)"/>.
+/// but a DLQ console has no business seeing <see cref="IOutboxProcessorStore.ClaimBatchAsync"/>.
 /// </remarks>
 public interface IOutboxAdminStore
 {

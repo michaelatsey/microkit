@@ -51,8 +51,8 @@ public sealed class EndpointIsolationTests
         var settled = rig.Settled;
         var store = Substitute.For<IOutboxProcessorStore>();
         rig.Store = store;
-        store.ClaimBatchAsync(Arg.Any<int>(), Arg.Any<TimeSpan>(), Arg.Any<CancellationToken>()).Returns(ValueTask.FromResult(claim));
-        // A store that ignores the filter: the processor still defers the excluded endpoint's rows.
+        // A store that does not honour the filter (against the contract): the processor still defers
+        // the excluded endpoint's rows.
         store.ClaimBatchAsync(Arg.Any<int>(), Arg.Any<TimeSpan>(), Arg.Any<OutboxEndpoints>(), Arg.Any<CancellationToken>())
             .Returns(ci =>
             {
@@ -175,7 +175,7 @@ public sealed class EndpointIsolationTests
 
         clock.Advance(options.PollingInterval);
         var retried = await CycleAsync();
-        retried.Excluded.ShouldBeEmpty("its back-off over, the claim includes it again");
+        retried.Excluded.ShouldBe([OutboxEndpoints.None], "its back-off over, the claim includes it again");
         retried.TransportActivations.ShouldBe(1, "its back-off over, it is tried again");
         var doubled = clock.GetUtcNow() + (options.PollingInterval * 2);
         retried.Settled.ShouldAllBe(o => o.NextRetryAtUtc == doubled, "the back-off doubled");
@@ -184,7 +184,8 @@ public sealed class EndpointIsolationTests
     [Fact]
     public async Task RowsOfAnEndpointInBackOff_HandedOverAnyway_AreDeferredAndReported()
     {
-        // A store whose claim ignores the endpoint filter (the interface's default) hands them over.
+        // A store that does not honour the claim's endpoint filter — against its contract — hands
+        // them over.
         var options = new OutboxProcessorOptions();
         var clock = new FakeTimeProvider(Now);
         var backoff = BackoffOf(options);
@@ -271,7 +272,7 @@ public sealed class EndpointIsolationTests
     public async Task RowsHandedOverInBackOff_AfterTheOtherEndpointFailedFirst_StillFlagTheBatch()
     {
         // The first verdict is the local endpoint's; the transport rows behind it were handed over in
-        // back-off by a store that ignores the filter. The flag, not the reason, tells the loop.
+        // back-off by a store that does not honour the filter. The flag, not the reason, tells the loop.
         var options = new OutboxProcessorOptions();
         var clock = new FakeTimeProvider(Now);
         var backoff = BackoffOf(options);
