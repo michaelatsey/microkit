@@ -97,14 +97,17 @@ the outbox **and** the inbox of one `DbContext`, configured on the bus, and a ho
   notification.
 - **One loop guard.** Every long-running loop — each store's outbox, inbox and retention loops, the
   local queue, the in-memory transport — ends only on a host stop: an `ObjectDisposedException` while
-  the host runs, or a logging provider that throws, is a failed cycle with its back-off, never the
-  end of the loop.
+  the host runs, a logging provider that throws, or a configuration fault (1402) is a failed cycle
+  with its back-off, never the end of the loop. A root container disposed while the host runs pauses
+  the in-memory loops as a dependency outage — requeued, nothing charged — never a busy loop that
+  dead-letters the queue; a handler's own disposed provider, the container healthy, stays a counted
+  failure that dead-letters at the limit.
 - **`MessageConsumerKey`** (`MicroKit.Messaging.Spi`): the version-free consumer key, for an
   integration package naming its own `LocalConsumer.ConsumerType`.
 - **Events:** 4000 (`Error`) an enlisted row its scope never saved — lost, and never silent; 4001
   (`Debug`) an enlisted row discarded with the change tracker; 1400 a store service that cannot be
-  activated; 1401 a failed loop cycle with its back-off; 1402 a loop stopped on a configuration
-  fault; 1403 the stores the engine drains; 2200–2209 the inbox guard (2209: a guard store that
+  activated; 1401 a failed loop cycle with its back-off; 1402 a configuration fault — the batch
+  released, the loop backed off, never ended; 1403 the stores the engine drains; 2200–2209 the inbox guard (2209: a guard store that
   reports itself unreachable — a dependency outage, nothing charged); 2300–2305 the local endpoint
   (2305: its loop failed outside any message); 2310 domain events a handler left undispatched on a
   host with no store; 3017 the in-memory transport's loop failed outside any envelope.
@@ -190,9 +193,14 @@ UPDATE "InboxMessages"
 
 The statements are PostgreSQL's; the names are the mapped table, column and index names. The two
 consumer-key statements give exactly the keys the code builds, and are run from this file by
-`ConsumerKeyMigrationTests`. Run them once no instance of the previous version consumes: during a
-rolling deployment an old instance still writes versioned keys, so run them again after the
-rollout — both are idempotent. The order of the first three matters: set `Endpoint` before `MessageKind` is dropped. In code: replace each
+`ConsumerKeyMigrationTests`.
+
+**Upgrade procedure: stop every instance, run the migration, start the new version.** A rolling
+deployment is not supported for this upgrade: the other schema changes already require it — `MessageKind`
+is dropped while an old instance still reads and writes it, and the new columns are read by the new
+version from its first batch. The consumer-key change adds nothing new to that procedure: once every
+instance is stopped, no old instance writes a versioned key after the `UPDATE`, and no new instance
+looks a row up under its new key before it. The order of the first three statements matters: set `Endpoint` before `MessageKind` is dropped. In code: replace each
 `IIntegrationEventPublisher.PublishAsync` with `IMessageBus.PublishAsync` — and drop the transaction
 it required: the caller's `SaveChanges` is enough — `AddEfCoreOutbox<TContext>()` with
 `bus.UseEntityFrameworkOutbox<TContext>()`, and `AddMediatRDomainEvents()` with

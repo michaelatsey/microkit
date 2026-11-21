@@ -147,6 +147,7 @@ ExactlyOnceTests.TwoConcurrentDeliveries_BothPastTheRead_GiveOneEffect         �
 ExactlyOnceTests.AHostLostBetweenTheCommitAndTheDispatch_IsDrainedByAnother_AndEachEffectAppliesOnce
 ExactlyOnceTests.WithARetryingStrategy_AFaultBeforeTheCommit_IsReplayed_AndEveryEffectAppliesOnce
 ExactlyOnceTests.WithARetryingStrategy_AFaultAfterTheCommit_IsVerified_AndNothingIsReplayed
+ExactlyOnceTests.WithARetryingStrategy_ATransientFaultOfTheVerificationRead_IsRetried_AndTheCommitStands   ← the strategy sees the raw fault
 ExactlyOnceTests.ARetryAbandonedWithItsClaim_IsRecoveredAfterTheLease_AndTheEffectAppliesOnce
 ExactlyOnceTests.ARetryAbandonedWithItsClaim_IsRecoveredAfterTheLease_WhenTheWallClockStepsBack   ← B's clock 5 s behind
 ExactlyOnceTests.ARetryAbandonedWithItsClaim_IsRecoveredAfterTheLease_WhenTheClockStepsBackBeforeTheClaim
@@ -169,7 +170,8 @@ OutboxEnlistmentTests.AnEnlistedRowItsScopeNeverSaved_IsReportedAsLost          
 OutboxEnlistmentTests.AnEnlistedRowDiscardedWithTheTracker_IsReportedAtDebugOnly             (event 4001)
 OutboxEnlistmentTests.AnEnlistedRowUnsavedInAHostsOwnTransaction_IsStillReportedAsLost      (UseTransaction: 4000, not 4001)
 OutboxEnlistmentTests.AScopeDisposedSynchronously_DoesNotThrow_AndStillReportsALostRow       (IDisposable)
-LocalGuardOutageTests.ALocalRowWhoseConsumersStoreIsDown_IsDeferred_NotDeadLettered_AndTheStoresOtherRowsKeepTheirCadence
+LocalGuardOutageTests.ALocalRowWhoseConsumersStoreIsDown_IsDeferred_NotDeadLettered_AndTheStoresOtherRowsKeepTheirCadence   (2209 carries the store's reason)
+GuardReadCancellationTests.AHostStopDuringTheGuardsRead_IsUnsettled_NeverAnOutage          (D10)
 ConsumerKeyMigrationTests.TheChangelogStatements_RewriteEveryKey_IntoTheKeyTheCodeBuilds_EvenForAMessageSplitAcrossVersions  (PostgreSQL; reads the SQL from CHANGELOG.md)
 StoreResolutionTests.*                       — every rule of the first-match order, and its refusals
 StoreCompositionTests.AnAssemblyBoundToTwoStores_IsAProblem
@@ -233,11 +235,13 @@ InboxRetryPolicyTests.ComputeBackoffCeiling_FollowsTheExponentialCurve
 ```
 OutboxLoopTests / InboxLoopTests: NextDelay_* (saturated, idle, partial, outage, cancelled, from zero) — the outbox has no outage arm: a down endpoint backs off on its own rows
 OutboxLoopTests.RunAsync_WhenTheProcessorCannotBeActivated_LogsAnActivationFailureAndKeepsRunning
-OutboxLoopTests.RunAsync_WhenTheProcessorThrowsAConfigurationException_StopsTheLoop
+OutboxLoopTests / InboxLoopTests.RunAsync_WhenTheProcessorThrowsAConfigurationException_BacksOffAndKeepsRunning   (1402 never ends a loop)
 InboxRetentionLoopTests.DefaultRetentionWindow_IsLongerThanTheOutboxs
 OutboxRetentionLoopTests.ExecuteAsync_DeletesAcrossEveryTenant
 GuardedLoopTests.AFault_WhileTheHostRuns_LeavesTheLoopRunning   ← every loop × {disposed while running, throwing logger}
 GuardedLoopTests.AFaultOfAnInMemoryWorkersLoop_IsReported_NeverSwallowed      (2305, 3017)
+GuardedLoopTests.AnUnsettledDeliveryWhileTheHostRuns_IsAnOutage_OnlyWhenTheRootContainerIsDisposed
+GuardedLoopTests.TheLocalQueue_ / TheInMemoryTransport_AHandlersOwnDisposedProvider_WithTheContainerHealthy_IsCounted_AndDeadLetters
 ShutdownReleaseTests.AHostStoppedMidOutboxBatch_ReleasesEveryClaimedRowWithItsAttemptCountUnchanged
 ShutdownReleaseTests.AHostStoppedMidInboxBatch_ReleasesEveryClaimedRowWithItsAttemptCountUnchanged
 ```

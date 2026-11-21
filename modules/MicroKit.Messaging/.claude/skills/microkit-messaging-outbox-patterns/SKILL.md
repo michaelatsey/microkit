@@ -210,7 +210,7 @@ return dispatcher ?? throw new OutboxConfigurationException(...);   // not regis
 |---|---|
 | `OutboxPayloadException` | dead-letter **on first sight**: unroutable endpoint, a transport row without `ContractName` or `Source`, a local payload no process can read |
 | `OutboxTransportUnavailableException` | defer the endpoint: that row and its endpoint's later rows settled `Deferred` — `NextRetryAtUtc` at the end of the endpoint's back-off, `RetryCount` and error text untouched (`OutboxEndpointBackoff`: `PollingInterval` doubling to `TransportUnavailableBackoff`, cleared by a sent row); **no retry consumed**; the other endpoint's rows are still dispatched |
-| `OutboxConfigurationException` (no dispatcher registered for the key — a container composed outside `AddMessageStore`) | release, settle, rethrow: that store's outbox loop stops (1402) |
+| `OutboxConfigurationException` (no dispatcher registered for the key — a container composed outside `AddMessageStore`) | release, settle, rethrow: that store's outbox loop backs off and reports it (1402); it never ends |
 | activation `InvalidOperationException` — e.g. a transport row with no `IMessageTransport` registered, which the transport dispatcher takes in its constructor | defer the endpoint as above, **no retry consumed**, no rethrow: `DispatcherActivationFailed`, event 1009 naming the call to add; the local rows are still delivered, and the transport is tried once per back-off period until one is deployed. Known defect #124: tenant-scoped, it holds the endpoint's rows of every tenant |
 | host stop | release the rest, nothing counted |
 | anything else | transient: retry with back-off until `MaxRetries` |
@@ -379,7 +379,7 @@ tenant, correlation); and call `MessageReceivePipeline.RetryAsync` with the clai
 | `InboxPayloadException`, `PermanentMessageException`, unknown consumer | `DeadLetter`, `RetryCount` unchanged | continues |
 | anything unrecognised | `Retry` with back-off; `DeadLetter` at `MaxRetries` | continues |
 | `InboxDependencyUnavailableException` | `Released`, nothing counted | abandoned |
-| `InboxConfigurationException` (no guard for the store) | `Released` | abandoned, rethrown: the loop stops |
+| `InboxConfigurationException` (no guard for the store) | `Released` | abandoned, rethrown: the loop backs off (1402), never ends |
 | host stop | `Released`, nothing counted | abandoned |
 
 `IsLeaseLost` is structural (EF: a `DbUpdateConcurrencyException` on an `InboxMessage` entry); a

@@ -112,7 +112,8 @@ MicroKit.Messaging.MediatR           ← MicroKit.Messaging, MicroKit.MediatR, M
    the inbox. A lost claim writes zero rows and counts no attempt.
 6. **A host stop is never a failure**: claimed rows are released with their attempt count unchanged.
    Every long-running loop runs under `GuardedLoop`: only a host stop ends it — an
-   `ObjectDisposedException` while the host runs or a throwing logger is a failed cycle.
+   `ObjectDisposedException` while the host runs, a throwing logger or a configuration fault (1402)
+   is a failed cycle with back-off.
 7. **Activation is not registration**: a missing registration fails at start; a registered service
    whose constructor throws is logged as an activation failure (1400), with back-off.
 8. **One scope per handler**, never shared; one loop per store, each with its own back-off.

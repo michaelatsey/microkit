@@ -28,7 +28,7 @@ internal interface IOutboxDispatcher
     /// <see cref="OutboxPayloadException"/> dead-letters the row,
     /// <see cref="OutboxTransportUnavailableException"/> defers this endpoint's rows to the end of its
     /// back-off while the other endpoint's are still dispatched,
-    /// <see cref="OutboxConfigurationException"/> stops the loop, and any other exception is a
+    /// <see cref="OutboxConfigurationException"/> settles the batch and backs the loop off (1402), and any other exception is a
     /// retry.
     /// </remarks>
     ValueTask DispatchAsync(OutboxMessage message, CancellationToken ct = default);

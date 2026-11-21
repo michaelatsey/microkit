@@ -82,7 +82,42 @@ public sealed class FaultRetryingStrategy(ExecutionStrategyDependencies dependen
 {
     /// <inheritdoc />
     protected override bool ShouldRetryOn(Exception? exception)
-        => exception is InjectedCommitFaultException || base.ShouldRetryOn(exception);
+        => exception is InjectedCommitFaultException or InjectedTransientReadException || base.ShouldRetryOn(exception);
+}
+
+/// <summary>A transient provider fault on a read: <see cref="DbException.IsTransient"/> is true.</summary>
+public sealed class InjectedTransientReadException() : DbException("injected transient read fault")
+{
+    /// <inheritdoc />
+    public override bool IsTransient => true;
+}
+
+/// <summary>
+/// Fails the next inbox reads after <see cref="CommitFaultInjector"/> fired — the commit
+/// verification — with a transient provider fault, <see cref="Arm"/>ed times.
+/// </summary>
+public sealed class VerificationReadFault(CommitFaultInjector commits) : DbCommandInterceptor
+{
+    private int _armed;
+
+    /// <summary>Fails the next <paramref name="times"/> inbox reads after a commit fault.</summary>
+    /// <param name="times">How many reads fail.</param>
+    public void Arm(int times = 1) => Volatile.Write(ref _armed, times);
+
+    /// <inheritdoc />
+    public override ValueTask<InterceptionResult<DbDataReader>> ReaderExecutingAsync(
+        DbCommand command, CommandEventData eventData, InterceptionResult<DbDataReader> result,
+        CancellationToken cancellationToken = default)
+    {
+        if (commits.Fired
+            && command.CommandText.Contains("FROM \"InboxMessages\"", StringComparison.Ordinal)
+            && Interlocked.Decrement(ref _armed) >= 0)
+        {
+            throw new InjectedTransientReadException();
+        }
+
+        return ValueTask.FromResult(result);
+    }
 }
 
 /// <summary>Fails every INSERT of a <c>Failed</c> inbox row while armed.</summary>

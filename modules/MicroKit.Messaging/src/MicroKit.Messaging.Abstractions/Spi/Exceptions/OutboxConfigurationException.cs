@@ -8,7 +8,8 @@ namespace MicroKit.Messaging.Spi;
 /// <para>
 /// Part of the SPI (<c>MicroKit.Messaging.Spi</c>), but <b>the engine raises this one, not a
 /// provider.</b> ⚠ A transport or store implementation must <b>never</b> throw it: its documented
-/// effect is that the worker <i>stops</i>, so raising it from a broker client turns a transient
+/// effect is that the batch is released and the loop backs off on the idle curve, reporting a
+/// configuration fault (event 1402) each cycle, so raising it from a broker client turns a transient
 /// outage into an outbox that drains nothing until someone redeploys. By the time a transport
 /// runs, the composition has already been proven adequate. Use
 /// <see cref="OutboxTransportUnavailableException"/> for an unreachable broker, or let an untyped
@@ -60,9 +61,10 @@ namespace MicroKit.Messaging.Spi;
 /// </para>
 /// <para>
 /// The processor settles the batch — the message that raised this and every one after it are
-/// released untouched, while those dispatched before it keep their outcome — and then rethrows, so
-/// the hosting worker stops. Backing off and retrying a missing registration cannot succeed: it will
-/// not fix itself without a redeployment, and a worker that quietly retries forever hides the defect.
+/// released untouched, while those dispatched before it keep their outcome — and then rethrows: the
+/// loop backs off on the idle curve and reports it (event 1402, <c>Critical</c>) on every cycle. Only a
+/// host stop ends a loop; a missing registration will not fix itself without a redeployment, and the
+/// report on every cycle keeps the defect visible.
 /// </para>
 /// </remarks>
 public sealed class OutboxConfigurationException : Exception

@@ -101,6 +101,36 @@ internal sealed class InMemoryTransportWorker(
     }
 
     /// <summary>
+    /// An unsettled delivery while the host runs (#188, review of 556bbc0). The root container
+    /// disposed: no service can be built until it is back — the dependency-outage path, requeued
+    /// uncounted and paused, never a busy loop that dead-letters every message in milliseconds.
+    /// Otherwise — a handler using a provider it captured from a disposed scope — a counted failed
+    /// attempt, which dead-letters at the limit rather than pausing everything for ever.
+    /// </summary>
+    /// <param name="outcome">The unsettled outcome.</param>
+    /// <returns>The outcome to settle.</returns>
+    internal DeliveryOutcome WhileTheHostRuns(DeliveryOutcome outcome)
+    {
+        var reason = outcome.Reason ?? outcome.Error?.Message;
+        return RootContainerDisposed()
+            ? new DeliveryOutcome(DeliveryVerdict.DependencyUnavailable, outcome.Error, reason)
+            : new DeliveryOutcome(DeliveryVerdict.Transient, outcome.Error, reason);
+    }
+
+    private bool RootContainerDisposed()
+    {
+        try
+        {
+            using var probe = scopeFactory.CreateScope();
+            return false;
+        }
+        catch (ObjectDisposedException)
+        {
+            return true;
+        }
+    }
+
+    /// <summary>
     /// Binds the endpoint through the singleton <see cref="InMemoryEndpointBinder"/>, resolved through
     /// the scope factory — the only constructor dependency a background worker takes for services
     /// it resolves; the scope owns none of them.
@@ -153,11 +183,9 @@ internal sealed class InMemoryTransportWorker(
             outcome = DeliveryOutcome.Permanent("An unexpected fault escaped the receive pipeline.", ex);
         }
 
-        // Unsettled is a stop only while the host stops (HostStop); otherwise — a provider disposed
-        // under the handler while the host runs — it is a failed attempt like any other.
         if (outcome.Verdict is DeliveryVerdict.Unsettled && !stoppingToken.IsCancellationRequested)
         {
-            outcome = new DeliveryOutcome(DeliveryVerdict.Transient, outcome.Error, outcome.Reason ?? outcome.Error?.Message);
+            outcome = WhileTheHostRuns(outcome);
         }
 
         TimeSpan? next;

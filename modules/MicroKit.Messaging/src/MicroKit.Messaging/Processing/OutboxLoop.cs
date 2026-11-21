@@ -45,7 +45,7 @@ internal sealed class OutboxLoop(
 {
     private const string Loop = "outbox";
 
-    /// <summary>Runs until <paramref name="stoppingToken"/> is cancelled or a configuration fault stops it.</summary>
+    /// <summary>Runs until <paramref name="stoppingToken"/> is cancelled: only a host stop ends it.</summary>
     /// <param name="stoppingToken">The host's token.</param>
     /// <returns>A task that completes when the loop ends.</returns>
     public Task RunAsync(CancellationToken stoppingToken)
@@ -80,11 +80,13 @@ internal sealed class OutboxLoop(
                     }
                     catch (OutboxConfigurationException ex)
                     {
-                        // The batch was settled — the rest of it released — before the processor rethrew. A
-                        // missing registration does not fix itself, so the loop stops rather than
-                        // retrying forever, and only this store's loop stops.
-                        GuardedLoop.Log(() => StoreEngineLogs.LoopStopped(logger, ex, Loop, store.Value));
-                        return null;
+                        // The batch was settled — the rest of it released — before the processor
+                        // rethrew. A missing registration does not fix itself, but only a host stop
+                        // ends a loop: it backs off on the idle curve and reports it each time.
+                        delay = Grow(delay, options.MaxPollingInterval);
+                        var faultDelay = delay;
+                        GuardedLoop.Log(() => StoreEngineLogs.ConfigurationFault(logger, ex, Loop, store.Value, faultDelay));
+                        return delay;
                     }
                 }
             },

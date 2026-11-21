@@ -1,5 +1,7 @@
 namespace MicroKit.Messaging.UnitTests.Processing;
 
+using MicroKit.Messaging.UnitTests.Bus;
+
 public sealed class OutboxLoopTests
 {
     // ---------------------------------------------------------------------------
@@ -312,31 +314,32 @@ public sealed class OutboxLoopTests
     }
 
     // ---------------------------------------------------------------------------
-    // Misconfiguration surfaced by the processor stops the worker
+    // Misconfiguration surfaced by the processor: reported and backed off, never the end of the loop
     // ---------------------------------------------------------------------------
 
     [Fact]
-    public async Task RunAsync_WhenTheProcessorThrowsAConfigurationException_StopsTheLoop()
+    public async Task RunAsync_WhenTheProcessorThrowsAConfigurationException_BacksOffAndKeepsRunning()
     {
-        var callCount = 0;
+        var clock = System.Diagnostics.Stopwatch.StartNew();
+        var calls = new System.Collections.Concurrent.ConcurrentQueue<TimeSpan>();
         var coordinator = Substitute.For<IOutboxProcessor>();
         coordinator
             .ProcessBatchAsync(Arg.Any<int>(), Arg.Any<CancellationToken>())
             .Returns(_ =>
             {
-                System.Threading.Interlocked.Increment(ref callCount);
-                return ValueTask.FromException<OutboxBatchResult>(
-                    new OutboxConfigurationException("IOutboxDispatcher is not registered."));
+                calls.Enqueue(clock.Elapsed);
+                return ValueTask.FromException<OutboxBatchResult>(new OutboxConfigurationException("IOutboxDispatcher is not registered."));
             });
 
         var sut = BuildWorker(coordinator, out _);
 
         await sut.StartAsync(CancellationToken.None);
-        await Task.Delay(200);
+        await Eventually.HoldsAsync(() => calls.Count >= 4, "only a host stop ends a loop: it keeps retrying");
         await sut.StopAsync(default);
 
-        // Unlike a transient fault, this must NOT be retried: it cannot fix itself.
-        callCount.ShouldBe(1);
+        // PollingInterval is 10 ms: the delay doubles on each fault (20, 40, 80 ms…), never spun on.
+        var at = calls.ToArray();
+        (at[3] - at[2]).ShouldBeGreaterThan(TimeSpan.FromMilliseconds(50), "the back-off grows toward MaxPollingInterval");
     }
 
     // ---------------------------------------------------------------------------

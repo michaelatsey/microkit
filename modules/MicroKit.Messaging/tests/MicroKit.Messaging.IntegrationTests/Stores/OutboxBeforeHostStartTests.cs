@@ -32,6 +32,13 @@ public sealed class OutboxBeforeHostStartTests
             {
                 o.Outbox.PollingInterval = TimeSpan.FromMilliseconds(50);
                 o.Outbox.MaxPollingInterval = TimeSpan.FromMilliseconds(100);
+
+                // Every context here shares one SQLite connection, which takes one transaction at a
+                // time: the guarded attempt can lose to the outbox's settlement ("nested
+                // transactions") and be recorded Failed. Its designed recovery is the store's retry,
+                // so the inbox loop polls as fast as the outbox, inside the test's window.
+                o.Inbox.PollingInterval = TimeSpan.FromMilliseconds(50);
+                o.Inbox.MaxPollingInterval = TimeSpan.FromMilliseconds(100);
             });
         });
         using var host = builder.Build();

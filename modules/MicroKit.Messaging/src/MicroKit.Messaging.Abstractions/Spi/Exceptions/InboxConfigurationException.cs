@@ -7,8 +7,9 @@ namespace MicroKit.Messaging.Spi;
 /// <remarks>
 /// <para>
 /// Part of the SPI (<c>MicroKit.Messaging.Spi</c>), but <b>the engine raises this one, not a
-/// provider</b> — a store's inbox service is missing from the container. It stops that store's
-/// retry loop, so a provider must not raise it for a runtime fault. A store author may throw it for a
+/// provider</b> — a store's inbox service is missing from the container. It backs that store's
+/// retry loop off and is reported on every cycle (event 1402), so a provider must not raise it for a
+/// runtime fault. A store author may throw it for a
 /// genuine registration defect it alone can detect; for anything that could clear on its own, use
 /// <see cref="InboxDependencyUnavailableException"/> or let an untyped exception propagate.
 /// </para>
@@ -20,7 +21,8 @@ namespace MicroKit.Messaging.Spi;
 /// <para>
 /// <b>Raised for a store whose <see cref="IInboxGuardStore"/> is not registered under its key</b>
 /// (#188), which a host start already rejects. On a store's retry loop the batch is settled first,
-/// every row released with no attempt counted, then the loop of that store stops. On a delivery no
+/// every row released with no attempt counted, then the loop of that store backs off and reports it
+/// (1402) — only a host stop ends a loop. On a delivery no
 /// row is written and the message is redelivered.
 /// </para>
 /// <para>

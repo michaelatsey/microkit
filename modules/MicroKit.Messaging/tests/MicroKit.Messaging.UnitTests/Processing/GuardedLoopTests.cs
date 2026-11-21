@@ -3,6 +3,7 @@
 namespace MicroKit.Messaging.UnitTests.Processing;
 
 using Microsoft.Extensions.Hosting;
+using MicroKit.Messaging.Bus;
 using MicroKit.Messaging.Local;
 using MicroKit.Messaging.Transport;
 using MicroKit.Messaging.UnitTests.Bus;
@@ -106,6 +107,101 @@ public sealed class GuardedLoopTests
         transportLog.Records.ShouldContain(r => r.EventId == 3017 && r.Level == LogLevel.Error && r.Exception == fault);
     }
 
+    [Fact]
+    public void AnUnsettledDeliveryWhileTheHostRuns_IsAnOutage_OnlyWhenTheRootContainerIsDisposed()
+    {
+        // The callers use only their scope factory; the other dependencies are never reached.
+        var unsettled = new DeliveryOutcome(DeliveryVerdict.Unsettled, new ObjectDisposedException(nameof(IServiceProvider)));
+        var disposedRoot = Substitute.For<IServiceScopeFactory>();
+        disposedRoot.CreateScope().Returns(_ => throw new ObjectDisposedException(nameof(IServiceProvider)));
+        var healthyRoot = new ServiceCollection().BuildServiceProvider().GetRequiredService<IServiceScopeFactory>();
+
+        new LocalQueueWorker(null!, disposedRoot, TimeProvider.System, NullLogger<LocalQueueWorker>.Instance)
+            .WhileTheHostRuns(unsettled).Verdict.ShouldBe(DeliveryVerdict.DependencyUnavailable, "the container is gone: pause, charge nothing");
+        new InMemoryTransportWorker(new InMemoryBroker(), disposedRoot, TimeProvider.System, NullLogger<InMemoryTransportWorker>.Instance)
+            .WhileTheHostRuns(unsettled).Verdict.ShouldBe(DeliveryVerdict.DependencyUnavailable);
+
+        new LocalQueueWorker(null!, healthyRoot, TimeProvider.System, NullLogger<LocalQueueWorker>.Instance)
+            .WhileTheHostRuns(unsettled).Verdict.ShouldBe(DeliveryVerdict.Transient, "the container is fine: the handler's own fault, counted");
+        new InMemoryTransportWorker(new InMemoryBroker(), healthyRoot, TimeProvider.System, NullLogger<InMemoryTransportWorker>.Instance)
+            .WhileTheHostRuns(unsettled).Verdict.ShouldBe(DeliveryVerdict.Transient);
+    }
+
+    [Fact]
+    public async Task TheLocalQueue_AHandlersOwnDisposedProvider_WithTheContainerHealthy_IsCounted_AndDeadLetters()
+    {
+        var calls = 0;
+        var builder = Host.CreateApplicationBuilder(new HostApplicationBuilderSettings { DisableDefaults = true });
+        var queue = new LocalQueue { DependencyUnavailableBackoff = TimeSpan.FromSeconds(30) };
+        builder.Services.AddSingleton(queue);
+        builder.Services.AddMicroKitMessaging(bus =>
+        {
+            bus.ServiceName = "tests.guard";
+            bus.AddLocalConsumerSource(new AlwaysDisposedConsumers(() => Interlocked.Increment(ref calls)));
+        });
+        using var host = builder.Build();
+        await host.StartAsync();
+        await using (var scope = host.Services.CreateAsyncScope())
+        {
+            await scope.ServiceProvider.GetRequiredService<ILocalMessageSender>()
+                .SendAsync(new ProbeMessage(), MessageId.New(), DateTimeOffset.UtcNow);
+        }
+
+        // A pause would be 30 s: dead-lettering inside the wait proves it was counted, not paused.
+        await Eventually.HoldsAsync(() => queue.DeadLettered == 1, "dead-lettered at the attempt limit, never retried for ever");
+        Volatile.Read(ref calls).ShouldBe(queue.MaxDeliveryAttempts);
+        await host.StopAsync();
+    }
+
+    [Fact]
+    public async Task TheInMemoryTransport_AHandlersOwnDisposedProvider_WithTheContainerHealthy_IsCounted_AndDeadLetters()
+    {
+        var broker = new InMemoryBroker { DependencyUnavailableBackoff = TimeSpan.FromSeconds(30) };
+        var counter = new DisposedCounter();
+        var host = await BusTestHost.StartAsync(
+            bus => bus.AddHandler<AlwaysDisposedHandler>(),
+            broker,
+            services: s => s.AddSingleton(counter));
+        await using (host)
+        {
+            await host.PublishAsync(new OrderPlaced(Guid.NewGuid()));
+
+            await Eventually.HoldsAsync(() => broker.GetDeadLetters(BusTestHost.Source).Count == 1,
+                "dead-lettered at the attempt limit, never retried for ever");
+            counter.Calls.ShouldBe(broker.MaxDeliveryAttempts);
+        }
+    }
+
+    private sealed class AlwaysDisposedConsumers(Action called) : ILocalConsumerSource
+    {
+        public IEnumerable<LocalConsumer> GetConsumers() =>
+        [
+            new LocalConsumer(typeof(ProbeMessage), "tests.guard.disposed", typeof(AlwaysDisposedConsumers), (_, _, _, _) =>
+            {
+                called();
+                return ValueTask.FromException(new ObjectDisposedException(nameof(IServiceProvider)));
+            }),
+        ];
+    }
+
+    public sealed class DisposedCounter
+    {
+        private int _calls;
+
+        public int Calls => Volatile.Read(ref _calls);
+
+        public void Called() => Interlocked.Increment(ref _calls);
+    }
+
+    private sealed class AlwaysDisposedHandler(DisposedCounter counter) : IMessageHandler<OrderPlaced>
+    {
+        public ValueTask HandleAsync(OrderPlaced message, MessageContext context, CancellationToken ct = default)
+        {
+            counter.Called();
+            return ValueTask.FromException(new ObjectDisposedException(nameof(IServiceProvider)));
+        }
+    }
+
     private static OutboxProcessorOptions OutboxOptions => new()
     {
         PollingInterval = TimeSpan.FromMilliseconds(5),
@@ -143,6 +239,7 @@ public sealed class GuardedLoopTests
     private static async Task<Running> LocalQueueAsync(Probe probe)
     {
         var builder = Host.CreateApplicationBuilder(new HostApplicationBuilderSettings { DisableDefaults = true });
+        builder.Services.AddSingleton(new LocalQueue { DependencyUnavailableBackoff = TimeSpan.FromMilliseconds(10) });
         if (probe.Fault is Fault.LoggerThatThrows)
         {
             builder.Services.AddSingleton<ILogger<LocalQueueWorker>>(new ThrowingLogger<LocalQueueWorker>());
@@ -168,6 +265,7 @@ public sealed class GuardedLoopTests
     {
         var host = await BusTestHost.StartAsync(
             bus => bus.AddHandler<ProbeHandler>(),
+            new InMemoryBroker { DependencyUnavailableBackoff = TimeSpan.FromMilliseconds(10) },
             services: s =>
             {
                 s.AddSingleton(probe);

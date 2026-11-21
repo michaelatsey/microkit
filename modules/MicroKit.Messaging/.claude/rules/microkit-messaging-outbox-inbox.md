@@ -204,7 +204,7 @@ with the first store); any other value → `OutboxPayloadException`.
 | dispatched | `Published` |
 | `OutboxPayloadException` — unroutable endpoint, transport row without `ContractName` or `Source`, local payload no process can read | dead-letter **on first sight** |
 | `OutboxTransportUnavailableException` — also a local consumer's dependency outage | **defer** that row's endpoint: the row and its endpoint's later rows are settled `Deferred` — `NextRetryAtUtc` at the end of the endpoint's back-off, `RetryCount` and error text untouched — no retry consumed, the claim skips them; the other endpoint's rows are still dispatched |
-| no dispatcher registered for the key (`GetKeyedService` returns null) → `OutboxConfigurationException` | release the rest of the batch (earlier rows keep their outcomes), settle it, **rethrow**: that store's outbox loop stops (event 1402). Every store registers both dispatchers, so a host composed through `AddMessageStore` never meets it: a missing transport is the activation row below |
+| no dispatcher registered for the key (`GetKeyedService` returns null) → `OutboxConfigurationException` | release the rest of the batch (earlier rows keep their outcomes), settle it, **rethrow**: that store's outbox loop backs off on the idle curve and reports it each time (event 1402, `Critical`) — it never ends a loop. Every store registers both dispatchers, so a host composed through `AddMessageStore` never meets it: a missing transport is the activation row below |
 | `GetKeyedService` throws `InvalidOperationException` (not `ObjectDisposedException`) | **defer** the endpoint as above, **not** rethrown: `DispatcherActivationFailed`, event 1009 per failed activation (row's `MessageId`, `TenantId`, `Endpoint`; with no transport, its message names the call to add). A store with no transport still delivers its local rows |
 | `OperationCanceledException` / `ObjectDisposedException` **while the host stops** (`HostStop`) | release the rest, nothing counted |
 | anything else | transient: retry with back-off until `MaxRetries` |
@@ -442,7 +442,7 @@ settled in one `ApplyOutcomesAsync`.
 | permanent — `PermanentMessageException`, `InboxPayloadException`, unknown consumer, type that no longer resolves, unreadable payload | dead-letter **now**, `RetryCount` unchanged | continues |
 | transient (anything unrecognised) | `Retry` with back-off; `DeadLetter` at `MaxRetries` | continues |
 | `InboxDependencyUnavailableException` | released, nothing counted | abandoned; back-off toward `DependencyUnavailableBackoff` |
-| `InboxConfigurationException` (no guard for the store) | released | abandoned, rethrown: that store's inbox loop stops (1402) |
+| `InboxConfigurationException` (no guard for the store) | released | abandoned, rethrown: that store's inbox loop backs off on the idle curve (1402), and never ends |
 | host stop | released, nothing counted | abandoned |
 
 - An `ObjectDisposedException` naming the provider while the host **runs** is a failed attempt on a
@@ -559,15 +559,19 @@ asserted on buffers). A processor that cannot be activated (1400) grows toward
 - **Activation is not registration.** A store missing a required service fails at start. An
   exception while resolving a registered processor or retention store is logged as an activation
   failure (1400) with back-off; the loop keeps running.
-- **A configuration fault stops only that loop** (1402): the processor settles first — the rest of
-  the batch released, earlier rows keeping their outcomes — then rethrows.
+- **A configuration fault backs off, and never ends a loop** (1402, `Critical`, logged on every
+  cycle): the processor settles first — the rest of the batch released, earlier rows keeping their
+  outcomes — then rethrows, and the loop grows its delay toward `MaxPollingInterval`. It cannot clear
+  without a fix; start validation rejects the compositions that raise it.
 - **A host stop is never a failure.** The loop ends only on the host's token; a processor
   interrupted by it releases what it claimed with attempt counts unchanged (`HostStop`).
 - **One loop guard** (`GuardedLoop`) runs every long-running loop — the four store loops,
   `LocalQueueWorker`, `InMemoryTransportWorker`: a thrown exception ends the loop only when
-  `HostStop` says so (a configuration fault ends it on purpose, by the loop's own choice, 1402); any
-  other is a failed cycle with that loop's back-off, and is logged (1401 for a store loop, 2305 the
-  local queue, 3017 the in-memory transport); logging goes through
+  `HostStop` says so; any other is a failed cycle with that loop's back-off, and is logged (1401 for
+  a store loop, 1402 a configuration fault, 2305 the local queue, 3017 the in-memory transport). An
+  unsettled delivery while the host runs is, in the in-memory workers, a dependency outage (requeued,
+  nothing charged, paused) only when the root container is disposed — probed by creating a scope —
+  and otherwise a counted failure (a handler's own disposed provider), never a busy loop; logging goes through
   `GuardedLoop.Log`, so a logging provider that throws never ends a loop. No loop keeps a catch shape
   of its own.
 

@@ -62,6 +62,10 @@ internal sealed class EfInboxStore<TContext>(
     private IDbContextTransaction? _transaction;
     private bool _committed;
 
+    // Inside ExecuteAsync, FindAsync is the strategy's commit verification: a transient fault must
+    // reach the strategy raw, so it retries the read (#188, review of 556bbc0).
+    private bool _inStrategy;
+
     // The row this attempt staged, so CommitAsync can write it even if the handler cleared the
     // tracker: a new delivery's enlisted row, or a retry's claimed row with the claim's token.
     private InboxMessage? _enlisted;
@@ -117,6 +121,7 @@ internal sealed class EfInboxStore<TContext>(
         ArgumentNullException.ThrowIfNull(verifySucceeded);
 
         var strategy = context.Database.CreateExecutionStrategy();
+        _inStrategy = true;
         try
         {
             return await strategy.ExecuteAsync(
@@ -132,6 +137,10 @@ internal sealed class EfInboxStore<TContext>(
             // The contract hands the engine the fault itself, not the strategy's wrapper.
             ExceptionDispatchInfo.Capture(last).Throw();
             throw;
+        }
+        finally
+        {
+            _inStrategy = false;
         }
     }
 
@@ -344,15 +353,21 @@ internal sealed class EfInboxStore<TContext>(
             await context.Database.OpenConnectionAsync(ct).ConfigureAwait(false);
             return true;
         }
-        catch (Exception ex) when (ex is not OperationCanceledException and not ObjectDisposedException)
+        catch (Exception ex) when (!_inStrategy && ex is not OperationCanceledException and not ObjectDisposedException)
         {
             throw Unreachable(ex);
         }
     }
 
-    /// <summary>A fault the provider calls transient — a dropped connection, a timeout.</summary>
-    private static bool IsTransientFault(Exception ex)
-        => ex is DbException { IsTransient: true } || ex.InnerException is DbException { IsTransient: true };
+    /// <summary>
+    /// A fault the provider calls transient — a dropped connection, a timeout — outside the
+    /// strategy. Never a cancellation of a cancelled token: one during a host stop must reach the
+    /// engine as the stop it is, which charges nothing (D10), not as an outage.
+    /// </summary>
+    private bool IsTransientFault(Exception ex)
+        => !_inStrategy
+            && ex is not OperationCanceledException { CancellationToken.IsCancellationRequested: true }
+            && (ex is DbException { IsTransient: true } || ex.InnerException is DbException { IsTransient: true });
 
     private static InboxDependencyUnavailableException Unreachable(Exception ex)
         => new($"The inbox store of '{typeof(TContext).FullName}' cannot be reached: {ex.Message}", ex);

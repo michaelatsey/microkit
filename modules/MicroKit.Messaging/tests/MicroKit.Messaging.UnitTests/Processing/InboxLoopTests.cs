@@ -1,5 +1,7 @@
 namespace MicroKit.Messaging.UnitTests.Processing;
 
+using MicroKit.Messaging.UnitTests.Bus;
+
 public sealed class InboxLoopTests
 {
     private static InboxProcessorOptions CadenceOptions => new()
@@ -124,6 +126,31 @@ public sealed class InboxLoopTests
     }
 
     [Fact]
+    public async Task RunAsync_WhenTheProcessorThrowsAConfigurationException_BacksOffAndKeepsRunning()
+    {
+        var clock = System.Diagnostics.Stopwatch.StartNew();
+        var calls = new System.Collections.Concurrent.ConcurrentQueue<TimeSpan>();
+        var coordinator = Substitute.For<IInboxProcessor>();
+        coordinator
+            .ProcessBatchAsync(Arg.Any<int>(), Arg.Any<CancellationToken>())
+            .Returns(_ =>
+            {
+                calls.Enqueue(clock.Elapsed);
+                return ValueTask.FromException<InboxBatchResult>(new InboxConfigurationException("No IInboxGuardStore is registered for the store."));
+            });
+
+        var sut = BuildWorker(coordinator, out _);
+
+        await sut.StartAsync(CancellationToken.None);
+        await Eventually.HoldsAsync(() => calls.Count >= 4, "only a host stop ends a loop: it keeps retrying");
+        await sut.StopAsync(default);
+
+        // PollingInterval is 10 ms: the delay doubles on each fault (20, 40, 80 ms…), never spun on.
+        var at = calls.ToArray();
+        (at[3] - at[2]).ShouldBeGreaterThan(TimeSpan.FromMilliseconds(50), "the back-off grows toward MaxPollingInterval");
+    }
+
+    [Fact]
     public async Task RunAsync_WhenTheProcessorThrowsATransientException_LogsAndContinues()
     {
         var callCount = 0;
@@ -205,37 +232,6 @@ public sealed class InboxLoopTests
         failure.Message.ShouldContain("its construction threw");
         failure.Message.ShouldNotContain("not registered");
         calls.ShouldBeGreaterThan(0, "the loop kept running and reached the processor once it activated");
-    }
-
-    /// <summary>
-    /// A missing registration cannot fix itself without a redeployment. The processor has already
-    /// settled and released the batch by then, so nothing is stranded — the worker stops rather
-    /// than retrying forever and hiding the defect.
-    /// </summary>
-    [Fact]
-    public async Task ExecuteAsync_WhenProcessorReportsMisconfiguration_StopsWorker()
-    {
-        var callCount = 0;
-        var coordinator = Substitute.For<IInboxProcessor>();
-        coordinator
-            .ProcessBatchAsync(Arg.Any<int>(), Arg.Any<CancellationToken>())
-            .Returns(_ =>
-            {
-                Interlocked.Increment(ref callCount);
-                return ValueTask.FromException<InboxBatchResult>(
-                    new InboxConfigurationException("IInboxGuardStore is not registered"));
-            });
-
-        var sut = BuildWorker(
-            coordinator,
-            out _,
-            new InboxProcessorOptions { PollingInterval = TimeSpan.FromMilliseconds(5) });
-
-        await sut.StartAsync(CancellationToken.None);
-        await Task.Delay(150);
-        await sut.StopAsync(default);
-
-        callCount.ShouldBe(1, "the worker must stop after the first misconfiguration, not back off");
     }
 
     // -----------------------------------------------------------------------------------

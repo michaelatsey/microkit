@@ -1,6 +1,7 @@
 using System.Collections.Concurrent;
 using MicroKit.Messaging.IntegrationTests.SecondModule;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 
 namespace MicroKit.Messaging.IntegrationTests.Stores;
 
@@ -22,8 +23,9 @@ public sealed class LocalGuardOutageTests
             // Store B's database cannot be opened: a directory that does not exist, read-write only.
             var unreachable = Path.Combine(Path.GetTempPath(), $"mk-188-{Guid.NewGuid():N}", "missing", "b.db");
             var transport = new SendingTransport();
+            var logs = new CapturingLoggerProvider();
             var services = new ServiceCollection();
-            services.AddLogging();
+            services.AddLogging(b => b.AddProvider(logs));
             services.AddSingleton<IMessageTransport>(transport);
             services.AddDbContext<TestMessagingDbContext>(o => o.UseSqlite(connectionOfA));
             services.AddDbContext<SecondMessagingDbContext>(o => o.UseSqlite($"Data Source={unreachable};Mode=ReadWrite"));
@@ -85,6 +87,13 @@ public sealed class LocalGuardOutageTests
             local.RetryCount.ShouldBe(0, "no attempt is charged");
             local.NextRetryAtUtc.ShouldNotBeNull("deferred to the end of the local endpoint's back-off");
             local.NextRetryAtUtc!.Value.ShouldBeGreaterThan(DateTimeOffset.UtcNow);
+
+            // Unreachable for any reason — a wrong password included — defers and never dead-letters;
+            // the Error carries the store's own reason, so a configuration error is visible.
+            var outage = logs.Entries.First(e => e.EventId == 2209);
+            outage.Level.ShouldBe(LogLevel.Error);
+            outage.ExceptionTypeName.ShouldBe(nameof(InboxDependencyUnavailableException));
+            outage.ExceptionMessage.ShouldNotBeNull().ShouldContain("unable to open database file", Case.Insensitive);
         });
 
     private sealed record OutageNotice;

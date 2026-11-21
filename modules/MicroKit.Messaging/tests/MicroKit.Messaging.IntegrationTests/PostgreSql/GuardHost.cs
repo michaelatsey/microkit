@@ -36,6 +36,8 @@ internal sealed class GuardHost : IAsyncDisposable
 
     public CommitFaultInjector Faults => Provider.GetRequiredService<CommitFaultInjector>();
 
+    public VerificationReadFault VerificationReads => Provider.GetRequiredService<VerificationReadFault>();
+
     public FailedRowInsertBlocker FailedRowInserts => Provider.GetRequiredService<FailedRowInsertBlocker>();
 
     public CapturingLoggerProvider Logs => Provider.GetRequiredService<CapturingLoggerProvider>();
@@ -64,6 +66,7 @@ internal sealed class GuardHost : IAsyncDisposable
         builder.Services.AddSingleton<GuardProbe>();
         builder.Services.AddSingleton<CommitFaultInjector>();
         builder.Services.AddSingleton<FailedRowInsertBlocker>();
+        builder.Services.AddSingleton<VerificationReadFault>();
         if (clock is not null)
         {
             builder.Services.AddSingleton(clock);
@@ -79,7 +82,8 @@ internal sealed class GuardHost : IAsyncDisposable
             })
             .AddInterceptors(
                 sp.GetRequiredService<CommitFaultInjector>(),
-                sp.GetRequiredService<FailedRowInsertBlocker>()));
+                sp.GetRequiredService<FailedRowInsertBlocker>(),
+                sp.GetRequiredService<VerificationReadFault>()));
 
         builder.Services.AddMicroKitMessaging(bus =>
         {

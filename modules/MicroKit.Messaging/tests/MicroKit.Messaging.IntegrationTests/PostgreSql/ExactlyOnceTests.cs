@@ -405,6 +405,28 @@ public sealed class ExactlyOnceTests(PostgreSqlFixture fixture)
         (await host.OutboxAsync()).ShouldHaveSingleItem();
     }
 
+    /// <summary>
+    /// The commit landed, then faulted; the read that verifies it fails once, transiently. The
+    /// strategy retries that read, as it retries any transient fault: the committed delivery is
+    /// acknowledged, never turned into a failure or an outage (#188, review of 556bbc0).
+    /// </summary>
+    [DockerRequiredFact]
+    public async Task WithARetryingStrategy_ATransientFaultOfTheVerificationRead_IsRetried_AndTheCommitStands()
+    {
+        await using var db = await StoreDatabase.CreateAsync<TestMessagingDbContext>(fixture.ConnectionString, o => new(o));
+        await using var host = GuardHost.Create(db, handlers: bus => bus.AddHandler<FirstGuardHandler>(), retrying: true, broker: new InMemoryBroker());
+
+        host.Faults.Arm(CommitFaultPoint.AfterCommit);
+        host.VerificationReads.Arm();
+        var result = await host.ReceiveAsync(GuardHost.Envelope(Guid.NewGuid(), new GuardEvent(Guid.NewGuid())));
+
+        host.Faults.Fired.ShouldBeTrue();
+        result.Disposition.ShouldBe(ReceiveDisposition.Acknowledge, "the commit landed: a failed read of it must be retried");
+        (await host.InboxAsync()).ShouldHaveSingleItem().Status.ShouldBe(InboxMessageStatus.Processed);
+        host.Probe.Calls(FirstGuardHandler.HandlerName).ShouldBe(1, "nothing replayed");
+        host.Logs.Entries.ShouldNotContain(e => e.EventId == 2209, "the store was never down");
+    }
+
     private static async Task<List<OutboxMessage>> OutboxOf(StoreDatabase db)
     {
         await using var context = new TestMessagingDbContext(

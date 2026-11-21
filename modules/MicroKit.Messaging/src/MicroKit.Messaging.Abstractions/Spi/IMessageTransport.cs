@@ -59,8 +59,8 @@ namespace MicroKit.Messaging.Spi;
 /// provider supplies its own implementation from its <c>Add{Provider}Transport()</c> extension.
 /// <b>With no transport registered</b>, a declared publication fails at host start, and a
 /// publication throws. The outbox's transport dispatcher is registered with the transport (#187), so a
-/// transport row that still reaches a host without one is a missing registration: the batch is
-/// released, no retry is consumed, and the store's outbox loop stops.
+/// transport row that still reaches a host without one defers the transport endpoint (event 1009,
+/// naming the call to add): no retry is consumed, and the store's local rows are still delivered.
 /// </para>
 /// <para>
 /// <b>Lifetime.</b> <c>UseInMemoryTransport()</c> registers the in-memory transport as a
@@ -114,8 +114,8 @@ public interface IMessageTransport
     /// unrecognised stays transient.
     /// <para>
     /// Never raise <see cref="OutboxConfigurationException"/> <b>from a transport</b>. That
-    /// classification means the composition is wrong, and it stops the worker; raising it from a
-    /// send would stop the worker over a runtime fault, which is the one failure a transport is
+    /// classification means the composition is wrong, and it holds the store's outbox loop in back-off
+    /// (1402); raising it from a send would hold the loop over a runtime fault, which is the one failure a transport is
     /// most likely to meet and least able to distinguish.
     /// <para>
     /// The ban is on transports specifically, not on the exception having a single origin — two

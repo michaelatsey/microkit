@@ -108,7 +108,7 @@ internal sealed class InboxProcessor(
             catch (InboxConfigurationException ex)
             {
                 // A store without its guard is a deployment defect: every row is released untouched
-                // below, then the fault is rethrown so this store's loop stops.
+                // below, then the fault is rethrown: this store's loop reports it and backs off.
                 abortReason = InboxBatchAbortReason.ConfigurationError;
                 configurationFault = ex;
                 InboxProcessorLogs.ServiceUnresolvable(logger, ex, messages.Count - index);

@@ -382,10 +382,9 @@ handed to a transport, no `[MessageContract]` needed.
   stops. **Durability needs a store.**
 - **Cascade events are delivered.** With a store, a domain event a handler raises — a notification
   handler's or a bus handler's — is dispatched after the handler and before the engine saves its
-  work, so it commits with that work and is delivered in turn. **Without a store** there is no
-  engine save after a handler, so nothing is dispatched there: an event still pending when the
-  handler returns is reported (2310, `Error`). Raise it before a save that dispatches — a MediatR
-  command with the transaction behavior — or configure a store.
+  work, so it commits with that work and is delivered in turn. **Without a store**, domain events
+  still undispatched when a handler's scope ends are dropped and reported (2310, `Error`): there is
+  no engine save after a handler to dispatch before. Durability needs a store.
 - **A notification handler is activated per delivery from its implementation type**: a transient or
   scoped registration yields one instance per delivery, disposed with it, and a sibling that cannot
   be built never fails it. A singleton is rejected at start — register it transient or scoped — and

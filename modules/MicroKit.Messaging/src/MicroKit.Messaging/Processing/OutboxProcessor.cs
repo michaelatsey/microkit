@@ -47,8 +47,8 @@ namespace MicroKit.Messaging.Processing;
 /// <para>
 /// <b>Configuration failure and activation failure are not synonyms.</b> A registration the
 /// container cannot supply at all — <c>GetService</c> returns <see langword="null"/> — abandons the
-/// batch, rethrows <see cref="OutboxConfigurationException"/> and stops the worker: it will not fix
-/// itself without a redeployment. A registration the container can supply but cannot activate —
+/// batch and rethrows <see cref="OutboxConfigurationException"/>; the loop backs off and reports it
+/// (1402) on every cycle: it will not fix itself without a redeployment. A registration the container can supply but cannot activate —
 /// <c>GetService</c> throws <see cref="InvalidOperationException"/>, most often because
 /// <see cref="IMessageTransport"/> is missing behind a transport dispatcher — defers that endpoint's
 /// rows, costs no retry budget and is not rethrown: the batch reports
@@ -308,8 +308,8 @@ internal sealed class OutboxProcessor : IOutboxProcessor
 
         if (configurationFault is not null)
         {
-            // Rethrown so the hosting worker stops. Backing off on a missing registration
-            // would retry forever a condition that cannot fix itself without a redeployment.
+            // Rethrown: the loop reports it (1402) and backs off on the idle curve. Only a host stop
+            // ends a loop, and the condition cannot fix itself without a redeployment.
             throw configurationFault;
         }
 
@@ -466,8 +466,8 @@ internal sealed class OutboxProcessor : IOutboxProcessor
     /// registered and cannot be activated.
     /// <list type="bullet">
     ///   <item><b>Null</b> is <see cref="OutboxConfigurationException"/>: the batch is released,
-    ///         settled and rethrown, and the worker stops. A missing registration will not fix itself
-    ///         without a redeployment.</item>
+    ///         settled and rethrown, and the loop backs off reporting it (1402). A missing
+    ///         registration will not fix itself without a redeployment.</item>
     ///   <item><b>An <see cref="InvalidOperationException"/></b> is wrapped in
     ///         <see cref="OutboxDispatcherActivationException"/>, which the batch loop catches by type:
     ///         the row's endpoint is deferred, no retry budget moves, nothing is rethrown, and the

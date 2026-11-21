@@ -22,9 +22,11 @@ internal static partial class StoreEngineLogs
     [LoggerMessage(
         EventId = 1402,
         Level = LogLevel.Critical,
-        Message = "The {Loop} loop of store '{Store}' met a configuration fault and stops. Every " +
-                  "claimed row was released. Fix the composition and redeploy.")]
-    public static partial void LoopStopped(ILogger logger, Exception exception, string loop, string store);
+        Message = "The {Loop} loop of store '{Store}' met a configuration fault; every claimed row was " +
+                  "released, and it retries after {Delay}. It cannot clear without a fix: correct the " +
+                  "composition and redeploy.")]
+    public static partial void ConfigurationFault(
+        ILogger logger, Exception exception, string loop, string store, TimeSpan delay);
 
     [LoggerMessage(
         EventId = 1403,
