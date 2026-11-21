@@ -98,8 +98,8 @@ the outbox **and** the inbox of one `DbContext`, configured on the bus, and a ho
 - **One loop guard.** Every long-running loop — each store's outbox, inbox and retention loops, the
   local queue, the in-memory transport — ends only on a host stop: an `ObjectDisposedException` while
   the host runs, a logging provider that throws, or a configuration fault (1402) is a failed cycle
-  with its back-off, never the end of the loop. A root container disposed while the host runs pauses
-  the in-memory loops as a dependency outage — requeued, nothing charged — never a busy loop that
+  with its back-off, never the end of the loop. A root container that cannot create a scope while the host
+  runs (disposed, or failing any other way) pauses the in-memory loops as a dependency outage — requeued, nothing charged — never a busy loop that
   dead-letters the queue; a handler's own disposed provider, the container healthy, stays a counted
   failure that dead-letters at the limit.
 - **`MessageConsumerKey`** (`MicroKit.Messaging.Spi`): the version-free consumer key, for an

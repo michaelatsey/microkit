@@ -67,7 +67,8 @@ internal sealed class LocalQueueWorker(
 
     /// <summary>
     /// An unsettled delivery while the host runs (#188, review of 556bbc0). The root container
-    /// disposed: no service can be built until it is back — the dependency-outage path, requeued
+    /// cannot create a scope — disposed, or failing any other way: no service can be built until it
+    /// is back — the dependency-outage path, requeued
     /// uncounted and paused, never a busy loop that dead-letters every message in milliseconds.
     /// Otherwise — a handler using a provider it captured from a disposed scope — a counted failed
     /// attempt, which dead-letters at the limit rather than pausing everything for ever.

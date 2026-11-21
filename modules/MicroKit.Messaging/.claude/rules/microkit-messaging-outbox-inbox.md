@@ -570,8 +570,8 @@ asserted on buffers). A processor that cannot be activated (1400) grows toward
   `HostStop` says so; any other is a failed cycle with that loop's back-off, and is logged (1401 for
   a store loop, 1402 a configuration fault, 2305 the local queue, 3017 the in-memory transport). An
   unsettled delivery while the host runs is, in the in-memory workers, a dependency outage (requeued,
-  nothing charged, paused) only when the root container is disposed — probed by creating a scope —
-  and otherwise a counted failure (a handler's own disposed provider), never a busy loop; logging goes through
+  nothing charged, paused) only when the root container cannot create a scope — disposed, or the
+  probe failing any other way, which never escapes — and otherwise a counted failure (a handler's own disposed provider), never a busy loop; logging goes through
   `GuardedLoop.Log`, so a logging provider that throws never ends a loop. No loop keeps a catch shape
   of its own.
 
