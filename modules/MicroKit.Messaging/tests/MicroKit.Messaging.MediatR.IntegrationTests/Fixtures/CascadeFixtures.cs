@@ -22,10 +22,10 @@ internal sealed class WidgetArchivedNotification(WidgetArchivedEvent domainEvent
     : DomainEventNotification<WidgetArchivedEvent>(domainEvent);
 
 /// <summary>
-/// Runs on the post-commit outbox path and raises a NEW domain event on a newly tracked aggregate.
-/// DomainEventsCascadeNotificationPublisher calls IDomainEventsDispatcher.DispatchEventsAsync once
-/// after all handlers for a notification complete, so this new event is drained and its notification
-/// staged to the outbox — within the processor's per-message scope.
+/// Runs in a local delivery and raises a NEW domain event on a newly tracked aggregate. The receive
+/// middleware of #188 D8 calls IDomainEventsDispatcher.DispatchEventsAsync after this handler and
+/// before the engine's save, so the new event's notification is enlisted and committed with this
+/// handler's work.
 /// </summary>
 internal sealed class ArchiveWidgetOnInspectionHandler(
     IE2EWriter writer,

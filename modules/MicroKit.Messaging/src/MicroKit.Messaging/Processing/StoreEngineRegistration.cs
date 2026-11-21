@@ -30,6 +30,10 @@ internal static class StoreEngineRegistration
         services.TryAddEnumerable(ServiceDescriptor.Singleton<IHostedService, MessageStoreEngine>());
         services.TryAddSingleton<InboxMetrics>();
 
+        // A local row (#188 D7) is delivered by the store's own outbox loop, through the receive
+        // pipeline: its dispatcher comes with the first store, whatever the transport.
+        services.TryAddKeyedScoped<IOutboxDispatcher, Local.LocalOutboxDispatcher>(OutboxDispatchers.Local);
+
         // The processors are keyed by store and built over that store's keyed services, resolved
         // from the loop's scope: the store's instance — its DbContext included — comes from the
         // scope, never from a type fixed here.
@@ -45,6 +49,7 @@ internal static class StoreEngineRegistration
         services.AddKeyedScoped<IInboxProcessor>(store, static (sp, key) => new InboxProcessor(
             sp.GetRequiredKeyedService<IInboxProcessorStore>(key),
             sp.GetRequiredService<Registry.MessageHandlerRegistry>(),
+            sp.GetRequiredService<Registry.LocalConsumerRegistry>(),
             sp.GetRequiredService<Publishing.IntegrationEventRegistry>(),
             sp.GetRequiredService<IMessageSerializer>(),
             sp.GetRequiredService<Bus.MessageReceivePipeline>(),

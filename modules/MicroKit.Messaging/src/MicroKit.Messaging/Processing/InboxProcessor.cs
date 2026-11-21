@@ -30,60 +30,40 @@ namespace MicroKit.Messaging.Processing;
 /// Failures are settled in one call at the end of the batch, each conditioned on the claim.
 /// </para>
 /// </remarks>
-internal sealed class InboxProcessor : IInboxProcessor
+/// <param name="store">
+/// Claim and settlement of failures. Batch-scoped by design (ADR-MSG-002 shared-DB cross-tenant
+/// reservation): NOT resolved from a per-message scope. It is the store this processor drains,
+/// resolved by the store's key from its loop's scope (#188); a dynamic store set is #191's.
+/// </param>
+/// <param name="registry">Maps a consumer type and a message type to its handler and invoker.</param>
+/// <param name="localConsumers">The local consumers (#188 D7), looked up when the bus has no handler of the pair.</param>
+/// <param name="contracts">Carries each message type's contract name and version (#187).</param>
+/// <param name="serializer">Deserializes the persisted payload.</param>
+/// <param name="pipeline">Runs each retry, guarded.</param>
+/// <param name="options">Batch size, lease, flush timeout.</param>
+/// <param name="policy">Attempts and back-off.</param>
+/// <param name="logger">Logger.</param>
+/// <param name="storeKey">The store this processor drains.</param>
+internal sealed class InboxProcessor(
+    IInboxProcessorStore store,
+    MessageHandlerRegistry registry,
+    LocalConsumerRegistry localConsumers,
+    IntegrationEventRegistry contracts,
+    IMessageSerializer serializer,
+    MessageReceivePipeline pipeline,
+    InboxProcessorOptions options,
+    InboxRetryPolicy policy,
+    ILogger<InboxProcessor> logger,
+    MessageStoreKey storeKey)
+    : IInboxProcessor
 {
-    // Batch-scoped by design (ADR-MSG-002 shared-DB cross-tenant reservation): NOT resolved
-    // from a per-message scope. It is the store this processor drains, resolved by the store's key
-    // from its loop's scope (#188); a dynamic store set is #191's.
-    private readonly IInboxProcessorStore _store;
-    private readonly MessageHandlerRegistry _registry;
-    private readonly IntegrationEventRegistry _contracts;
-    private readonly IMessageSerializer _serializer;
-    private readonly MessageReceivePipeline _pipeline;
-    private readonly InboxProcessorOptions _options;
-    private readonly InboxRetryPolicy _policy;
-    private readonly ILogger<InboxProcessor> _logger;
-    private readonly MessageStoreKey _storeKey;
-
-    /// <summary>Initializes a new <see cref="InboxProcessor"/>.</summary>
-    /// <param name="store">Claim and settlement of failures, batch-scoped.</param>
-    /// <param name="registry">Maps a consumer type and a message type to its handler and invoker.</param>
-    /// <param name="contracts">Carries each message type's contract name and version (#187).</param>
-    /// <param name="serializer">Deserializes the persisted payload.</param>
-    /// <param name="pipeline">Runs each retry, guarded.</param>
-    /// <param name="options">Batch size, lease, flush timeout.</param>
-    /// <param name="policy">Attempts and back-off.</param>
-    /// <param name="logger">Logger.</param>
-    /// <param name="storeKey">The store this processor drains.</param>
-    public InboxProcessor(
-        IInboxProcessorStore store,
-        MessageHandlerRegistry registry,
-        IntegrationEventRegistry contracts,
-        IMessageSerializer serializer,
-        MessageReceivePipeline pipeline,
-        InboxProcessorOptions options,
-        InboxRetryPolicy policy,
-        ILogger<InboxProcessor> logger,
-        MessageStoreKey storeKey)
-    {
-        _store = store;
-        _registry = registry;
-        _contracts = contracts;
-        _serializer = serializer;
-        _pipeline = pipeline;
-        _options = options;
-        _policy = policy;
-        _logger = logger;
-        _storeKey = storeKey;
-    }
-
     /// <inheritdoc />
     public async ValueTask<InboxBatchResult> ProcessBatchAsync(
         int batchSize,
         CancellationToken cancellationToken = default)
     {
-        var claim = await _store
-            .ClaimBatchAsync(batchSize, _options.LeaseDuration, cancellationToken)
+        var claim = await store
+            .ClaimBatchAsync(batchSize, options.LeaseDuration, cancellationToken)
             .ConfigureAwait(false);
 
         if (claim.Count == 0)
@@ -91,7 +71,7 @@ internal sealed class InboxProcessor : IInboxProcessor
             return InboxBatchResult.Empty;
         }
 
-        InboxProcessorLogs.BatchClaimed(_logger, claim.Count);
+        InboxProcessorLogs.BatchClaimed(logger, claim.Count);
 
         var messages = claim.Messages;
 
@@ -109,7 +89,7 @@ internal sealed class InboxProcessor : IInboxProcessor
             if (cancellationToken.IsCancellationRequested)
             {
                 abortReason = InboxBatchAbortReason.Cancelled;
-                InboxProcessorLogs.BatchCancelled(_logger, messages.Count - index);
+                InboxProcessorLogs.BatchCancelled(logger, messages.Count - index);
                 break;
             }
 
@@ -131,7 +111,7 @@ internal sealed class InboxProcessor : IInboxProcessor
                 // below, then the fault is rethrown so this store's loop stops.
                 abortReason = InboxBatchAbortReason.ConfigurationError;
                 configurationFault = ex;
-                InboxProcessorLogs.ServiceUnresolvable(_logger, ex, messages.Count - index);
+                InboxProcessorLogs.ServiceUnresolvable(logger, ex, messages.Count - index);
                 break;
             }
             catch (Exception ex) when (ex is InboxPayloadException)
@@ -154,7 +134,7 @@ internal sealed class InboxProcessor : IInboxProcessor
                 // landed. Charging an attempt would penalise a message for a shutdown it had no
                 // part in.
                 abortReason = InboxBatchAbortReason.Cancelled;
-                InboxProcessorLogs.BatchCancelled(_logger, messages.Count - index);
+                InboxProcessorLogs.BatchCancelled(logger, messages.Count - index);
                 break;
             }
 
@@ -176,15 +156,15 @@ internal sealed class InboxProcessor : IInboxProcessor
             {
                 case DeliveryVerdict.DependencyUnavailable:
                     abortReason = InboxBatchAbortReason.DependencyUnavailable;
-                    InboxProcessorLogs.DependencyUnavailable(_logger, outcome.Error!, messages.Count - index);
+                    InboxProcessorLogs.DependencyUnavailable(logger, outcome.Error!, messages.Count - index);
                     break;
 
                 case DeliveryVerdict.Permanent:
                     InboxProcessorLogs.PermanentFailure(
-                        _logger, outcome.Error!, message.MessageId.Value, message.ConsumerType);
+                        logger, outcome.Error!, message.MessageId.Value, message.ConsumerType);
                     // A permanent verdict counts no attempt: no number of attempts would change it.
                     deferred.Add(InboxOutcome.DeadLetter(
-                        key, message.RetryCount, _policy.Truncate(outcome.Error?.Message)));
+                        key, message.RetryCount, policy.Truncate(outcome.Error?.Message)));
                     continue;
 
                 default:
@@ -229,18 +209,24 @@ internal sealed class InboxProcessor : IInboxProcessor
         // Registry lookup first: an unregistered consumer is permanent by construction. The key is
         // the PAIR (#187): one handler may handle several message types, each with its own invoker.
         var eventType = ResolveEventType(message);
-        if (!_registry.TryGetInvoker(message.ConsumerType, eventType, out var entry))
+        var local = false;
+        if (!registry.TryGetInvoker(message.ConsumerType, eventType, out var entry))
         {
-            throw new InboxPayloadException(
-                $"Unknown consumer type '{message.ConsumerType}' for '{eventType.FullName}'. It is " +
-                "absent from the handler registry, so no number of retries will resolve it. Call " +
-                "bus.AddHandler<THandler>() inside AddMicroKitMessaging, then requeue.");
+            // A local consumer's row (#188 D7) has the same shape: its message type and its name.
+            local = localConsumers.TryGetConsumer(message.ConsumerType, eventType, out entry);
+            if (!local)
+            {
+                throw new InboxPayloadException(
+                    $"Unknown consumer type '{message.ConsumerType}' for '{eventType.FullName}'. It is " +
+                    "absent from the handler registry and from the local consumers, so no number of " +
+                    "retries will resolve it. Register the handler, then requeue.");
+            }
         }
 
-        var evt = Deserialize(message, eventType);
+        var evt = Deserialize(message, eventType, local);
         var context = BuildContext(message, eventType);
 
-        return _pipeline.RetryAsync(message, entry, evt, context, claimToken, _storeKey, cancellationToken);
+        return pipeline.RetryAsync(message, entry, evt, context, claimToken, storeKey, cancellationToken);
     }
 
     /// <summary>Deserializes the payload, treating every failure as permanent.</summary>
@@ -248,14 +234,17 @@ internal sealed class InboxProcessor : IInboxProcessor
     /// Deserialization is CPU-bound over an in-memory string: it has no transient failure mode, so
     /// a payload that cannot be read is a poison message, never a reason to spend the retry budget.
     /// </remarks>
-    private IIntegrationEvent Deserialize(InboxMessage message, Type eventType)
+    /// <param name="message">The row.</param>
+    /// <param name="eventType">Its resolved type.</param>
+    /// <param name="local">A local message, which need not be an <see cref="IIntegrationEvent"/>.</param>
+    private object Deserialize(InboxMessage message, Type eventType, bool local)
     {
         object? deserialized;
 
         try
         {
             // The row stores the body as UTF-8 JSON text (application/json).
-            deserialized = _serializer.Deserialize(Encoding.UTF8.GetBytes(message.Payload), eventType);
+            deserialized = serializer.Deserialize(Encoding.UTF8.GetBytes(message.Payload), eventType);
         }
         catch (Exception ex)
         {
@@ -265,8 +254,9 @@ internal sealed class InboxProcessor : IInboxProcessor
                 ex);
         }
 
-        return deserialized as IIntegrationEvent
-            ?? throw new InboxPayloadException(
+        return deserialized is IIntegrationEvent || (local && deserialized is not null)
+            ? deserialized
+            : throw new InboxPayloadException(
                 $"Payload for EventType '{message.EventType}' deserialized to null or to a type " +
                 "that is not an IIntegrationEvent. The persisted row must change before this " +
                 "can succeed.");
@@ -288,7 +278,7 @@ internal sealed class InboxProcessor : IInboxProcessor
     /// </summary>
     private MessageContext BuildContext(InboxMessage message, Type eventType)
     {
-        _contracts.TryGetContract(eventType, out var contract);
+        contracts.TryGetContract(eventType, out var contract);
 
         return new MessageContext
         {
@@ -311,21 +301,21 @@ internal sealed class InboxProcessor : IInboxProcessor
         InboxMessage message, InboxMessageKey key, Exception ex)
     {
         var nextRetryCount = message.RetryCount + 1;
-        var error = _policy.Truncate(ex.Message);
+        var error = policy.Truncate(ex.Message);
 
-        if (_policy.IsExhausted(nextRetryCount))
+        if (policy.IsExhausted(nextRetryCount))
         {
             InboxProcessorLogs.RetriesExhausted(
-                _logger, ex, message.MessageId.Value, message.ConsumerType, _policy.MaxRetries);
+                logger, ex, message.MessageId.Value, message.ConsumerType, policy.MaxRetries);
 
             return InboxOutcome.DeadLetter(key, nextRetryCount, error);
         }
 
-        var nextRetryAtUtc = _policy.NextAttemptAt(nextRetryCount);
+        var nextRetryAtUtc = policy.NextAttemptAt(nextRetryCount);
 
         InboxProcessorLogs.TransientFailure(
-            _logger, ex, message.MessageId.Value, message.ConsumerType,
-            nextRetryCount, _policy.MaxRetries, nextRetryAtUtc);
+            logger, ex, message.MessageId.Value, message.ConsumerType,
+            nextRetryCount, policy.MaxRetries, nextRetryAtUtc);
 
         return InboxOutcome.Retry(key, nextRetryCount, nextRetryAtUtc, error);
     }
@@ -343,11 +333,11 @@ internal sealed class InboxProcessor : IInboxProcessor
             return;
         }
 
-        using var settleCts = new CancellationTokenSource(_options.OutcomeFlushTimeout);
+        using var settleCts = new CancellationTokenSource(options.OutcomeFlushTimeout);
 
         try
         {
-            var written = await _store
+            var written = await store
                 .ApplyOutcomesAsync(claimToken, outcomes, settleCts.Token)
                 .ConfigureAwait(false);
 
@@ -355,7 +345,7 @@ internal sealed class InboxProcessor : IInboxProcessor
             {
                 // Silent success is forbidden: fewer rows than outcomes means those rows no
                 // longer carry this batch's token — their claim was lost, and nothing was counted.
-                InboxProcessorLogs.PartialSettlement(_logger, written, outcomes.Count);
+                InboxProcessorLogs.PartialSettlement(logger, written, outcomes.Count);
             }
         }
         catch (Exception ex)
@@ -363,7 +353,7 @@ internal sealed class InboxProcessor : IInboxProcessor
             // Swallowed on purpose: leases expire on their own and the rows are re-claimed.
             // Letting this escape would take down the loop over a condition the inbox is designed
             // to survive.
-            InboxProcessorLogs.SettlementFailed(_logger, ex, outcomes.Count);
+            InboxProcessorLogs.SettlementFailed(logger, ex, outcomes.Count);
         }
     }
 

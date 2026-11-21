@@ -64,8 +64,9 @@ internal static partial class OutboxProcessorLogs
     /// <remarks>
     /// Deliberately names no particular registration. <c>OutboxConfigurationException</c> reaches
     /// this event from two kinds of place that a single sentence cannot cover: something the
-    /// processor resolves from the scope is not registered at all (<c>IOutboxDispatcher</c>); or a dispatcher was handed a row it structurally cannot serve,
-    /// such as a notification with no MediatR glue installed. The exception carries which one, and
+    /// processor resolves from the scope is not registered at all — the dispatcher of a row's endpoint,
+    /// a transport row with no transport registered; or a dispatcher was handed a row it
+    /// structurally cannot serve. The exception carries which one, and
     /// is logged with this event; a headline naming only the first sends an operator to check a
     /// registration that is already there. A dispatcher that is registered but cannot be
     /// <i>activated</i> — a transport dispatcher with no <c>IMessageTransport</c> — does not come
@@ -120,11 +121,11 @@ internal static partial class OutboxProcessorLogs
         EventId = 1009,
         Level = LogLevel.Error,
         Message = "The outbox dispatcher is registered but could not be activated for message " +
-                  "{MessageId} (tenant {TenantId}, kind {MessageKind}); the accompanying exception " +
+                  "{MessageId} (tenant {TenantId}, endpoint {Endpoint}); the accompanying exception " +
                   "says why. Abandoning batch and releasing {ReleasedCount} message(s) with no retry " +
                   "consumed. The worker keeps running and retries on the next cycle.")]
     public static partial void DispatcherActivationFailed(
-        ILogger logger, Exception exception, Guid messageId, string? tenantId, MessageKind messageKind,
+        ILogger logger, Exception exception, Guid messageId, string? tenantId, string? endpoint,
         int releasedCount);
 
     [LoggerMessage(

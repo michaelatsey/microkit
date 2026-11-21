@@ -40,7 +40,7 @@ public sealed class EfOutboxStoreTests
         DateTimeOffset? createdAtUtc = null,
         DateTimeOffset? processedAtUtc = null,
         Guid? claimToken = null,
-        MessageKind messageKind = MessageKind.Notification,
+        string? endpoint = OutboxMessage.LocalEndpoint,
         string? contractName = null,
         string? source = null,
         IReadOnlyDictionary<string, string>? headers = null)
@@ -49,7 +49,7 @@ public sealed class EfOutboxStoreTests
         {
             Id = MessageId.New(),
             TenantId = tenantId,
-            MessageKind = messageKind,
+            Endpoint = endpoint,
             ContractName = contractName,
             Source = source,
             Headers = headers,
@@ -110,7 +110,7 @@ public sealed class EfOutboxStoreTests
             await using var __ = ctx;
 
             var message = BuildOutboxMessage(
-                messageKind: MessageKind.Contract,
+                endpoint: null,
                 contractName: "shop.orders.order-placed.v1",
                 source: "/shop/orders",
                 headers: new Dictionary<string, string> { ["x-origin"] = "checkout", ["x-lang"] = "fr" });
@@ -121,7 +121,7 @@ public sealed class EfOutboxStoreTests
             await using var probe = SecondContext(conn);
             var stored = await probe.OutboxMessages.SingleAsync();
 
-            stored.MessageKind.ShouldBe(MessageKind.Contract);
+            stored.Endpoint.ShouldBeNull("a contract row is bound for the transport");
             stored.ContractName.ShouldBe("shop.orders.order-placed.v1");
             stored.Source.ShouldBe("/shop/orders");
             stored.Headers.ShouldNotBeNull().ShouldBe(
@@ -815,7 +815,7 @@ public sealed class EfOutboxStoreTests
             ctx.OutboxMessages.Add(BuildOutboxMessage(
                 status: OutboxMessageStatus.Published,
                 processedAtUtc: Now.AddDays(-30),
-                messageKind: MessageKind.Contract,
+                endpoint: null,
                 contractName: "saasbtp.safety.constat-recorded.v1",
                 source: "/saasbtp/safety"));
             await ctx.SaveChangesAsync();
@@ -872,7 +872,7 @@ public sealed class EfOutboxStoreTests
     }
 
     // ---------------------------------------------------------------------------
-    // Message kind, contract name, and the replay natural key
+    // Endpoint, contract name, and the removed replay key
     // ---------------------------------------------------------------------------
 
     private static Microsoft.EntityFrameworkCore.Metadata.IReadOnlyProperty Property(
@@ -880,33 +880,31 @@ public sealed class EfOutboxStoreTests
         => ctx.Model.FindEntityType(typeof(OutboxMessage))!.FindProperty(name)!;
 
     /// <summary>
-    /// The column exists to be queried — session 023 calls it "routing, queryable in SQL". An int
-    /// discriminator is unreadable in psql or the Supabase dashboard, which would defeat the only
-    /// reason the column is there rather than inferred from the payload's CLR type.
+    /// The routing column (#188 D7): a readable string, optional because a transport row is its
+    /// null, and bounded.
     /// </summary>
     [Fact]
-    public void MessageKind_IsMappedAsARequiredConstrainedString()
+    public void Endpoint_IsMappedAsAnOptionalBoundedString()
     {
         var (conn, ctx) = CreateIsolatedDb();
         using var _ = conn;
         using var __ = ctx;
 
-        var kind = Property(ctx, nameof(OutboxMessage.MessageKind));
+        var endpoint = Property(ctx, nameof(OutboxMessage.Endpoint));
 
-        kind.GetProviderClrType().ShouldBe(
-            typeof(string), "an int discriminator is unreadable in a SQL console");
-        kind.GetMaxLength().ShouldBe(
-            32, "the width every other status column in this module uses");
-        kind.IsNullable.ShouldBeFalse("every row has a nature");
+        endpoint.ClrType.ShouldBe(typeof(string), "readable in a SQL console");
+        endpoint.GetValueConverter().ShouldBeNull("stored as the string it is");
+        endpoint.GetMaxLength().ShouldBe(64);
+        endpoint.IsNullable.ShouldBeTrue("a transport row is the column's null");
+        ctx.Model.FindEntityType(typeof(OutboxMessage))!.FindProperty("MessageKind")
+            .ShouldBeNull("the column is removed (#188)");
     }
 
     /// <summary>
-    /// The contract name is meaningful only for a contract row, and headers only when the
-    /// publication has any, so both are optional — and the pairing with <c>MessageKind</c> is
+    /// The contract name is meaningful only for a transport row, and headers only when the
+    /// publication has any, so both are optional — and their pairing with <c>Endpoint</c> is
     /// deliberately not enforced at this layer. The bus is the only writer that will ever set them,
-    /// so the invariant belongs there. A
-    /// check constraint would have to spell <c>MessageKind &lt;&gt; 'Contract'</c>, hardcoding an
-    /// enum member name into the schema.
+    /// so the invariant belongs there.
     /// </summary>
     [Fact]
     public void ContractNameAndHeaders_AreOptional()
@@ -916,7 +914,7 @@ public sealed class EfOutboxStoreTests
         using var __ = ctx;
 
         var contractName = Property(ctx, nameof(OutboxMessage.ContractName));
-        contractName.IsNullable.ShouldBeTrue("a notification has no wire identity");
+        contractName.IsNullable.ShouldBeTrue("a local message has no wire identity");
         contractName.GetMaxLength().ShouldBe(
             256,
             "a consumer's contract names are data this column truncates silently on a provider " +
@@ -983,7 +981,7 @@ public sealed class EfOutboxStoreTests
     /// A converter that maps but does not round-trip passes every metadata assertion above.
     /// </summary>
     [Fact]
-    public Task BothKinds_RoundTripThroughTheDatabase()
+    public Task BothEndpoints_RoundTripThroughTheDatabase()
         => Task.Run(async () =>
         {
             var (conn, ctx) = CreateIsolatedDb();
@@ -992,20 +990,18 @@ public sealed class EfOutboxStoreTests
 
             ctx.OutboxMessages.Add(BuildOutboxMessage());
             ctx.OutboxMessages.Add(BuildOutboxMessage(
-                messageKind: MessageKind.Contract,
+                endpoint: null,
                 contractName: "saasbtp.safety.constat-recorded.v1"));
             await ctx.SaveChangesAsync();
 
             await using var probe = SecondContext(conn);
-            var rows = await probe.OutboxMessages.AsNoTracking()
-                .OrderBy(m => m.MessageKind)
-                .ToListAsync();
+            var rows = await probe.OutboxMessages.AsNoTracking().ToListAsync();
 
-            var notification = rows.Single(m => m.MessageKind == MessageKind.Notification);
-            notification.ContractName.ShouldBeNull();
-            notification.Headers.ShouldBeNull();
+            var local = rows.Single(m => m.Endpoint == OutboxMessage.LocalEndpoint);
+            local.ContractName.ShouldBeNull();
+            local.Headers.ShouldBeNull();
 
-            var contract = rows.Single(m => m.MessageKind == MessageKind.Contract);
+            var contract = rows.Single(m => m.Endpoint == null);
             contract.ContractName.ShouldBe("saasbtp.safety.constat-recorded.v1");
         });
 
@@ -1038,9 +1034,9 @@ public sealed class EfOutboxStoreTests
             await using var __ = ctx;
 
             ctx.OutboxMessages.Add(BuildOutboxMessage(
-                messageKind: MessageKind.Contract, contractName: "shop.order-placed.v1", source: "/shop"));
+                endpoint: null, contractName: "shop.order-placed.v1", source: "/shop"));
             ctx.OutboxMessages.Add(BuildOutboxMessage(
-                messageKind: MessageKind.Contract, contractName: "shop.order-placed.v1", source: "/shop"));
+                endpoint: null, contractName: "shop.order-placed.v1", source: "/shop"));
 
             await ctx.SaveChangesAsync();
 

@@ -35,32 +35,36 @@ public sealed class OutboxMessage
     public string? TenantId { get; set; }
 
     /// <summary>
-    /// Gets or sets the nature of this message — what the dispatcher routes it to.
+    /// The <see cref="Endpoint"/> of a local message: delivered in this process, to the local
+    /// consumers of its type, never handed to <see cref="IMessageTransport"/>.
+    /// </summary>
+    public const string LocalEndpoint = "local";
+
+    /// <summary>
+    /// Gets or sets where this message is dispatched: <see langword="null"/> for the transport,
+    /// <see cref="LocalEndpoint"/> for the local endpoint.
     /// </summary>
     /// <remarks>
     /// <para>
-    /// The outbox is reentrant: one table, two natures, and a message may pass through the queue
-    /// twice. Declared here rather than inferred from the payload's CLR type so that the routing
-    /// decision is visible to SQL and does not require the payload-agnostic core to recognise a
-    /// notification. Defaults to <see cref="MessageKind.Notification"/>, the zero value — which
-    /// <see cref="MessageKind"/> pins with an explicit <c>= 0</c> rather than leaving to
-    /// declaration order.
+    /// One table carries both. A transport row is a contract the bus published: the store's outbox
+    /// loop builds a <see cref="MessageEnvelope"/> from it and hands it to
+    /// <see cref="IMessageTransport"/>. A local row is an in-process message — a domain-event
+    /// notification of <c>MicroKit.Messaging.MediatR</c> — that the same loop delivers through the
+    /// receive pipeline, once per local consumer, each guarded by its own inbox row (#188 D7). The
+    /// row is <see cref="OutboxMessageStatus.Published"/> once every consumer's delivery is
+    /// recorded.
     /// </para>
     /// <para>
-    /// <b>This column is what the dispatchers route on.</b> <c>TransportOutboxDispatcher</c>
-    /// switches on it to build an envelope or to refuse the row, and <c>MediatROutboxDispatcher</c>
-    /// switches on it to publish in process or to delegate inward without deserializing the payload
-    /// at all. Neither performs a CLR type test, and a <see cref="MessageKind.Contract"/> row is
-    /// delegated even when its payload happens to be an <c>INotification</c> — pinned by
-    /// <c>DispatchAsync_WhenKindIsContract_AndPayloadIsANotification_StillDelegates</c>.
+    /// Routing reads this column, never the payload's CLR type. Any other value cannot be routed by
+    /// this build: such a row is dead-lettered on first sight.
     /// </para>
     /// </remarks>
-    public MessageKind MessageKind { get; set; }
+    public string? Endpoint { get; set; }
 
     /// <summary>
     /// Gets or sets the stable wire identity of this message, e.g.
-    /// <c>saasbtp.safety.constat-recorded.v1</c>. <see langword="null"/> for a
-    /// <see cref="MessageKind.Notification"/>, which has no wire identity.
+    /// <c>saasbtp.safety.constat-recorded.v1</c>. <see langword="null"/> for a local message
+    /// (<see cref="LocalEndpoint"/>), which has no wire identity.
     /// </summary>
     /// <remarks>
     /// <para>
@@ -69,39 +73,27 @@ public sealed class OutboxMessage
     /// it is an assembly-qualified name the receiving process cannot resolve.
     /// </para>
     /// <para>
-    /// Nothing enforces that a <see cref="MessageKind.Contract"/> row actually carries one, and that
-    /// is a <b>deferral, not an omission</b>: the bus is the only writer that will ever set these
-    /// columns, so the invariant belongs there — next to the code that knows the contract — rather
-    /// than scattered across a schema anyone can write to.
+    /// Nothing in the schema enforces that a transport row carries one: the bus is the only writer
+    /// that sets these columns, so the invariant lives there, next to the code that knows the
+    /// contract.
     /// </para>
     /// <para>
-    /// A database check constraint is the obvious alternative and is the wrong instrument. Its
-    /// predicate has to spell <c>MessageKind &lt;&gt; 'Contract'</c>, hardcoding an enum member name
-    /// into the schema: renaming a member would then break the constraint on top of the column, and
-    /// the column at least fails at compile time where the constraint fails at run time.
+    /// <b>The addressing key once a message leaves the process.</b> A transport row is handed to
+    /// <c>IMessageTransport</c> addressed by this name, and the receiving process resolves it to its
+    /// <i>own</i> local CLR type through <c>IntegrationEventRegistry.TryResolveLocalType</c>.
+    /// <see cref="EventType"/> is the deserialization key of a local row, which has no contract name
+    /// at all: the two serve disjoint sets of rows.
     /// </para>
     /// <para>
-    /// <b>The addressing key once a message leaves the process.</b> A
-    /// <see cref="MessageKind.Contract"/> row is handed to <c>IMessageTransport</c> addressed by
-    /// this name, and the receiving process resolves it to its <i>own</i> local CLR type through
-    /// <c>IntegrationEventRegistry.TryResolveLocalType</c>. <see cref="EventType"/> remains the
-    /// deserialization key on every path that stays in one process, and the two are not rivals —
-    /// they serve disjoint sets of rows, because a <see cref="MessageKind.Notification"/> row has
-    /// no contract name at all.
-    /// </para>
-    /// <para>
-    /// <b>Non-null is a precondition of dispatch, enforced by the dispatcher.</b> Nullable here
-    /// because a notification row legitimately has none; <c>TransportOutboxDispatcher</c> raises
-    /// <see cref="OutboxPayloadException"/> on a contract row that reaches it without one, since
-    /// such a row is unaddressable and no retry can change that.
+    /// <b>Non-null is a precondition of dispatch, enforced by the dispatcher.</b> A transport row
+    /// that reaches it without one is unaddressable and dead-lettered: no retry can change it.
     /// </para>
     /// </remarks>
     public string? ContractName { get; set; }
 
     /// <summary>
     /// Gets or sets the module that emitted this message, e.g. <c>/saasbtp/safety</c>.
-    /// <see langword="null"/> for a <see cref="MessageKind.Notification"/>, which never leaves the
-    /// process and so has no emitter to declare.
+    /// For a local message (<see cref="LocalEndpoint"/>), the service's own name, when it has one.
     /// </summary>
     /// <remarks>
     /// <para>
@@ -137,38 +129,16 @@ public sealed class OutboxMessage
     /// <see cref="Payload"/> — always its runtime type, never a declared or generic one.
     /// </summary>
     /// <remarks>
-    /// <b>This is not necessarily an integration event, and on the domain-event path it is
-    /// not one at all.</b> The outbox is payload-agnostic: <c>OutboxMessageFactory.CreateNotification</c>
-    /// and <c>CreateContract</c> both accept <see cref="object"/> and stamp
-    /// <c>payload.GetType().AssemblyQualifiedName</c>.
-    /// What ends up here depends on who wrote the row:
-    /// <list type="bullet">
-    ///   <item>via <c>MicroKit.Messaging.MediatR</c> — a
-    ///         <c>DomainEventNotification&lt;TEvent&gt;</c>, which is a MediatR
-    ///         <c>INotification</c> and is <b>not</b> an <see cref="IIntegrationEvent"/>;</item>
-    ///   <item>via a direct <see cref="IOutboxWriter"/> write — whatever that caller serialized,
-    ///         typically an <see cref="IIntegrationEvent"/>.</item>
-    /// </list>
-    /// Do not wire a publisher that assumes one kind. <c>IOutboxDispatcher</c> is the seam that
-    /// decides, and it routes on <see cref="MessageKind"/> rather than on the type named here:
-    /// <c>MediatROutboxDispatcher</c> serves a <see cref="MessageKind.Notification"/> row and
-    /// delegates the rest, and <c>TransportOutboxDispatcher</c> sends a
-    /// <see cref="MessageKind.Contract"/> row without deserializing it at all.
     /// <para>
-    /// <b>A local deserialization detail, not a contract.</b> An assembly-qualified name does not
-    /// cross a service boundary — the consumer does not have the producer's assembly, so
-    /// <c>Type.GetType</c> fails there; it works in process by accident. The identity a consumer
-    /// addresses is <see cref="ContractName"/>, and the nature of the row is declared by
-    /// <see cref="MessageKind"/> rather than recovered from the type named here.
+    /// <b>Not necessarily an integration event.</b> A transport row carries one; a local row
+    /// carries whatever was sent locally — a <c>DomainEventNotification&lt;TEvent&gt;</c> of
+    /// <c>MicroKit.Messaging.MediatR</c>, which is not an <see cref="IIntegrationEvent"/>.
     /// </para>
     /// <para>
-    /// <b>Where the boundary falls, exactly.</b> This property remains the deserialization key on
-    /// every path that stays in one process, and that is not a transitional state: a
-    /// <see cref="MessageKind.Notification"/> row has no <see cref="ContractName"/> at all, so it
-    /// can only ever be resolved from here. A <see cref="MessageKind.Contract"/> row handed to a
-    /// transport resolves by <see cref="ContractName"/> instead, through
-    /// <c>IntegrationEventRegistry</c>, because that is the only identity the receiving process can
-    /// act on. The two keys are therefore not rivals — they serve disjoint sets of rows.
+    /// <b>A local deserialization key, not a contract.</b> An assembly-qualified name does not cross
+    /// a service boundary — the consumer does not have the producer's assembly. A transport row is
+    /// sent without being deserialized and resolved on the far side by <see cref="ContractName"/>;
+    /// a local row, which never leaves the process, is resolved from here.
     /// </para>
     /// </remarks>
     public string EventType { get; set; } = null!;
@@ -233,7 +203,7 @@ public sealed class OutboxMessage
     /// <summary>
     /// Gets or sets the W3C <c>traceparent</c> current when this row was staged.
     /// <see langword="null"/> when there was no active activity, and on every
-    /// <see cref="MessageKind.Notification"/> row.
+    /// local row (<see cref="LocalEndpoint"/>).
     /// </summary>
     /// <remarks>
     /// <para>

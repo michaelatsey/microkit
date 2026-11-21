@@ -108,7 +108,7 @@ internal static class ReadmeSnippets
         {
             bus.ServiceName = "shop.orders";
             bus.UseEntityFrameworkOutbox<AppDbContext>();
-            bus.AddMediatRDomainEvents();    // only with MicroKit.Messaging.MediatR
+            bus.UseMediatRDomainEvents();    // only with MicroKit.Messaging.MediatR
         });
         // end-snippet
     }

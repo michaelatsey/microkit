@@ -58,29 +58,13 @@ namespace MicroKit.Messaging.Processing;
 /// message.
 /// </para>
 /// <para>
-/// <b>Known defect — deferred settlement is not transactional, and the batch window is not
-/// free.</b> The settlement write and any work the dispatcher's target performed are two
-/// separate transactions: the target commits inside the per-message scope, the outcome is
-/// buffered, and <c>ApplyOutcomesAsync</c> runs afterwards on the batch-scoped store. A crash
-/// in between replays every message in the batch.
-/// <list type="bullet">
-///   <item>Where each consumer sits behind an <b>inbox</b>, that costs duplication only — the
-///         receiver writes one row per consumer, the unique index absorbs the redelivery, and no
-///         handler runs twice.</item>
-///   <item>Where the dispatcher invokes a handler <b>in-process with no inbox row</b>, it does
-///         not. <c>MediatROutboxDispatcher</c> publishes a notification through
-///         <c>IPublisher.Publish</c>, and notification handlers have no per-consumer inbox
-///         (ADR-MSG-009): a replay re-runs every one of them and re-writes whatever they
-///         wrote. A handler that projects into a table produces its rows a second time.</item>
-/// </list>
-/// The consumer side already solved this — the inbox guard (<see cref="IInboxGuardStore"/>)
-/// commits a handler's row in the handler's own transaction, so the row and the side effects commit
-/// together (#188). The outbox needs the counterpart: a settlement store that stages the
-/// <c>Published</c> mark into the transaction the dispatch target commits, instead of writing
-/// it in a separate one afterwards. That changes <see cref="IOutboxProcessorStore"/> and is
-/// deferred to its own lot; until then the mitigation is the documented one — <b>notification
-/// handlers on this path must be idempotent</b>, and the guarantee is at-least-once, not
-/// transactionally atomic as it is on the inbox.
+/// <b>Deferred settlement costs a re-send, never a re-run.</b> The settlement write and the
+/// dispatch are two separate transactions: the outcome is buffered and <c>ApplyOutcomesAsync</c>
+/// runs afterwards on the batch-scoped store. A crash in between dispatches every message of the
+/// batch again. Every consumer sits behind an inbox row, so that costs duplication only: a transport
+/// row is re-sent and the receiver's inbox absorbs it; a local row (#188 D7) is delivered again and
+/// each consumer's row, already <c>Processed</c> or <c>Failed</c>, skips it. No handler runs twice
+/// for a replayed batch.
 /// </para>
 /// <para>
 /// <b>Ordering.</b> The loop is sequential, so messages are dispatched in claim order.
@@ -221,7 +205,7 @@ internal sealed class OutboxProcessor : IOutboxProcessor
                     ex.InnerException ?? ex,
                     message.Id.Value,
                     message.TenantId,
-                    message.MessageKind,
+                    message.Endpoint,
                     messages.Count - index);
                 break;
             }
@@ -305,7 +289,7 @@ internal sealed class OutboxProcessor : IOutboxProcessor
             holder.Store = _storeKey;
         }
 
-        var dispatcher = ResolveDispatcher(scope.ServiceProvider);
+        var dispatcher = ResolveDispatcher(scope.ServiceProvider, message);
 
         await dispatcher.DispatchAsync(message, cancellationToken).ConfigureAwait(false);
     }
@@ -384,13 +368,22 @@ internal sealed class OutboxProcessor : IOutboxProcessor
     /// activated fails that one delivery, redelivered, or that one retry, counted — never the batch.
     /// </para>
     /// </remarks>
-    private static IOutboxDispatcher ResolveDispatcher(IServiceProvider serviceProvider)
+    private static IOutboxDispatcher ResolveDispatcher(IServiceProvider serviceProvider, OutboxMessage message)
     {
+        // The row's endpoint names its dispatcher (#188 D7). A value this build cannot route is
+        // permanent for this deployment: re-reading the row will never change it.
+        var key = OutboxDispatchers.KeyOf(message)
+            ?? throw new OutboxPayloadException(
+                $"Outbox message {message.Id} carries endpoint '{message.Endpoint}', which this build " +
+                "cannot route: a row is dispatched to the transport (no endpoint) or to the local " +
+                $"endpoint ('{OutboxMessage.LocalEndpoint}'). The row was written by another version " +
+                "or edited by hand.");
+
         IOutboxDispatcher? dispatcher;
 
         try
         {
-            dispatcher = serviceProvider.GetService<IOutboxDispatcher>();
+            dispatcher = serviceProvider.GetKeyedService<IOutboxDispatcher>(key);
         }
         catch (InvalidOperationException ex) when (ex is not ObjectDisposedException)
         {
@@ -399,10 +392,13 @@ internal sealed class OutboxProcessor : IOutboxProcessor
 
         return dispatcher
             ?? throw new OutboxConfigurationException(
-                $"{nameof(IOutboxDispatcher)} is not registered, so no outbox row can be dispatched. " +
-                "Register a transport — bus.UseInMemoryTransport(), or a broker provider's " +
-                "Add{Provider}Transport() — or AddMediatRDomainEvents() for domain-event " +
-                "notifications. Retrying will not help.");
+                key is OutboxDispatchers.Transport
+                    ? $"Outbox message {message.Id} is bound for the transport, but no transport is " +
+                      "registered, so it cannot be dispatched. Register one — bus.UseInMemoryTransport(), " +
+                      "or a broker provider's Add{Provider}Transport(). Retrying will not help."
+                    : $"Outbox message {message.Id} is bound for the local endpoint, but its dispatcher " +
+                      "is not registered. The store engine registers it with every store; a container " +
+                      "missing it was composed outside AddMicroKitMessaging. Retrying will not help.");
     }
 
     private OutboxOutcome BuildTransientOutcome(OutboxMessage message, Exception ex)

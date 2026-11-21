@@ -44,7 +44,7 @@ public sealed class OutboxEnlistmentTests
             }
 
             var row = (await fixture.ReadOutboxAsync()).ShouldHaveSingleItem();
-            row.MessageKind.ShouldBe(MessageKind.Contract);
+            row.Endpoint.ShouldBeNull("a contract is bound for the transport");
             row.ContractName.ShouldBe("tests.enlistment.event.v1");
             row.Source.ShouldBe(Fixture.ServiceName);
             row.Status.ShouldBe(OutboxMessageStatus.Pending);

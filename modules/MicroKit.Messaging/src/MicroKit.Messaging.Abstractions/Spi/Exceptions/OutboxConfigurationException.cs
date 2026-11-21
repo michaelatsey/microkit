@@ -15,21 +15,11 @@ namespace MicroKit.Messaging.Spi;
 /// exception propagate for an ordinary transient fault.
 /// </para>
 /// <para>
-/// <b>Raised from two kinds of place, both of which establish the fault before any delivery is
-/// attempted.</b>
-/// <list type="bullet">
-///   <item><b>Service resolution, when nothing is registered</b> — <c>OutboxProcessor</c>
-///         resolves <see cref="IOutboxDispatcher"/>, and the scope's origin holder, with
-///         <c>GetService</c>, and raises this only when the container returns
-///         <see langword="null"/>: the service is not registered at all.</item>
-///   <item><b>A dispatcher handed a row it structurally cannot serve in this composition</b> —
-///         <c>TransportOutboxDispatcher</c> raises it for a <see cref="MessageKind.Notification"/>
-///         row, which nothing in the process can fan out unless
-///         <c>MicroKit.Messaging.MediatR</c> is registered; <c>MediatROutboxDispatcher</c> raises it
-///         for any other row when no standard dispatcher is registered behind it to take the row. The
-///         row is valid and the payload is fine; its arrival is what proves a registration is
-///         missing.</item>
-/// </list>
+/// <b>Raised by service resolution, before any delivery is attempted.</b> <c>OutboxProcessor</c>
+/// resolves the dispatcher of each row's endpoint with <c>GetService</c>, and raises this only when
+/// the container returns <see langword="null"/>: the dispatcher is not registered at all — a
+/// transport row in a host that registers no transport. The row is valid; its arrival is what proves
+/// a registration is missing.
 /// A <see cref="IMessageTransport"/> implementation must <b>not</b> raise it — see that
 /// interface's remarks. By the time a transport runs, the composition has already been proven
 /// adequate by the fact that the transport was resolved and called.

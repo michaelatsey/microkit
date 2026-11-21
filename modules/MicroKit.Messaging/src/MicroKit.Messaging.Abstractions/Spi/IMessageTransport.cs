@@ -59,8 +59,8 @@ namespace MicroKit.Messaging.Spi;
 /// provider supplies its own implementation from its <c>Add{Provider}Transport()</c> extension.
 /// <b>With no transport registered</b>, a declared publication fails at host start, and a
 /// publication throws. The outbox's transport dispatcher is registered with the transport (#187), so a
-/// <see cref="MessageKind.Contract"/> row that still reaches a host without one is a missing
-/// registration: the batch is released, no retry is consumed, and the worker stops.
+/// transport row that still reaches a host without one is a missing registration: the batch is
+/// released, no retry is consumed, and the store's outbox loop stops.
 /// </para>
 /// <para>
 /// <b>Lifetime.</b> <c>UseInMemoryTransport()</c> registers the in-memory transport as a
@@ -125,12 +125,9 @@ public interface IMessageTransport
     /// <i>registered</i> dispatcher is not that case: the container throws
     /// <see cref="InvalidOperationException"/> while activating the dispatcher, and the processor
     /// releases the batch without rethrowing
-    /// (<c>OutboxBatchAbortReason.DispatcherActivationFailed</c>). An
-    /// <c>IOutboxDispatcher</c> may also raise it for
-    /// a row it <i>structurally cannot serve in this composition</i>: <c>TransportOutboxDispatcher</c>
-    /// does so for a <see cref="MessageKind.Notification"/> row, which is a perfectly good row that
-    /// only <c>MicroKit.Messaging.MediatR</c> can fan out, so its arrival proves that package is
-    /// not registered. Both are properties of the composition, decided before the message is sent.
+    /// (<c>OutboxBatchAbortReason.DispatcherActivationFailed</c>). The commonest case of the first is
+    /// a transport row reaching a host with no transport registered at all. It is a property of the
+    /// composition, decided before the message is sent.
     /// A transport's failures never are: by the time it runs, the composition has already been
     /// proven adequate by the fact that the transport was resolved and called at all.
     /// </para>

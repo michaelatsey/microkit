@@ -600,6 +600,7 @@ public sealed class InboxProcessorTests
         return new InboxProcessor(
             store,
             registry,
+            new LocalConsumerRegistry(new MessagingComposition()),
             contracts,
             serializer ?? RoundTripSerializer(),
             harness.Pipeline,

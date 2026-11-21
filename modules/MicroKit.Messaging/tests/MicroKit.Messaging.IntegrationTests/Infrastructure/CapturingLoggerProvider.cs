@@ -10,7 +10,8 @@ internal readonly record struct CapturedLogEntry(
     string CategoryName,
     string RenderedMessage,
     string? ExceptionTypeName,
-    IReadOnlyList<KeyValuePair<string, object?>> State)
+    IReadOnlyList<KeyValuePair<string, object?>> State,
+    DateTimeOffset At)
 {
     /// <summary>A single-line form suitable for verbatim reporting.</summary>
     public override string ToString()
@@ -87,6 +88,7 @@ internal sealed class CapturingLoggerProvider : ILoggerProvider
                 categoryName,
                 formatter(state, exception),
                 exception?.GetType().Name,
-                state as IReadOnlyList<KeyValuePair<string, object?>> ?? []));
+                state as IReadOnlyList<KeyValuePair<string, object?>> ?? [],
+                DateTimeOffset.UtcNow));
     }
 }

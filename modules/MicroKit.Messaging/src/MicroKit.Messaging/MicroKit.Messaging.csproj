@@ -20,11 +20,6 @@
   </PropertyGroup>
   <ItemGroup>
     <InternalsVisibleTo Include="MicroKit.Messaging.UnitTests" />
-    <InternalsVisibleTo Include="MicroKit.Messaging.MediatR" />
-    <!-- OutboxDomainEventSinkTests constructs the internal OutboxMessageFactory as a collaborator:
-         ADR-MSG-008 §2 defers an IOutboxMessageMapper until a second implementation exists, so the
-         sealed class cannot be doubled. -->
-    <InternalsVisibleTo Include="MicroKit.Messaging.MediatR.UnitTests" />
     <!-- IOutboxProcessor / IInboxProcessor are internal (#185; #188 keys them by store). The
          integration suites drive one deterministic batch through the store's keyed processor, and
          no public API offers that: InboxSettlementGuaranteeTests, TwoStoresTests and E2EHarness.

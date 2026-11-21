@@ -100,6 +100,7 @@ internal sealed class GuardHarness
         var pipeline = new MessageReceivePipeline(
             contracts,
             handlers,
+            new LocalConsumerRegistry(composition),
             new MicroKit.Messaging.Serialization.SystemTextJsonMessageSerializer(),
             scopes,
             new MessageStoreResolver(composition, new StaticMessageStoreSet(composition)),

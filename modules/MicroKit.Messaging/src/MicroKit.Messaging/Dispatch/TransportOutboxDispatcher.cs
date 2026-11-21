@@ -4,8 +4,9 @@ using System.Text;
 using MicroKit.Messaging.Serialization;
 
 /// <summary>
-/// The standard <see cref="IOutboxDispatcher"/>: turns a <see cref="MessageKind.Contract"/> row
-/// into a <see cref="MessageEnvelope"/> and hands it to <see cref="IMessageTransport"/>.
+/// The transport <see cref="IOutboxDispatcher"/>: turns a transport row (no
+/// <see cref="OutboxMessage.Endpoint"/>) into a <see cref="MessageEnvelope"/> and hands it to
+/// <see cref="IMessageTransport"/>.
 /// </summary>
 /// <remarks>
 /// <para>
@@ -46,8 +47,9 @@ using MicroKit.Messaging.Serialization;
 /// it. Wrapping or re-typing anything here would destroy the only signal the engine has.
 /// </para>
 /// <para>
-/// Registered as <b>scoped</b> with the transport, by <c>UseInMemoryTransport()</c>; the processor
-/// resolves it from the per-message execution scope.
+/// Registered as <b>scoped</b> with the transport, keyed <see cref="OutboxDispatchers.Transport"/>,
+/// by <c>UseInMemoryTransport()</c> or a broker provider; the processor resolves it from the
+/// per-message execution scope.
 /// </para>
 /// </remarks>
 internal sealed class TransportOutboxDispatcher(
@@ -56,76 +58,31 @@ internal sealed class TransportOutboxDispatcher(
     : IOutboxDispatcher
 {
     /// <inheritdoc />
-    /// <exception cref="OutboxConfigurationException">
-    /// The row is a <see cref="MessageKind.Notification"/>. Nothing in this process can fan one
-    /// out, because the package that does — <c>MicroKit.Messaging.MediatR</c> — is not registered.
-    /// See the method remarks for why this is a configuration fault rather than a payload one.
-    /// </exception>
     /// <exception cref="OutboxPayloadException">
-    /// The row can never be dispatched without the persisted row itself changing: a
-    /// <see cref="MessageKind.Contract"/> row missing its <see cref="OutboxMessage.ContractName"/>
-    /// or <see cref="OutboxMessage.Source"/>, or a <see cref="OutboxMessage.MessageKind"/> this
-    /// build cannot interpret at all.
+    /// The transport row carries no <see cref="OutboxMessage.ContractName"/> or no
+    /// <see cref="OutboxMessage.Source"/>: unaddressable, and no retry rewrites a persisted row.
     /// </exception>
     /// <remarks>
-    /// <para>
-    /// <b>Why a notification is a configuration fault and not a poison payload.</b> The payload is
-    /// fine, the row is fine, and it would dispatch correctly the moment
-    /// <c>AddMediatRDomainEvents()</c> is called — something staged a notification and nothing here
-    /// can fan it out, which is the definition of a missing registration. The classification is not
-    /// cosmetic: <see cref="OutboxPayloadException"/> dead-letters on <i>first sight</i>, so a host
-    /// that forgot one line in its composition root would silently dead-letter every domain event
-    /// in the system on the first poll, recoverable only by operator requeue.
-    /// <see cref="OutboxConfigurationException"/> instead releases the entire batch untouched,
-    /// consumes no retry budget, and stops the worker — the rows stay <c>Pending</c>, and deploying
-    /// the missing package drains them. Loud and reversible beats loud and destructive.
-    /// </para>
-    /// <para>
-    /// <b>Why an unknown kind is the opposite.</b> The asymmetry is deliberate.
-    /// <see cref="MessageKind"/> is persisted as a string, so a row written by a later build — or
-    /// edited by hand — can carry a value this build cannot interpret. A notification is a kind
-    /// this build <i>understands</i> and cannot serve, fixable by deployment; an unknown kind
-    /// cannot be interpreted at all, and re-reading the row will not change that. Permanent for
-    /// this deployment, so it dead-letters.
-    /// </para>
+    /// Reached only for a transport row: <c>OutboxProcessor</c> resolves the dispatcher keyed by the
+    /// row's <see cref="OutboxMessage.Endpoint"/> (<see cref="OutboxDispatchers"/>), so a local row
+    /// never gets here and this class needs no routing of its own.
     /// </remarks>
     public async ValueTask DispatchAsync(OutboxMessage message, CancellationToken ct = default)
     {
         ArgumentNullException.ThrowIfNull(message);
-
-        switch (message.MessageKind)
-        {
-            case MessageKind.Contract:
-                await SendAsync(message, ct).ConfigureAwait(false);
-                return;
-
-            case MessageKind.Notification:
-                throw new OutboxConfigurationException(
-                    $"Outbox message {message.Id} is a {nameof(MessageKind.Notification)}, which " +
-                    "this process has no way to dispatch: notifications are fanned out in-process " +
-                    "by MicroKit.Messaging.MediatR, and it is not registered. Call " +
-                    "AddMediatRDomainEvents() on the MessagingBuilder, or stop staging " +
-                    $"notifications. EventType: '{message.EventType}'.");
-
-            default:
-                throw new OutboxPayloadException(
-                    $"Outbox message {message.Id} carries MessageKind '{message.MessageKind}', " +
-                    "which this build cannot interpret. The column is persisted as a string, so " +
-                    "this row was most likely written by a later version of MicroKit.Messaging or " +
-                    "edited by hand. No composition of this build can route it.");
-        }
+        await SendAsync(message, ct).ConfigureAwait(false);
     }
 
     private async ValueTask SendAsync(OutboxMessage message, CancellationToken ct)
     {
-        // The row permits null on both columns because a notification legitimately has neither.
-        // A contract row that reaches here without them is unaddressable, and the entity enforces
+        // The row permits null on both columns because a local row legitimately has no contract.
+        // A transport row that reaches here without them is unaddressable, and the entity enforces
         // no pairing invariant — it is an EF Core entity with no constructor to enforce one in, so
         // this is the last place the check can happen. Permanent: no retry rewrites a persisted row.
         if (string.IsNullOrWhiteSpace(message.ContractName))
         {
             throw new OutboxPayloadException(
-                $"Outbox message {message.Id} is a {nameof(MessageKind.Contract)} but carries no " +
+                $"Outbox message {message.Id} is a transport row but carries no " +
                 "ContractName. A contract is addressed on the wire by that name and by nothing " +
                 "else, so this row can never be sent. Whoever staged it must set it; the bus " +
                 "always does.");
@@ -134,7 +91,7 @@ internal sealed class TransportOutboxDispatcher(
         if (string.IsNullOrWhiteSpace(message.Source))
         {
             throw new OutboxPayloadException(
-                $"Outbox message {message.Id} is a {nameof(MessageKind.Contract)} but carries no " +
+                $"Outbox message {message.Id} is a transport row but carries no " +
                 $"Source. The emitting module travels with every contract ('{message.ContractName}' " +
                 "here) and is stamped at staging from the module's registered source. Whoever " +
                 "staged this row did not set it.");

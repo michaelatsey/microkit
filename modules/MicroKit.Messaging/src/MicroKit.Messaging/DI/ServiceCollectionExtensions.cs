@@ -1,7 +1,9 @@
 using MicroKit.Messaging.Bus;
 using MicroKit.Messaging.Execution;
+using MicroKit.Messaging.Local;
 using MicroKit.Messaging.Outbox;
 using MicroKit.Messaging.Publishing;
+using MicroKit.Messaging.Registry;
 using MicroKit.Messaging.Serialization;
 using MicroKit.Messaging.Stores;
 using Microsoft.Extensions.DependencyInjection.Extensions;
@@ -188,5 +190,12 @@ public static class ServiceCollectionExtensions
         // needs is created per handler through IExecutionScopeFactory.
         services.TryAddSingleton<MessageReceivePipeline>();
 
+        // The local endpoint (#188 D7): the consumers the integration packages supply, the sender
+        // they enlist or queue through, and — for a host with no store — the in-memory queue. Its
+        // worker comes with the first consumer source (AddLocalConsumerSource): a host with no
+        // local consumer runs no hosted service of the bus's own.
+        services.TryAddSingleton<LocalConsumerRegistry>();
+        services.TryAddScoped<ILocalMessageSender, LocalMessageSender>();
+        services.TryAddSingleton<LocalQueue>();
     }
 }

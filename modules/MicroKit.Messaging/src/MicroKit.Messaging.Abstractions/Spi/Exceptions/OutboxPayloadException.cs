@@ -1,7 +1,7 @@
 namespace MicroKit.Messaging.Spi;
 
 /// <summary>
-/// Thrown by an <see cref="IOutboxDispatcher"/> when a message can never be dispatched
+/// Thrown on the outbox dispatch path — by an <see cref="IMessageTransport"/> or the engine — when a message can never be dispatched
 /// successfully without the persisted row itself being changed.
 /// </summary>
 /// <remarks>

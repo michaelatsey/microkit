@@ -5,6 +5,7 @@ using MicroKit.Messaging.Execution;
 using MicroKit.Messaging.Processing;
 using MicroKit.Messaging.Publishing;
 using MicroKit.Messaging.Registry;
+using MicroKit.Messaging.Serialization;
 using MicroKit.Messaging.Stores;
 using MessageCtx = MicroKit.Messaging.Execution.ExecutionContext;
 
@@ -62,6 +63,7 @@ using MessageCtx = MicroKit.Messaging.Execution.ExecutionContext;
 internal sealed class MessageReceivePipeline(
     IntegrationEventRegistry contracts,
     MessageHandlerRegistry handlers,
+    LocalConsumerRegistry localConsumers,
     IMessageSerializer serializer,
     IExecutionScopeFactory scopeFactory,
     MessageStoreResolver stores,
@@ -104,15 +106,68 @@ internal sealed class MessageReceivePipeline(
                 ex);
         }
 
+        return await DeliverPreparedAsync(prepared, ct).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// Delivers one local message (#188 D7) — an outbox row routed to the local endpoint, or an entry
+    /// of the in-memory queue of a host with no store — to one local consumer or to every local
+    /// consumer of its type, as a transport delivery reaches its handlers: each guarded by its inbox
+    /// row when it has a store.
+    /// </summary>
+    /// <param name="message">The local row: its type, payload and metadata.</param>
+    /// <param name="consumerType">
+    /// One consumer to deliver to — an entry of the in-memory queue of a host with no store — or
+    /// <see langword="null"/> for every consumer of the type, each guarded by its own inbox row.
+    /// </param>
+    /// <param name="ct">The host's token; its cancellation means shutdown.</param>
+    /// <returns>The verdict, for the outbox loop or the local queue to settle.</returns>
+    /// <remarks>
+    /// Its context carries no contract — <see cref="MessageContext.ContractName"/> is empty and
+    /// <see cref="MessageContext.ContractVersion"/> zero — and its headers are rebuilt from the
+    /// row's columns, as the transport dispatcher builds an envelope's.
+    /// </remarks>
+    public async ValueTask<DeliveryOutcome> DeliverLocalAsync(
+        OutboxMessage message, string? consumerType = null, CancellationToken ct = default)
+    {
+        ArgumentNullException.ThrowIfNull(message);
+
+        Prepared prepared;
+        try
+        {
+            var result = PrepareLocal(message, consumerType, ct);
+            if (result.Outcome is { } early)
+            {
+                return early;
+            }
+
+            prepared = result.Prepared!.Value;
+        }
+        catch (Exception ex) when (IsShutdown(ex, ct))
+        {
+            return new DeliveryOutcome(DeliveryVerdict.Unsettled, ex);
+        }
+        catch (Exception ex)
+        {
+            return DeliveryOutcome.Permanent(
+                $"Local message '{message.Id}' ('{message.EventType}') failed before any consumer: {ex.Message}",
+                ex);
+        }
+
+        return await DeliverPreparedAsync(prepared, ct).ConfigureAwait(false);
+    }
+
+    /// <summary>The per-handler stage, shared by a transport delivery and a local one.</summary>
+    private async ValueTask<DeliveryOutcome> DeliverPreparedAsync(Prepared prepared, CancellationToken ct)
+    {
         var outcome = DeliveryOutcome.Success;
 
         foreach (var entry in prepared.Entries)
         {
             var store = stores.ForHandler(entry.HandlerType);
             var handlerOutcome = store is null
-                ? await DeliverToHandlerAsync(entry, prepared.Message, prepared.Context, envelope, ct)
-                    .ConfigureAwait(false)
-                : await DeliverGuardedAsync(entry, prepared, envelope, store, ct).ConfigureAwait(false);
+                ? await DeliverToHandlerAsync(entry, prepared, ct).ConfigureAwait(false)
+                : await DeliverGuardedAsync(entry, prepared, store, ct).ConfigureAwait(false);
 
             if (handlerOutcome.Verdict is DeliveryVerdict.Unsettled)
             {
@@ -146,7 +201,7 @@ internal sealed class MessageReceivePipeline(
     public async ValueTask<RetryOutcome> RetryAsync(
         InboxMessage row,
         MessageHandlerRegistry.HandlerEntry entry,
-        IIntegrationEvent message,
+        object message,
         MessageContext context,
         Guid claimToken,
         MessageStoreKey store,
@@ -229,7 +284,7 @@ internal sealed class MessageReceivePipeline(
             return (DeliveryOutcome.Permanent($"Message id '{envelope.Id}' is not a GUID."), null);
         }
 
-        IIntegrationEvent message;
+        object message;
         try
         {
             message = serializer.Deserialize(envelope.Body, eventType) as IIntegrationEvent
@@ -254,24 +309,132 @@ internal sealed class MessageReceivePipeline(
         }
 
         var context = BuildContext(envelope, eventType, MessageId.From(id));
-        return (null, new Prepared(message, context, entries, eventType));
+        var incoming = new Incoming(
+            envelope.Id, envelope.Type, envelope.Source, envelope.Time, envelope.Headers,
+            () => Encoding.UTF8.GetString(envelope.Body.Span));
+        return (null, new Prepared(message, context, entries, eventType, incoming));
+    }
+
+    /// <summary>
+    /// <see cref="Prepare"/> for a local row: its type from <see cref="OutboxMessage.EventType"/>,
+    /// its consumers from the local registry, its context from its columns.
+    /// </summary>
+    private (DeliveryOutcome? Outcome, Prepared? Prepared) PrepareLocal(
+        OutboxMessage row, string? consumerType, CancellationToken ct)
+    {
+        var id = row.Id.Value.ToString();
+        var eventType = RowEventTypes.Resolve(row.EventType);
+        if (eventType is null)
+        {
+            return (DeliveryOutcome.Permanent(
+                $"Local message type '{row.EventType}' resolves to no type in this process."), null);
+        }
+
+        object message;
+        try
+        {
+            message = serializer.Deserialize(Encoding.UTF8.GetBytes(row.Payload), eventType)
+                ?? throw new InboxPayloadException($"The payload deserialized to null, not '{eventType.FullName}'.");
+        }
+        catch (Exception ex) when (!IsShutdown(ex, ct))
+        {
+            return (DeliveryOutcome.Permanent(
+                $"The payload of local message '{id}' cannot be deserialized into '{eventType.FullName}'.",
+                ex), null);
+        }
+
+        var source = row.Source ?? string.Empty;
+        IReadOnlyList<MessageHandlerRegistry.HandlerEntry> entries = consumerType is null
+            ? localConsumers.GetConsumers(eventType)
+            : localConsumers.TryGetConsumer(consumerType, eventType, out var only) ? [only] : [];
+        if (entries.Count == 0)
+        {
+            BusLogs.NoHandler(logger, id, eventType.FullName!, source, eventType.FullName!);
+            metrics.RecordUnconsumed(eventType.FullName!);
+            return (DeliveryOutcome.Success, null);
+        }
+
+        var headers = LocalHeaders(row);
+        var context = new MessageContext
+        {
+            MessageId = row.Id,
+            ContractName = string.Empty,
+            ContractVersion = 0,
+            Source = source,
+            OccurredOnUtc = row.OccurredOnUtc,
+            TenantId = row.TenantId,
+            CorrelationId = headers.GetValueOrDefault(MessageHeaders.CorrelationId) ?? Guid.NewGuid().ToString(),
+            CausationId = row.CausationId?.Value.ToString(),
+            Headers = headers,
+        };
+
+        var incoming = new Incoming(id, eventType.FullName!, source, row.OccurredOnUtc, headers, () => row.Payload);
+        return (null, new Prepared(message, context, entries, eventType, incoming));
+    }
+
+    /// <summary>A local row's headers: its own, then the reserved ones from its columns.</summary>
+    private static Dictionary<string, string> LocalHeaders(OutboxMessage row)
+    {
+        var headers = new Dictionary<string, string>(StringComparer.Ordinal);
+        if (row.Headers is { } extra)
+        {
+            foreach (var (name, value) in extra)
+            {
+                if (!MessageHeaders.IsReserved(name))
+                {
+                    headers[name] = value;
+                }
+            }
+        }
+
+        if (row.CorrelationId is not null)
+        {
+            headers[MessageHeaders.CorrelationId] = row.CorrelationId.Value.ToString();
+        }
+
+        if (row.TenantId is not null)
+        {
+            headers[MessageHeaders.TenantId] = row.TenantId;
+        }
+
+        if (row.CausationId is not null)
+        {
+            headers[MessageHeaders.CausationId] = row.CausationId.Value.ToString();
+        }
+
+        return headers;
     }
 
     /// <summary>What the per-handler stage needs, resolved once per delivery.</summary>
     private readonly record struct Prepared(
-        IIntegrationEvent Message,
+        object Message,
         MessageContext Context,
         IReadOnlyList<MessageHandlerRegistry.HandlerEntry> Entries,
-        Type EventType);
+        Type EventType,
+        Incoming Incoming);
+
+    /// <summary>The arriving message, whatever carried it: what logs name and an inbox row records.</summary>
+    /// <param name="Id">The message id, as carried.</param>
+    /// <param name="Type">The wire type, or a local message's type name.</param>
+    /// <param name="Source">The emitting service.</param>
+    /// <param name="Time">When it occurred.</param>
+    /// <param name="Headers">Its headers, reserved ones included.</param>
+    /// <param name="Payload">Its body as text, decoded only when a row is written.</param>
+    private sealed record Incoming(
+        string Id,
+        string Type,
+        string Source,
+        DateTimeOffset Time,
+        IReadOnlyDictionary<string, string> Headers,
+        Func<string> Payload);
 
     /// <summary>One handler, with no store: the #186 path, unchanged.</summary>
     private async ValueTask<DeliveryOutcome> DeliverToHandlerAsync(
         MessageHandlerRegistry.HandlerEntry entry,
-        IIntegrationEvent message,
-        MessageContext context,
-        MessageEnvelope envelope,
+        Prepared prepared,
         CancellationToken ct)
     {
+        var (message, context, envelope) = (prepared.Message, prepared.Context, prepared.Incoming);
         try
         {
             var executionContext = ExecutionContextOf(context);
@@ -302,13 +465,13 @@ internal sealed class MessageReceivePipeline(
     private async ValueTask<DeliveryOutcome> DeliverGuardedAsync(
         MessageHandlerRegistry.HandlerEntry entry,
         Prepared prepared,
-        MessageEnvelope envelope,
         MessageStoreKey store,
         CancellationToken ct)
     {
         var context = prepared.Context;
+        var envelope = prepared.Incoming;
         var key = new InboxMessageKey(context.MessageId, entry.ConsumerType);
-        var rows = new RowFactory(prepared, envelope, entry.ConsumerType, retryPolicy.Clock);
+        var rows = new RowFactory(prepared, entry.ConsumerType, retryPolicy.Clock);
         var attempt = new GuardedAttempt(entry, prepared.Message, context, ExecutionContextOf(context), store, key)
         {
             NewRow = rows,
@@ -568,7 +731,7 @@ internal sealed class MessageReceivePipeline(
     private static async ValueTask RunHandlerAsync(
         IServiceProvider services,
         MessageHandlerRegistry.HandlerEntry entry,
-        IIntegrationEvent message,
+        object message,
         MessageContext context,
         CancellationToken ct)
     {
@@ -588,15 +751,7 @@ internal sealed class MessageReceivePipeline(
                 ? middlewares[index].InvokeAsync(receiveContext, () => RunAsync(index + 1), ct)
                 : InvokeHandlerAsync();
 
-        ValueTask InvokeHandlerAsync()
-        {
-            var handler = services.GetService(entry.HandlerType)
-                ?? throw new InvalidOperationException(
-                    $"Handler '{entry.HandlerType.FullName}' is in the handler registry but " +
-                    "not in the service provider.");
-
-            return entry.Invoker(handler, message, context, ct);
-        }
+        ValueTask InvokeHandlerAsync() => entry.Invoke(services, message, context, ct);
     }
 
     private static IInboxGuardStore? ResolveGuard(IServiceProvider services, MessageStoreKey store)
@@ -670,7 +825,7 @@ internal sealed class MessageReceivePipeline(
     /// <summary>The state of one guarded handler across its attempts.</summary>
     private sealed class GuardedAttempt(
         MessageHandlerRegistry.HandlerEntry entry,
-        IIntegrationEvent message,
+        object message,
         MessageContext context,
         MessageCtx executionContext,
         MessageStoreKey store,
@@ -678,7 +833,7 @@ internal sealed class MessageReceivePipeline(
     {
         public MessageHandlerRegistry.HandlerEntry Entry { get; } = entry;
 
-        public IIntegrationEvent Message { get; } = message;
+        public object Message { get; } = message;
 
         public MessageContext Context { get; } = context;
 
@@ -703,7 +858,7 @@ internal sealed class MessageReceivePipeline(
 
     /// <summary>Builds the inbox row of a new delivery, a fresh instance per attempt.</summary>
     private sealed class RowFactory(
-        Prepared prepared, MessageEnvelope envelope, string consumerType, TimeProvider clock)
+        Prepared prepared, string consumerType, TimeProvider clock)
     {
         // Decoded only when a row is written: a skipped redelivery never pays for it.
         private string? _payload;
@@ -719,14 +874,14 @@ internal sealed class MessageReceivePipeline(
                 ConsumerType = consumerType,
                 TenantId = context.TenantId,
                 EventType = prepared.EventType.AssemblyQualifiedName!,
-                Payload = _payload ??= Encoding.UTF8.GetString(envelope.Body.Span),
-                Source = envelope.Source,
-                Headers = envelope.Headers.Count == 0
+                Payload = _payload ??= prepared.Incoming.Payload(),
+                Source = prepared.Incoming.Source,
+                Headers = prepared.Incoming.Headers.Count == 0
                     ? null
-                    : new Dictionary<string, string>(envelope.Headers, StringComparer.Ordinal),
+                    : new Dictionary<string, string>(prepared.Incoming.Headers, StringComparer.Ordinal),
                 Status = status,
                 ReceivedAtUtc = now,
-                OccurredOnUtc = envelope.Time,
+                OccurredOnUtc = prepared.Incoming.Time,
                 ProcessedAtUtc = status is InboxMessageStatus.Processed ? now : null,
                 // The columns are GUIDs; a correlation that is not one is not recorded (#206).
                 CorrelationId = Guid.TryParse(context.CorrelationId, out var correlation)

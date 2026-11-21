@@ -1,7 +1,7 @@
 namespace MicroKit.Messaging.Spi;
 
 /// <summary>
-/// Thrown by an <see cref="IOutboxDispatcher"/> when the transport is unreachable,
+/// Thrown by an <see cref="IMessageTransport"/> when the transport is unreachable,
 /// making every remaining message in the batch equally undispatchable.
 /// </summary>
 /// <remarks>

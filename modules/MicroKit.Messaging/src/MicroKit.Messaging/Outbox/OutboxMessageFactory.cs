@@ -9,15 +9,11 @@ using MicroKit.Messaging.Serialization;
 /// </summary>
 /// <remarks>
 /// <para>
-/// Two methods rather than one with a <see cref="MessageKind"/> parameter: the two paths agree on
-/// almost nothing. A notification's identity and occurrence time are intrinsic to its domain event
-/// and its metadata comes from the scope; a contract's are those the bus already put on the
-/// publication, and only a contract carries a contract name, a source, headers and a trace parent.
-/// </para>
-/// <para>
-/// Both set <see cref="OutboxMessage.MessageKind"/> explicitly. <c>Notification</c> is the enum's
-/// zero value, so leaving it unset would be correct by accident; with a sibling that sets
-/// <c>Contract</c>, an omission would read as one.
+/// Two methods, because the two paths agree on almost nothing. A local message's identity and
+/// occurrence time are given by its sender and its metadata comes from the scope; a contract's are
+/// those the bus already put on the publication, and only a contract carries a contract name,
+/// headers and a trace parent. Only the local one sets <see cref="OutboxMessage.Endpoint"/>: a
+/// transport row is the column's null.
 /// </para>
 /// <para>
 /// Singleton-safe: <see cref="IExecutionContext"/> is a method parameter, never a constructor
@@ -35,44 +31,31 @@ using MicroKit.Messaging.Serialization;
 internal sealed class OutboxMessageFactory(IMessageSerializer serializer, TimeProvider timeProvider)
 {
     /// <summary>
-    /// Creates a <see cref="MessageKind.Notification"/> row — a domain event fanned out in process.
+    /// Builds a local message's row (#188 D7): routed to <see cref="OutboxMessage.LocalEndpoint"/>,
+    /// with no contract, its tenant, correlation and causation taken from the sender's scope.
     /// </summary>
-    /// <param name="payload">
-    /// The object to serialize into <see cref="OutboxMessage.Payload"/>. Any runtime type is
-    /// accepted; serialization uses <c>payload.GetType()</c>. In the domain-event flow this is
-    /// typically an <c>IDomainEventNotification{TEvent}</c> (from <c>MicroKit.Messaging.MediatR</c>).
-    /// </param>
-    /// <param name="messageId">
-    /// The stable, end-to-end identifier. Supplied by the caller from the domain event's intrinsic
-    /// <c>EventId</c> so that the outbox row and the inbox dedup key share the same identity.
-    /// </param>
-    /// <param name="occurredOnUtc">
-    /// The UTC time at which the domain event occurred. Sourced from the domain event's intrinsic
-    /// <c>OccurredAt</c> property.
-    /// </param>
-    /// <param name="context">
-    /// The ambient execution context supplying <c>TenantId</c>, <c>CorrelationId</c> and
-    /// <c>CausationId</c>.
-    /// </param>
-    /// <returns>
-    /// A pending <see cref="MessageKind.Notification"/> row. It carries no
-    /// <see cref="OutboxMessage.ContractName"/> or <see cref="OutboxMessage.Source"/>: a
-    /// notification never leaves the process, so it
-    /// has no wire identity and no emitter to declare.
-    /// </returns>
-    public OutboxMessage CreateNotification(
+    /// <param name="payload">The message; its runtime type is the deserialization key.</param>
+    /// <param name="messageId">The message's identity — every consumer's inbox key.</param>
+    /// <param name="occurredOnUtc">When the fact it announces happened.</param>
+    /// <param name="source">The service's name.</param>
+    /// <param name="context">The sender's execution context.</param>
+    /// <returns>The unsaved row.</returns>
+    public OutboxMessage CreateLocal(
         object payload,
-        Guid messageId,
+        MessageId messageId,
         DateTimeOffset occurredOnUtc,
+        string? source,
         IExecutionContext context)
     {
         ArgumentNullException.ThrowIfNull(payload);
+        ArgumentNullException.ThrowIfNull(messageId);
         ArgumentNullException.ThrowIfNull(context);
 
         return new OutboxMessage
         {
-            Id = MessageId.From(messageId),
-            MessageKind = MessageKind.Notification,
+            Id = messageId,
+            Endpoint = OutboxMessage.LocalEndpoint,
+            Source = source,
             EventType = payload.GetType().AssemblyQualifiedName!,
             Payload = SerializeAsText(payload),
             TenantId = context.TenantId,   // null pass-through — ADR-MSG-008 §5
@@ -86,7 +69,7 @@ internal sealed class OutboxMessageFactory(IMessageSerializer serializer, TimePr
     }
 
     /// <summary>
-    /// Creates a <see cref="MessageKind.Contract"/> row — an integration event bound for a
+    /// Creates a transport row — an integration event bound for a
     /// transport — from a publication the bus has already addressed and headed.
     /// </summary>
     /// <param name="payload">The integration event. Business payload only.</param>
@@ -98,7 +81,7 @@ internal sealed class OutboxMessageFactory(IMessageSerializer serializer, TimePr
     /// The envelope headers the bus built: the reserved ones become the row's columns, the others
     /// its <see cref="OutboxMessage.Headers"/>.
     /// </param>
-    /// <returns>A pending <see cref="MessageKind.Contract"/> row.</returns>
+    /// <returns>A pending transport row.</returns>
     /// <remarks>
     /// The reserved headers are read back from what the bus wrote, never from the scope again, so
     /// the row carries exactly what a direct send would have put on the envelope — the trace parent
@@ -125,7 +108,6 @@ internal sealed class OutboxMessageFactory(IMessageSerializer serializer, TimePr
         return new OutboxMessage
         {
             Id = messageId,
-            MessageKind = MessageKind.Contract,
             ContractName = contractName,
             Source = source,
 

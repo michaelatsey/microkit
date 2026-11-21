@@ -6,11 +6,10 @@ namespace MicroKit.Messaging.MediatR.IntegrationTests;
 /// core orchestrator invokes. Both callers of <c>DispatchEventsAsync</c> must reach it.
 /// </summary>
 /// <remarks>
-/// These are the tests the new sensitivity standard names: <b>delete the sink loop from the
-/// orchestrator and both must fail.</b> The first covers the in-pipeline caller
-/// (<c>TransactionBehavior</c>, order 700); the second covers the out-of-pipeline caller
-/// (<c>DomainEventsCascadeNotificationPublisher</c>, ADR-MSG-013) — which ADR-MEDIATR-014 flags as
-/// the one place a careless implementation would break silently.
+/// <b>Delete the sink loop from the orchestrator and this fails.</b> It covers the in-pipeline caller
+/// (<c>TransactionBehavior</c>, order 700). The other caller — the dispatch after a handler, now the
+/// receive middleware of #188 D8 — is covered by <c>CascadeDeliveryTests</c>, which asserts the
+/// cascade is delivered rather than merely staged.
 /// </remarks>
 public sealed class DomainEventSinkStagingTests
 {
@@ -41,43 +40,8 @@ public sealed class DomainEventSinkStagingTests
 
         // And it came from the notification path (P3), not from a raw domain event.
         rows[0].EventType.ShouldContain(nameof(WidgetCreatedNotification));
-    }
 
-    [Fact]
-    public async Task CascadePublish_WhenHandlerRaisesEvent_StagesOutboxRowInProcessorScope()
-    {
-        await using var connection = await E2EHarness.OpenConnectionAsync();
-        await E2EHarness.CreateSchemaAsync(connection);
-
-        var recorder = new HandlerInvocationRecorder();
-        var logs = new CapturingLoggerProvider();
-        await using var provider = E2EHarness.BuildProvider(connection, recorder, logs);
-
-        await using var scope = provider.CreateAsyncScope();
-
-        // Publishing the notification directly is the outbox processor's own step, minus the drain:
-        // DomainEventsCascadeNotificationPublisher runs every handler and then calls
-        // IDomainEventsDispatcher.DispatchEventsAsync once. ArchiveWidgetOnInspectionHandler raises
-        // WidgetArchivedEvent on a newly tracked aggregate while it runs.
-        var aggregateId = Guid.NewGuid();
-        await scope.ServiceProvider.GetRequiredService<IPublisher>()
-            .Publish(new WidgetInspectedNotification(new WidgetInspectedEvent(aggregateId, DateTimeOffset.UtcNow)));
-
-        recorder.For<ArchiveWidgetOnInspectionHandler>().Count.ShouldBe(1);
-
-        // STAGED, not persisted. Nothing on the outbox processing path calls SaveChanges —
-        // TransactionBehavior is the sole flush owner (ADR-MSG-012) and is not in this path, so the
-        // staged row dies with the scope. That is L0-FINDINGS.md Finding #3, still open and out of
-        // scope here; CascadeObservationTests pins the resulting loss. What THIS test pins is the
-        // half that ADR-MEDIATR-014 owns: the cascade dispatch still reaches the sinks, so the row
-        // is produced at all. Delete the orchestrator's sink loop and the change tracker is empty.
-        var context = scope.ServiceProvider.GetRequiredService<E2EDbContext>();
-        var staged = context.ChangeTracker.Entries<OutboxMessage>()
-            .Where(e => e.State == EntityState.Added)
-            .Select(e => e.Entity)
-            .ToList();
-
-        staged.Count.ShouldBe(1, "the cascade event must reach the outbox sink");
-        staged[0].EventType.ShouldContain(nameof(WidgetArchivedNotification));
+        // A local message (#188 D7): drained into the receive pipeline, never handed to a transport.
+        rows[0].Endpoint.ShouldBe(OutboxMessage.LocalEndpoint);
     }
 }

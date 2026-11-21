@@ -113,7 +113,7 @@ public sealed class MessagingAbstractionsArchitectureTests
     public void NoAssemblyStillCarriesTheDedicatedIntegrationEventTable()
     {
         // IntegrationEventMessage, IntegrationEventStatus and IntegrationEventMessageConfiguration
-        // were retired when the publisher moved onto MessageKind.Contract outbox rows. The argument
+        // were retired when the publisher moved onto transport outbox rows. The argument
         // that justified a separate table — that a discriminator INFERRED from the payload's CLR
         // type could feed integration events into the MediatR fan-out — no longer applies: the
         // nature of a row is DECLARED by its writer in a column, and both dispatchers switch on
@@ -144,7 +144,7 @@ public sealed class MessagingAbstractionsArchitectureTests
                     .GetTypes()
                     .ShouldBeEmpty(
                         $"{assembly.GetName().Name} must not reinstate {name}; the dedicated " +
-                        "integration-event table was retired onto MessageKind.Contract rows");
+                        "integration-event table was retired onto transport outbox rows");
             }
         }
     }
@@ -169,8 +169,8 @@ public sealed class MessagingAbstractionsArchitectureTests
     }
 
     /// <summary>
-    /// No <see cref="IOutboxDispatcher"/> depends on <see cref="IInboxGuardStore"/> — nothing writes
-    /// inbox rows on the <i>producing</i> side.
+    /// No outbox dispatcher depends on <see cref="IInboxGuardStore"/> — nothing writes inbox rows on
+    /// the <i>producing</i> side.
     /// </summary>
     /// <remarks>
     /// <para>
@@ -189,8 +189,13 @@ public sealed class MessagingAbstractionsArchitectureTests
     /// bypassing the wire and the contract name that make a consumer's own type resolvable. A row
     /// written from the receiving side, from an envelope that crossed a transport, is the opposite
     /// of that defect. This test therefore narrows to the dispatch path, where the regression would
-    /// actually reappear, and covers the glue as well as Core — <c>MediatROutboxDispatcher</c> is
-    /// the other place a producer-side writer could be added without anyone noticing.
+    /// actually reappear.
+    /// </para>
+    /// <para>
+    /// <b>Since #188 the dispatcher seam is internal to Core</b>, so it is selected by name and the
+    /// glue is asserted to have none: <c>MicroKit.Messaging.MediatR</c> sends local messages through
+    /// the public <c>ILocalMessageSender</c>, and <c>LocalOutboxDispatcher</c> delivers them through
+    /// the receive pipeline — the receiving side, whose guard writes each consumer's row.
     /// </para>
     /// </remarks>
     [Fact]
@@ -211,31 +216,36 @@ public sealed class MessagingAbstractionsArchitectureTests
         // CONTROL 2 — the selector. The assertion below is a CONJUNCTION, so it can go vacuous on
         // either side: a selector matching no dispatcher at all yields an empty set whatever the
         // dispatchers do. The original test needed one control; this one needs two.
-        Assembly[] dispatchHosts = [CoreAssembly, MediatRGlueAssembly];
+        var dispatcher = Types.InAssembly(CoreAssembly)
+            .That().HaveName("IOutboxDispatcher").And().ResideInNamespace("MicroKit.Messaging.Processing")
+            .GetTypes()
+            .ShouldHaveSingleItem("the dispatcher seam is found by name: it is internal since #188");
 
-        foreach (var assembly in dispatchHosts)
-        {
-            Types.InAssembly(assembly)
-                .That()
-                .ImplementInterface(typeof(IOutboxDispatcher))
-                .GetTypes()
-                .ShouldNotBeEmpty(
-                    $"control assertion: {assembly.GetName().Name} must contain at least one " +
-                    "IOutboxDispatcher, or the assertion below selects nothing and proves nothing");
+        Types.InAssembly(CoreAssembly)
+            .That()
+            .ImplementInterface(dispatcher)
+            .GetTypes()
+            .Count()
+            .ShouldBe(2, "control assertion: Core holds the transport and the local dispatcher, or " +
+                         "the assertion below selects nothing and proves nothing");
 
-            Types.InAssembly(assembly)
-                .That()
-                .ImplementInterface(typeof(IOutboxDispatcher))
-                .And()
-                .HaveDependencyOn(typeof(IInboxGuardStore).FullName)
-                .GetTypes()
-                .ShouldBeEmpty(
-                    $"{assembly.GetName().Name} must not write inbox rows from the dispatch path. " +
-                    "Inbox rows are written by the receive pipeline's guard, on the RECEIVING side " +
-                    "(#188 D6; ADR-MSG-019). A dispatcher that writes one " +
-                    "is the in-process fan-out coming back. Update this test AND the ADR rather " +
-                    "than deleting the assertion");
-        }
+        Types.InAssembly(CoreAssembly)
+            .That()
+            .ImplementInterface(dispatcher)
+            .And()
+            .HaveDependencyOn(typeof(IInboxGuardStore).FullName)
+            .GetTypes()
+            .ShouldBeEmpty(
+                "No dispatcher may write inbox rows from the dispatch path. Inbox rows are written by " +
+                "the receive pipeline's guard, on the RECEIVING side (#188 D6; ADR-MSG-019). A " +
+                "dispatcher that writes one is the in-process fan-out coming back. Update this test " +
+                "AND the ADR rather than deleting the assertion");
+
+        Types.InAssembly(MediatRGlueAssembly)
+            .That()
+            .HaveDependencyOn(dispatcher.FullName)
+            .GetTypes()
+            .ShouldBeEmpty("the glue sends local messages through the public SPI (#188 D8)");
     }
 
     /// <summary>

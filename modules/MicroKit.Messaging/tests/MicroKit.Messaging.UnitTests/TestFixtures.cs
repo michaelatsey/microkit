@@ -116,13 +116,12 @@ internal static class OutboxFixtures
         };
 
     /// <summary>
-    /// A <see cref="MessageKind.Contract"/> row — one the transport dispatcher can actually send.
+    /// A transport row — one the transport dispatcher can actually send.
     /// </summary>
     /// <remarks>
-    /// Separate from <see cref="Message"/> rather than a parameter on it, because the two carry
-    /// genuinely different column sets: a contract row must have <c>ContractName</c> and
-    /// <c>Source</c>, and a notification row must not. A single builder with nullable defaults
-    /// would let a test silently construct a row that cannot exist in production.
+    /// Separate from <see cref="Message"/> rather than a parameter on it, because a transport row
+    /// must carry <c>ContractName</c> and <c>Source</c>: a single builder with nullable defaults
+    /// would let a test silently construct a row the bus never writes.
     /// </remarks>
     internal static OutboxMessage ContractMessage(
         string? contractName = "shop.orders.order-placed.v1",
@@ -132,7 +131,6 @@ internal static class OutboxFixtures
         int retryCount = 0)
     {
         var message = Message(retryCount: retryCount, tenantId: tenantId);
-        message.MessageKind = MessageKind.Contract;
         message.ContractName = contractName;
         message.Source = source;
         message.Payload = payload;

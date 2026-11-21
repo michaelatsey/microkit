@@ -39,12 +39,24 @@ internal sealed class MessageHandlerRegistry
 
     /// <summary>
     /// Entry stored in the handler registry. Contains the consumer type name,
-    /// the handler CLR type, and a pre-compiled invoker delegate.
+    /// the handler CLR type, and a pre-compiled delegate that resolves and runs it.
     /// </summary>
+    /// <remarks>
+    /// The delegate takes the message scope's services, so one shape serves an
+    /// <see cref="IMessageHandler{TMessage}"/> — resolved by its type — and a
+    /// <see cref="LocalConsumer"/>, which resolves itself (#188 D7).
+    /// </remarks>
     public readonly record struct HandlerEntry(
         string ConsumerType,
         Type HandlerType,
-        Func<object, IIntegrationEvent, MessageContext, CancellationToken, ValueTask> Invoker);
+        Func<IServiceProvider, object, MessageContext, CancellationToken, ValueTask> Invoke)
+    {
+        /// <summary>The entry of a local consumer.</summary>
+        /// <param name="consumer">The consumer.</param>
+        /// <returns>Its entry.</returns>
+        public static HandlerEntry Of(LocalConsumer consumer)
+            => new(consumer.ConsumerType, consumer.HandlerType, consumer.Invoke);
+    }
 
     /// <summary>
     /// Registers a handler using an invoker closed over <typeparamref name="TEvent"/> at
@@ -70,7 +82,7 @@ internal sealed class MessageHandlerRegistry
         var entry = new HandlerEntry(
             consumerType,
             handlerType,
-            (h, e, c, ct) => ((IMessageHandler<TEvent>)h).HandleAsync((TEvent)e, c, ct));
+            (sp, e, c, ct) => ((IMessageHandler<TEvent>)Resolve(sp, handlerType)).HandleAsync((TEvent)e, c, ct));
 
         AddEntry(typeof(TEvent), entry);
     }
@@ -98,13 +110,20 @@ internal sealed class MessageHandlerRegistry
             .GetMethod(nameof(BuildReflectionInvoker), BindingFlags.NonPublic | BindingFlags.Static)!
             .MakeGenericMethod(eventType);
 
-        var invoker = (Func<object, IIntegrationEvent, MessageContext, CancellationToken, ValueTask>)method.Invoke(null, null)!;
-        AddEntry(eventType, new HandlerEntry(consumerType, handlerType, invoker));
+        var invoker = (Func<Type, Func<IServiceProvider, object, MessageContext, CancellationToken, ValueTask>>)
+            method.Invoke(null, null)!;
+        AddEntry(eventType, new HandlerEntry(consumerType, handlerType, invoker(handlerType)));
     }
 
-    private static Func<object, IIntegrationEvent, MessageContext, CancellationToken, ValueTask> BuildReflectionInvoker<TEvent>()
+    private static Func<Type, Func<IServiceProvider, object, MessageContext, CancellationToken, ValueTask>> BuildReflectionInvoker<TEvent>()
         where TEvent : IIntegrationEvent
-        => (h, e, c, ct) => ((IMessageHandler<TEvent>)h).HandleAsync((TEvent)e, c, ct);
+        => handlerType => (sp, e, c, ct) => ((IMessageHandler<TEvent>)Resolve(sp, handlerType)).HandleAsync((TEvent)e, c, ct);
+
+    /// <summary>The handler, resolved last, from the message scope.</summary>
+    private static object Resolve(IServiceProvider services, Type handlerType)
+        => services.GetService(handlerType)
+            ?? throw new InvalidOperationException(
+                $"Handler '{handlerType.FullName}' is in the handler registry but not in the service provider.");
 
     /// <summary>
     /// Adds one entry, idempotently in (<c>ConsumerType</c>, message type). A repeated registration

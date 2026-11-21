@@ -29,11 +29,26 @@ public sealed class StoppablePostgreSqlFixture : IAsyncLifetime
             return;
         }
 
-        _container = new PostgreSqlBuilder("postgres:17-alpine")
-            .WithDatabase("microkit_messaging_stoppable")
-            .WithPortBinding(FreePort(), PostgreSqlBuilder.PostgreSqlPort)
-            .Build();
-        await _container.StartAsync();
+        // The port is probed free here, but Docker publishes it on its own host — under Docker
+        // Desktop on WSL, Windows — which may still refuse it (a reserved range, a late taker).
+        // A refused port is retried with another; any other failure is the test's.
+        for (var attempt = 1; ; attempt++)
+        {
+            _container = new PostgreSqlBuilder("postgres:17-alpine")
+                .WithDatabase("microkit_messaging_stoppable")
+                .WithPortBinding(FreePort(), PostgreSqlBuilder.PostgreSqlPort)
+                .Build();
+            try
+            {
+                await _container.StartAsync();
+                return;
+            }
+            catch (Docker.DotNet.DockerApiException ex)
+                when (attempt < 5 && ex.Message.Contains("ports are not available", StringComparison.Ordinal))
+            {
+                await _container.DisposeAsync();
+            }
+        }
     }
 
     public async Task DisposeAsync()

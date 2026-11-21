@@ -139,38 +139,54 @@ public sealed class OutboxTransportClassificationTests
     }
 
     // -----------------------------------------------------------------------------------------
-    // A notification row with no MediatR glue — the composition this dispatcher must not absorb
+    // The row's endpoint routes it (#188 D7)
     // -----------------------------------------------------------------------------------------
 
     /// <summary>
-    /// A notification reaching the transport dispatcher releases the whole batch and stops the
-    /// worker, rather than dead-lettering the queue.
+    /// A transport row in a host that registers no transport at all releases the batch and stops
+    /// the loop, rather than dead-lettering the queue.
     /// </summary>
     /// <remarks>
-    /// The end-to-end form of the routing decision. A host that composes
-    /// <c>AddTransportDispatcher()</c> and forgets <c>AddMediatRDomainEvents()</c> has every domain
-    /// event in the system sitting in this table; classifying that as a payload fault would
-    /// dead-letter all of them on the first poll. Here they survive as <c>Pending</c> and the
-    /// worker stops so the omission is visible.
+    /// The transport's dispatcher is registered with the transport, so its absence is a missing
+    /// registration: the rows are fine and dispatch the moment a transport is deployed. Classifying
+    /// it as a payload fault would dead-letter every queued contract on the first poll.
     /// </remarks>
     [Fact]
-    public async Task ProcessBatch_WhenNotificationRowMeetsTheTransportDispatcher_ReleasesBatchThenRethrows()
+    public async Task ProcessBatch_WhenATransportRowMeetsNoTransport_ReleasesBatchThenRethrows()
     {
-        var messages = Enumerable.Range(0, 3).Select(_ => OutboxFixtures.Message()).ToArray();
-        foreach (var m in messages)
-        {
-            m.MessageKind = MessageKind.Notification;
-        }
-
+        var messages = Enumerable.Range(0, 3).Select(_ => OutboxFixtures.ContractMessage()).ToArray();
         var (store, captured) = StoreReturning(OutboxFixtures.Claim(messages));
-        var processor = Build(store, new RecordingMessageTransport());
+        var services = new ServiceCollection();
+        services.AddLogging();
+        var processor = BuildCore(store, services);
 
-        await Should.ThrowAsync<OutboxConfigurationException>(
+        var fault = await Should.ThrowAsync<OutboxConfigurationException>(
             async () => await processor.ProcessBatchAsync(10, CancellationToken.None));
 
+        fault.Message.ShouldContain("no transport is registered");
         captured.Count.ShouldBe(messages.Length);
         captured.ShouldAllBe(o => o.Kind == OutboxOutcomeKind.Released);
         captured.ShouldAllBe(o => o.RetryCount == 0);
+    }
+
+    /// <summary>
+    /// A row whose endpoint this build cannot route is dead-lettered on first sight, and only it:
+    /// the rest of the batch is dispatched.
+    /// </summary>
+    [Fact]
+    public async Task ProcessBatch_WhenARowsEndpointCannotBeRouted_DeadLettersItAndDispatchesTheRest()
+    {
+        var unroutable = OutboxFixtures.ContractMessage();
+        unroutable.Endpoint = "a-later-endpoint";
+        var routable = OutboxFixtures.ContractMessage();
+        var transport = new RecordingMessageTransport();
+        var (store, captured) = StoreReturning(OutboxFixtures.Claim(unroutable, routable));
+
+        await Build(store, transport).ProcessBatchAsync(10, CancellationToken.None);
+
+        captured.Single(o => o.MessageId == unroutable.Id).Kind.ShouldBe(OutboxOutcomeKind.DeadLetter);
+        captured.Single(o => o.MessageId == routable.Id).Kind.ShouldBe(OutboxOutcomeKind.Published);
+        transport.Sent.ShouldHaveSingleItem().Id.ShouldBe(routable.Id.Value.ToString());
     }
 
     // -----------------------------------------------------------------------------------------
@@ -250,7 +266,7 @@ public sealed class OutboxTransportClassificationTests
         var services = new ServiceCollection();
         services.AddLogging();
         services.AddSingleton(transport);
-        services.AddScoped<IOutboxDispatcher, TransportOutboxDispatcher>();
+        services.AddKeyedScoped<IOutboxDispatcher, TransportOutboxDispatcher>(OutboxDispatchers.Transport);
 
         return BuildCore(store, services);
     }
@@ -260,7 +276,7 @@ public sealed class OutboxTransportClassificationTests
     {
         var services = new ServiceCollection();
         services.AddLogging();
-        services.AddScoped<IOutboxDispatcher, TransportOutboxDispatcher>();
+        services.AddKeyedScoped<IOutboxDispatcher, TransportOutboxDispatcher>(OutboxDispatchers.Transport);
 
         return BuildCore(store, services);
     }

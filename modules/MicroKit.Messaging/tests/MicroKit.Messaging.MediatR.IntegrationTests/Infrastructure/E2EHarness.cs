@@ -105,27 +105,18 @@ internal static class E2EHarness
             .AddTransactionBehavior());
 
         // NO TRANSPORT IS REGISTERED HERE, and that is the point of this composition rather than an
-        // omission. Every suite on this harness exercises the domain-event path, which stages
-        // MessageKind.Notification rows and fans them out in process through MediatR — so the
-        // notification-only host of ADR-MSG-019 is exactly what these tests need, and this harness
-        // is the standing proof that it composes and drains. MediatROutboxDispatcher's inner is
-        // null throughout; a MessageKind.Contract row would raise OutboxConfigurationException, and
-        // nothing here stages one.
+        // omission. Every suite on this harness exercises the domain-event path: a notification is a
+        // local message (#188 D7), drained by the store's own outbox loop into the receive pipeline,
+        // one guarded delivery per notification handler — no transport involved. A suite that needs
+        // one adds it through configureMessaging.
         //
-        // Registration order is no longer load-bearing anywhere. The standard dispatcher lives in a
-        // keyed slot only MicroKit.Messaging writes, so AddMediatRDomainEvents() never competes for
-        // the seam and no longer requires a transport to have been registered first; the glue
-        // contributes an IDomainEventsSink to the single core dispatcher rather than registering a
-        // rival one (ADR-MEDIATR-014).
-        //
-        // The hosted services — the store engine and MessagingCompositionValidator — start nothing
-        // without an IHost. They are left alone; every drain goes through DrainOnceAsync or
-        // DrainInboxOnceAsync. The contract rules still apply: the registry checks them itself
-        // when it is first resolved.
+        // The hosted services start nothing without an IHost. Every drain goes through
+        // DrainOnceAsync or DrainInboxOnceAsync; the contract rules still apply, because the
+        // registry checks them itself when it is first resolved.
         services.AddMicroKitMessaging(messaging =>
         {
             messaging.ServiceName = "/tests/e2e";
-            messaging.UseEntityFrameworkOutbox<E2EDbContext>().AddMediatRDomainEvents();
+            messaging.UseEntityFrameworkOutbox<E2EDbContext>().UseMediatRDomainEvents();
             configureMessaging?.Invoke(messaging);
         });
 

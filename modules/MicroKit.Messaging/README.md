@@ -256,13 +256,13 @@ services.AddMicroKitMessaging(bus =>
 {
     bus.ServiceName = "shop.orders";
     bus.UseEntityFrameworkOutbox<AppDbContext>();
-    bus.AddMediatRDomainEvents();    // only with MicroKit.Messaging.MediatR
+    bus.UseMediatRDomainEvents();    // only with MicroKit.Messaging.MediatR
 });
 ```
 
 The durable calls live in their packages' namespaces: `MicroKit.Messaging.EntityFrameworkCore`
-(`AddEfCoreOutbox`, `ApplyMessagingConfiguration`), `MicroKit.Messaging.MediatR.DependencyInjection`
-(`AddMediatRDomainEvents`) and `MicroKit.MediatR.Behaviors.DependencyInjection`
+(`UseEntityFrameworkOutbox`, `ApplyMessagingConfiguration`), `MicroKit.Messaging.MediatR.DependencyInjection`
+(`UseMediatRDomainEvents`) and `MicroKit.MediatR.Behaviors.DependencyInjection`
 (`AddTransactionBehavior`).
 
 > **PostgreSQL and SQLite only.** `ApplyMessagingConfiguration()` declares a unique index over
@@ -273,7 +273,7 @@ The durable calls live in their packages' namespaces: `MicroKit.Messaging.Entity
 > the second insert. See *State* below for the workaround you would own.
 
 **Nothing here composes in a required order.** `UseInMemoryTransport()` — or a broker provider's
-`Add{Provider}Transport()` — goes before or after `AddMediatRDomainEvents()`; either works.
+`Add{Provider}Transport()` — goes before or after `UseMediatRDomainEvents()`; either works.
 
 A host that publishes only domain-event notifications registers no transport at all, as above. Do
 **not** add one "just in case": it declares an intent to send contracts, and without a working
@@ -289,10 +289,11 @@ A host built with `Host.CreateApplicationBuilder()` or `WebApplication.CreateBui
 logging. A bare `ServiceCollection` does not, and several types here require `ILogger<T>` — call
 `AddLogging()` yourself if you compose by hand.
 
-> **Handlers must be idempotent.** Delivery is at-least-once by design. On the bus, a message
-> redelivered because one handler failed runs every handler again. On the notification path an
-> outbox retry re-publishes the notification and re-runs *all* of its handlers. The same contract
-> applies to `IMessageHandler<T>` on the inbox path.
+> **Handlers must be idempotent.** Delivery is at-least-once by design. Without a store, a bus
+> message redelivered because one handler failed runs every handler again (#186). With a store, each
+> handler is guarded by its own inbox row and only the failing one is retried — but what a handler
+> does outside its store's `DbContext` is still at-least-once. A notification handler is always a
+> consumer of its own: a retry re-runs only the one that failed.
 
 ---
 

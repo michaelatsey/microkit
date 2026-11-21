@@ -26,6 +26,8 @@ internal sealed class MessagingComposition
     private readonly List<string?> _serviceNames = [];
     private readonly List<UnloadedTypes> _unloaded = [];
     private readonly List<StoreRegistration> _stores = [];
+    private readonly List<ILocalConsumerSource> _localSources = [];
+    private readonly List<Func<IServiceProvider, IEnumerable<string>>> _startupChecks = [];
 
     /// <summary>Gets the handler registry the declared handlers are written into.</summary>
     public MessageHandlerRegistry Handlers { get; } = new();
@@ -68,6 +70,31 @@ internal sealed class MessagingComposition
     /// runs with no durability.
     /// </summary>
     public IReadOnlyList<StoreRegistration> Stores => _stores;
+
+    /// <summary>Gets the local consumer sources, in registration order, each type once (#188 D7).</summary>
+    public IReadOnlyList<ILocalConsumerSource> LocalConsumerSources => _localSources;
+
+    /// <summary>Gets the composition-wide checks run at host start, each returning the problems it found.</summary>
+    public IReadOnlyList<Func<IServiceProvider, IEnumerable<string>>> StartupChecks => _startupChecks;
+
+    /// <summary>Adds a local consumer source; a second source of the same type is ignored.</summary>
+    /// <param name="source">The source.</param>
+    public void AddLocalConsumerSource(ILocalConsumerSource source)
+    {
+        ArgumentNullException.ThrowIfNull(source);
+        if (!_localSources.Exists(s => s.GetType() == source.GetType()))
+        {
+            _localSources.Add(source);
+        }
+    }
+
+    /// <summary>Adds a composition-wide start check.</summary>
+    /// <param name="check">The check.</param>
+    public void AddStartupCheck(Func<IServiceProvider, IEnumerable<string>> check)
+    {
+        ArgumentNullException.ThrowIfNull(check);
+        _startupChecks.Add(check);
+    }
 
     /// <summary>
     /// Gets the registration of <paramref name="key"/>, creating it on first use: a second

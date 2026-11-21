@@ -220,38 +220,19 @@ public sealed class MessagingBuilder
     }
 
     /// <summary>
-    /// Registers <c>TransportOutboxDispatcher</c>, which routes <see cref="MessageKind.Contract"/>
-    /// outbox rows to the registered <see cref="IMessageTransport"/>. Called by
-    /// <see cref="UseInMemoryTransport"/>.
+    /// Registers <c>TransportOutboxDispatcher</c>, which sends transport outbox rows (no
+    /// <see cref="OutboxMessage.Endpoint"/>) to the registered <see cref="IMessageTransport"/>.
+    /// Called by <see cref="UseInMemoryTransport"/>.
     /// </summary>
     /// <returns>The same builder, for chaining.</returns>
     /// <remarks>
-    /// <para>
-    /// <b>Two registrations, because the seam has two slots.</b> The dispatcher goes into the keyed
-    /// slot named by <see cref="OutboxDispatcherKeys.Standard"/>, which only this package ever
-    /// writes; a forwarder then claims the unkeyed <see cref="IOutboxDispatcher"/> slot that
-    /// <c>OutboxProcessor</c> resolves. A decorating package — <c>MicroKit.Messaging.MediatR</c> —
-    /// removes the forwarder, takes the unkeyed slot outright, and finds this dispatcher through the
-    /// key. That split makes the composition order-independent: before the glue, the forwarder is
-    /// removed and the keyed dispatcher wrapped; after it, the keyed <c>TryAdd</c> still lands while
-    /// the unkeyed one abstains. Calling this method twice is a no-op.
-    /// </para>
-    /// <para>
-    /// <b>Internal since #187.</b> A transport registration owns it, so the composition is one call.
-    /// </para>
+    /// Keyed <see cref="OutboxDispatchers.Transport"/>: <c>OutboxProcessor</c> resolves a row's
+    /// dispatcher by its endpoint, so the transport and the local endpoint never compete for one
+    /// slot (#188 D7). Internal since #187: a transport registration owns it. Idempotent.
     /// </remarks>
     internal MessagingBuilder AddTransportDispatcher()
     {
-        // The real registration. Keyed, so a decorator can find it without competing for the slot
-        // the engine resolves.
-        Services.TryAddKeyedScoped<IOutboxDispatcher, TransportOutboxDispatcher>(
-            OutboxDispatcherKeys.Standard);
-
-        // The unkeyed seam OutboxProcessor resolves. TryAdd, so a decorator already holding it is
-        // not displaced — which is the direction that had shipped as a silent bypass (ADR-MSG-016).
-        Services.TryAddScoped<IOutboxDispatcher>(
-            sp => sp.GetRequiredKeyedService<IOutboxDispatcher>(OutboxDispatcherKeys.Standard));
-
+        Services.TryAddKeyedScoped<IOutboxDispatcher, TransportOutboxDispatcher>(OutboxDispatchers.Transport);
         return this;
     }
 
@@ -305,7 +286,7 @@ public sealed class MessagingBuilder
     /// </exception>
     /// <remarks>
     /// <para>
-    /// The only feature of the bus that registers a hosted service: the loop that takes each
+    /// It registers one hosted service of its own: the loop that takes each
     /// envelope off this service's endpoint and runs it inline through the receive pipeline. The
     /// endpoint is the <see cref="ServiceName"/>, bound at host start to the contracts the
     /// service's handlers handle. See <see cref="InMemoryBroker"/> for the routing, redelivery,
@@ -314,7 +295,7 @@ public sealed class MessagingBuilder
     /// <para>
     /// It also registers the outbox's transport dispatcher (<c>TransportOutboxDispatcher</c>), so
     /// a host with <c>UseEntityFrameworkOutbox&lt;TContext&gt;()</c> sends its contract rows here with no
-    /// further call — in either order with <c>AddMediatRDomainEvents()</c>.
+    /// further call.
     /// </para>
     /// <para>
     /// Calling it again replaces the broker when one is supplied and is otherwise a no-op. A

@@ -21,6 +21,11 @@ public sealed class MessageHandlerRegistryTests
     private static readonly string ConsumerType =
         typeof(RecordingInboxHandler).AssemblyQualifiedName!;
 
+    /// <summary>A message scope holding exactly <paramref name="handler"/>, as the pipeline resolves it.</summary>
+    private static ServiceProvider ServicesWith<THandler>(THandler handler)
+        where THandler : class
+        => new ServiceCollection().AddSingleton(handler).BuildServiceProvider();
+
     private static MessageHandlerRegistry WithOneHandler()
     {
         var registry = new MessageHandlerRegistry();
@@ -122,8 +127,9 @@ public sealed class MessageHandlerRegistryTests
     [Fact]
     public async Task Invoker_InvokesTheHandlerWithTheDeserializedEvent()
     {
-        // The invoker is a closure built at registration time and holds the only cast from object
-        // to IMessageHandler<TEvent>. If it is wrong, nothing else in the registry reveals it.
+        // The invoker is a closure built at registration time: it resolves the handler from the
+        // message scope and holds the only cast to IMessageHandler<TEvent>. If it is wrong, nothing
+        // else in the registry reveals it.
         var registry = WithOneHandler();
         registry.TryGetInvoker(ConsumerType, typeof(InboxTestEvent), out var entry).ShouldBeTrue();
 
@@ -138,7 +144,7 @@ public sealed class MessageHandlerRegistryTests
             Source = "/tests",
             OccurredOnUtc = DateTimeOffset.UnixEpoch,
         };
-        await entry.Invoker(handler, evt, context, CancellationToken.None);
+        await entry.Invoke(ServicesWith(handler), evt, context, CancellationToken.None);
 
         handler.InvocationCount.ShouldBe(1);
     }
@@ -180,7 +186,7 @@ public sealed class MessageHandlerRegistryTests
 
         registry.TryGetInvoker(ConsumerType, typeof(InboxTestEvent), out var first).ShouldBeTrue();
         registry.TryGetInvoker(ConsumerType, typeof(OtherInboxEvent), out var second).ShouldBeTrue();
-        first.Invoker.ShouldNotBeSameAs(second.Invoker);
+        first.Invoke.ShouldNotBeSameAs(second.Invoke);
         registry.GetHandlers(typeof(InboxTestEvent)).ShouldHaveSingleItem();
         registry.GetHandlers(typeof(OtherInboxEvent)).ShouldHaveSingleItem();
         registry.RegisteredConsumerTypes.ShouldBe([ConsumerType]);
@@ -203,9 +209,9 @@ public sealed class MessageHandlerRegistryTests
         };
 
         registry.TryGetInvoker(ConsumerType, typeof(InboxTestEvent), out var first).ShouldBeTrue();
-        await first.Invoker(handler, new InboxTestEvent(MessageId.New(), "t"), context, CancellationToken.None);
+        await first.Invoke(ServicesWith(handler), new InboxTestEvent(MessageId.New(), "t"), context, CancellationToken.None);
         registry.TryGetInvoker(ConsumerType, typeof(OtherInboxEvent), out var second).ShouldBeTrue();
-        await second.Invoker(handler, new OtherInboxEvent(), context, CancellationToken.None);
+        await second.Invoke(ServicesWith(handler), new OtherInboxEvent(), context, CancellationToken.None);
 
         handler.Calls.ShouldBe([nameof(InboxTestEvent), nameof(OtherInboxEvent)]);
     }

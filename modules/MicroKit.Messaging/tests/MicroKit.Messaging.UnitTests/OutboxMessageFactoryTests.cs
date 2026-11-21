@@ -22,113 +22,125 @@ public sealed class OutboxMessageFactoryTests
     }
 
     [Fact]
-    public void CreateNotification_EventType_IsAssemblyQualifiedNameOfPayloadRuntimeType()
+    public void CreateLocal_EventType_IsAssemblyQualifiedNameOfPayloadRuntimeType()
     {
         var payload = new FakeNotification();
-        var msg = _sut.CreateNotification(payload, Guid.NewGuid(), DateTimeOffset.UtcNow, _ctx);
+        var msg = _sut.CreateLocal(payload, MessageId.From(Guid.NewGuid()), DateTimeOffset.UtcNow, source: null, _ctx);
 
         msg.EventType.ShouldBe(typeof(FakeNotification).AssemblyQualifiedName);
     }
 
     [Fact]
-    public void CreateNotification_MessageId_CopiedFromParameter()
+    public void CreateLocal_MessageId_CopiedFromParameter()
     {
         var id = Guid.NewGuid();
-        var msg = _sut.CreateNotification(new FakeNotification(), id, DateTimeOffset.UtcNow, _ctx);
+        var msg = _sut.CreateLocal(new FakeNotification(), MessageId.From(id), DateTimeOffset.UtcNow, source: null, _ctx);
 
         msg.Id.ShouldBe(MessageId.From(id));
     }
 
     [Fact]
-    public void CreateNotification_OccurredOnUtc_CopiedFromParameter()
+    public void CreateLocal_OccurredOnUtc_CopiedFromParameter()
     {
         var occurred = new DateTimeOffset(2025, 6, 1, 10, 0, 0, TimeSpan.Zero);
-        var msg = _sut.CreateNotification(new FakeNotification(), Guid.NewGuid(), occurred, _ctx);
+        var msg = _sut.CreateLocal(new FakeNotification(), MessageId.From(Guid.NewGuid()), occurred, source: null, _ctx);
 
         msg.OccurredOnUtc.ShouldBe(occurred);
     }
 
     [Fact]
-    public void CreateNotification_TenantId_WhenContextHasTenantId_Copied()
+    public void CreateLocal_TenantId_WhenContextHasTenantId_Copied()
     {
         _ctx.TenantId.Returns("tenant-42");
-        var msg = _sut.CreateNotification(new FakeNotification(), Guid.NewGuid(), DateTimeOffset.UtcNow, _ctx);
+        var msg = _sut.CreateLocal(new FakeNotification(), MessageId.From(Guid.NewGuid()), DateTimeOffset.UtcNow, source: null, _ctx);
 
         msg.TenantId.ShouldBe("tenant-42");
     }
 
     [Fact]
-    public void CreateNotification_TenantId_WhenContextTenantIdIsNull_IsNull()
+    public void CreateLocal_TenantId_WhenContextTenantIdIsNull_IsNull()
     {
         _ctx.TenantId.Returns((string?)null);
-        var msg = _sut.CreateNotification(new FakeNotification(), Guid.NewGuid(), DateTimeOffset.UtcNow, _ctx);
+        var msg = _sut.CreateLocal(new FakeNotification(), MessageId.From(Guid.NewGuid()), DateTimeOffset.UtcNow, source: null, _ctx);
 
         msg.TenantId.ShouldBeNull();
     }
 
     [Fact]
-    public void CreateNotification_CorrelationId_WhenContextHasValidGuid_Parsed()
+    public void CreateLocal_CorrelationId_WhenContextHasValidGuid_Parsed()
     {
         var guid = Guid.NewGuid();
         _ctx.CorrelationId.Returns(guid.ToString());
-        var msg = _sut.CreateNotification(new FakeNotification(), Guid.NewGuid(), DateTimeOffset.UtcNow, _ctx);
+        var msg = _sut.CreateLocal(new FakeNotification(), MessageId.From(Guid.NewGuid()), DateTimeOffset.UtcNow, source: null, _ctx);
 
         msg.CorrelationId.ShouldBe(CorrelationId.From(guid));
     }
 
     [Fact]
-    public void CreateNotification_CorrelationId_WhenContextCorrelationIdIsNull_GeneratesNew()
+    public void CreateLocal_CorrelationId_WhenContextCorrelationIdIsNull_GeneratesNew()
     {
         _ctx.CorrelationId.Returns((string?)null);
-        var msg = _sut.CreateNotification(new FakeNotification(), Guid.NewGuid(), DateTimeOffset.UtcNow, _ctx);
+        var msg = _sut.CreateLocal(new FakeNotification(), MessageId.From(Guid.NewGuid()), DateTimeOffset.UtcNow, source: null, _ctx);
 
         msg.CorrelationId.ShouldNotBe(default);
     }
 
     [Fact]
-    public void CreateNotification_CausationId_WhenContextHasValidGuid_Parsed()
+    public void CreateLocal_CausationId_WhenContextHasValidGuid_Parsed()
     {
         var guid = Guid.NewGuid();
         _ctx.CausationId.Returns(guid.ToString());
-        var msg = _sut.CreateNotification(new FakeNotification(), Guid.NewGuid(), DateTimeOffset.UtcNow, _ctx);
+        var msg = _sut.CreateLocal(new FakeNotification(), MessageId.From(Guid.NewGuid()), DateTimeOffset.UtcNow, source: null, _ctx);
 
         msg.CausationId.ShouldBe(CausationId.From(guid));
     }
 
     [Fact]
-    public void CreateNotification_CausationId_WhenContextCausationIdIsNull_IsNull()
+    public void CreateLocal_CausationId_WhenContextCausationIdIsNull_IsNull()
     {
         _ctx.CausationId.Returns((string?)null);
-        var msg = _sut.CreateNotification(new FakeNotification(), Guid.NewGuid(), DateTimeOffset.UtcNow, _ctx);
+        var msg = _sut.CreateLocal(new FakeNotification(), MessageId.From(Guid.NewGuid()), DateTimeOffset.UtcNow, source: null, _ctx);
 
         msg.CausationId.ShouldBeNull();
     }
 
     [Fact]
-    public void CreateNotification_Status_IsPending()
+    public void CreateLocal_IsRoutedToTheLocalEndpoint_WithTheSendersSource_AndNoContract()
     {
-        var msg = _sut.CreateNotification(new FakeNotification(), Guid.NewGuid(), DateTimeOffset.UtcNow, _ctx);
+        // #188 D7: a local row is drained into the receive pipeline, never handed to a transport.
+        var msg = _sut.CreateLocal(new FakeNotification(), MessageId.New(), DateTimeOffset.UtcNow, "/shop/orders", _ctx);
+
+        msg.Endpoint.ShouldBe(OutboxMessage.LocalEndpoint);
+        msg.Source.ShouldBe("/shop/orders");
+        msg.ContractName.ShouldBeNull();
+        msg.TraceParent.ShouldBeNull();
+    }
+
+    [Fact]
+    public void CreateLocal_Status_IsPending()
+    {
+        var msg = _sut.CreateLocal(new FakeNotification(), MessageId.From(Guid.NewGuid()), DateTimeOffset.UtcNow, source: null, _ctx);
 
         msg.Status.ShouldBe(OutboxMessageStatus.Pending);
     }
 
     [Fact]
-    public void CreateNotification_RetryCount_IsZero()
+    public void CreateLocal_RetryCount_IsZero()
     {
-        var msg = _sut.CreateNotification(new FakeNotification(), Guid.NewGuid(), DateTimeOffset.UtcNow, _ctx);
+        var msg = _sut.CreateLocal(new FakeNotification(), MessageId.From(Guid.NewGuid()), DateTimeOffset.UtcNow, source: null, _ctx);
 
         msg.RetryCount.ShouldBe(0);
     }
 
     [Fact]
-    public void CreateNotification_Payload_DelegatesTo_Serializer()
+    public void CreateLocal_Payload_DelegatesTo_Serializer()
     {
         var payload = new FakeNotification();
         // Serialized as its RUNTIME type, and the bytes land on the row as UTF-8 text (#186).
         _serializer.Serialize(payload, typeof(FakeNotification))
             .Returns((ReadOnlyMemory<byte>)"{\"serialized\":true}"u8.ToArray());
 
-        var msg = _sut.CreateNotification(payload, Guid.NewGuid(), DateTimeOffset.UtcNow, _ctx);
+        var msg = _sut.CreateLocal(payload, MessageId.From(Guid.NewGuid()), DateTimeOffset.UtcNow, source: null, _ctx);
 
         msg.Payload.ShouldBe("{\"serialized\":true}");
     }
@@ -165,7 +177,7 @@ public sealed class OutboxMessageFactoryTests
             new FakeNotification(), id, "shop.order-placed.v1", "shop.orders", published, new Dictionary<string, string>());
 
         row.Id.ShouldBe(id);
-        row.MessageKind.ShouldBe(MessageKind.Contract);
+        row.Endpoint.ShouldBeNull("a contract row is bound for the transport");
         row.ContractName.ShouldBe("shop.order-placed.v1");
         row.Source.ShouldBe("shop.orders");
         row.OccurredOnUtc.ShouldBe(published);
@@ -240,10 +252,9 @@ public sealed class OutboxMessageFactoryTests
     /// assertion about dispatch order depend on wall-clock resolution.
     /// </remarks>
     [Fact]
-    public void CreateNotification_CreatedAtUtc_ComesFromTheInjectedClock()
+    public void CreateLocal_CreatedAtUtc_ComesFromTheInjectedClock()
     {
-        var msg = _sut.CreateNotification(
-            new FakeNotification(), Guid.NewGuid(), DateTimeOffset.UtcNow, _ctx);
+        var msg = _sut.CreateLocal(new FakeNotification(), MessageId.From(Guid.NewGuid()), DateTimeOffset.UtcNow, source: null, _ctx);
 
         msg.CreatedAtUtc.ShouldBe(Now);
     }

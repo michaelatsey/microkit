@@ -32,13 +32,10 @@ public sealed class OutboxMessageConfiguration : IEntityTypeConfiguration<Outbox
         // TenantId is intentionally optional (no IsRequired) — Messaging must operate
         // without Multitenancy per ADR-EXEC-001; host enforces TenantId when needed.
 
-        // Stored as a string, like every other enum in this module: the column exists to be
-        // queried, and an int discriminator is unreadable in psql or the Supabase dashboard.
-        // It also means inserting an enum member cannot silently remap existing rows.
-        builder.Property(m => m.MessageKind)
-            .IsRequired()
-            .HasConversion<string>()
-            .HasMaxLength(32);
+        // Where the row is dispatched (#188 D7): null for the transport, "local" for the local
+        // endpoint. Optional, so a transport row costs nothing; 64 bounds a short routing name.
+        builder.Property(m => m.Endpoint)
+            .HasMaxLength(64);
 
         // 256 is the wire contract name's own bound: a name that must survive a CLR rename, an
         // assembly split and a module extraction is written by hand and read by strangers, so it
@@ -47,9 +44,8 @@ public sealed class OutboxMessageConfiguration : IEntityTypeConfiguration<Outbox
         builder.Property(m => m.ContractName)
             .HasMaxLength(256);
 
-        // Not IsRequired: null on a Notification row, which never leaves the process and so has no
-        // emitter to declare. TransportOutboxDispatcher enforces non-null on the Contract path,
-        // where the entity cannot.
+        // Not IsRequired: a local row may have none. TransportOutboxDispatcher enforces non-null on
+        // a transport row, where the entity cannot.
         builder.Property(m => m.Source)
             .HasMaxLength(256);
 
@@ -76,7 +72,7 @@ public sealed class OutboxMessageConfiguration : IEntityTypeConfiguration<Outbox
             .HasMaxLength(2048);
 
         // A W3C traceparent is 55 characters in the current version; 64 leaves room for the next
-        // one without inviting anything else into the column. Null on every Notification row.
+        // one without inviting anything else into the column. Null on every local row.
         builder.Property(m => m.TraceParent)
             .HasMaxLength(64);
 

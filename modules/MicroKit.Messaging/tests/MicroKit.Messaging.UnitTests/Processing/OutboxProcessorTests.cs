@@ -230,7 +230,7 @@ public sealed class OutboxProcessorTests
         var messages = Enumerable.Range(0, 3).Select(_ => OutboxFixtures.Message()).ToArray();
         var (store, captured) = StoreReturning(OutboxFixtures.Claim(messages));
 
-        // No IOutboxDispatcher registered at all — the resolution itself is the fault.
+        // No dispatcher registered for the row's endpoint — the resolution itself is the fault.
         var sut = BuildWithoutDispatcher(store);
 
         await Should.ThrowAsync<OutboxConfigurationException>(
@@ -318,7 +318,7 @@ public sealed class OutboxProcessorTests
         var activationFailure = logger.Records.Single(r => r.EventId == 1009).Message;
         activationFailure.ShouldContain(second.Id.Value.ToString());
         activationFailure.ShouldContain("tenant-b");
-        activationFailure.ShouldContain(nameof(MessageKind.Contract));
+        activationFailure.ShouldContain("endpoint", Case.Sensitive, "the row's endpoint names the dispatcher that failed");
 
         result.Published.ShouldBe(1, "message 1 was delivered before message 2's dispatcher failed");
         result.Released.ShouldBe(2, "the message that hit the fault AND every message after it");
@@ -688,7 +688,7 @@ public sealed class OutboxProcessorTests
         var services = new ServiceCollection();
         services.AddLogging();
         services.AddSingleton(observed);
-        services.AddScoped<IOutboxDispatcher, StoreRecordingDispatcher>();
+        services.AddKeyedScoped<IOutboxDispatcher, StoreRecordingDispatcher>(OutboxDispatchers.Transport);
 
         var sut = BuildCore(store, services, options: null, random: null);
 
@@ -789,7 +789,7 @@ public sealed class OutboxProcessorTests
         Random? random = null)
     {
         var services = new ServiceCollection();
-        services.AddSingleton<IOutboxDispatcher>(dispatcher);
+        services.AddKeyedSingleton<IOutboxDispatcher>(OutboxDispatchers.Transport, dispatcher);
         services.AddLogging();
 
         return BuildCore(store, services, options, random);
@@ -826,7 +826,7 @@ public sealed class OutboxProcessorTests
         var services = new ServiceCollection();
         services.AddLogging();
         services.AddScoped<DeliveryStoreHolder>();
-        services.AddScoped<IOutboxDispatcher>(_ =>
+        services.AddKeyedScoped<IOutboxDispatcher>(OutboxDispatchers.Transport, (_, _) =>
             scopes!.Contexts[^1].CausationId == failOn.Value.ToString()
                 ? throw fault()
                 : dispatcher);
@@ -870,7 +870,7 @@ public sealed class OutboxProcessorTests
     {
         var services = new ServiceCollection();
         services.AddLogging();
-        services.AddSingleton<IOutboxDispatcher>(new ScriptedDispatcher());
+        services.AddKeyedSingleton<IOutboxDispatcher>(OutboxDispatchers.Transport, new ScriptedDispatcher());
         var provider = services.BuildServiceProvider();
         scopes = new TestExecutionScopeFactory(provider.GetRequiredService<IServiceScopeFactory>());
 

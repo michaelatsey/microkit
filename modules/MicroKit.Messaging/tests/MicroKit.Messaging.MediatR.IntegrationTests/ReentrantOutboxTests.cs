@@ -36,20 +36,21 @@ public sealed class ReentrantOutboxTests
 
         await ShipAWidgetAsync(provider);
 
-        // 1. The command staged one Notification row and nothing else. The publication has not
-        //    happened yet: the handler runs on the drain, not in the command's transaction.
+        // 1. The command staged one local row and nothing else. The publication has not happened
+        //    yet: the handler runs on the drain, not in the command's transaction.
         var staged = await E2EHarness.ReadOutboxAsync(connection);
         var notification = staged.ShouldHaveSingleItem();
-        notification.MessageKind.ShouldBe(MessageKind.Notification);
-        notification.ContractName.ShouldBeNull("a notification has no wire identity");
+        notification.Endpoint.ShouldBe(OutboxMessage.LocalEndpoint);
+        notification.ContractName.ShouldBeNull("a local message has no wire identity");
 
-        // 2. The first drain fans the notification out; its handler publishes.
+        // 2. The first drain delivers the notification locally; its handler publishes, and the
+        //    publication is enlisted in the delivery's store and committed with the handler's row.
         await E2EHarness.DrainOnceAsync(provider, CancellationToken.None);
 
         var afterFirstDrain = await E2EHarness.ReadOutboxAsync(connection);
         afterFirstDrain.Count.ShouldBe(2, "the dispatch produced a second row — the outbox is reentrant");
 
-        var contract = afterFirstDrain.Single(m => m.MessageKind == MessageKind.Contract);
+        var contract = afterFirstDrain.Single(m => m.Endpoint == null);
         contract.ContractName.ShouldBe(WidgetShipped.ContractName);
         contract.Source.ShouldBe(Source);
         contract.Id.ShouldNotBe(notification.Id, "one table, one primary key column");
@@ -71,7 +72,7 @@ public sealed class ReentrantOutboxTests
             notification.CorrelationId,
             "correlation identifies the chain and is copied through — only causation advances");
 
-        afterFirstDrain.Single(m => m.MessageKind == MessageKind.Notification)
+        afterFirstDrain.Single(m => m.Endpoint == OutboxMessage.LocalEndpoint)
             .Status.ShouldBe(OutboxMessageStatus.Published);
 
         transport.Sent.ShouldBeEmpty("the contract row was staged during the drain, not claimed by it");
@@ -97,9 +98,8 @@ public sealed class ReentrantOutboxTests
         RecordingMessageTransport transport)
         => E2EHarness.BuildProvider(connection, recorder, logs, messaging =>
         {
-            // Registered AFTER AddMediatRDomainEvents(), which is the order ADR-MSG-019's keyed
-            // seam exists to make irrelevant: the glue holds the unkeyed slot and resolves its
-            // inner through OutboxDispatcherKeys.Standard, so the transport dispatcher still runs.
+            // Registered AFTER UseMediatRDomainEvents(): the order is irrelevant, since each row's
+            // endpoint names its dispatcher (#188 D7).
             messaging.Services.AddSingleton<IMessageTransport>(transport);
             messaging.ServiceName = Source;
             messaging.Publishes<WidgetShipped>();

@@ -119,7 +119,7 @@ public sealed class PublicSurfaceTests
     }
 
     /// <summary>
-    /// The SPI: what an author of a store, a transport or a dispatcher implements. Separate from the
+    /// The SPI: what an author of a store, a transport or an integration package implements. Separate from the
     /// application surface so that neither can grow by accident into the other.
     /// </summary>
     [Fact]
@@ -133,8 +133,9 @@ public sealed class PublicSurfaceTests
             "EnvelopeReceiveResult", "ReceiveDisposition", "IMessageSerializer",
             // The seam a store provider calls to add a store to the engine (#188).
             "IMessageStoreSet", "MessageStoreBuilder", "MessageStoreRegistrationExtensions",
-            // Dispatch.
-            "IOutboxDispatcher", "OutboxDispatcherKeys",
+            // The local endpoint (#188 D7, D8): what an integration package sends local messages
+            // through, the consumers it supplies, and its registration path.
+            "ILocalMessageSender", "ILocalConsumerSource", "LocalConsumer", "MessagingIntegrationExtensions",
             // Stores, split by consumer (ISP).
             "IOutboxWriter", "IOutboxProcessorStore", "IOutboxAdminStore", "IOutboxRetentionStore",
             "IInboxGuardStore", "IInboxProcessorStore", "IInboxAdminStore", "IInboxRetentionStore",
@@ -144,7 +145,7 @@ public sealed class PublicSurfaceTests
             // Value objects carried on a row.
             "CorrelationId", "CausationId",
             // Row and outcome state.
-            "MessageKind", "OutboxMessageStatus", "InboxMessageStatus",
+            "OutboxMessageStatus", "InboxMessageStatus",
             "OutboxOutcomeKind", "InboxOutcomeKind",
             // The exceptions a provider raises across the seam, for the engine to classify.
             "OutboxPayloadException", "OutboxTransportUnavailableException",
@@ -218,8 +219,8 @@ public sealed class PublicSurfaceTests
         VisibleTypeNamesIn("MicroKit.Messaging.MediatR.DependencyInjection", MediatRGlueAssembly)
             .ShouldBe(
                 ["MessagingMediatRExtensions"],
-                "the glue is one registration method; the sink, the routing dispatcher and the " +
-                "cascade publisher are internal");
+                "the glue is one registration method; the sink, the dispatch middleware and the " +
+                "notification handler source are internal");
     }
 
     /// <summary>

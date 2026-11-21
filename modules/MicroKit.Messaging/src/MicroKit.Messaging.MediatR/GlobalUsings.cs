@@ -3,7 +3,6 @@ global using MicroKit.Domain.Events;
 global using MicroKit.MediatR.Events;
 global using MicroKit.MediatR.Handlers;
 global using MicroKit.Messaging;
-global using MicroKit.Messaging.MediatR.Outbox;
 global using MicroKit.Messaging.Options;
 global using MicroKit.Execution.Abstractions;
 global using Microsoft.Extensions.DependencyInjection;

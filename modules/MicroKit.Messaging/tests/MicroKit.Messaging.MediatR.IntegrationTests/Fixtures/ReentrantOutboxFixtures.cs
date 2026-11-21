@@ -26,9 +26,9 @@ internal sealed record WidgetShipped(Guid WidgetId) : IIntegrationEvent
 }
 
 /// <summary>
-/// The reentrant hop: a notification handler on the post-commit outbox path publishes an
-/// integration event, which is enlisted as a <see cref="MessageKind.Contract"/> row and makes a
-/// second pass through the same queue.
+/// The reentrant hop: a notification handler, in a local delivery, publishes an integration event,
+/// which is enlisted as a transport row in the delivery's store and makes a second pass through the
+/// same queue.
 /// </summary>
 /// <remarks>
 /// Outbox by enlistment (#188): the bus adds the row to the dispatch scope's <c>DbContext</c>, and

@@ -107,7 +107,54 @@ internal sealed class MessagingCompositionValidator(
             }
         }
 
+        foreach (var check in composition.StartupChecks)
+        {
+            problems.AddRange(check(services));
+        }
+
+        problems.AddRange(UnboundLocalConsumers());
+
         MessagingCompositionAnalysis.ThrowIfAny(problems);
+    }
+
+    /// <summary>
+    /// The local consumers are read at start, so a source supplying an invalid one fails here rather
+    /// than a send. With several stores, a local consumer whose handler type sits in an assembly bound
+    /// to none of them has no inbox to be guarded by — the rule an unbound handler already follows (D12).
+    /// </summary>
+    private IEnumerable<string> UnboundLocalConsumers()
+    {
+        if (composition.LocalConsumerSources.Count == 0)
+        {
+            return [];
+        }
+
+        IReadOnlyList<LocalConsumer> consumers;
+        try
+        {
+            consumers = services.GetRequiredService<Registry.LocalConsumerRegistry>().Consumers;
+        }
+        catch (ArgumentException ex)
+        {
+            return [$"A local consumer source supplied an invalid consumer: {ex.Message} Fix the source's consumers."];
+        }
+
+        return composition.Stores.Count < 2 ? [] : Unbound(consumers);
+    }
+
+    private IEnumerable<string> Unbound(IReadOnlyList<LocalConsumer> consumers)
+    {
+        var bound = composition.Stores.SelectMany(s => s.Assemblies).ToHashSet();
+        foreach (var handler in consumers.Select(c => c.HandlerType).Distinct())
+        {
+            if (!bound.Contains(handler.Assembly))
+            {
+                yield return
+                    $"Local consumer '{handler.FullName}' is bound to no store, and {composition.Stores.Count} " +
+                    $"are configured. Bind its assembly '{handler.Assembly.GetName().Name}' to one store " +
+                    "(for EF Core: store => store.ForAssemblyContaining<T>()).";
+            }
+        }
     }
 
     /// <inheritdoc />
