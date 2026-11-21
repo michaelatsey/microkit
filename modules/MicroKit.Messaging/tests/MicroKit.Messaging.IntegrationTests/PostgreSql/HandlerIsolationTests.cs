@@ -128,6 +128,26 @@ public sealed class HandlerIsolationTests(PostgreSqlFixture fixture)
         (await host.InboxAsync()).ShouldHaveSingleItem().Status.ShouldBe(InboxMessageStatus.Failed);
     }
 
+    /// <summary>
+    /// A handler that publishes and then throws, saving nothing: its publication rolls back with the
+    /// attempt, so it is reported discarded with its work (4001, Debug), never lost (4000, Error).
+    /// </summary>
+    [DockerRequiredFact]
+    public async Task AHandlerThatPublishesThenThrows_ReportsItsPublicationDiscardedWithTheAttempt_NotLost()
+    {
+        await using var db = await NewDatabase();
+        await using var host = GuardHost.Create(db, handlers: bus => bus.AddHandler<FirstGuardHandler>(), broker: new InMemoryBroker());
+        host.Probe.PublishFollowUp = true;
+        host.Probe.Scripts[FirstGuardHandler.HandlerName] = _ => throw new InvalidOperationException("after its publication, before any save");
+
+        var result = await host.ReceiveAsync(GuardHost.Envelope(Guid.NewGuid(), new GuardEvent(Guid.NewGuid())));
+
+        result.Disposition.ShouldBe(ReceiveDisposition.Acknowledge);
+        (await host.OutboxAsync()).ShouldBeEmpty();
+        host.Logs.Entries.ShouldNotContain(e => e.EventId == 4000, "a rolled-back attempt's publication is not lost");
+        host.Logs.Entries.ShouldContain(e => e.EventId == 4001, "it is reported discarded with the attempt");
+    }
+
     [DockerRequiredFact]
     public async Task AHandlerThatSavesThenPublishes_CommitsItsDataItsPublicationAndItsRowTogether()
     {
@@ -226,6 +246,38 @@ public sealed class HandlerIsolationTests(PostgreSqlFixture fixture)
         redelivered.Disposition.ShouldBe(ReceiveDisposition.Acknowledge);
         host.Probe.Calls(FirstGuardHandler.HandlerName).ShouldBe(2, "the redelivery ran the handler again");
         (await host.InboxAsync()).ShouldHaveSingleItem().Status.ShouldBe(InboxMessageStatus.Failed);
+    }
+
+    /// <summary>
+    /// A row the store refuses on its data — a tenant id longer than its column — fails on every
+    /// attempt: a counted failure the transport dead-letters in time, never a dependency outage that
+    /// pauses the endpoint for ever (#188, review of the guard-outage fix).
+    /// </summary>
+    [DockerRequiredFact]
+    public async Task ARowTheStoreRefusesOnItsData_IsACountedFailure_NotADependencyOutage()
+    {
+        await using var db = await NewDatabase();
+        await using var host = GuardHost.Create(db, handlers: bus => bus.AddHandler<FirstGuardHandler>());
+        var plain = GuardHost.Envelope(Guid.NewGuid(), new GuardEvent(Guid.NewGuid()));
+        var envelope = new MessageEnvelope
+        {
+            Id = plain.Id,
+            Source = plain.Source,
+            Type = plain.Type,
+            Time = plain.Time,
+            DataContentType = plain.DataContentType,
+            Headers = new Dictionary<string, string>(plain.Headers, StringComparer.Ordinal)
+            {
+                [MessageHeaders.TenantId] = new string('t', 300),   // TenantId is HasMaxLength(256)
+            },
+            Body = plain.Body,
+        };
+
+        var result = await host.ReceiveAsync(envelope);
+
+        result.Disposition.ShouldBe(ReceiveDisposition.Redeliver, "a data fault is counted, and dead-letters at the attempt limit");
+        host.Logs.Entries.ShouldContain(e => e.EventId == 2204);
+        host.Logs.Entries.ShouldNotContain(e => e.EventId == 2209, "the store is up: no outage");
     }
 
     /// <summary>

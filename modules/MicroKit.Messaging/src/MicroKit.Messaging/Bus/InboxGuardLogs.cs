@@ -80,4 +80,13 @@ internal static partial class InboxGuardLogs
                   "acknowledged and will be redelivered.")]
     public static partial void GuardUnregistered(
         ILogger logger, string handlerType, Guid messageId, string store);
+
+    [LoggerMessage(
+        EventId = 2209,
+        Level = LogLevel.Error,
+        Message = "Handler '{HandlerType}' could not reach its inbox row for message {MessageId}: store " +
+                  "'{Store}' reports itself unreachable. A dependency outage: nothing is charged, and " +
+                  "the delivery waits — a transport pauses and redelivers, a local row is deferred.")]
+    public static partial void GuardUnreachable(
+        ILogger logger, Exception exception, string handlerType, Guid messageId, string store);
 }

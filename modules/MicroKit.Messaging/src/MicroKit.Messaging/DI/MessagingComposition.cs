@@ -182,7 +182,7 @@ internal sealed class MessagingComposition
         }
 
         _handled.Add(pair);
-        Handlers.Register(messageType, handlerType.AssemblyQualifiedName!, handlerType);
+        Handlers.Register(messageType, MessageConsumerKey.Of(handlerType), handlerType);
     }
 
     private void Read(Type messageType)

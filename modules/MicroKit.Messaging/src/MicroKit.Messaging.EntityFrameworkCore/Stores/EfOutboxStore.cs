@@ -45,8 +45,9 @@ namespace MicroKit.Messaging.EntityFrameworkCore;
 internal sealed class EfOutboxStore<TContext>(
     TContext context,
     TimeProvider timeProvider,
-    ILogger<EfOutboxStore<TContext>>? logger = null)
-    : IOutboxWriter, IOutboxProcessorStore, IOutboxAdminStore, IOutboxRetentionStore, IDisposable
+    ILogger<EfOutboxStore<TContext>>? logger = null,
+    EfInboxAttempt<TContext>? attempt = null)
+    : IOutboxWriter, IOutboxProcessorStore, IOutboxAdminStore, IOutboxRetentionStore, IDisposable, IAsyncDisposable
     where TContext : DbContext
 {
     private readonly ILogger _logger = logger ?? NullLogger<EfOutboxStore<TContext>>.Instance;
@@ -85,7 +86,8 @@ internal sealed class EfOutboxStore<TContext>(
     /// A row still <c>Added</c> is a publication whose unit of work was never saved — lost with the
     /// scope, so an <c>Error</c>. A row <c>Detached</c> was discarded on purpose with the change
     /// tracker — a rolled-back attempt, <c>DiscardChanges</c> — together with the business data it
-    /// announced, so a <c>Debug</c>. A row saved and then rolled back by its transaction is neither:
+    /// announced, so a <c>Debug</c>; so is a row still <c>Added</c> when this scope's guarded inbox
+    /// attempt never committed (<see cref="EfInboxAttempt{TContext}"/>): it rolls back with that work. A row saved and then rolled back by its transaction is neither:
     /// the business data rolled back with it.
     /// </remarks>
     public void Dispose()
@@ -98,6 +100,11 @@ internal sealed class EfOutboxStore<TContext>(
         var store = EntityFrameworkOutbox.KeyOf<TContext>().Value;
         var enlisted = _enlisted;
         _enlisted = null;
+
+        // This scope's guarded attempt never committed: it rolls back, and an Added row goes with the
+        // work it announced — not lost. Any other open transaction (a host's own, through
+        // UseTransaction) proves nothing: an Added row there was never saved, and is lost.
+        var rollingBack = attempt is { Uncommitted: true };
 
         foreach (var row in enlisted)
         {
@@ -112,15 +119,27 @@ internal sealed class EfOutboxStore<TContext>(
                 return;
             }
 
-            if (state is EntityState.Added)
+            if (state is EntityState.Added && !rollingBack)
             {
                 EfOutboxLogs.UnsavedEnlistment(_logger, row.Id.Value, row.ContractName ?? row.EventType, store);
             }
-            else if (state is EntityState.Detached)
+            else if (state is EntityState.Detached or EntityState.Added)
             {
                 EfOutboxLogs.DiscardedEnlistment(_logger, row.Id.Value, row.ContractName ?? row.EventType, store);
             }
         }
+    }
+
+    /// <inheritdoc/>
+    /// <remarks>
+    /// The same report as <see cref="Dispose"/>: the container calls this for a scope disposed
+    /// asynchronously, that one for a scope disposed synchronously, so the report never depends on
+    /// how the scope ends.
+    /// </remarks>
+    public ValueTask DisposeAsync()
+    {
+        Dispose();
+        return ValueTask.CompletedTask;
     }
 
     // ---------- IOutboxProcessorStore ----------

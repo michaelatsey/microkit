@@ -42,6 +42,26 @@ the outbox **and** the inbox of one `DbContext`, configured on the bus, and a ho
   `ReleasedCount` or `MessageKind` needs the new properties.
 - **`MicroKit.Messaging.MediatR` no longer replaces MediatR's `INotificationPublisher`**, and no
   longer has access to `MicroKit.Messaging`'s internals: it is built on the public SPI.
+- **The inbox consumer key is version-free.** An inbox row's `ConsumerType` is now
+  `Namespace.Type, AssemblyName` (`MessageConsumerKey.Of(handlerType)`), for bus handlers and
+  notification handlers alike; it was the handler type's `AssemblyQualifiedName`, so every
+  assembly-version bump changed every key, and a message redelivered across a deployment found no row
+  and ran its handler again. The transformation removes every `, Version=…`, `, Culture=…` and
+  `, PublicKeyToken=…` part of the old key, those of generic type arguments included
+  (`MessageConsumerKey.FromAssemblyQualifiedName`). Existing rows must be rewritten when the new
+  version is deployed (see *Migration*): under its old key a `Processed` row no longer skips a
+  redelivery, and a `Failed` row is dead-lettered as an unknown consumer on its next retry.
+- **Store providers: `IInboxGuardStore.ExecuteAsync<TState, TResult>(state, operation,
+  verifySucceeded, verifiedResult, ct)`** replaces the form without state: the two callbacks take
+  the state, so the engine passes static lambdas and allocates no closure per handler.
+- **A notification handler registered as a singleton is a start failure**, naming the fix: register
+  it transient or scoped. It would be shared by every delivery, and resolving it builds its
+  siblings too. An instance registration — a singleton — was already rejected.
+- **Without a store, `UseMediatRDomainEvents()` dispatches no domain event after a handler.** There
+  is no engine save after it, so an in-transaction `IDomainEventHandler` run there would stage
+  writes nothing saves. The events a handler leaves pending are reported instead (2310, `Error`):
+  raise them before a save that dispatches — a MediatR command with the transaction behavior — or
+  configure a store.
 
 ### Added
 
@@ -73,11 +93,27 @@ the outbox **and** the inbox of one `DbContext`, configured on the bus, and a ho
 - **Start checks**, each naming its fix: a store whose `DbContext` is not registered; a model
   without the messaging entities; several stores and an unbound handler or local consumer; an
   assembly bound to two stores; `UseMediatRDomainEvents()` without MicroKit.MediatR; a notification
-  handler registered as an open generic, a factory or an instance, or for an abstract notification.
+  handler registered as an open generic, a factory, an instance or a singleton, or for an abstract
+  notification.
+- **One loop guard.** Every long-running loop — each store's outbox, inbox and retention loops, the
+  local queue, the in-memory transport — ends only on a host stop: an `ObjectDisposedException` while
+  the host runs, or a logging provider that throws, is a failed cycle with its back-off, never the
+  end of the loop.
+- **`MessageConsumerKey`** (`MicroKit.Messaging.Spi`): the version-free consumer key, for an
+  integration package naming its own `LocalConsumer.ConsumerType`.
 - **Events:** 4000 (`Error`) an enlisted row its scope never saved — lost, and never silent; 4001
   (`Debug`) an enlisted row discarded with the change tracker; 1400 a store service that cannot be
   activated; 1401 a failed loop cycle with its back-off; 1402 a loop stopped on a configuration
-  fault; 1403 the stores the engine drains; 2200–2208 the inbox guard; 2300–2304 the local endpoint.
+  fault; 1403 the stores the engine drains; 2200–2209 the inbox guard (2209: a guard store that
+  reports itself unreachable — a dependency outage, nothing charged); 2300–2305 the local endpoint
+  (2305: its loop failed outside any message); 2310 domain events a handler left undispatched on a
+  host with no store; 3017 the in-memory transport's loop failed outside any envelope.
+- **An unreachable guard store is a dependency outage.** A store provider's `IInboxGuardStore` says
+  its database cannot be reached by throwing `InboxDependencyUnavailableException` from `FindAsync`
+  or `TryInsertFailedAsync`: the delivery pauses and is redelivered, nothing charged, and a local row
+  is deferred. Any other fault — a value too long for its column — stays a counted failure that
+  dead-letters in time. The EF store raises it when its connection cannot be opened, or when the
+  provider calls the fault transient.
   1010 and the 1004/1009 changes are under *Breaking*.
 
 ### Fixed
@@ -88,6 +124,15 @@ the outbox **and** the inbox of one `DbContext`, configured on the bus, and a ho
   back-off, never as "not registered"; a missing registration is rejected at start (#127).
 - A notification handler with a dependency that cannot be built no longer fails its siblings: each
   is activated on its own.
+- A local row whose consumer's store is down — its inbox row cannot be reached — is deferred under
+  the local endpoint's back-off, nothing charged, never dead-lettered; the store's transport rows
+  keep their cadence.
+- A publication enlisted by a guarded attempt that rolls back without saving — its handler threw —
+  is reported discarded with the attempt (4001, `Debug`), not lost (4000, `Error`). A row left
+  unsaved in any other open transaction — a host's own, through `UseTransaction` — is still lost
+  (4000).
+- The EF stores implement `IDisposable` as well as `IAsyncDisposable`, with the same logic: a scope
+  disposed synchronously no longer throws, and still reports a lost row (4000).
 - A broker provider's `IMessageTransport` now sends a store's transport rows: every store registers
   the transport dispatcher, which a provider had no public way to register. With no transport at
   all, a transport row is deferred (event 1009, naming the call to add) instead of stopping the
@@ -123,8 +168,31 @@ ALTER TABLE "InboxMessages" ADD "Source" text NULL;        -- what a retry rebui
 ALTER TABLE "InboxMessages" ADD "Headers" text NULL;
 ```
 
-The statements are PostgreSQL's; the names are the mapped table, column and index names. The order
-of the first three matters: set `Endpoint` before `MessageKind` is dropped. In code: replace each
+The version-free consumer key. A message redelivered across an earlier version bump has a row per
+version for one handler, which the rewrite would collapse onto one key and the unique index refuse:
+the `DELETE` keeps one per message and handler first — a `Processed` row if there is one, else the
+newest — then the `UPDATE` rewrites the rest:
+
+```sql
+-- InboxMessages.ConsumerType: the version-free consumer key
+DELETE FROM "InboxMessages" AS m
+ USING (SELECT "RowId",
+               row_number() OVER (
+                   PARTITION BY "MessageId",
+                                regexp_replace("ConsumerType", ', (Version|Culture|PublicKeyToken)=[^,\]]+', '', 'g')
+                   ORDER BY ("Status" = 'Processed') DESC, "ReceivedAtUtc" DESC) AS n
+          FROM "InboxMessages") AS d
+ WHERE m."RowId" = d."RowId" AND d.n > 1;
+UPDATE "InboxMessages"
+   SET "ConsumerType" = regexp_replace("ConsumerType", ', (Version|Culture|PublicKeyToken)=[^,\]]+', '', 'g')
+ WHERE "ConsumerType" ~ ', (Version|Culture|PublicKeyToken)=';
+```
+
+The statements are PostgreSQL's; the names are the mapped table, column and index names. The two
+consumer-key statements give exactly the keys the code builds, and are run from this file by
+`ConsumerKeyMigrationTests`. Run them once no instance of the previous version consumes: during a
+rolling deployment an old instance still writes versioned keys, so run them again after the
+rollout — both are idempotent. The order of the first three matters: set `Endpoint` before `MessageKind` is dropped. In code: replace each
 `IIntegrationEventPublisher.PublishAsync` with `IMessageBus.PublishAsync` — and drop the transaction
 it required: the caller's `SaveChanges` is enough — `AddEfCoreOutbox<TContext>()` with
 `bus.UseEntityFrameworkOutbox<TContext>()`, and `AddMediatRDomainEvents()` with

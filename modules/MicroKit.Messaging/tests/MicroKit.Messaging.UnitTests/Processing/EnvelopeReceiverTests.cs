@@ -20,8 +20,8 @@ public sealed class EnvelopeReceiverTests
 {
     private const string ContractName = "partner.billing.invoice-settled.v1";
     private const string Source = "/partner/billing";
-    private static readonly string ConsumerA = typeof(FirstConsumer).AssemblyQualifiedName!;
-    private static readonly string ConsumerB = typeof(SecondConsumer).AssemblyQualifiedName!;
+    private static readonly string ConsumerA = MessageConsumerKey.Of(typeof(FirstConsumer));
+    private static readonly string ConsumerB = MessageConsumerKey.Of(typeof(SecondConsumer));
 
     // Deliberately far from the clock, and in the past: OccurredOnUtc is the business fact's time
     // and a receiver that reached for it would order the retry claim on a producer's clock.
@@ -182,6 +182,22 @@ public sealed class EnvelopeReceiverTests
         result.Disposition.ShouldBe(ReceiveDisposition.Redeliver, "nothing records the failure, so the transport must keep the message");
         harness.Guard.Database.Rows.ShouldBeEmpty();
         harness.Guard.Logs.Records.ShouldContain(r => r.EventId == 2204 && r.Level == LogLevel.Error);
+    }
+
+    [Fact]
+    public async Task ReceiveAsync_WhenTheStoreReportsItselfUnreachable_ForTheFailedRow_AsksToPauseAndRedeliver()
+    {
+        // Only the store can tell an outage from a write that fails on its data: it says so (#188).
+        var harness = Harness.Build(consumers: 1);
+        harness.Probe.Throw[ConsumerA] = new InvalidOperationException("the handler failed");
+        harness.Guard.Database.FailInsertFailed = new InboxDependencyUnavailableException("the store cannot be reached");
+
+        var result = await harness.Receiver.ReceiveAsync(Envelope());
+
+        result.Disposition.ShouldBe(ReceiveDisposition.PauseAndRedeliver, "a dependency outage: nothing charged");
+        harness.Guard.Database.Rows.ShouldBeEmpty();
+        harness.Guard.Logs.Records.ShouldContain(r => r.EventId == 2209 && r.Level == LogLevel.Error);
+        harness.Guard.Logs.Records.ShouldNotContain(r => r.EventId == 2204);
     }
 
     [Fact]

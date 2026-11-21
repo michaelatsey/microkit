@@ -1,3 +1,5 @@
+using System.Data;
+using System.Data.Common;
 using System.Linq.Expressions;
 using System.Runtime.ExceptionServices;
 
@@ -43,8 +45,11 @@ namespace MicroKit.Messaging.EntityFrameworkCore;
 /// </para>
 /// </remarks>
 /// <typeparam name="TContext">The application's <see cref="DbContext"/> type.</typeparam>
-internal sealed class EfInboxStore<TContext>(TContext context, TimeProvider timeProvider)
-    : IInboxGuardStore, IInboxProcessorStore, IInboxAdminStore, IInboxRetentionStore, IAsyncDisposable
+internal sealed class EfInboxStore<TContext>(
+    TContext context,
+    TimeProvider timeProvider,
+    EfInboxAttempt<TContext>? attempt = null)
+    : IInboxGuardStore, IInboxProcessorStore, IInboxAdminStore, IInboxRetentionStore, IDisposable, IAsyncDisposable
     where TContext : DbContext
 {
     // Logical key -> surrogate key, built from the rows this batch claimed. Scoped lifetime, so
@@ -55,6 +60,7 @@ internal sealed class EfInboxStore<TContext>(TContext context, TimeProvider time
 
     // The attempt's transaction, begun by BeginAsync on this scope's context.
     private IDbContextTransaction? _transaction;
+    private bool _committed;
 
     // The row this attempt staged, so CommitAsync can write it even if the handler cleared the
     // tracker: a new delivery's enlisted row, or a retry's claimed row with the claim's token.
@@ -67,14 +73,29 @@ internal sealed class EfInboxStore<TContext>(TContext context, TimeProvider time
         var id = key.MessageId;
         var consumer = key.ConsumerType;
 
-        var state = await context.Set<InboxMessage>()
-            .AsNoTracking()
-            .Where(m => m.MessageId == id && m.ConsumerType == consumer)
-            .Select(m => new { m.Status, m.DeadLettered, m.RowId })
-            .FirstOrDefaultAsync(ct)
-            .ConfigureAwait(false);
+        var opened = await OpenOrUnreachableAsync(ct).ConfigureAwait(false);
+        try
+        {
+            var state = await context.Set<InboxMessage>()
+                .AsNoTracking()
+                .Where(m => m.MessageId == id && m.ConsumerType == consumer)
+                .Select(m => new { m.Status, m.DeadLettered, m.RowId })
+                .FirstOrDefaultAsync(ct)
+                .ConfigureAwait(false);
 
-        return state is null ? null : new InboxRowState(state.Status, state.DeadLettered, state.RowId);
+            return state is null ? null : new InboxRowState(state.Status, state.DeadLettered, state.RowId);
+        }
+        catch (Exception ex) when (IsTransientFault(ex))
+        {
+            throw Unreachable(ex);
+        }
+        finally
+        {
+            if (opened)
+            {
+                await context.Database.CloseConnectionAsync().ConfigureAwait(false);
+            }
+        }
     }
 
     /// <inheritdoc/>
@@ -85,9 +106,10 @@ internal sealed class EfInboxStore<TContext>(TContext context, TimeProvider time
     /// already has a transaction, and accepts a transaction begun inside the strategy's operation —
     /// the shape the #188 spike proved on PostgreSQL.
     /// </remarks>
-    public async ValueTask<TResult> ExecuteAsync<TResult>(
-        Func<CancellationToken, ValueTask<TResult>> operation,
-        Func<CancellationToken, ValueTask<bool>> verifySucceeded,
+    public async ValueTask<TResult> ExecuteAsync<TState, TResult>(
+        TState state,
+        Func<TState, CancellationToken, ValueTask<TResult>> operation,
+        Func<TState, CancellationToken, ValueTask<bool>> verifySucceeded,
         TResult verifiedResult,
         CancellationToken ct = default)
     {
@@ -98,10 +120,10 @@ internal sealed class EfInboxStore<TContext>(TContext context, TimeProvider time
         try
         {
             return await strategy.ExecuteAsync(
-                (operation, verifySucceeded, verifiedResult),
-                static async (_, state, token) => await state.operation(token).ConfigureAwait(false),
-                static async (_, state, token) => await state.verifySucceeded(token).ConfigureAwait(false)
-                    ? new ExecutionResult<TResult>(true, state.verifiedResult)
+                (state, operation, verifySucceeded, verifiedResult),
+                static async (_, s, token) => await s.operation(s.state, token).ConfigureAwait(false),
+                static async (_, s, token) => await s.verifySucceeded(s.state, token).ConfigureAwait(false)
+                    ? new ExecutionResult<TResult>(true, s.verifiedResult)
                     : new ExecutionResult<TResult>(false, default!),
                 ct).ConfigureAwait(false);
         }
@@ -125,6 +147,7 @@ internal sealed class EfInboxStore<TContext>(TContext context, TimeProvider time
         }
 
         _transaction = await context.Database.BeginTransactionAsync(ct).ConfigureAwait(false);
+        attempt?.Begun();
     }
 
     /// <inheritdoc/>
@@ -197,6 +220,8 @@ internal sealed class EfInboxStore<TContext>(TContext context, TimeProvider time
 
         await context.SaveChangesAsync(ct).ConfigureAwait(false);
         await transaction.CommitAsync(ct).ConfigureAwait(false);
+        _committed = true;
+        attempt?.Committed();
     }
 
     /// <summary>
@@ -270,11 +295,17 @@ internal sealed class EfInboxStore<TContext>(TContext context, TimeProvider time
     {
         ArgumentNullException.ThrowIfNull(row);
 
+        var opened = await OpenOrUnreachableAsync(ct).ConfigureAwait(false);
         var entry = context.Set<InboxMessage>().Add(row);
         try
         {
             await context.SaveChangesAsync(ct).ConfigureAwait(false);
             return true;
+        }
+        catch (Exception ex) when (IsTransientFault(ex))
+        {
+            entry.State = EntityState.Detached;
+            throw Unreachable(ex);
         }
         catch (DbUpdateException)
         {
@@ -287,17 +318,89 @@ internal sealed class EfInboxStore<TContext>(TContext context, TimeProvider time
 
             throw;
         }
+        finally
+        {
+            if (opened)
+            {
+                await context.Database.CloseConnectionAsync().ConfigureAwait(false);
+            }
+        }
+    }
+
+    /// <summary>
+    /// Opens the connection on its own, so a database that cannot be reached is told apart from a
+    /// command that fails on its data (#188): the first is a dependency outage, the second the
+    /// failure it is. Returns whether this call opened it, and must therefore close it.
+    /// </summary>
+    private async ValueTask<bool> OpenOrUnreachableAsync(CancellationToken ct)
+    {
+        if (context.Database.GetDbConnection().State is ConnectionState.Open)
+        {
+            return false;
+        }
+
+        try
+        {
+            await context.Database.OpenConnectionAsync(ct).ConfigureAwait(false);
+            return true;
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException and not ObjectDisposedException)
+        {
+            throw Unreachable(ex);
+        }
+    }
+
+    /// <summary>A fault the provider calls transient — a dropped connection, a timeout.</summary>
+    private static bool IsTransientFault(Exception ex)
+        => ex is DbException { IsTransient: true } || ex.InnerException is DbException { IsTransient: true };
+
+    private static InboxDependencyUnavailableException Unreachable(Exception ex)
+        => new($"The inbox store of '{typeof(TContext).FullName}' cannot be reached: {ex.Message}", ex);
+
+    /// <inheritdoc/>
+    /// <remarks>
+    /// Both disposal forms, with the same logic: the container calls <see cref="Dispose"/> for a
+    /// scope disposed synchronously, and throws for a service that is only
+    /// <see cref="IAsyncDisposable"/>. An attempt's transaction not committed is rolled back with it.
+    /// </remarks>
+    public void Dispose()
+    {
+        var transaction = DiscardUncommitted();
+        transaction?.Dispose();
     }
 
     /// <inheritdoc/>
     public async ValueTask DisposeAsync()
     {
-        if (_transaction is not null)
+        var transaction = DiscardUncommitted();
+        if (transaction is not null)
         {
-            // Not committed: rolled back with the transaction.
-            await _transaction.DisposeAsync().ConfigureAwait(false);
-            _transaction = null;
+            await transaction.DisposeAsync().ConfigureAwait(false);
         }
+    }
+
+    /// <summary>
+    /// An attempt that never committed — its handler threw, its save hit the inbox key — rolls back,
+    /// and what it staged goes with it: the tracker is cleared, so a publication it enlisted reads as
+    /// discarded with its work (4001), never as lost (4000).
+    /// </summary>
+    private Microsoft.EntityFrameworkCore.Storage.IDbContextTransaction? DiscardUncommitted()
+    {
+        var transaction = _transaction;
+        _transaction = null;
+        if (transaction is not null && !_committed)
+        {
+            try
+            {
+                context.ChangeTracker.Clear();
+            }
+            catch (ObjectDisposedException)
+            {
+                // The context went first: nothing is left to clear.
+            }
+        }
+
+        return transaction;
     }
 
     // ---------- IInboxProcessorStore ----------

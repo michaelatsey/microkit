@@ -160,7 +160,7 @@ internal sealed class GuardHost : IAsyncDisposable
         var row = new InboxMessage
         {
             MessageId = MessageId.From(messageId),
-            ConsumerType = typeof(THandler).AssemblyQualifiedName!,
+            ConsumerType = MessageConsumerKey.Of(typeof(THandler)),
             EventType = typeof(GuardEvent).AssemblyQualifiedName!,
             Payload = JsonSerializer.Serialize(message, JsonSerializerOptions.Web),
             Source = ServiceName,

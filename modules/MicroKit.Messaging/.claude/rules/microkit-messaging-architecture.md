@@ -144,11 +144,15 @@ three registrations:
    and dated by its `OccurredAt`.
 2. `NotificationHandlerSource`, an `ILocalConsumerSource`: each closed `INotificationHandler<T>` of a
    domain-event notification is a local consumer **of its own**, named by its implementation type's
-   assembly-qualified name, activated per delivery. An open generic, a handler of an abstract or
-   interface notification, and a factory or instance registration are start failures, never skips.
+   version-free key (`MessageConsumerKey`), activated per delivery. An open generic, a handler of an
+   abstract or interface notification, a factory or instance registration and a singleton are start
+   failures, never skips.
 3. `DomainEventsDispatchMiddleware`, a receive middleware: after every handler — bus or notification —
-   it calls `IDomainEventsDispatcher.DispatchEventsAsync`, so cascade events commit with the
-   handler's work and are delivered.
+   on a host with a store, it calls `IDomainEventsDispatcher.DispatchEventsAsync`, so cascade events
+   commit with the handler's work and are delivered. With no store there is no engine save after a
+   handler: it dispatches nothing and reports the events left pending (2310, `Error`). The store set
+   decides per delivery — registration cannot, `UseMediatRDomainEvents()` being order-independent
+   with the store calls.
 
 A start check also requires MicroKit.MediatR's `IDomainEventsDispatcher` and
 `IDomainEventNotificationFactory`.

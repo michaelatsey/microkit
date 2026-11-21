@@ -25,60 +25,45 @@ internal sealed class OutboxRetentionLoop(
     /// <summary>Runs until <paramref name="stoppingToken"/> is cancelled.</summary>
     /// <param name="stoppingToken">The host's token.</param>
     /// <returns>A task that completes when the loop ends.</returns>
-    public async Task RunAsync(CancellationToken stoppingToken)
+    public Task RunAsync(CancellationToken stoppingToken)
     {
         if (options.RetentionDays <= 0)
         {
-            OutboxProcessorLogs.RetentionDisabled(logger, options.RetentionDays);
-            return;
+            GuardedLoop.Log(() => OutboxProcessorLogs.RetentionDisabled(logger, options.RetentionDays));
+            return Task.CompletedTask;
         }
 
-        while (!stoppingToken.IsCancellationRequested)
-        {
-            try
+        return GuardedLoop.RunAsync(
+            async ct =>
             {
                 var scope = scopeFactory.CreateAsyncScope();
                 await using (scope.ConfigureAwait(false))
                 {
-                    IOutboxRetentionStore? retention = null;
+                    IOutboxRetentionStore retention;
                     try
                     {
                         retention = scope.ServiceProvider.GetRequiredKeyedService<IOutboxRetentionStore>(store);
                     }
-                    catch (Exception ex) when (!HostStop.Is(ex, stoppingToken))
+                    catch (Exception ex) when (!HostStop.Is(ex, ct))
                     {
-                        StoreEngineLogs.ActivationFailed(
-                            logger, ex, Loop, store.Value, nameof(IOutboxRetentionStore), options.RetentionInterval);
+                        GuardedLoop.Log(() => StoreEngineLogs.ActivationFailed(
+                            logger, ex, Loop, store.Value, nameof(IOutboxRetentionStore), options.RetentionInterval));
+                        return options.RetentionInterval;
                     }
 
-                    if (retention is not null)
-                    {
-                        var cutoff = timeProvider.GetUtcNow().AddDays(-options.RetentionDays);
-                        var deleted = await retention
-                            .DeleteProcessedAsync(cutoff, tenantId: null, stoppingToken)
-                            .ConfigureAwait(false);
-
-                        OutboxProcessorLogs.RetentionPass(logger, deleted, cutoff);
-                    }
+                    var cutoff = timeProvider.GetUtcNow().AddDays(-options.RetentionDays);
+                    var deleted = await retention.DeleteProcessedAsync(cutoff, tenantId: null, ct).ConfigureAwait(false);
+                    GuardedLoop.Log(() => OutboxProcessorLogs.RetentionPass(logger, deleted, cutoff));
+                    return options.RetentionInterval;
                 }
-            }
-            catch (Exception ex) when (HostStop.Is(ex, stoppingToken))
+            },
+            ex =>
             {
-                break;
-            }
-            catch (Exception ex)
-            {
-                OutboxProcessorLogs.RetentionFailed(logger, ex, options.RetentionInterval);
-            }
-
-            try
-            {
-                await Task.Delay(options.RetentionInterval, stoppingToken).ConfigureAwait(false);
-            }
-            catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
-            {
-                break;
-            }
-        }
+                GuardedLoop.Log(() => OutboxProcessorLogs.RetentionFailed(logger, ex, options.RetentionInterval));
+                return options.RetentionInterval;
+            },
+            // The interval runs on real time, as it always has; the cutoff reads the injected clock.
+            TimeProvider.System,
+            stoppingToken);
     }
 }

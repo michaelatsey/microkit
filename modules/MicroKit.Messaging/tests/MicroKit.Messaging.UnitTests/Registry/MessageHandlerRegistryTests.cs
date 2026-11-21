@@ -19,7 +19,7 @@ namespace MicroKit.Messaging.UnitTests.Registry;
 public sealed class MessageHandlerRegistryTests
 {
     private static readonly string ConsumerType =
-        typeof(RecordingInboxHandler).AssemblyQualifiedName!;
+        MessageConsumerKey.Of(typeof(RecordingInboxHandler));
 
     /// <summary>A message scope holding exactly <paramref name="handler"/>, as the pipeline resolves it.</summary>
     private static ServiceProvider ServicesWith<THandler>(THandler handler)

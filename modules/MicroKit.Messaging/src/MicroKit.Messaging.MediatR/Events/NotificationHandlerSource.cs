@@ -18,15 +18,19 @@ namespace MicroKit.Messaging.MediatR.Events;
 /// <b>Never a silent skip (C3).</b> A local consumer is matched by the notification's exact runtime
 /// type and named by its handler's type, so a descriptor that does not name both cannot be one: an
 /// open generic <c>INotificationHandler&lt;&gt;</c>, a handler of an abstract or interface
-/// domain-event notification, and a factory or instance registration. Each is reported as a start
-/// problem naming it, rather than leaving that handler to never run.
+/// domain-event notification, a factory or instance registration, and a singleton. Each is reported
+/// as a start problem naming it, rather than leaving that handler to never run.
 /// </para>
 /// <para>
 /// <b>Each consumer builds its own handler and nothing else</b>, from the delivery's scope: a
 /// sibling whose dependency cannot be resolved never fails it. A transient or scoped handler is
 /// activated by a factory prepared at the scan — each delivery has a scope of its own, so the two
-/// lifetimes coincide — and the delivery disposes it. A singleton handler is the scope's
-/// registration, as MediatR resolves it.
+/// lifetimes coincide — and the delivery disposes it. A singleton is rejected at start: it would be
+/// shared by every delivery, and resolving it builds its siblings too.
+/// </para>
+/// <para>
+/// <b>The consumer's inbox key is version-free</b> (<see cref="MessageConsumerKey"/>): it survives an
+/// assembly-version bump, so a redelivery across a deployment still finds its row.
 /// </para>
 /// </remarks>
 internal sealed class NotificationHandlerSource(IServiceCollection services) : ILocalConsumerSource
@@ -91,16 +95,27 @@ internal sealed class NotificationHandlerSource(IServiceCollection services) : I
                 continue;
             }
 
-            var factory = descriptor.Lifetime is ServiceLifetime.Singleton
-                ? null
-                : ActivatorUtilities.CreateFactory(descriptor.ImplementationType, Type.EmptyTypes);
-            var invoker = (Func<Type, ObjectFactory?, Func<IServiceProvider, object, MessageContext, CancellationToken, ValueTask>>)
+            if (descriptor.Lifetime is ServiceLifetime.Singleton)
+            {
+                // A consumer is activated per delivery, in that delivery's scope, on its own: a
+                // singleton would be shared by every delivery, and resolving it means building its
+                // siblings too, so one that cannot be built would fail this one (#188, review of PR
+                // #208). An instance registration, a singleton, is rejected above for its key.
+                problems.Add(
+                    $"Notification handler '{handlerType.FullName}' of '{notification.FullName}' is " +
+                    "registered as a singleton. A notification handler is a local consumer of its own, " +
+                    "activated per delivery in that delivery's scope: register it transient or scoped.");
+                continue;
+            }
+
+            var factory = ActivatorUtilities.CreateFactory(descriptor.ImplementationType, Type.EmptyTypes);
+            var invoker = (Func<Type, ObjectFactory, Func<IServiceProvider, object, MessageContext, CancellationToken, ValueTask>>)
                 typeof(NotificationHandlerSource)
                     .GetMethod(nameof(InvokerFor), BindingFlags.NonPublic | BindingFlags.Static)!
                     .MakeGenericMethod(notification)
                     .Invoke(null, null)!;
             consumers.Add(new LocalConsumer(
-                notification, handlerType.AssemblyQualifiedName!, handlerType, invoker(handlerType, factory)));
+                notification, MessageConsumerKey.Of(handlerType), handlerType, invoker(handlerType, factory)));
         }
 
         return (consumers, problems);
@@ -110,13 +125,10 @@ internal sealed class NotificationHandlerSource(IServiceCollection services) : I
     /// The invoker of one handler, closed over its notification type once, at the scan: a delivery
     /// calls a typed delegate, with no reflection.
     /// </summary>
-    private static Func<Type, ObjectFactory?, Func<IServiceProvider, object, MessageContext, CancellationToken, ValueTask>> InvokerFor<TNotification>()
+    private static Func<Type, ObjectFactory, Func<IServiceProvider, object, MessageContext, CancellationToken, ValueTask>> InvokerFor<TNotification>()
         where TNotification : INotification
-        => static (handlerType, factory) => factory is null
-            ? (services, message, _, ct) => new ValueTask(
-                Resolve<TNotification>(services, handlerType).Handle((TNotification)message, ct))
-            : (services, message, _, ct) => HandleOwnedAsync(
-                (INotificationHandler<TNotification>)factory(services, null), (TNotification)message, ct);
+        => static (_, factory) => (services, message, _, ct) => HandleOwnedAsync(
+            (INotificationHandler<TNotification>)factory(services, null), (TNotification)message, ct);
 
     /// <summary>Runs a handler this delivery activated, then disposes it: the scope does not track it.</summary>
     private static async ValueTask HandleOwnedAsync<TNotification>(
@@ -162,22 +174,6 @@ internal sealed class NotificationHandlerSource(IServiceCollection services) : I
         }
 
         return false;
-    }
-
-    private static INotificationHandler<TNotification> Resolve<TNotification>(IServiceProvider services, Type handlerType)
-        where TNotification : INotification
-    {
-        foreach (var handler in services.GetServices<INotificationHandler<TNotification>>())
-        {
-            if (handler.GetType() == handlerType)
-            {
-                return handler;
-            }
-        }
-
-        throw new InvalidOperationException(
-            $"Notification handler '{handlerType.FullName}' is a local consumer but is not registered " +
-            $"for '{typeof(TNotification).FullName}' in the message scope.");
     }
 
     private static string Name(ServiceDescriptor descriptor)

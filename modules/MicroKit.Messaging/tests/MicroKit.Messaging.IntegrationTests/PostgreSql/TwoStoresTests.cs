@@ -249,7 +249,7 @@ public sealed class TwoStoresTests(PostgreSqlFixture fixture)
             context.InboxMessages.Add(new InboxMessage
             {
                 MessageId = MessageId.New(),
-                ConsumerType = typeof(THandler).AssemblyQualifiedName!,
+                ConsumerType = MessageConsumerKey.Of(typeof(THandler)),
                 EventType = typeof(StoreBEvent).AssemblyQualifiedName!,
                 Payload = $"{{\"id\":\"{message.Id}\"}}",
                 Status = InboxMessageStatus.Received,

@@ -83,8 +83,12 @@ business data; inside a delivery, the engine's commit does.
   `IntegrationEventPublishException`: a publication never succeeds silently.
 - When the scope is disposed, `EfOutboxStore.Dispose` reports every row it enlisted: still `Added`
   → event **4000** (`Error`) — lost, the unit of work was never saved; `Detached` → event **4001**
-  (`Debug`) — discarded with the change tracker, with the work it announced. A row saved and then
-  rolled back is neither: its business data rolled back with it.
+  (`Debug`) — discarded with the change tracker, with the work it announced; so is a row still
+  `Added` when the scope's guarded inbox attempt never committed (`EfInboxAttempt<TContext>`, scoped,
+  marked by the inbox store; the inbox store also clears the tracker of such an attempt). Any other
+  open transaction — a host's own, through `UseTransaction` — leaves an `Added` row lost (4000). A row saved and then rolled
+  back is neither: its business data rolled back with it. Both EF stores implement `IDisposable`
+  and `IAsyncDisposable` with the same logic: a scope disposed synchronously reports too.
 - `IOutboxWriter.AddBatchAsync` stages several rows in one `AddRange`; an empty list is a no-op.
 
 ### `OutboxMessage`
@@ -320,7 +324,14 @@ drain.
    - **Dependency unavailable** (`InboxDependencyUnavailableException`): **no row**; the transport
      pauses and redelivers, nothing counted.
    - A row already there → another delivery owns it (2208): success.
-   - The `Failed` row cannot be written (2204): transient — the transport redelivers.
+   - The `Failed` row cannot be written (2204): transient — the transport redelivers, counted.
+   - **The store reports itself unreachable** — `FindAsync` or `TryInsertFailedAsync` throws
+     `InboxDependencyUnavailableException` (2209): a dependency outage, nothing charged; the transport
+     pauses and redelivers, a local row is deferred under the local endpoint's back-off, never
+     dead-lettered. Only the store can tell an outage from a write that fails on its data (a value
+     too long for its column fails every time, and must dead-letter, not pause for ever). The EF store
+     raises it when its connection cannot be opened, or when the provider calls the fault transient
+     (`DbException.IsTransient`).
 6. The guard not registered for the store (2207) is transient here; host start rejects it first.
 
 > **Scope initializers run before the attempt's transaction.** They configure the scope the store's
@@ -356,14 +367,14 @@ Scoped, keyed by the store. One instance per scope, one scope per attempt.
 
 | Member | Contract |
 |---|---|
-| `FindAsync(key)` | Reads the row's state (`InboxRowState`: `Status`, `DeadLettered`, `RowId`) **from the database**, untracked — never from a cache or tracker: it answers "did an unknown commit land?". |
-| `ExecuteAsync(op, verify, verified)` | One operation of the execution strategy; after an unknown-outcome fault, `verify` first. The last fault propagates **unwrapped** (no `RetryLimitExceededException`). |
+| `FindAsync(key)` | Reads the row's state (`InboxRowState`: `Status`, `DeadLettered`, `RowId`) **from the database**, untracked — never from a cache or tracker: it answers "did an unknown commit land?". Throws `InboxDependencyUnavailableException` when the database cannot be reached. |
+| `ExecuteAsync(state, op, verify, verified)` | One operation of the execution strategy; `state` is handed to both callbacks, so the engine passes static lambdas; after an unknown-outcome fault, `verify` first. The last fault propagates **unwrapped** (no `RetryLimitExceededException`). |
 | `BeginAsync` | Begins the attempt's transaction. The EF store throws if the context already has one. |
 | `EnlistProcessedAsync(row)` | Adds a new delivery's row, already `Processed`. Writes nothing. The unique index is the guard. |
 | `MarkClaimedProcessedAsync(key, token)` | Marks a retry's claimed row `Processed`, **conditioned on the claim token**; `false` when the row no longer carries it — the handler must not run. Must hold under a context whose queries do not track by default. |
 | `CommitAsync` | Saves, then commits. The EF store re-stages the row if the handler cleared the tracker, and only if this attempt did not already write it. |
 | `IsLeaseLost(ex)` | Structural: the conditioned write matched no row (EF: `DbUpdateConcurrencyException` on an `InboxMessage` entry). Any other exception, a business unique violation included, is the handler's failure. |
-| `TryInsertFailedAsync(row)` | Inserts a failed row and commits it alone; `false` when a row of that pair exists. |
+| `TryInsertFailedAsync(row)` | Inserts a failed row and commits it alone; `false` when a row of that pair exists. Throws `InboxDependencyUnavailableException` when the database cannot be reached; any other fault propagates as is. |
 
 ### Handler rules with a store
 
@@ -386,7 +397,7 @@ Scoped, keyed by the store. One instance per scope, one scope per attempt.
 | Member | Rule |
 |---|---|
 | `RowId` (`Guid`) | **Primary key**, writer-assigned, `ValueGeneratedNever`. The claim selects on it alone: a compound-key `UPDATE` filtered by two `Contains` selects the cross product and breaks the `batchSize` bound. |
-| `MessageId` + `ConsumerType` | Unique index `UX_InboxMessages_MessageId_ConsumerType` — **the sole authority** for deduplication. `ConsumerType` is the handler type's assembly-qualified name. |
+| `MessageId` + `ConsumerType` | Unique index `UX_InboxMessages_MessageId_ConsumerType` — **the sole authority** for deduplication. `ConsumerType` is the handler type's version-free key, `Namespace.Type, AssemblyName` (`MessageConsumerKey`): an assembly-version bump never changes it. |
 | `EventType` | The local type the message was delivered as, assembly-qualified. |
 | `Payload`, `Source`, `Headers` | What a retry rebuilds its `MessageContext` from. |
 | `TenantId` | `string?`, no filter, never a claim filter. |
@@ -552,6 +563,13 @@ asserted on buffers). A processor that cannot be activated (1400) grows toward
   the batch released, earlier rows keeping their outcomes — then rethrows.
 - **A host stop is never a failure.** The loop ends only on the host's token; a processor
   interrupted by it releases what it claimed with attempt counts unchanged (`HostStop`).
+- **One loop guard** (`GuardedLoop`) runs every long-running loop — the four store loops,
+  `LocalQueueWorker`, `InMemoryTransportWorker`: a thrown exception ends the loop only when
+  `HostStop` says so (a configuration fault ends it on purpose, by the loop's own choice, 1402); any
+  other is a failed cycle with that loop's back-off, and is logged (1401 for a store loop, 2305 the
+  local queue, 3017 the in-memory transport); logging goes through
+  `GuardedLoop.Log`, so a logging provider that throws never ends a loop. No loop keeps a catch shape
+  of its own.
 
 ### Retention — not housekeeping
 

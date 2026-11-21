@@ -294,7 +294,8 @@ the business data it announces, or neither; inside a delivery, the engine's save
 
 - **A row still unsaved when its scope ends is lost, and reported:** event 4000 at `Error` names the
   message, its contract and its store. A row discarded with the change tracker (`DiscardChanges`,
-  `ChangeTracker.Clear()`) is reported at `Debug` (4001): the caller chose to drop it.
+  `ChangeTracker.Clear()`) is reported at `Debug` (4001): the caller chose to drop it. So is a row
+  enlisted by a delivery's attempt that rolls back: it goes with the work it announced.
 - With no store configured, `PublishAsync` sends to the transport at once (#186). With stores
   configured there is never a direct send.
 
@@ -328,7 +329,9 @@ by a command whose unit of work saves `OrdersDbContext`, is never saved — and 
 
 ### What the inbox guarantees
 
-With a store, each handler runs under its inbox row, keyed (`MessageId`, consumer type):
+With a store, each handler runs under its inbox row, keyed (`MessageId`, consumer type). The
+consumer type is the handler's `Namespace.Type, AssemblyName`, with no version: it survives an
+assembly-version bump, so a redelivery across a deployment still finds its row.
 
 - a row in any state — processed, failed, retrying — skips a new delivery: a redelivery never starts
   a second attempt;
@@ -377,13 +380,17 @@ handed to a transport, no `[MessageContract]` needed.
   handler, each with its own retries and dead letter. It is queued **before the command commits**:
   a command that rolls back still notifies, and a message still queued is lost if the process
   stops. **Durability needs a store.**
-- **Cascade events are delivered.** A domain event a handler raises — a notification handler's or a
-  bus handler's — is dispatched after the handler and before the engine saves its work, so it
-  commits with that work and is delivered in turn.
+- **Cascade events are delivered.** With a store, a domain event a handler raises — a notification
+  handler's or a bus handler's — is dispatched after the handler and before the engine saves its
+  work, so it commits with that work and is delivered in turn. **Without a store** there is no
+  engine save after a handler, so nothing is dispatched there: an event still pending when the
+  handler returns is reported (2310, `Error`). Raise it before a save that dispatches — a MediatR
+  command with the transaction behavior — or configure a store.
 - **A notification handler is activated per delivery from its implementation type**: a transient or
   scoped registration yields one instance per delivery, disposed with it, and a sibling that cannot
-  be built never fails it; a singleton is the container's. A decorated registration is a factory
-  registration, rejected at start: a consumer is keyed by its handler's type.
+  be built never fails it. A singleton is rejected at start — register it transient or scoped — and
+  so is a decorated registration, a factory registration: a consumer is keyed by its handler's
+  type.
 - A handler never runs in the scope that raised the event.
 
 > **Handlers must be idempotent.** Delivery is at-least-once by design. Without a store, a bus

@@ -66,7 +66,7 @@ public sealed class ShutdownReleaseTests(PostgreSqlFixture fixture)
                 context.InboxMessages.Add(new InboxMessage
                 {
                     MessageId = MessageId.New(),
-                    ConsumerType = typeof(BlockingShutdownHandler).AssemblyQualifiedName!,
+                    ConsumerType = MessageConsumerKey.Of(typeof(BlockingShutdownHandler)),
                     EventType = typeof(ShutdownEvent).AssemblyQualifiedName!,
                     Payload = $"{{\"id\":\"{Guid.NewGuid()}\"}}",
                     Status = InboxMessageStatus.Failed,

@@ -66,6 +66,7 @@ public static class MessagingBuilderExtensions
             }
 
             // One store instance per scope over the scope's TContext; every contract resolves to it.
+            services.TryAddScoped<EfInboxAttempt<TContext>>();
             services.TryAddScoped<EfOutboxStore<TContext>>();
             services.TryAddKeyedScoped<IOutboxWriter>(key, static (sp, _) => sp.GetRequiredService<EfOutboxStore<TContext>>());
             services.TryAddKeyedScoped<IOutboxProcessorStore>(key, static (sp, _) => sp.GetRequiredService<EfOutboxStore<TContext>>());

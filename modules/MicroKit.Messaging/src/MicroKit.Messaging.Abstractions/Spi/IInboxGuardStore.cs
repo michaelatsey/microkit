@@ -54,15 +54,18 @@ public interface IInboxGuardStore
     /// is removed, so the engine classifies the fault itself.
     /// </para>
     /// </remarks>
+    /// <typeparam name="TState">The state the two callbacks read, so a caller needs no closure.</typeparam>
     /// <typeparam name="TResult">The operation's result.</typeparam>
+    /// <param name="state">Handed to <paramref name="operation"/> and <paramref name="verifySucceeded"/>.</param>
     /// <param name="operation">One attempt.</param>
     /// <param name="verifySucceeded">Whether an attempt whose commit outcome is unknown committed.</param>
     /// <param name="verifiedResult">The result when <paramref name="verifySucceeded"/> reports the commit.</param>
     /// <param name="ct">Cancellation token.</param>
     /// <returns>The result of the attempt that completed.</returns>
-    ValueTask<TResult> ExecuteAsync<TResult>(
-        Func<CancellationToken, ValueTask<TResult>> operation,
-        Func<CancellationToken, ValueTask<bool>> verifySucceeded,
+    ValueTask<TResult> ExecuteAsync<TState, TResult>(
+        TState state,
+        Func<TState, CancellationToken, ValueTask<TResult>> operation,
+        Func<TState, CancellationToken, ValueTask<bool>> verifySucceeded,
         TResult verifiedResult,
         CancellationToken ct = default);
 

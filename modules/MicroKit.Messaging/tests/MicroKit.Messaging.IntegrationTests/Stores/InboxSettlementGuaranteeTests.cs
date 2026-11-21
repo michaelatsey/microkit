@@ -239,7 +239,7 @@ public sealed class InboxSettlementGuaranteeTests
             {
                 RowId = Guid.NewGuid(),
                 MessageId = MessageId.New(),
-                ConsumerType = typeof(RecordingSettlementHandler).AssemblyQualifiedName!,
+                ConsumerType = MessageConsumerKey.Of(typeof(RecordingSettlementHandler)),
                 TenantId = "tenant-a",
                 EventType = typeof(SettlementTestEvent).AssemblyQualifiedName!,
                 Payload = """{"MessageId":{"Value":"8a1d0f7e-1111-2222-3333-444455556666"},"TenantId":"tenant-a","OccurredOnUtc":"2026-08-21T12:00:00+00:00"}""",

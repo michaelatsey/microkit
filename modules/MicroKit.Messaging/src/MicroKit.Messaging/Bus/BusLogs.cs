@@ -110,4 +110,10 @@ internal static partial class BusLogs
                   "that failed is not registered. First loader error: {FirstError}")]
     public static partial void TypesNotLoaded(
         ILogger logger, string assembly, int count, string typeNames, string firstError);
+
+    [LoggerMessage(
+        EventId = 3017,
+        Level = LogLevel.Error,
+        Message = "The in-memory transport's consume loop failed outside any envelope; it runs again in {RetryIn}.")]
+    public static partial void InMemoryLoopFaulted(ILogger logger, Exception exception, TimeSpan retryIn);
 }

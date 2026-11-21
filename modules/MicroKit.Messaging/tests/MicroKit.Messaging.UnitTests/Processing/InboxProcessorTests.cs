@@ -501,7 +501,7 @@ public sealed class InboxProcessorTests
 
     // ── Helpers ───────────────────────────────────────────────────────────────────────────────
 
-    private static readonly string ConsumerType = typeof(RetryHandler).AssemblyQualifiedName!;
+    private static readonly string ConsumerType = MessageConsumerKey.Of(typeof(RetryHandler));
     private static readonly string EventType = typeof(InboxTestEvent).AssemblyQualifiedName!;
 
     private static InboxMessageKey Key(InboxMessage row) => new(row.MessageId, row.ConsumerType);

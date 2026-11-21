@@ -134,6 +134,57 @@ public sealed class OutboxEnlistmentTests
         });
 
     /// <summary>
+    /// A host's own transaction, attached with <c>UseTransaction</c> and committed by its owner after
+    /// the scope: a row enlisted and never saved there is lost, and reported as lost (4000) — only an
+    /// inbox attempt that never committed takes its rows with it (#188, review of the 4001 fix).
+    /// </summary>
+    [Fact]
+    public Task AnEnlistedRowUnsavedInAHostsOwnTransaction_IsStillReportedAsLost()
+        => Task.Run(async () =>
+        {
+            await using var fixture = await Fixture.CreateAsync();
+            var connection = fixture.Connection;
+            await using var transaction = await connection.BeginTransactionAsync();
+
+            await using (var scope = fixture.Provider.CreateAsyncScope())
+            {
+                var context = scope.ServiceProvider.GetRequiredService<TestMessagingDbContext>();
+                await context.Database.UseTransactionAsync(transaction);
+                await context.SaveChangesAsync();
+                await scope.ServiceProvider.GetRequiredService<IMessageBus>().PublishAsync(new EnlistedEvent(Guid.NewGuid()));
+            }
+
+            await transaction.CommitAsync();
+
+            fixture.Logs.Entries.ShouldContain(e => e.EventId == 4000 && e.Level == LogLevel.Error,
+                "the business transaction committed without the row: the publication is lost");
+            fixture.Logs.Entries.ShouldNotContain(e => e.EventId == 4001);
+        });
+
+    /// <summary>
+    /// A scope disposed synchronously — an operator job's <c>using var scope = sp.CreateScope()</c> —
+    /// that resolved both of the store's EF types neither throws nor loses the D5 report: each type
+    /// implements both disposal forms with the same logic.
+    /// </summary>
+    [Fact]
+    public Task AScopeDisposedSynchronously_DoesNotThrow_AndStillReportsALostRow()
+        => Task.Run(async () =>
+        {
+            await using var fixture = await Fixture.CreateAsync();
+            var key = EntityFrameworkOutbox.KeyOf<TestMessagingDbContext>();
+            MessageId id;
+
+            var scope = fixture.Provider.CreateScope();
+            scope.ServiceProvider.GetRequiredKeyedService<IInboxAdminStore>(key).ShouldNotBeNull();
+            id = await scope.ServiceProvider.GetRequiredService<IMessageBus>()
+                .PublishAsync(new EnlistedEvent(Guid.NewGuid()));
+            Should.NotThrow(scope.Dispose, "both stores dispose synchronously");
+
+            var lost = fixture.Logs.Entries.Where(e => e.EventId == 4000).ShouldHaveSingleItem();
+            lost.RenderedMessage.ShouldContain(id.Value.ToString());
+        });
+
+    /// <summary>
     /// A row discarded with the change tracker went with the work it announced: <c>Debug</c>, never
     /// the lost-row <c>Error</c>.
     /// </summary>
@@ -167,6 +218,8 @@ public sealed class OutboxEnlistmentTests
         }
 
         public ServiceProvider Provider { get; }
+
+        public SqliteConnection Connection => _connection;
 
         public CapturingLoggerProvider Logs { get; }
 

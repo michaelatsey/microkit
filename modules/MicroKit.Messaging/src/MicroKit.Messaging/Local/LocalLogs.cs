@@ -39,4 +39,10 @@ internal static partial class LocalLogs
                   "to it without counting an attempt.")]
     public static partial void Paused(
         ILogger logger, Guid messageId, string type, string consumerType, TimeSpan backoff);
+
+    [LoggerMessage(
+        EventId = 2305,
+        Level = LogLevel.Error,
+        Message = "The local queue's loop failed outside any message; it runs again in {RetryIn}.")]
+    public static partial void LoopFaulted(ILogger logger, Exception exception, TimeSpan retryIn);
 }

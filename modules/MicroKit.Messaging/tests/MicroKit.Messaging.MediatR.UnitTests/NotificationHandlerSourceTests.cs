@@ -25,7 +25,7 @@ public sealed class NotificationHandlerSourceTests
         consumers.Select(c => c.HandlerType).ShouldBe([typeof(FirstOrderHandler), typeof(SecondOrderHandler)]);
         consumers.ShouldAllBe(c => c.MessageType == typeof(OrderPlacedNotification));
         // The consumer type is the inbox key: the bus's own rule for a handler (#187).
-        consumers[0].ConsumerType.ShouldBe(typeof(FirstOrderHandler).AssemblyQualifiedName);
+        consumers[0].ConsumerType.ShouldBe(MessageConsumerKey.Of(typeof(FirstOrderHandler)));
         source.Problems().ShouldBeEmpty();
     }
 
@@ -66,6 +66,19 @@ public sealed class NotificationHandlerSourceTests
         var problem = source.Problems().ShouldHaveSingleItem();
         problem.ShouldContain(typeof(OrderPlacedNotification).FullName!);
         problem.ShouldContain("a factory");
+    }
+
+    [Fact]
+    public void ASingletonHandler_IsReported_NamingTheFix()
+    {
+        // A singleton would be shared by every delivery, and resolving it builds its siblings too.
+        var source = Source(s => s.AddSingleton<INotificationHandler<OrderPlacedNotification>, FirstOrderHandler>());
+
+        source.GetConsumers().ShouldBeEmpty();
+        var problem = source.Problems().ShouldHaveSingleItem();
+        problem.ShouldContain(typeof(FirstOrderHandler).FullName!);
+        problem.ShouldContain("singleton");
+        problem.ShouldContain("register it transient or scoped");
     }
 
     [Fact]

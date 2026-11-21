@@ -310,8 +310,7 @@ internal sealed class MessageReceivePipeline(
 
         var context = BuildContext(envelope, eventType, MessageId.From(id));
         var incoming = new Incoming(
-            envelope.Id, envelope.Type, envelope.Source, envelope.Time, envelope.Headers,
-            () => Encoding.UTF8.GetString(envelope.Body.Span));
+            envelope.Id, envelope.Type, envelope.Source, envelope.Time, envelope.Headers, envelope.Body, Text: null);
         return (null, new Prepared(message, context, entries, eventType, incoming));
     }
 
@@ -368,7 +367,7 @@ internal sealed class MessageReceivePipeline(
             Headers = headers,
         };
 
-        var incoming = new Incoming(id, eventType.FullName!, source, row.OccurredOnUtc, headers, () => row.Payload);
+        var incoming = new Incoming(id, eventType.FullName!, source, row.OccurredOnUtc, headers, Body: default, row.Payload);
         return (null, new Prepared(message, context, entries, eventType, incoming));
     }
 
@@ -419,14 +418,20 @@ internal sealed class MessageReceivePipeline(
     /// <param name="Source">The emitting service.</param>
     /// <param name="Time">When it occurred.</param>
     /// <param name="Headers">Its headers, reserved ones included.</param>
-    /// <param name="Payload">Its body as text, decoded only when a row is written.</param>
+    /// <param name="Body">A transport delivery's body, decoded only when a row is written.</param>
+    /// <param name="Text">A local row's payload, already text; <see langword="null"/> for a transport delivery.</param>
     private sealed record Incoming(
         string Id,
         string Type,
         string Source,
         DateTimeOffset Time,
         IReadOnlyDictionary<string, string> Headers,
-        Func<string> Payload);
+        ReadOnlyMemory<byte> Body,
+        string? Text)
+    {
+        /// <summary>The payload as text: the row's, or the body decoded as UTF-8.</summary>
+        public string PayloadText() => Text ?? Encoding.UTF8.GetString(Body.Span);
+    }
 
     /// <summary>One handler, with no store: the #186 path, unchanged.</summary>
     private async ValueTask<DeliveryOutcome> DeliverToHandlerAsync(
@@ -489,10 +494,22 @@ internal sealed class MessageReceivePipeline(
                     return new DeliveryOutcome(DeliveryVerdict.Transient, Unregistered(store));
                 }
 
-                // D6a/b: a row in any state means another delivery owns this pair.
-                if (await guard.FindAsync(key, ct).ConfigureAwait(false) is { } existing)
+                // D6a/b: a row in any state means another delivery owns this pair. A store that
+                // reports itself unreachable is a dependency outage, never a handler's failure
+                // (#188); any other fault of the read redelivers, as an unrecorded failure does.
+                InboxRowState? existing;
+                try
                 {
-                    InboxGuardLogs.Skipped(logger, entry.HandlerType.FullName!, key.MessageId.Value, store.Value, existing.Status);
+                    existing = await guard.FindAsync(key, ct).ConfigureAwait(false);
+                }
+                catch (Exception ex) when (IsGuardOutage(ex, ct))
+                {
+                    return GuardUnreachable(ex, entry.HandlerType, key, store);
+                }
+
+                if (existing is { } owned)
+                {
+                    InboxGuardLogs.Skipped(logger, entry.HandlerType.FullName!, key.MessageId.Value, store.Value, owned.Status);
                     metrics.RecordDeduplicated(entry.ConsumerType);
                     return DeliveryOutcome.Success;
                 }
@@ -511,9 +528,18 @@ internal sealed class MessageReceivePipeline(
                     }
 
                     // An outage is not a race: no read, which would fail too and hide the verdict.
-                    var found = Classify(ex) is DeliveryVerdict.DependencyUnavailable
-                        ? null
-                        : await guard.FindAsync(key, ct).ConfigureAwait(false);
+                    InboxRowState? found = null;
+                    if (Classify(ex) is not DeliveryVerdict.DependencyUnavailable)
+                    {
+                        try
+                        {
+                            found = await guard.FindAsync(key, ct).ConfigureAwait(false);
+                        }
+                        catch (Exception unreachable) when (IsGuardOutage(unreachable, ct))
+                        {
+                            return GuardUnreachable(unreachable, entry.HandlerType, key, store);
+                        }
+                    }
 
                     // This attempt's own row: the commit landed, then the fault — with no retrying
                     // strategy nothing verified it.
@@ -556,6 +582,26 @@ internal sealed class MessageReceivePipeline(
     }
 
     /// <summary>
+    /// Whether a fault of the guard's store is an outage: the store says so with
+    /// <see cref="InboxDependencyUnavailableException"/>. Only the store can tell a database that
+    /// cannot be reached from a command that fails on its data — a value too long for its column
+    /// fails every time, and must stay a counted failure that dead-letters, not an endless pause.
+    /// </summary>
+    private static bool IsGuardOutage(Exception ex, CancellationToken ct)
+        => !IsShutdown(ex, ct) && Classify(ex) is DeliveryVerdict.DependencyUnavailable;
+
+    /// <summary>
+    /// The guard's store is unreachable (#188): a dependency outage, never the handler's failure —
+    /// nothing is charged. A transport pauses and redelivers; a local row is deferred under the
+    /// local endpoint's back-off.
+    /// </summary>
+    private DeliveryOutcome GuardUnreachable(Exception ex, Type handlerType, InboxMessageKey key, MessageStoreKey store)
+    {
+        InboxGuardLogs.GuardUnreachable(logger, ex, handlerType.FullName!, key.MessageId.Value, store.Value);
+        return new DeliveryOutcome(DeliveryVerdict.DependencyUnavailable, ex, ex.Message);
+    }
+
+    /// <summary>
     /// Runs the attempts of one guarded handler through the store's execution strategy. The commit
     /// outcome of a failed attempt is verified by reading the row: committed means
     /// <c>Processed</c>.
@@ -563,8 +609,9 @@ internal sealed class MessageReceivePipeline(
     private async ValueTask<AttemptResult> RunGuardedAsync(
         IInboxGuardStore guard, GuardedAttempt attempt, CancellationToken ct)
         => await guard.ExecuteAsync(
-            token => AttemptAsync(attempt, token),
-            async token => await guard.FindAsync(attempt.Key, token).ConfigureAwait(false)
+            (Pipeline: this, Guard: guard, Attempt: attempt),
+            static (s, token) => s.Pipeline.AttemptAsync(s.Attempt, token),
+            static async (s, token) => await s.Guard.FindAsync(s.Attempt.Key, token).ConfigureAwait(false)
                 is { Status: InboxMessageStatus.Processed },
             AttemptResult.Committed,
             ct).ConfigureAwait(false);
@@ -662,6 +709,11 @@ internal sealed class MessageReceivePipeline(
                 }
             }
         }
+        catch (Exception ex) when (IsGuardOutage(ex, ct))
+        {
+            // The store is down: a dependency outage — not acknowledged, nothing charged (#188).
+            return GuardUnreachable(ex, attempt.Entry.HandlerType, attempt.Key, attempt.Store);
+        }
         catch (Exception ex) when (!IsShutdown(ex, ct))
         {
             InboxGuardLogs.FailedRowUnwritable(logger, ex, handlerType, messageId, attempt.Store.Value);
@@ -735,7 +787,15 @@ internal sealed class MessageReceivePipeline(
         MessageContext context,
         CancellationToken ct)
     {
-        var middlewares = services.GetServices<IMessageReceiveMiddleware>().ToArray();
+        // The container hands back an array; anything else is copied once.
+        var resolved = services.GetServices<IMessageReceiveMiddleware>();
+        var middlewares = resolved as IMessageReceiveMiddleware[] ?? [.. resolved];
+        if (middlewares.Length == 0)
+        {
+            await entry.Invoke(services, message, context, ct).ConfigureAwait(false);
+            return;
+        }
+
         var receiveContext = new MessageReceiveContext
         {
             Context = context,
@@ -743,15 +803,30 @@ internal sealed class MessageReceivePipeline(
             HandlerType = entry.HandlerType,
             Services = services,
         };
+        await new ReceiveChain(middlewares, receiveContext, entry, ct).RunAsync(0).ConfigureAwait(false);
+    }
 
-        await RunAsync(0).ConfigureAwait(false);
+    /// <summary>
+    /// The middlewares of one delivery, then its handler, with no capturing lambda: each stage's
+    /// <c>proceed</c> is a <see cref="Stage"/> naming the next index, so a middleware that calls it
+    /// again — a retry — runs the rest of the chain again, as each stage's own delegate always did.
+    /// </summary>
+    private sealed class ReceiveChain(
+        IMessageReceiveMiddleware[] middlewares,
+        MessageReceiveContext context,
+        MessageHandlerRegistry.HandlerEntry entry,
+        CancellationToken ct)
+    {
+        public ValueTask RunAsync(int index)
+            => index < middlewares.Length
+                ? middlewares[index].InvokeAsync(context, new Stage(this, index + 1).ProceedAsync, ct)
+                : entry.Invoke(context.Services, context.Message, context.Context, ct);
+    }
 
-        ValueTask RunAsync(int index) =>
-            index < middlewares.Length
-                ? middlewares[index].InvokeAsync(receiveContext, () => RunAsync(index + 1), ct)
-                : InvokeHandlerAsync();
-
-        ValueTask InvokeHandlerAsync() => entry.Invoke(services, message, context, ct);
+    /// <summary>One stage's <c>proceed</c>: the chain from the next index on.</summary>
+    private sealed class Stage(ReceiveChain chain, int next)
+    {
+        public ValueTask ProceedAsync() => chain.RunAsync(next);
     }
 
     private static IInboxGuardStore? ResolveGuard(IServiceProvider services, MessageStoreKey store)
@@ -874,7 +949,7 @@ internal sealed class MessageReceivePipeline(
                 ConsumerType = consumerType,
                 TenantId = context.TenantId,
                 EventType = prepared.EventType.AssemblyQualifiedName!,
-                Payload = _payload ??= prepared.Incoming.Payload(),
+                Payload = _payload ??= prepared.Incoming.PayloadText(),
                 Source = prepared.Incoming.Source,
                 Headers = prepared.Incoming.Headers.Count == 0
                     ? null

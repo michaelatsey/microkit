@@ -64,11 +64,12 @@ internal, or does not exist. Adding a public type means editing that list on pur
 | `IOutboxProcessorStore` | `ClaimBatchAsync(batchSize, lockDuration, OutboxEndpoints excluded, ct)` → `OutboxClaim`, one signature, no default: the rows of an endpoint in back-off must be left out; `ApplyOutcomesAsync(claimToken, outcomes, ct)` → rows written, every `OutboxOutcomeKind` settled |
 | `OutboxEndpoints` | `[Flags]` `None`, `Transport`, `Local` — the endpoints a claim leaves out |
 | `IOutboxAdminStore` / `IOutboxRetentionStore` | `GetDeadLetteredAsync`, `RequeueAsync` / `DeleteProcessedAsync` |
-| `IInboxGuardStore` | `FindAsync`, `ExecuteAsync` (the store's execution strategy, with commit verification), `BeginAsync`, `EnlistProcessedAsync` (new delivery), `MarkClaimedProcessedAsync` (retry), `CommitAsync`, `IsLeaseLost`, `TryInsertFailedAsync`. Scoped, keyed by the store key, one instance per attempt scope |
+| `IInboxGuardStore` | `FindAsync`, `ExecuteAsync<TState, TResult>` (the store's execution strategy, with commit verification; the state reaches both callbacks), `BeginAsync`, `EnlistProcessedAsync` (new delivery), `MarkClaimedProcessedAsync` (retry), `CommitAsync`, `IsLeaseLost`, `TryInsertFailedAsync`. Scoped, keyed by the store key, one instance per attempt scope |
 | `InboxRowState` | `(InboxMessageStatus Status, bool DeadLettered, Guid RowId)` — what `FindAsync` reads |
 | `IInboxProcessorStore` | `ClaimBatchAsync(batchSize, leaseDuration, ct)` → `InboxClaim`; `ApplyOutcomesAsync` |
 | `IInboxAdminStore` / `IInboxRetentionStore` | `GetDeadLetteredAsync`, `RequeueAsync(InboxMessageKey)` / `DeleteProcessedAsync` |
 | `ILocalMessageSender` | `SendAsync(object message, MessageId messageId, DateTimeOffset occurredOnUtc, ct)` — a local message: never handed to a transport |
+| `MessageConsumerKey` | `Of(Type)`, `FromAssemblyQualifiedName(string)` — the version-free inbox key of a handler type: no `Version`, `Culture` or `PublicKeyToken`, generic arguments included |
 | `ILocalConsumerSource` / `LocalConsumer` | `GetConsumers()`; `LocalConsumer(MessageType, ConsumerType, HandlerType, Invoke)`. `ConsumerType` is the inbox key: keep it stable across deployments |
 | `MessagingIntegrationExtensions` | `AddLocalConsumerSource(source)`, `AddStartupCheck(check)` on `MessagingBuilder` |
 | `OutboxMessage`, `InboxMessage` | The rows. `OutboxMessage.Endpoint`: `null` = transport, `OutboxMessage.LocalEndpoint` (`"local"`) = local endpoint |
@@ -104,7 +105,8 @@ internal, or does not exist. Adding a public type means editing that list on pur
 
 One inbox row per (`MessageId`, `ConsumerType`); the unique index
 `UX_InboxMessages_MessageId_ConsumerType` is the guard. `ConsumerType` is the handler type's
-`AssemblyQualifiedName` (a bus handler) or `LocalConsumer.ConsumerType`.
+version-free key, `MessageConsumerKey.Of(handlerType)` = `Namespace.Type, AssemblyName` (a bus or
+notification handler), or another source's `LocalConsumer.ConsumerType`.
 
 ---
 

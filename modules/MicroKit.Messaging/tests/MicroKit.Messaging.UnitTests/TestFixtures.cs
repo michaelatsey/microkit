@@ -358,9 +358,10 @@ internal sealed class InMemoryInboxGuard(InMemoryInboxDatabase database, TimePro
             ? new InboxRowState(row.Status, row.DeadLettered, row.RowId)
             : (InboxRowState?)null);
 
-    public async ValueTask<TResult> ExecuteAsync<TResult>(
-        Func<CancellationToken, ValueTask<TResult>> operation,
-        Func<CancellationToken, ValueTask<bool>> verifySucceeded,
+    public async ValueTask<TResult> ExecuteAsync<TState, TResult>(
+        TState state,
+        Func<TState, CancellationToken, ValueTask<TResult>> operation,
+        Func<TState, CancellationToken, ValueTask<bool>> verifySucceeded,
         TResult verifiedResult,
         CancellationToken ct = default)
     {
@@ -368,11 +369,11 @@ internal sealed class InMemoryInboxGuard(InMemoryInboxDatabase database, TimePro
         {
             try
             {
-                return await operation(ct);
+                return await operation(state, ct);
             }
             catch (Exception ex) when (attempt < 3 && database.RetryOn(ex))
             {
-                if (await verifySucceeded(ct))
+                if (await verifySucceeded(state, ct))
                 {
                     return verifiedResult;
                 }

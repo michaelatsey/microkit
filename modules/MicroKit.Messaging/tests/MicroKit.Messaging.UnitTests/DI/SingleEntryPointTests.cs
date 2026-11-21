@@ -481,7 +481,7 @@ public sealed class SingleEntryPointTests
 
         handlers.GetHandlers(typeof(OrderPlaced)).Select(h => h.HandlerType)
             .ShouldContain(typeof(FirstOrderPlacedHandler));
-        handlers.TryGetInvoker(typeof(PlacedThenShippedHandler).AssemblyQualifiedName!, typeof(OrderShipped), out _)
+        handlers.TryGetInvoker(MessageConsumerKey.Of(typeof(PlacedThenShippedHandler)), typeof(OrderShipped), out _)
             .ShouldBeTrue("a scanned handler of two types holds one entry per type");
         handlers.GetHandlers(typeof(OrderPlaced)).Select(h => h.HandlerType)
             .ShouldNotContain(typeof(AbstractOrderPlacedHandler), "abstract classes are skipped");

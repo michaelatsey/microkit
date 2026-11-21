@@ -48,71 +48,57 @@ internal sealed class OutboxLoop(
     /// <summary>Runs until <paramref name="stoppingToken"/> is cancelled or a configuration fault stops it.</summary>
     /// <param name="stoppingToken">The host's token.</param>
     /// <returns>A task that completes when the loop ends.</returns>
-    public async Task RunAsync(CancellationToken stoppingToken)
+    public Task RunAsync(CancellationToken stoppingToken)
     {
         var delay = options.PollingInterval;
 
-        while (!stoppingToken.IsCancellationRequested)
-        {
-            try
+        return GuardedLoop.RunAsync(
+            async ct =>
             {
                 var scope = scopeFactory.CreateAsyncScope();
                 await using (scope.ConfigureAwait(false))
                 {
-                    IOutboxProcessor? processor = null;
+                    IOutboxProcessor processor;
                     try
                     {
                         processor = scope.ServiceProvider.GetRequiredKeyedService<IOutboxProcessor>(store);
                     }
-                    catch (Exception ex) when (!HostStop.Is(ex, stoppingToken))
+                    catch (Exception ex) when (!HostStop.Is(ex, ct))
                     {
                         delay = Grow(delay, options.TransportUnavailableBackoff);
-                        StoreEngineLogs.ActivationFailed(
-                            logger, ex, Loop, store.Value, nameof(IOutboxProcessor), delay);
+                        var activationDelay = delay;
+                        GuardedLoop.Log(() => StoreEngineLogs.ActivationFailed(
+                            logger, ex, Loop, store.Value, nameof(IOutboxProcessor), activationDelay));
+                        return delay;
                     }
 
-                    if (processor is not null)
+                    try
                     {
-                        var result = await processor.ProcessBatchAsync(options.BatchSize, stoppingToken)
-                            .ConfigureAwait(false);
+                        var result = await processor.ProcessBatchAsync(options.BatchSize, ct).ConfigureAwait(false);
                         delay = NextDelay(result, delay);
+                        return delay;
+                    }
+                    catch (OutboxConfigurationException ex)
+                    {
+                        // The batch was settled — the rest of it released — before the processor rethrew. A
+                        // missing registration does not fix itself, so the loop stops rather than
+                        // retrying forever, and only this store's loop stops.
+                        GuardedLoop.Log(() => StoreEngineLogs.LoopStopped(logger, ex, Loop, store.Value));
+                        return null;
                     }
                 }
-            }
-            catch (OutboxConfigurationException ex)
+            },
+            ex =>
             {
-                // The batch was settled — the rest of it released — before the processor rethrew. A
-                // missing registration does not fix itself, so the loop stops rather than retrying
-                // forever, and only this store's loop stops.
-                StoreEngineLogs.LoopStopped(logger, ex, Loop, store.Value);
-                return;
-            }
-            catch (Exception ex) when (HostStop.Is(ex, stoppingToken))
-            {
-                break;
-            }
-            catch (Exception ex)
-            {
-                // The claim itself failed: this store's database is unreachable. Back off on the
-                // idle curve rather than polling at full speed.
+                // The cycle failed — the claim itself, most often: this store's database is
+                // unreachable. Back off on the idle curve rather than polling at full speed.
                 delay = Grow(delay, options.MaxPollingInterval);
-                StoreEngineLogs.LoopFailed(logger, ex, Loop, store.Value, delay);
-            }
-
-            if (delay <= TimeSpan.Zero)
-            {
-                continue;
-            }
-
-            try
-            {
-                await Task.Delay(delay, stoppingToken).ConfigureAwait(false);
-            }
-            catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
-            {
-                break;
-            }
-        }
+                var failureDelay = delay;
+                GuardedLoop.Log(() => StoreEngineLogs.LoopFailed(logger, ex, Loop, store.Value, failureDelay));
+                return delay;
+            },
+            TimeProvider.System,
+            stoppingToken);
     }
 
     /// <summary>The delay before the next batch, from the result of this one.</summary>

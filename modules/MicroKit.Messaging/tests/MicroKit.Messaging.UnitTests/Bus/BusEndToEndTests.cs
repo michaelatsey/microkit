@@ -141,6 +141,22 @@ public sealed class BusEndToEndTests
         ]);
     }
 
+    [Fact]
+    public async Task AReceiveMiddlewareThatProceedsTwice_RunsTheRestOfTheChainTwice()
+    {
+        // A retrying middleware calls proceed again: the inner middleware runs again, not only the handler.
+        await using var host = await BusTestHost.StartAsync(bus => bus
+            .AddReceiveMiddleware<ProceedTwiceMiddleware>()
+            .AddReceiveMiddleware<RecordingReceiveMiddleware>()
+            .AddHandler<FirstOrderPlacedHandler>());
+
+        await host.PublishAsync(new OrderPlaced(Guid.NewGuid()));
+
+        await Eventually.HoldsAsync(() => host.Recorder.Deliveries.Count == 2, "the handler ran twice");
+        host.Recorder.Steps.Count(s => s.StartsWith("receive:", StringComparison.Ordinal))
+            .ShouldBe(2, "the inner middleware ran on each proceed");
+    }
+
     // ── Verification 5 ─────────────────────────────────────────────────────────────────────────
 
     [Fact]
@@ -253,6 +269,17 @@ internal sealed class RecordingReceiveMiddleware(BusRecorder recorder) : IMessag
         var stamp = context.Context.Headers.GetValueOrDefault("x-stamp", "none");
         recorder.Step($"receive:{context.HandlerType.Name}:{stamp}");
         return proceed();
+    }
+}
+
+/// <summary>Calls the rest of the chain twice, as a retrying middleware does.</summary>
+internal sealed class ProceedTwiceMiddleware : IMessageReceiveMiddleware
+{
+    public async ValueTask InvokeAsync(
+        MessageReceiveContext context, Func<ValueTask> proceed, CancellationToken ct = default)
+    {
+        await proceed();
+        await proceed();
     }
 }
 
