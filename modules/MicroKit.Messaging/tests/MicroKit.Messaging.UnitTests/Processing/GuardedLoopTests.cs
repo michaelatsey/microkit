@@ -128,6 +128,21 @@ public sealed class GuardedLoopTests
     }
 
     [Fact]
+    public void AContainerProbeThatFailsAnyOtherWay_IsAnUnusableContainer_AndNeverEscapes()
+    {
+        // A disposed DryIoc container throws its own ContainerException: escaping here, after the
+        // dequeue and before the settlement, would lose the message (#188, review of 1c70bf5).
+        var unsettled = new DeliveryOutcome(DeliveryVerdict.Unsettled, new ObjectDisposedException(nameof(IServiceProvider)));
+        var foreignContainer = Substitute.For<IServiceScopeFactory>();
+        foreignContainer.CreateScope().Returns(_ => throw new InvalidOperationException("container is disposed"));
+
+        new LocalQueueWorker(null!, foreignContainer, TimeProvider.System, NullLogger<LocalQueueWorker>.Instance)
+            .WhileTheHostRuns(unsettled).Verdict.ShouldBe(DeliveryVerdict.DependencyUnavailable);
+        new InMemoryTransportWorker(new InMemoryBroker(), foreignContainer, TimeProvider.System, NullLogger<InMemoryTransportWorker>.Instance)
+            .WhileTheHostRuns(unsettled).Verdict.ShouldBe(DeliveryVerdict.DependencyUnavailable);
+    }
+
+    [Fact]
     public async Task TheLocalQueue_AHandlersOwnDisposedProvider_WithTheContainerHealthy_IsCounted_AndDeadLetters()
     {
         var calls = 0;

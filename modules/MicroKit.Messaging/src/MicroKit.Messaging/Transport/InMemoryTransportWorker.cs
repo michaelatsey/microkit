@@ -117,6 +117,11 @@ internal sealed class InMemoryTransportWorker(
             : new DeliveryOutcome(DeliveryVerdict.Transient, outcome.Error, reason);
     }
 
+    /// <summary>
+    /// Whether no scope can be built. Any failure counts — another container reports its disposal
+    /// with its own exception type — and none escapes: the probe runs after the message left the
+    /// queue and before it is settled, so an escaping exception would lose it.
+    /// </summary>
     private bool RootContainerDisposed()
     {
         try
@@ -124,7 +129,7 @@ internal sealed class InMemoryTransportWorker(
             using var probe = scopeFactory.CreateScope();
             return false;
         }
-        catch (ObjectDisposedException)
+        catch (Exception)
         {
             return true;
         }

@@ -143,8 +143,8 @@ public sealed class OutboxTransportClassificationTests
     // -----------------------------------------------------------------------------------------
 
     /// <summary>
-    /// A transport row whose dispatcher is not registered at all releases the batch and stops the
-    /// loop, rather than dead-lettering the queue.
+    /// A transport row whose dispatcher is not registered at all releases the batch and rethrows —
+    /// the loop then backs off and reports it (1402) — rather than dead-lettering the queue.
     /// </summary>
     /// <remarks>
     /// Every store registers both dispatchers, so only a container composed outside the store engine

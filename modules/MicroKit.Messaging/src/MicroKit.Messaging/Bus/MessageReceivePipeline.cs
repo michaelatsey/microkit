@@ -247,7 +247,7 @@ internal sealed class MessageReceivePipeline(
         }
         catch (InboxConfigurationException)
         {
-            // A store without its guard: the retry loop settles its batch and stops.
+            // A store without its guard: the retry loop settles its batch, reports it (1402) and backs off.
             throw;
         }
         catch (Exception ex) when (guard is not null && guard.IsLeaseLost(ex))
