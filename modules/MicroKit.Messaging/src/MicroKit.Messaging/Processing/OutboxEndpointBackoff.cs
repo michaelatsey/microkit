@@ -48,6 +48,21 @@ internal sealed class OutboxEndpointBackoff(TimeSpan initial, TimeSpan ceiling)
         return slot is not null && now < slot.Until;
     }
 
+    /// <summary>
+    /// Whether <paramref name="endpoint"/> is not recovered at <paramref name="now"/>, for the back-off
+    /// up-down counter (#126): from a down verdict until a dispatched row clears it, but never once
+    /// <paramref name="halfOpen"/> has passed since its back-off ended with no new attempt.
+    /// </summary>
+    /// <param name="endpoint">A dispatcher key.</param>
+    /// <param name="now">The current time.</param>
+    /// <param name="halfOpen">How long past its end a back-off still counts.</param>
+    /// <returns><see langword="true"/> while the endpoint is not recovered.</returns>
+    public bool IsUnrecoveredAt(string endpoint, DateTimeOffset now, TimeSpan halfOpen)
+    {
+        var slot = Volatile.Read(ref SlotOf(endpoint));
+        return slot is not null && now < slot.Until + halfOpen;
+    }
+
     /// <summary>The endpoints in back-off at <paramref name="now"/>, for the claim to leave out.</summary>
     /// <param name="now">The current time.</param>
     /// <returns>The endpoints whose rows are not to be claimed.</returns>

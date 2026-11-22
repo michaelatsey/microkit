@@ -23,6 +23,12 @@ internal sealed class InboxTenantBackoff(InboxProcessorOptions options)
     /// <summary>Gets a value indicating whether no store has a tenant, a probe or a suspicion to clear.</summary>
     public bool IsQuiet => Volatile.Read(ref _loud.Value) == 0;
 
+    /// <summary>
+    /// Gets the stores whose state exists — each one from its first use — for the inbox's back-off
+    /// up-down counter (#126). Safe to enumerate while stores are added.
+    /// </summary>
+    public IEnumerable<KeyValuePair<MessageStoreKey, TenantBackoff>> Stores => _stores;
+
     /// <summary>The back-off state of <paramref name="store"/>'s inbox.</summary>
     /// <param name="store">The store.</param>
     /// <returns>Its state, created on first use.</returns>

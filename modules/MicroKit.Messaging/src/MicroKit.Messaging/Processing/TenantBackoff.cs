@@ -152,6 +152,41 @@ internal sealed class TenantBackoff
     }
 
     /// <summary>
+    /// The number of tenants not recovered at <paramref name="now"/>, for the back-off up-down counters
+    /// (#126): a tenant counts from its down verdict until a success clears its entry, but never once
+    /// <paramref name="halfOpen"/> has passed since its back-off ended with no new attempt.
+    /// </summary>
+    /// <param name="now">The current time.</param>
+    /// <param name="halfOpen">
+    /// How long past its end a back-off still counts: the ceiling plus the loop's longest idle delay, within
+    /// which a tenant still failing is blocked again. An entry already pruned — a ceiling past its end, by a
+    /// batch's <see cref="Prune"/> — counts nothing.
+    /// </param>
+    /// <returns>The tenants not recovered. One volatile read, no lock, when there is none.</returns>
+    /// <remarks>Allocates nothing: an observable instrument's callback calls it.</remarks>
+    public int CountUnrecoveredAt(DateTimeOffset now, TimeSpan halfOpen)
+    {
+        if (IsEmpty)
+        {
+            return 0;
+        }
+
+        lock (_lock)
+        {
+            var unrecovered = 0;
+            foreach (var slot in _slots.Values)
+            {
+                if (now < slot.Until + halfOpen)
+                {
+                    unrecovered++;
+                }
+            }
+
+            return unrecovered;
+        }
+    }
+
+    /// <summary>
     /// The current delay of <paramref name="tenant"/>'s entry — it doubles on each failure, so it ranks
     /// the tenants that failed least — whether or not its back-off is still in force.
     /// </summary>

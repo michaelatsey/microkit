@@ -6,9 +6,9 @@ namespace MicroKit.Messaging;
 /// <remarks>
 /// <para>
 /// This type exists because the instrumentation itself is an implementation detail while the
-/// <i>names</i> it publishes are a compatibility commitment. <c>InboxMetrics</c> owns the
-/// <see cref="System.Diagnostics.Metrics.Meter"/> and became internal with #185; a host still has
-/// to name that meter to receive anything, so the name lives here instead of on the recorder.
+/// <i>names</i> it publishes are a compatibility commitment. <c>InboxMetrics</c> and
+/// <c>OutboxMetrics</c> own the <see cref="System.Diagnostics.Metrics.Meter"/>s and are internal; a host
+/// still has to name each meter to receive anything, so the names live here instead of on the recorders.
 /// </para>
 /// <para>
 /// Changing a value on this type is a <b>behaviour change</b>, not a rename: a deployed collector
@@ -16,13 +16,22 @@ namespace MicroKit.Messaging;
 /// </para>
 /// <para>
 /// It is named for diagnostics rather than metrics because it will also carry the
-/// <see cref="System.Diagnostics.ActivitySource"/> name when tracing lands (#186, #126).
+/// <see cref="System.Diagnostics.ActivitySource"/> name when tracing lands.
+/// </para>
+/// <para>
+/// The instruments do not follow the OpenTelemetry messaging semantic conventions, which have
+/// Development status. The back-off instruments are up-down counters — their values add up across stores
+/// and endpoints — which Prometheus shows as gauges. Each counts an endpoint or a tenant 1 from a down
+/// verdict until a success, or until a ceiling plus <c>MaxPollingInterval</c> after its back-off ended with
+/// no new attempt: an outage reads above zero for as long as it lasts.
 /// </para>
 /// </remarks>
 /// <example>
 /// <code>
 /// builder.Services.AddOpenTelemetry()
-///     .WithMetrics(m => m.AddMeter(MessagingDiagnostics.InboxMeterName));
+///     .WithMetrics(m => m
+///         .AddMeter(MessagingDiagnostics.InboxMeterName)
+///         .AddMeter(MessagingDiagnostics.OutboxMeterName));
 /// </code>
 /// </example>
 public static class MessagingDiagnostics
@@ -30,12 +39,32 @@ public static class MessagingDiagnostics
     /// <summary>
     /// The meter carrying the three inbox ingestion counters —
     /// <c>microkit.inbox.messages.added</c>, <c>microkit.inbox.messages.deduplicated</c> and
-    /// <c>microkit.inbox.envelopes.unconsumed</c>.
+    /// <c>microkit.inbox.envelopes.unconsumed</c> — and the observable up-down counter
+    /// <c>microkit.inbox.tenants.backoff</c>.
     /// </summary>
     /// <remarks>
     /// The deduplication counter's <b>rate</b> is the signal, not its value: a steady low level is
     /// healthy, a sustained climb means a lease set too short, a stalling consumer, or a broker
     /// replaying. The unconsumed counter separates a correct zero-row delivery from a silent one.
+    /// <c>microkit.inbox.tenants.backoff</c> (tag <c>store.key</c>) is the number of tenants not recovered
+    /// on a store's inbox: above zero for a sustained period, a tenant's dependency is down.
     /// </remarks>
     public const string InboxMeterName = "MicroKit.Messaging.Inbox";
+
+    /// <summary>
+    /// The meter carrying the outbox's instruments — the counter <c>microkit.outbox.messages.settled</c>,
+    /// the histogram <c>microkit.outbox.dispatch.delay</c> and the observable up-down counters
+    /// <c>microkit.outbox.endpoints.backoff</c> and <c>microkit.outbox.tenants.backoff</c>.
+    /// </summary>
+    /// <remarks>
+    /// Every instrument is tagged <c>store.key</c> and <c>endpoint</c> (<c>transport</c> or
+    /// <c>local</c>); never a tenant. <c>messages.settled</c> counts what a batch wrote, tagged
+    /// <c>outcome</c> (<c>published</c>, <c>retry</c>, <c>dead_letter</c>, <c>deferred</c>): a
+    /// <c>dead_letter</c> rate above zero is lost work for an operator; it counts at least once, a partial
+    /// settlement its whole batch. <c>dispatch.delay</c>, in seconds, runs from the row's staging to its
+    /// endpoint taking it: alert on a percentile. The two back-off counters — 1 while an endpoint has not
+    /// recovered, and the tenants on it that have not — observe an outage as a value: above zero for a
+    /// sustained period, an endpoint or a tenant is down.
+    /// </remarks>
+    public const string OutboxMeterName = "MicroKit.Messaging.Outbox";
 }

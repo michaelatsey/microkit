@@ -2,6 +2,8 @@ using Microsoft.Extensions.Time.Testing;
 
 namespace MicroKit.Messaging.UnitTests.Processing;
 
+using MicroKit.Messaging.UnitTests.Bus;
+
 public sealed class InboxRetentionLoopTests
 {
     private static readonly DateTimeOffset Now = new(2026, 8, 21, 12, 0, 0, TimeSpan.Zero);
@@ -138,14 +140,11 @@ public sealed class InboxRetentionLoopTests
 
         var sut = BuildWorker(store, FastOptions);
 
-        await Should.NotThrowAsync(async () =>
-        {
-            await sut.StartAsync(CancellationToken.None);
-            await Task.Delay(200);
-            await sut.StopAsync(default);
-        });
-
-        callCount.ShouldBeGreaterThan(1);
+        await Should.NotThrowAsync(() => sut.StartAsync(CancellationToken.None));
+        await Eventually.HoldsAsync(
+            () => Volatile.Read(ref callCount) >= 2,
+            "a failed pass must not end the loop: the next pass retries");
+        await Should.NotThrowAsync(() => sut.StopAsync(default));
     }
 
     private static LoopHarness BuildWorker(IInboxRetentionStore store, InboxProcessorOptions options)

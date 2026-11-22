@@ -139,8 +139,9 @@ internal static partial class OutboxProcessorLogs
     /// </para>
     /// <para>
     /// <c>Error</c>, not <c>Critical</c>, matching <see cref="TransportUnavailable"/> — the other arm
-    /// that defers an endpoint without stopping the worker. <c>Critical</c> belongs to
-    /// <see cref="DispatchMisconfigured"/>, which does stop it. The commonest cause is a transport
+    /// that defers an endpoint and goes on with the batch. <c>Critical</c> belongs to
+    /// <see cref="DispatchMisconfigured"/>, which abandons it: the rest of the batch is released, and the
+    /// loop logs 1402 and backs off on the idle curve until the composition is fixed. The commonest cause is a transport
     /// dispatcher registered with no <c>IMessageTransport</c>; the accompanying exception is the
     /// container's own <see cref="InvalidOperationException"/> — the only type this event reports —
     /// and names the type it could not supply.
