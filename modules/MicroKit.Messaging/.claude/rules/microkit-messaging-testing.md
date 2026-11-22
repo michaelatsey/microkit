@@ -209,8 +209,14 @@ EndpointIsolationTests.AMixedBatchWithNoTransport_DeliversItsLocalRows_AndDefers
 EndpointIsolationTests.ADownEndpoint_IsTriedOncePerBackOffPeriod_NotOncePerCycle_AndItsBackOffGrows
 IntegrationTests EndpointOutageClaimTests.ABrokerOutageLongerThanABatch_NeverStarvesTheLocalRows_AndTriesTheBrokerOncePerBackOff
 ```
-The activation tests fail activation for **one** row — the shape a tenant-scoped cause has (#124);
-the `InvalidOperationException` boundary is pinned on both sides.
+The activation tests fail activation for **one** row — the shape a tenant-scoped cause has: that
+tenant is deferred and the other tenants' rows dispatched (#124); a row with no tenant keeps the
+endpoint verdict (`…ForARowWithNoTenant_DefersItsEndpointsRows`); the `InvalidOperationException`
+boundary is pinned on both sides. #188's endpoint tests (`EndpointIsolationTests`) use rows with no
+tenant. The tenant back-off is pinned by `TenantBackoffTests` (unit) and, on PostgreSQL,
+`TenantBackoffOutboxTests` (V1–V3, V1b, a known tenant recovering while the endpoint is suspected),
+`TenantBackoffInboxTests` (retries, new deliveries, the in-memory transport not paused),
+`AdminDeadLetterPendingTests` and `ShutdownReleaseTests.AHostStoppedDuringTheSecondPassOf…`.
 
 ### InboxProcessor and the inbox retry policy (`UnitTests/Processing`)
 ```

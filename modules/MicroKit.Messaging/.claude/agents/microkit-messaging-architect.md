@@ -132,7 +132,9 @@ FIRST DELIVERY, per handler:
      a success
   4. the handler failed → everything rolled back; TryInsertFailedAsync writes the row Failed in a
      transaction of its own, and only then is the delivery acknowledged. A permanent verdict
-     counts no attempt; a dependency outage writes no row and redelivers
+     counts no attempt; a dependency outage of one tenant writes the row Failed, uncounted, due at
+     the end of that tenant's back-off (#124), and one with no tenant, of the store itself or shared
+     by every tenant (the probe failed) writes no row and redelivers
 
 RETRY (the store's inbox loop → InboxProcessor; it never invokes a handler itself):
   1. IInboxProcessorStore.ClaimBatchAsync — atomic, selects candidates by single-column RowId,

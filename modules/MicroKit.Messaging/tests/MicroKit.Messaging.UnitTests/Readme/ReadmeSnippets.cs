@@ -45,6 +45,52 @@ public static class Shipping
     // end-snippet
 }
 
+/// <summary>The operator's way out for a tenant that will not recover (#124).</summary>
+public static class TenantAdmin
+{
+    // begin-snippet: tenant-admin-exit
+    // A tenant that will not recover: dead-letter the messages it holds, in one statement per table.
+    // Only the rows no loop holds are parked; run it again if the tenant's events still report rows.
+    public static async Task ParkTenantAsync(
+        IServiceProvider services, MessageStoreKey store, string tenantId, CancellationToken ct = default)
+    {
+        await using var scope = services.CreateAsyncScope();
+        var outbox = scope.ServiceProvider.GetRequiredKeyedService<IOutboxAdminStore>(store);
+        var inbox = scope.ServiceProvider.GetRequiredKeyedService<IInboxAdminStore>(store);
+
+        await outbox.DeadLetterPendingAsync(tenantId, ParkedReason, ct);
+        await inbox.DeadLetterPendingAsync(tenantId, ParkedReason, ct);
+    }
+
+    // The tenant is healthy again: requeue what was parked — not what dead-lettered on its own.
+    public static async Task RestoreTenantAsync(
+        IServiceProvider services, MessageStoreKey store, string tenantId, CancellationToken ct = default)
+    {
+        await using var scope = services.CreateAsyncScope();
+        var outbox = scope.ServiceProvider.GetRequiredKeyedService<IOutboxAdminStore>(store);
+        var inbox = scope.ServiceProvider.GetRequiredKeyedService<IInboxAdminStore>(store);
+
+        foreach (var message in await outbox.GetDeadLetteredAsync(1000, tenantId, ct))
+        {
+            if (message.ErrorMessage == ParkedReason)
+            {
+                await outbox.RequeueAsync(message.Id, ct);
+            }
+        }
+
+        foreach (var row in await inbox.GetDeadLetteredAsync(1000, tenantId, ct))
+        {
+            if (row.ErrorMessage == ParkedReason)
+            {
+                await inbox.RequeueAsync(new InboxMessageKey(row.MessageId, row.ConsumerType), ct);
+            }
+        }
+    }
+
+    private const string ParkedReason = "Parked by an operator: the tenant cannot be served.";
+    // end-snippet
+}
+
 internal static class ReadmeSnippets
 {
     public static void QuickStart(IServiceCollection services)
