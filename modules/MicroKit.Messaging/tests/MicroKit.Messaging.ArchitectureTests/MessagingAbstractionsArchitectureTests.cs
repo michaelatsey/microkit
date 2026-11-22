@@ -356,8 +356,9 @@ public sealed class MessagingAbstractionsArchitectureTests
             .ToList();
 
         offenders.ShouldBeEmpty(
-            "only the composition root may name StaticMessageStoreSet; the engine iterates stores " +
-            "through IMessageStoreSet, or the dynamic set of #191 cannot replace it");
+            "only the composition root may name StaticMessageStoreSet; the engine and resolution reach " +
+            "the configured stores through IMessageStoreSet — a partitioned store's instances come from " +
+            "its source (#191), never from the set");
     }
 
     // ---------------------------------------------------------------------------

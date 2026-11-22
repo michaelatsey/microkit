@@ -173,8 +173,9 @@ dotnet test modules/MicroKit.Messaging/tests/MicroKit.Messaging.ArchitectureTest
   the glue does not name `IOutboxDispatcher`. Inbox rows are written by the pipeline's guard only.
 - **`OnlyCoreShipsAnIMessageTransport_AndItIsTheInternalInMemoryOne`** — a second transport, or a
   public one, is a decision.
-- **`Core_DependsOnTheStaticStoreSet_OnlyThroughIMessageStoreSet`** — keeps the store set
-  replaceable (#191).
+- **`Core_DependsOnTheStaticStoreSet_OnlyThroughIMessageStoreSet`** — the engine and resolution reach
+  the configured stores through `IMessageStoreSet` alone; a partitioned store's instances come from its
+  source (#191).
 - **`Core_DoesNotContainTypeNamedMessageDispatcher`**,
   **`Core_DoesNotContainTypeNamedInProcessIntegrationDispatcher`**,
   **`NoAssemblyStillCarriesTheDedicatedIntegrationEventTable`** — removed designs stay removed.

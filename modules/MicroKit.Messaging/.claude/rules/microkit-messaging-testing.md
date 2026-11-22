@@ -258,6 +258,28 @@ ShutdownReleaseTests.AHostStoppedMidOutboxBatch_ReleasesEveryClaimedRowWithItsAt
 ShutdownReleaseTests.AHostStoppedMidInboxBatch_ReleasesEveryClaimedRowWithItsAttemptCountUnchanged
 ```
 
+### Partitioned stores (#191: `UnitTests/Processing`, `IntegrationTests/PostgreSql/Instances`)
+```
+FifoGateTests.Release_HandsThePermitToTheOldestWaiter_InArrivalOrder / AReleasedPermit_GoesToTheWaiter_NotToANewcomer
+FifoGateTests.AReleaseRacingACancellation_NeverLosesAPermit                       (10,000 rounds)
+StoreInstanceReconcilerTests.ManySignals_BeforeAndWhileItRuns_ThrowNothing_AndTheLastSnapshotIsWhatIsDrained
+StoreInstanceReconcilerTests.ARemovedInstance_StopsAndIsReleased_AndReAddedStartsAgainOnlyOnceItsLoopsHaveEnded
+InstanceLoopTests.ARemovedInstance_SettlesItsBatchInFlight_ThenStopsClaiming / ABatchThatThrows_ReturnsItsPermit_AndTheLoopGoesOn
+InstanceMetricsTests.*                                                             (V7: tag off sums, tag on, released)
+PartitionedStoreTests.FiftyInstances_EveryRowAndDueRetry_IsProcessedInItsOwnDatabase  (V1, peak connections)
+PartitionedStoreTests.AnInstanceAddedAtRuntime_…  / RemovedWhileABatchIsInFlight_…  / ADeliveryWhoseDependencyIsDown…
+PartitionedStoreTests.ADeliveryInFlightAcrossARemoval_… / ACheckOnlyAnInstanceCanRun_… / AnUnmappedDelivery_DoesNotDelayAMappedOne_…
+PartitionedStoreLatencyTests.WithOneInstancesDatabaseStopped_… (V4, 600 ms) / UnderAGateOfOne_TwoLargeBacklogs_… (V5, 3.7 s)
+PartitionedHostShapeTests.TheReadmesPartitionedStore_StartsAndDrains_UnderDevelopmentValidation (V10)
+```
+- The instances' databases live on their own container (`InstanceServerFixture`), started with
+  `max_connections=600`; each database's connection string caps its pool at 10 and prunes idle
+  connections after 3 s, so 50 databases stay within the server. Each is cloned from a template carrying
+  the schema. A database is "stopped" with `ALTER DATABASE … ALLOW_CONNECTIONS false` and its sessions
+  terminated, so one server serves every test.
+- V4 and V5's bounds are measured (five runs each), the derivation next to the constant. V5 gives each
+  heavy send a 1 ms cost: an unfair gate then costs the light row tens of seconds, not a margin.
+
 ### Dispatchers (`UnitTests/Dispatch`, `UnitTests/Local`, `UnitTests/DI`)
 ```
 TransportOutboxDispatcherTests.DispatchAsync_DoesNotDeserializeThePayload
@@ -381,7 +403,7 @@ EndpointBindingTests.APublicationBeforeHostStart_ReachesTheHostsOwnHandlerOnceIt
   over Abstractions, Core and EntityFrameworkCore;
   `OnlyCoreShipsAnIMessageTransport_AndItIsTheInternalInMemoryOne`;
   `NoOutboxDispatcherWritesInboxRows` (no dispatcher depends on `IInboxGuardStore`; the glue does not
-  name `IOutboxDispatcher`); `Core_DependsOnTheStaticStoreSet_OnlyThroughIMessageStoreSet` (#191);
+  name `IOutboxDispatcher`); `Core_DependsOnTheStaticStoreSet_OnlyThroughIMessageStoreSet`;
   `Core_DoesNotContainTypeNamedMessageDispatcher`,
   `Core_DoesNotContainTypeNamedInProcessIntegrationDispatcher`,
   `NoAssemblyStillCarriesTheDedicatedIntegrationEventTable`.

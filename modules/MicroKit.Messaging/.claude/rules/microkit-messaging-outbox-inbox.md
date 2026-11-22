@@ -31,7 +31,9 @@ Handlers must therefore be idempotent for every effect outside the store's `DbCo
 | `MessageStoreKey` (application namespace) | Names a store. Non-empty. The EF store's key is `EntityFrameworkOutbox.KeyOf<TContext>()` = `"ef:" + typeof(TContext).FullName`. |
 | `AddMessageStore(key, store => ...)` | The one path a store provider registers by. The first call for a key also registers the engine (`StoreEngineRegistration.AddStore`); a second call for the same key configures the same store. |
 | `MessageStoreBuilder` | `Key`, `Services`, `BindAssembly(Assembly)`, `AddStartupCheck(...)`. |
-| `IMessageStoreSet` | `GetStores()`. Core registers a static set (`StaticMessageStoreSet`), read once when the engine starts. A dynamic set is #191. |
+| `IMessageStoreSet` | `GetStores()`: the configured stores. Core registers a static set (`StaticMessageStoreSet`), read once when the engine starts and by resolution, binding and the start checks. A partitioned store is in it whether or not it has an instance. |
+| `MessageStoreBuilder.PartitionedBy<TSource, TInitializer>()` (#191) | Makes a store partitioned: `TSource` (`IMessageStoreInstanceSource`, a singleton of its own type, forwarded keyed) supplies its `MessageStoreInstance`s — a snapshot, a change token, and `TryGetInstance(MessageContext)` mapping a delivery; `TInitializer` (`IMessageStoreInstanceInitializer`, keyed, scoped) prepares each instance scope. One source per store. |
+| `MessageStoreBuilder.AddInstanceCheck(...)` (#191) | A check a partitioned store runs once, in its first instance's prepared scope: problems refuse the store (1409), a throw backs the instance off. The EF model check is one. |
 
 A store registers, **keyed by its `MessageStoreKey` and scoped**: `IOutboxWriter`,
 `IOutboxProcessorStore`, `IOutboxRetentionStore`, `IInboxGuardStore`, `IInboxProcessorStore`,
@@ -573,6 +575,22 @@ runs, **per store**, four independent loops: `OutboxLoop`, `InboxLoop`, `OutboxR
 `InboxRetentionLoop` (event 1403 lists the stores). Each loop creates its own scope per cycle and
 resolves its store's keyed processor or retention store from it, so **a store whose database is
 down backs off alone**.
+
+**Partitioned stores (#191, ADR-MSG-021).** For a partitioned store the engine runs a
+`StoreInstanceReconciler` instead: it reads the source's snapshot at start and on each change of its
+token (signals coalesced in a bounded channel of one, `DropWrite`; a faulty snapshot is logged, 1407 /
+1408, and ignored) and runs the same four loops per instance, each with its own `StoreInstanceState`
+— outbox endpoint back-off, inbox tenant back-off, metric series — created when the instance appears
+and released once its loops have ended. Each loop scope is prepared for the instance (store and
+instance on `DeliveryStoreHolder`, then the instance initializer, then the store's pending instance
+check); the processors resolved there take the instance's state. A removal stops each loop between
+batches: the batch in flight settles on the host's token, never cancelled. The outbox and inbox batches
+of every instance pass one `FifoGate` (`StoreInstanceOptions.MaxConcurrentBatches`, 16), held claim to
+settlement and released in a `finally`; a released permit goes to the oldest waiter. Single stores
+never enter it. A delivery guarded by a partitioned store runs against its instance — a local row's
+own, else the source's mapping, a lookup that never creates state — and one mapped to no instance
+drained here is `Transient` (1410), never a pause. Instance loops log 1411–1414 with `{Store}` and
+`{Instance}`, each iteration inside a logging scope carrying both.
 
 | Cadence (outbox; the inbox the same, plus its outage arm) | Next delay |
 |---|---|
