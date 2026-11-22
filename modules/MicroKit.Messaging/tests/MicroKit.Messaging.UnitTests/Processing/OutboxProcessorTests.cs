@@ -259,34 +259,28 @@ public sealed class OutboxProcessorTests
     // ---------------------------------------------------------------------------
 
     /// <summary>
-    /// A dispatcher that is registered but cannot be activated abandons the batch: the remainder is
-    /// released, no retry budget moves, and nothing is rethrown, so the worker keeps running.
+    /// A dispatcher that cannot be activated for one tenant's row defers that tenant's rows only (#124
+    /// D1): no retry budget moves, nothing is rethrown, the endpoint stays open, and the other tenants'
+    /// rows behind it are dispatched.
     /// </summary>
     /// <remarks>
     /// <para>
     /// <b>The fixture fails activation for message 2 only, and that shape is realistic.</b> Activation
     /// runs in the message's own scope, built from its <c>TenantId</c>, so a tenant-scoped cause fails
-    /// for some messages and not others. It is also the only shape that makes batch-wide handling
-    /// visible: a per-message implementation would retry message 2 and go on to publish message 3.
-    /// This test pins today's verdict. Releasing message 3 for message 2's cause is the known defect
-    /// ADR-MSG-019 records, so the owed fix is expected to change this test.
-    /// </para>
-    /// <para>
-    /// <b>Which assertion discriminates against what.</b> The outcomes —
-    /// <c>[Published, Released, Released]</c> — rule out a per-message implementation. They do
-    /// <i>not</i> rule out the catch-based implementation this replaced, which produces the same
-    /// three: against that one, the discriminators are the absent rethrow, the abort reason, and
-    /// event 1009 where it logged 1006.
+    /// for some messages and not others. Message 3 belongs to another tenant: it is the probe, and its
+    /// success keeps the endpoint open.
     /// </para>
     /// <para>
     /// The fault is an <see cref="InvalidOperationException"/> on purpose — the type the container
-    /// throws for a dependency it cannot supply, the one a catch-based implementation swallows, and the
-    /// only one the resolution tags. Every other type stays per message, pinned by
+    /// throws for a dependency it cannot supply, and the only one the resolution tags. Every other type
+    /// stays per message, pinned by
     /// <c>ProcessBatch_WhenActivationThrowsAnythingButInvalidOperationException_RetriesOnlyThatMessage</c>.
+    /// The row with no tenant keeps #188's endpoint verdict:
+    /// <c>ProcessBatch_WhenTheDispatcherCannotBeActivatedForARowWithNoTenant_DefersItsEndpointsRows</c>.
     /// </para>
     /// </remarks>
     [Fact]
-    public async Task ProcessBatch_WhenTheDispatcherCannotBeActivated_DefersItsEndpointsRowsWithoutConsumingRetriesOrRethrowing()
+    public async Task ProcessBatch_WhenTheDispatcherCannotBeActivatedForOneTenant_DefersThatTenantsRows_AndDispatchesTheOthers()
     {
         var first = OutboxFixtures.Message(retryCount: 1);
         // Its own tenant and kind, so the 1009 assertion below cannot pass on a neighbour's values.
@@ -297,6 +291,7 @@ public sealed class OutboxProcessorTests
 
         var dispatcher = new ScriptedDispatcher();
         var logger = new CapturingLogger<OutboxProcessor>();
+        var backoff = new OutboxEndpointBackoff(DefaultOptions.PollingInterval, DefaultOptions.TransportUnavailableBackoff);
         var sut = BuildFailingActivationFor(
             store,
             dispatcher,
@@ -304,7 +299,8 @@ public sealed class OutboxProcessorTests
             () => new InvalidOperationException(
                 "Unable to resolve service for type 'IMessageTransport' while attempting to " +
                 "activate 'TransportOutboxDispatcher'."),
-            logger);
+            logger,
+            backoff);
 
         // Not rethrown: a registered dispatcher that cannot be built must not stop the worker.
         var result = await sut.ProcessBatchAsync(10, CancellationToken.None);
@@ -312,29 +308,69 @@ public sealed class OutboxProcessorTests
         result.AbortReason.ShouldBe(OutboxBatchAbortReason.DispatcherActivationFailed);
         logger.Records.ShouldContain(
             r => r.EventId == 1009 && r.Level == LogLevel.Error,
-            "a batch abandoned with no rethrow and no retry movement must not be silent");
+            "a deferral with no rethrow and no retry movement must not be silent");
 
-        // The row an operator has to find when the cause never clears (ADR-MSG-019, known defect).
+        // The row an operator has to find when the cause never clears.
         var activationFailure = logger.Records.Single(r => r.EventId == 1009).Message;
         activationFailure.ShouldContain(second.Id.Value.ToString());
         activationFailure.ShouldContain("tenant-b");
         activationFailure.ShouldContain("endpoint", Case.Sensitive, "the row's endpoint names the dispatcher that failed");
+        logger.Records.ShouldContain(r => r.EventId == 1011 && r.Message.Contains("tenant-b"), "1011 says what waits for that tenant");
+        logger.Records.ShouldNotContain(r => r.EventId == 1010, "the endpoint is not down");
 
-        result.Published.ShouldBe(1, "message 1 was delivered before message 2's dispatcher failed");
-        result.Released.ShouldBe(2, "the message that hit the fault AND every later row of its endpoint");
+        result.Published.ShouldBe(2, "the other tenant's rows, before and after, are dispatched");
+        result.Released.ShouldBe(1, "only the row of the tenant that failed waits");
         result.Retried.ShouldBe(0, "an activation failure is not a per-message fault");
         result.DeadLettered.ShouldBe(0);
 
-        captured.Single(o => o.MessageId == first.Id).Kind.ShouldBe(OutboxOutcomeKind.Published);
+        var deferred = captured.Single(o => o.MessageId == second.Id);
+        deferred.Kind.ShouldBe(OutboxOutcomeKind.Deferred, "the row keeps its own count: no attempt is charged");
+        deferred.NextRetryAtUtc.ShouldBe(Now + DefaultOptions.PollingInterval, "to the end of the tenant's back-off");
+        dispatcher.Dispatched.Select(m => m.Id).ShouldBe([first.Id, third.Id]);
+        backoff.BlockedAt(Now).ShouldBe(OutboxEndpoints.None, "the endpoint stays open for every other tenant");
+        backoff.TenantsOf(OutboxDispatchers.Transport).IsBlocked("tenant-b", Now, out _).ShouldBeTrue();
+        await store.Received(1).ApplyOutcomesAsync(
+            claim.Token, Arg.Any<IReadOnlyList<OutboxOutcome>>(), Arg.Any<CancellationToken>());
+    }
+
+    /// <summary>
+    /// A row with no tenant has no tenant to narrow the verdict to: its endpoint is deferred as #188
+    /// made it — the row and every later row of the endpoint, no retry consumed, nothing rethrown (#124 V4).
+    /// </summary>
+    [Fact]
+    public async Task ProcessBatch_WhenTheDispatcherCannotBeActivatedForARowWithNoTenant_DefersItsEndpointsRows()
+    {
+        var first = OutboxFixtures.Message(retryCount: 1, tenantId: null);
+        var second = OutboxFixtures.ContractMessage(retryCount: 1, tenantId: null);
+        var third = OutboxFixtures.Message(retryCount: 1, tenantId: null);
+        var claim = OutboxFixtures.Claim(first, second, third);
+        var (store, captured) = StoreReturning(claim);
+
+        var dispatcher = new ScriptedDispatcher();
+        var logger = new CapturingLogger<OutboxProcessor>();
+        var backoff = new OutboxEndpointBackoff(DefaultOptions.PollingInterval, DefaultOptions.TransportUnavailableBackoff);
+        var sut = BuildFailingActivationFor(
+            store, dispatcher, second.Id, () => new InvalidOperationException("no IMessageTransport"), logger, backoff);
+
+        var result = await sut.ProcessBatchAsync(10, CancellationToken.None);
+
+        result.AbortReason.ShouldBe(OutboxBatchAbortReason.DispatcherActivationFailed);
+        logger.Records.Single(r => r.EventId == 1009).Message.ShouldContain(second.Id.Value.ToString());
+        logger.Records.ShouldContain(r => r.EventId == 1010, "the endpoint is down");
+        logger.Records.ShouldNotContain(r => r.EventId == 1011, "no tenant is involved");
+
+        result.Published.ShouldBe(1, "message 1 was delivered before message 2's dispatcher failed");
+        result.Released.ShouldBe(2, "the message that hit the fault AND every later row of its endpoint");
+        result.Retried.ShouldBe(0);
         foreach (var deferred in captured.Where(o => o.MessageId != first.Id))
         {
-            deferred.Kind.ShouldBe(OutboxOutcomeKind.Deferred, "the row keeps its own count: no attempt is charged");
-            deferred.NextRetryAtUtc.ShouldNotBeNull("deferred to the end of the endpoint's back-off");
+            deferred.Kind.ShouldBe(OutboxOutcomeKind.Deferred);
+            deferred.NextRetryAtUtc.ShouldBe(Now + DefaultOptions.PollingInterval);
         }
 
         dispatcher.Dispatched.ShouldHaveSingleItem().Id.ShouldBe(first.Id, "message 3 is never attempted");
-        await store.Received(1).ApplyOutcomesAsync(
-            claim.Token, Arg.Any<IReadOnlyList<OutboxOutcome>>(), Arg.Any<CancellationToken>());
+        backoff.BlockedAt(Now).ShouldBe(OutboxEndpoints.Transport);
+        backoff.TenantsOf(OutboxDispatchers.Transport).IsEmpty.ShouldBeTrue();
     }
 
     /// <summary>
@@ -817,7 +853,8 @@ public sealed class OutboxProcessorTests
         ScriptedDispatcher dispatcher,
         MessageId failOn,
         Func<Exception> fault,
-        ILogger<OutboxProcessor> logger)
+        ILogger<OutboxProcessor> logger,
+        OutboxEndpointBackoff? backoff = null)
     {
         // The scope being activated is the last one created; its context names the row being
         // dispatched as its causation.
@@ -834,7 +871,7 @@ public sealed class OutboxProcessorTests
         scopes = new TestExecutionScopeFactory(provider.GetRequiredService<IServiceScopeFactory>());
 
         return new OutboxProcessor(
-            store, scopes, DefaultOptions, new FakeTimeProvider(Now), FixedRandom.NoJitter, logger, TestStore);
+            store, scopes, DefaultOptions, new FakeTimeProvider(Now), FixedRandom.NoJitter, logger, TestStore, backoff);
     }
 
     private static OutboxProcessor BuildCore(

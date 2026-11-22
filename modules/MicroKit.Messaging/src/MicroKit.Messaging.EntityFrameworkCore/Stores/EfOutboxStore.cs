@@ -387,6 +387,32 @@ internal sealed class EfOutboxStore<TContext>(
         return rows == 1;
     }
 
+    /// <inheritdoc/>
+    public async ValueTask<int> DeadLetterPendingAsync(string tenantId, string reason, CancellationToken ct = default)
+    {
+        ArgumentNullException.ThrowIfNull(tenantId);
+        ArgumentException.ThrowIfNullOrWhiteSpace(reason);
+
+        var now = timeProvider.GetUtcNow();
+        var error = reason.Length <= OutboxMessageConfiguration.ErrorMessageMaxLength
+            ? reason
+            : reason[..OutboxMessageConfiguration.ErrorMessageMaxLength];
+
+        // One statement. ClaimToken null: a row a processor holds is left to its batch.
+        return await context.Set<OutboxMessage>()
+            .Where(m => m.TenantId == tenantId
+                        && m.Status == OutboxMessageStatus.Pending
+                        && !m.DeadLettered
+                        && m.ClaimToken == null)
+            .ExecuteUpdateAsync(s => s
+                .SetProperty(m => m.Status, OutboxMessageStatus.Failed)
+                .SetProperty(m => m.DeadLettered, true)
+                .SetProperty(m => m.ErrorMessage, error)
+                .SetProperty(m => m.ProcessedAtUtc, now),
+                ct)
+            .ConfigureAwait(false);
+    }
+
     // ---------- IOutboxRetentionStore ----------
 
     /// <inheritdoc/>

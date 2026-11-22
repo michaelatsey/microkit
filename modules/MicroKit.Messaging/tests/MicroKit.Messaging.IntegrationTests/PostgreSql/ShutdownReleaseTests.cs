@@ -93,6 +93,92 @@ public sealed class ShutdownReleaseTests(PostgreSqlFixture fixture)
         rows.ShouldAllBe(r => !r.DeadLettered);
     }
 
+    /// <summary>
+    /// #124 V9 and C1: a host stopped while a tenant is in back-off — so mid-way through the second pass
+    /// of the reordered batch — releases every row it had not attempted, whichever pass it belongs to,
+    /// with its attempt count unchanged.
+    /// </summary>
+    [DockerRequiredFact]
+    public async Task AHostStoppedDuringTheSecondPassOfAnOutboxBatch_ReleasesEveryUnattemptedRowWithItsAttemptCountUnchanged()
+    {
+        await using var db = await StoreDatabase.CreateAsync<TestMessagingDbContext>(fixture.ConnectionString, o => new(o));
+        var transport = new TenantBlockingTransport("A");
+        using var host = BuildHost(db, transport: null, configure: bus =>
+        {
+            bus.Services.AddSingleton<IMessageTransport>(transport);
+            bus.AddTransportDispatcher();
+        });
+
+        // A failed a minute ago: its back-off is over, its entry is not — its rows go in the second pass.
+        var store = EntityFrameworkOutbox.KeyOf<TestMessagingDbContext>();
+        host.Services.GetRequiredKeyedService<OutboxEndpointBackoff>(store)
+            .TenantsOf(OutboxDispatchers.Transport).OnDown("A", DateTimeOffset.UtcNow.AddMinutes(-1), out _);
+
+        var a1 = OutboxRow("A", -3, retryCount: 2);
+        var a2 = OutboxRow("A", -2, retryCount: 2);
+        var c1 = OutboxRow("C", -1, retryCount: 0);
+        await using (var seed = NewContext(db))
+        {
+            seed.OutboxMessages.AddRange(a1, a2, c1);
+            await seed.SaveChangesAsync();
+        }
+
+        await host.StartAsync();
+        await transport.Entered.Task.WaitAsync(TimeSpan.FromSeconds(10));
+        transport.Sent.ShouldBe(["C"], "control: the first pass ran, the host stops in the second");
+
+        await host.StopAsync();
+
+        var rows = (await ReadOutboxAsync(db)).ToDictionary(r => r.Id);
+        rows[c1.Id].Status.ShouldBe(OutboxMessageStatus.Published, "the row attempted before the stop keeps its outcome");
+        foreach (var id in new[] { a1.Id, a2.Id })
+        {
+            rows[id].Status.ShouldBe(OutboxMessageStatus.Pending, "released, not retried");
+            rows[id].RetryCount.ShouldBe(2, "a host stop charges no attempt");
+            rows[id].ClaimToken.ShouldBeNull();
+            rows[id].LockedUntilUtc.ShouldBeNull();
+            rows[id].DeadLettered.ShouldBeFalse();
+        }
+    }
+
+    private static OutboxMessage OutboxRow(string tenant, int secondsAgo, int retryCount) => new()
+    {
+        Id = MessageId.New(),
+        ContractName = "tests.shutdown.event.v1",
+        Source = "tests.shutdown",
+        TenantId = tenant,
+        EventType = typeof(ShutdownEvent).AssemblyQualifiedName!,
+        Payload = $"{{\"id\":\"{Guid.NewGuid()}\"}}",
+        Status = OutboxMessageStatus.Pending,
+        RetryCount = retryCount,
+        OccurredOnUtc = DateTimeOffset.UtcNow,
+        CreatedAtUtc = DateTimeOffset.UtcNow.AddSeconds(secondsAgo - 60),
+        CorrelationId = CorrelationId.New(),
+    };
+
+    /// <summary>Sends every tenant's envelope but one, which it holds until the host stops.</summary>
+    private sealed class TenantBlockingTransport(string blocked) : IMessageTransport
+    {
+        public TaskCompletionSource Entered { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public List<string?> Sent { get; } = [];
+
+        public async ValueTask SendAsync(MessageEnvelope envelope, CancellationToken ct = default)
+        {
+            var tenant = envelope.Headers.GetValueOrDefault(MessageHeaders.TenantId);
+            if (tenant == blocked)
+            {
+                Entered.TrySetResult();
+                await Task.Delay(Timeout.Infinite, ct);
+            }
+
+            lock (Sent)
+            {
+                Sent.Add(tenant);
+            }
+        }
+    }
+
     private static IHost BuildHost(StoreDatabase db, BlockingTransport? transport, Action<MessagingBuilder> configure)
     {
         var builder = Host.CreateApplicationBuilder(new HostApplicationBuilderSettings { DisableDefaults = true });

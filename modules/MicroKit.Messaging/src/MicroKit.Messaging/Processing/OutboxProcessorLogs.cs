@@ -67,6 +67,21 @@ internal static partial class OutboxProcessorLogs
     public static partial void EndpointDeferred(
         ILogger logger, string? endpoint, int deferredCount, DateTimeOffset from, DateTimeOffset until);
 
+    /// <remarks>
+    /// Once per batch and (endpoint, tenant), once the batch is settled (#124): a down verdict on a row
+    /// with a tenant holds that tenant's rows of the endpoint, not the endpoint. 1004 and 1009 say why;
+    /// this one what waits for that tenant, and until when. It repeats once per the tenant's back-off
+    /// while the cause lasts.
+    /// </remarks>
+    [LoggerMessage(
+        EventId = 1011,
+        Level = LogLevel.Warning,
+        Message = "Outbox endpoint {Endpoint} (null: the transport) is down for tenant {TenantId}: " +
+                  "{DeferredCount} row(s) of the batch were settled to wait, the first until {From:O}, the " +
+                  "last until {Until:O}, no retry consumed; the other tenants' rows are dispatched.")]
+    public static partial void TenantDeferred(
+        ILogger logger, string? endpoint, string tenantId, int deferredCount, DateTimeOffset from, DateTimeOffset until);
+
     [LoggerMessage(
         EventId = 1005,
         Level = LogLevel.Information,
@@ -116,10 +131,11 @@ internal static partial class OutboxProcessorLogs
     /// </para>
     /// <para>
     /// <b>It names the row whose dispatcher could not be built</b> — id, tenant and kind. Activation
-    /// runs in that row's own scope, so a tenant-scoped cause fails for some rows only, and one that
-    /// never clears — a de-provisioned tenant — fails it again each time the endpoint's back-off ends,
-    /// holding that endpoint's rows of every tenant. These three values are how an operator finds it.
-    /// #124 is the known defect.
+    /// runs in that row's own scope, so a tenant-scoped cause fails for some rows only: that tenant is
+    /// put in back-off on the endpoint (1011 says what waits), and one that never clears — a
+    /// de-provisioned tenant — fails again once per its own back-off, holding no other tenant's rows
+    /// (#124). These three values are how an operator finds it, and the tenant is what
+    /// <c>IOutboxAdminStore.DeadLetterPendingAsync</c> takes.
     /// </para>
     /// <para>
     /// <c>Error</c>, not <c>Critical</c>, matching <see cref="TransportUnavailable"/> — the other arm

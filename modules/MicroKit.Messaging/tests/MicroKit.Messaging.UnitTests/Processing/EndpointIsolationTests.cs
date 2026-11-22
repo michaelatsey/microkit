@@ -18,7 +18,7 @@ public sealed class EndpointIsolationTests
 
     private static OutboxMessage Local()
     {
-        var row = OutboxFixtures.Message();
+        var row = OutboxFixtures.Message(tenantId: null);
         row.Endpoint = OutboxMessage.LocalEndpoint;
         return row;
     }
@@ -105,9 +105,9 @@ public sealed class EndpointIsolationTests
     [Fact]
     public async Task AMixedBatchWithNoTransport_DeliversItsLocalRows_AndDefersOnlyItsTransportRows()
     {
-        var transportFirst = OutboxFixtures.ContractMessage();
+        var transportFirst = OutboxFixtures.ContractMessage(tenantId: null);
         var localA = Local();
-        var transportSecond = OutboxFixtures.ContractMessage();
+        var transportSecond = OutboxFixtures.ContractMessage(tenantId: null);
         var localB = Local();
         var (processor, settled, local, _, logs) = Build(
             OutboxFixtures.Claim(transportFirst, localA, transportSecond, localB), transportActivates: false);
@@ -135,7 +135,7 @@ public sealed class EndpointIsolationTests
     public async Task ALocalConsumersDependencyOutage_NeverHoldsBackTheTransportRows()
     {
         var localA = Local();
-        var transport = OutboxFixtures.ContractMessage();
+        var transport = OutboxFixtures.ContractMessage(tenantId: null);
         var localB = Local();
         var (processor, settled, local, transportDispatcher, _) = Build(
             OutboxFixtures.Claim(localA, transport, localB),
@@ -156,7 +156,7 @@ public sealed class EndpointIsolationTests
         var options = new OutboxProcessorOptions();
         var clock = new FakeTimeProvider(Now);
         var backoff = BackoffOf(options);
-        var transportRows = Enumerable.Range(0, 3).Select(_ => OutboxFixtures.ContractMessage()).ToArray();
+        var transportRows = Enumerable.Range(0, 3).Select(_ => OutboxFixtures.ContractMessage(tenantId: null)).ToArray();
 
         async Task<Rig> CycleAsync()
         {
@@ -190,7 +190,7 @@ public sealed class EndpointIsolationTests
         var clock = new FakeTimeProvider(Now);
         var backoff = BackoffOf(options);
         var until = backoff.Block(OutboxDispatchers.Transport, Now);
-        var rows = new[] { OutboxFixtures.ContractMessage(), OutboxFixtures.ContractMessage() };
+        var rows = new[] { OutboxFixtures.ContractMessage(tenantId: null), OutboxFixtures.ContractMessage(tenantId: null) };
         var (processor, rig, _, _, logs) = Build(OutboxFixtures.Claim(rows), transportActivates: true, clock, backoff);
 
         var result = await processor.ProcessBatchAsync(10);
@@ -206,7 +206,7 @@ public sealed class EndpointIsolationTests
     public async Task ADeferralThatWasNotWritten_IsNotReportedAsDeferred()
     {
         // A lost lease: the settlement writes none of the batch's rows.
-        var rows = new[] { OutboxFixtures.ContractMessage(), OutboxFixtures.ContractMessage() };
+        var rows = new[] { OutboxFixtures.ContractMessage(tenantId: null), OutboxFixtures.ContractMessage(tenantId: null) };
         var (processor, rig, _, _, logs) = Build(
             OutboxFixtures.Claim(rows), transportActivates: false, new FakeTimeProvider(Now), BackoffOf(new OutboxProcessorOptions()));
         rig.Store.ApplyOutcomesAsync(Arg.Any<Guid>(), Arg.Any<IReadOnlyList<OutboxOutcome>>(), Arg.Any<CancellationToken>())
@@ -223,9 +223,9 @@ public sealed class EndpointIsolationTests
     {
         var options = new OutboxProcessorOptions();
         var clock = new FakeTimeProvider(Now);
-        var first = OutboxFixtures.ContractMessage();
+        var first = OutboxFixtures.ContractMessage(tenantId: null);
         var slow = Local();
-        var second = OutboxFixtures.ContractMessage();
+        var second = OutboxFixtures.ContractMessage(tenantId: null);
         var (processor, _, _, _, logs) = Build(
             OutboxFixtures.Claim(first, slow, second), transportActivates: false, clock, BackoffOf(options),
             localScript: _ =>
@@ -278,7 +278,7 @@ public sealed class EndpointIsolationTests
         var backoff = BackoffOf(options);
         backoff.Block(OutboxDispatchers.Transport, Now);
         var (processor, _, _, _, _) = Build(
-            OutboxFixtures.Claim(Local(), OutboxFixtures.ContractMessage(), OutboxFixtures.ContractMessage()),
+            OutboxFixtures.Claim(Local(), OutboxFixtures.ContractMessage(tenantId: null), OutboxFixtures.ContractMessage(tenantId: null)),
             transportActivates: true, clock, backoff,
             localScript: _ => new OutboxTransportUnavailableException("a consumer's dependency is down"));
 
@@ -296,7 +296,7 @@ public sealed class EndpointIsolationTests
         var options = new OutboxProcessorOptions();
         var clock = new FakeTimeProvider(Now);
         var slow = Local();
-        var transport = OutboxFixtures.ContractMessage();
+        var transport = OutboxFixtures.ContractMessage(tenantId: null);
         var (processor, rig, _, _, _) = Build(
             OutboxFixtures.Claim(slow, transport), transportActivates: false, clock, BackoffOf(options),
             localScript: _ =>
@@ -336,7 +336,7 @@ public sealed class EndpointIsolationTests
         var options = new OutboxProcessorOptions();
         var clock = new FakeTimeProvider(Now);
         var backoff = BackoffOf(options);
-        var row = OutboxFixtures.ContractMessage();
+        var row = OutboxFixtures.ContractMessage(tenantId: null);
 
         var (down, _, _, _, _) = Build(OutboxFixtures.Claim(row), transportActivates: false, clock, backoff);
         await down.ProcessBatchAsync(10);

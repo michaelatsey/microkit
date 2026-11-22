@@ -42,10 +42,11 @@ namespace MicroKit.Messaging.Spi;
 /// <para>
 /// <b>Not every such cause passes.</b> The dispatcher is activated in the scope of the message being
 /// dispatched, built from that message's tenant, so a tenant-aware composition can throw that
-/// exception for one tenant only — and a de-provisioned tenant never recovers. Each time the
-/// endpoint's back-off ends its row fails again, and that endpoint's rows of every tenant wait, with
-/// no dead-letter exit, until an operator intervenes; the other endpoint's rows still go out. That is
-/// a known defect, not a design property; the fix is owed by #124.
+/// exception for one tenant only — and a de-provisioned tenant never recovers. On a message with a
+/// tenant, the verdict holds that tenant's messages of the endpoint, each time to the end of its own
+/// back-off, and the other tenants' go out; the endpoint is held for every tenant only once a second
+/// tenant fails before any success (#124). The operator's way out for a tenant that will not recover
+/// is <see cref="IOutboxAdminStore.DeadLetterPendingAsync"/>.
 /// </para>
 /// <para>
 /// <b>The two are separated by the container, not by inspecting an exception.</b>
