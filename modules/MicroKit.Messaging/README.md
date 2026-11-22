@@ -612,8 +612,13 @@ holds that tenant, not the endpoint:
   whose rows all carry one tenant (a database per tenant) touches one batch per back-off period, not
   its whole backlog. A row with no tenant is never left out. Tenant ids are compared by the column's
   collation: under a case-insensitive one, holding `Acme` also holds `acme`. The EF store needs a
-  provider that translates a collection parameter (SQL Server: compatibility level 130 or above). The filter is not an index range: each claim reads past the held tenant's
-  claimable rows, as it read past them once they were deferred before.
+  provider that translates a collection parameter (SQL Server: compatibility level 130 or above).
+- **The bound.** Each claim reads, and never writes, a held tenant's claimable rows: the filter is
+  not an index range, so the cost of every claim, for every other tenant, grows with that backlog,
+  not with the batch size — a slower store, not a stalled one. It is what the claim read over the same
+  backlog once deferred, before tenants were left out, and adding `TenantId` to the claim indexes
+  does not change it. `DeadLetterPendingAsync` (*A tenant that never recovers*, below) is the exit
+  for a tenant that will not recover.
 
 The inbox follows the same rule, on its own curve (`Inbox.PollingInterval` doubling to
 `Inbox.DependencyUnavailableBackoff`), for an `InboxDependencyUnavailableException` a handler throws:

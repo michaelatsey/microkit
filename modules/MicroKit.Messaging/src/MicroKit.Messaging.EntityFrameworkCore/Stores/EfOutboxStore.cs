@@ -464,9 +464,15 @@ internal sealed class EfOutboxStore<TContext>(
     /// never be claimed again. The same holds for the endpoint arm of each predicate.
     /// </para>
     /// <para>
-    /// The filter is a residual one: no index is ordered by tenant within the claim's order, so the
-    /// claim reads past the excluded tenants' claimable rows ahead of the first ones it may take
-    /// (TenantExclusionPlanTests), and writes none of them.
+    /// <b>The bound.</b> Each claim reads, and never writes, a held tenant's claimable rows: the filter is
+    /// a residual one, no index being ordered by tenant within the claim's order, so the cost of every
+    /// claim, for every other tenant, grows with that backlog, not with the batch size
+    /// (TenantExclusionPlanTests) — a slower store, not a stalled one. It is what the claim read over the
+    /// same backlog once deferred, before tenants were left out; past a size the planner scans the table
+    /// either way. Appending <c>TenantId</c> to <c>IX_OutboxMessages_Endpoint_Dispatchable</c> and
+    /// <c>IX_InboxMessages_Processable</c> was measured on PostgreSQL at 20,000 and 200,000 held rows and
+    /// changed neither plan nor buffer count (#124 A8). <c>DeadLetterPendingAsync</c> is the exit for a
+    /// tenant that will not recover.
     /// </para>
     /// </remarks>
     private static IQueryable<OutboxMessage> ExcludingTenants(

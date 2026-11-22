@@ -81,6 +81,13 @@ public interface IOutboxProcessorStore
     /// it out. A row of a listed tenant handed over anyway is deferred unattempted, as for an endpoint.
     /// </para>
     /// <para>
+    /// <b>The bound.</b> Each claim reads, and never writes, a held tenant's claimable rows: no claim index
+    /// orders them by tenant, so the cost of every claim, for every other tenant, grows with that backlog,
+    /// not with <paramref name="batchSize"/> — a slower store, not a stalled one.
+    /// <see cref="IOutboxAdminStore.DeadLetterPendingAsync"/> is the exit for a tenant that will not
+    /// recover.
+    /// </para>
+    /// <para>
     /// <b>Clock.</b> The lease expiry is computed from the application clock via
     /// <see cref="TimeProvider"/>, not from the database clock. That keeps the implementation
     /// provider-neutral and unit-testable, at the cost of being sensitive to drift between the

@@ -447,6 +447,11 @@ internal sealed class EfInboxStore<TContext>(
         //    because under UseRelationalNulls(), a context option the host owns, NOT (TenantId =
         //    ANY(@p)) is null for it, and the row would never be claimed again. The stamp below matches
         //    the candidates by RowId.
+        //
+        //    The bound: each claim reads, and never writes, a held tenant's claimable rows — the filter
+        //    is residual, as in EfOutboxStore.ExcludingTenants — so the cost of every claim grows with
+        //    that backlog, not with batchSize. DeadLetterPendingAsync is the exit for a tenant that will
+        //    not recover.
         var processable = context.Set<InboxMessage>()
             .AsNoTracking()
             .Where(Processable(now));

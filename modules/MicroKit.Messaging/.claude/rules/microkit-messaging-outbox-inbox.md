@@ -240,9 +240,12 @@ with the first store); any other value → `OutboxPayloadException`.
   listed tenant handed over anyway is deferred and sets `HandedOverInBackOff`, as for an endpoint. The
   EF store sends each list as one array parameter (`EF.Parameter`: EF Core 10 otherwise sends one
   parameter per value), adds nothing for an empty list, and spells out `TenantId == null` so a row
-  with no tenant is never left out, even under `UseRelationalNulls()`. The filter is residual, not an
-  index range: the claim reads past the held tenant's claimable rows, as it reads past waiting rows
-  (`TenantExclusionPlanTests`). A row with no tenant blocks the endpoint as above.
+  with no tenant is never left out, even under `UseRelationalNulls()`. **The bound:** the filter is
+  residual, not an index range, so each claim reads, and never writes, a held tenant's claimable rows,
+  as it reads past waiting rows (`TenantExclusionPlanTests`): its cost grows with that backlog, not the
+  batch size. `TenantId` appended to the claim indexes changed neither plan nor buffers at 20,000 and
+  200,000 rows (A8): do not add it. The exit for a tenant that will not recover is
+  `DeadLetterPendingAsync`. A row with no tenant blocks the endpoint as above.
   - **The probe (half-open).** After a tenant is blocked, the next down verdict from a tenant with
     no entry — before any success — blocks that tenant **and** the endpoint, and clears the probe
     (`OutageScope.Shared`, event 1010). A success clears the probe. So a real outage costs at most two
