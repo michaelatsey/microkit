@@ -152,11 +152,11 @@ internal sealed class InboxMetrics : IDisposable
         }
 
         var now = _timeProvider.GetUtcNow();
-        foreach (var (store, backoff) in _tenantBackoff.Stores)
+        foreach (var (key, backoff) in _tenantBackoff.Stores)
         {
             measurements.Add(new Measurement<int>(
                 backoff.CountUnrecoveredAt(now, _halfOpen),
-                new KeyValuePair<string, object?>("store.key", store.Value)));
+                new KeyValuePair<string, object?>("store.key", key.Store.Value)));
         }
 
         return measurements;

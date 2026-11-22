@@ -63,7 +63,7 @@ internal sealed class OutboxMetrics : IDisposable
     private readonly TimeProvider _timeProvider;
     private readonly Counter<long> _settled;
     private readonly Histogram<double> _dispatchDelay;
-    private readonly ConcurrentDictionary<MessageStoreKey, OutboxEndpointBackoff> _stores = new();
+    private readonly ConcurrentDictionary<StoreInstanceKey, OutboxEndpointBackoff> _stores = new();
     private readonly TimeSpan _halfOpen;
 
     /// <summary>Initializes a new <see cref="OutboxMetrics"/>.</summary>
@@ -120,7 +120,7 @@ internal sealed class OutboxMetrics : IDisposable
     /// <summary>Reports the back-off of <paramref name="store"/> from now on.</summary>
     /// <param name="store">The store.</param>
     /// <param name="backoff">Its endpoint back-off, the store's singleton.</param>
-    public void Track(MessageStoreKey store, OutboxEndpointBackoff backoff) => _stores[store] = backoff;
+    public void Track(MessageStoreKey store, OutboxEndpointBackoff backoff) => _stores[new StoreInstanceKey(store, null)] = backoff;
 
     /// <summary>Records one dispatch's delay, clamped at zero.</summary>
     /// <param name="delay">The processor's clock once the dispatch returned, minus the row's staging time.</param>
@@ -206,10 +206,10 @@ internal sealed class OutboxMetrics : IDisposable
     {
         var now = _timeProvider.GetUtcNow();
         var measurements = new List<Measurement<int>>();
-        foreach (var (store, backoff) in _stores)
+        foreach (var (key, backoff) in _stores)
         {
-            measurements.Add(Measure(backoff.IsUnrecoveredAt(OutboxDispatchers.Transport, now, _halfOpen) ? 1 : 0, store, TransportTag));
-            measurements.Add(Measure(backoff.IsUnrecoveredAt(OutboxDispatchers.Local, now, _halfOpen) ? 1 : 0, store, LocalTag));
+            measurements.Add(Measure(backoff.IsUnrecoveredAt(OutboxDispatchers.Transport, now, _halfOpen) ? 1 : 0, key.Store, TransportTag));
+            measurements.Add(Measure(backoff.IsUnrecoveredAt(OutboxDispatchers.Local, now, _halfOpen) ? 1 : 0, key.Store, LocalTag));
         }
 
         return measurements;
@@ -219,10 +219,10 @@ internal sealed class OutboxMetrics : IDisposable
     {
         var now = _timeProvider.GetUtcNow();
         var measurements = new List<Measurement<int>>();
-        foreach (var (store, backoff) in _stores)
+        foreach (var (key, backoff) in _stores)
         {
-            measurements.Add(Measure(backoff.TenantsOf(OutboxDispatchers.Transport).CountUnrecoveredAt(now, _halfOpen), store, TransportTag));
-            measurements.Add(Measure(backoff.TenantsOf(OutboxDispatchers.Local).CountUnrecoveredAt(now, _halfOpen), store, LocalTag));
+            measurements.Add(Measure(backoff.TenantsOf(OutboxDispatchers.Transport).CountUnrecoveredAt(now, _halfOpen), key.Store, TransportTag));
+            measurements.Add(Measure(backoff.TenantsOf(OutboxDispatchers.Local).CountUnrecoveredAt(now, _halfOpen), key.Store, LocalTag));
         }
 
         return measurements;

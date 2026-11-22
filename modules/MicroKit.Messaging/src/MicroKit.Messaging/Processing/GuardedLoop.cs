@@ -3,7 +3,8 @@ namespace MicroKit.Messaging.Processing;
 /// <summary>
 /// The one loop guard every long-running loop of the module runs under — the store engine's four
 /// loops per store, the in-memory transport's consume loop and the local queue's (#188): only a
-/// host stop ends a loop, and nothing it logs can end it.
+/// host stop — or, for a loop given a removal token, that token (#191) — ends a loop, and nothing it
+/// logs can end it.
 /// </summary>
 /// <remarks>
 /// <para>
@@ -13,6 +14,11 @@ namespace MicroKit.Messaging.Processing;
 /// goes on.
 /// </para>
 /// <para>
+/// <b>A removal is read between iterations, never inside one.</b> A loop given a removal token ends
+/// before its next iteration, or during its delay, once that token is cancelled; the iteration in
+/// flight never sees it, so a batch it holds runs to its settlement.
+/// </para>
+/// <para>
 /// <b>Logging cannot throw.</b> Every log call of a loop goes through <see cref="Log"/>, which swallows
 /// a logging provider's fault: there is nowhere left to report it, and it must not end the loop or
 /// undo a settlement.
@@ -20,7 +26,10 @@ namespace MicroKit.Messaging.Processing;
 /// </remarks>
 internal static class GuardedLoop
 {
-    /// <summary>Runs <paramref name="iteration"/> until the host stops or an iteration asks to stop.</summary>
+    /// <summary>
+    /// Runs <paramref name="iteration"/> until the host stops, <paramref name="removal"/> is cancelled,
+    /// or an iteration asks to stop.
+    /// </summary>
     /// <param name="iteration">
     /// One pass: returns the delay before the next one (<see cref="TimeSpan.Zero"/> for none), or
     /// <see langword="null"/> to end the loop for a reason of its own (a configuration fault).
@@ -31,6 +40,11 @@ internal static class GuardedLoop
     /// </param>
     /// <param name="timeProvider">The clock the delays run on.</param>
     /// <param name="stoppingToken">The host's token.</param>
+    /// <param name="removal">
+    /// Asks the loop to end without stopping the host (#191: its store instance was removed). It is
+    /// read between iterations and cuts a delay short, and never reaches <paramref name="iteration"/>:
+    /// an iteration in flight — a batch — runs to its settlement on the host's token alone.
+    /// </param>
     /// <returns>A task that completes when the loop ends.</returns>
     [System.Diagnostics.CodeAnalysis.SuppressMessage(
         "Design",
@@ -40,9 +54,17 @@ internal static class GuardedLoop
         Func<CancellationToken, ValueTask<TimeSpan?>> iteration,
         Func<Exception, TimeSpan> onFault,
         TimeProvider timeProvider,
-        CancellationToken stoppingToken)
+        CancellationToken stoppingToken,
+        CancellationToken removal = default)
     {
-        while (!stoppingToken.IsCancellationRequested)
+        // One linked source for the whole loop, and only for a loop that can be removed: a single
+        // store's loop delays on the host's token, as it always has.
+        using var linked = removal.CanBeCanceled
+            ? CancellationTokenSource.CreateLinkedTokenSource(stoppingToken, removal)
+            : null;
+        var delayToken = linked?.Token ?? stoppingToken;
+
+        while (!stoppingToken.IsCancellationRequested && !removal.IsCancellationRequested)
         {
             TimeSpan? next;
             try
@@ -70,9 +92,9 @@ internal static class GuardedLoop
 
             try
             {
-                await Task.Delay(delay, timeProvider, stoppingToken).ConfigureAwait(false);
+                await Task.Delay(delay, timeProvider, delayToken).ConfigureAwait(false);
             }
-            catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
+            catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested || removal.IsCancellationRequested)
             {
                 return;
             }
