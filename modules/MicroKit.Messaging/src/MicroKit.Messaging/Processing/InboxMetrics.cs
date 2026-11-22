@@ -35,12 +35,15 @@ namespace MicroKit.Messaging.Processing;
 /// <see cref="InboxProcessorOptions.MaxPollingInterval"/>) after its back-off ended with no new attempt; it
 /// also drops out when its entry is pruned, a ceiling after its back-off ended, by the next retry batch.
 /// The bound assumes the retry loop makes the next attempt: a transport delivery that leaves its tenant in
-/// back-off with no row — the tenant fails the probe, or its deferred row cannot be written, or the store
-/// is unreachable while writing it — is next attempted by the transport's redelivery, and a provider
-/// pausing longer than the bound reads 0 before it. A store is reported once its state is created, by the
-/// first <see cref="InboxTenantBackoff.For"/> call for it: its retry loop's first cycle, an outage one of
-/// its deliveries meets, or any of its deliveries while some store's inbox has something in back-off — so
-/// it can read 0 with no outage of its own. A store none of these reaches reports nothing (event 1400
+/// back-off with no row — the tenant fails the probe, its deferred row cannot be written, the store is
+/// unreachable while writing it, or the host stops while writing it — is next attempted by the
+/// transport's redelivery, and a provider pausing longer than the bound reads 0 before it. A store is
+/// reported once its state is created, by the first <see cref="InboxTenantBackoff.For"/> call for it,
+/// which a local delivery never makes: its retry loop's first cycle; a dependency outage, or the store
+/// unreachable, met by one of its transport deliveries; or, while
+/// <see cref="InboxTenantBackoff.IsQuiet"/> is false — a tenant in back-off, a probe pending or a
+/// suspicion standing, on any store's inbox — one of its transport deliveries with a tenant that passed
+/// the dedup read, or a transport success. So it can read 0 with no outage of its own. A store none of these reaches reports nothing (event 1400
 /// covers a retry loop whose processor never activates). Each known store reports, zero included, so an
 /// alert resolves.
 /// </para>

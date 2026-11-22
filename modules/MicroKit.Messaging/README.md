@@ -826,18 +826,21 @@ after its back-off ended with no new attempt — for the outbox, `TransportUnava
 half-open, not recovered: the next attempt comes within `MaxPollingInterval` plus a batch's own time, so
 an endpoint or a tenant still failing is blocked again before that bound, and the counter never drops to
 0 during an outage; one with nothing left to send drops out after it. The inbox has one exception: a
-transport delivery that leaves its tenant in back-off with no row — the tenant fails the probe, or its
-deferred row cannot be written, or the store is unreachable while writing it — is next attempted by the
-transport's redelivery, not the retry loop, and a provider pausing longer than the bound reads 0 before
-it. A tenant also drops out when its entry is pruned, a ceiling after its back-off ended, by the next
-batch of its store: with `MaxPollingInterval` above the ceiling, a tenant still failing can read 0 for
-the batch that prunes it and blocks it again. Each process reports its own view, and one that recorded
-the last failure, at the ceiling, and has nothing left to send — another instance drained the rows —
-holds 1 for up to two ceilings plus `MaxPollingInterval` after that failure (11 minutes with the
-defaults). Alert on the raw value held longer than that: `microkit_outbox_endpoints_backoff > 0` for 15
-minutes with the defaults. An outbox store is reported from its first cycle. An inbox store is reported
-once its back-off state is first used: its retry loop's first cycle, an outage one of its deliveries
-meets, or any of its deliveries while some store's inbox has something in back-off — so it can read 0
+transport delivery that leaves its tenant in back-off with no row — the tenant fails the probe, its
+deferred row cannot be written, the store is unreachable while writing it, or the host stops while
+writing it — is next attempted by the transport's redelivery, not the retry loop, and a provider pausing
+longer than the bound reads 0 before it. A tenant also drops out when its entry is pruned, a ceiling
+after its back-off ended, by the next batch of its store: with `MaxPollingInterval` above the ceiling, a
+tenant still failing can read 0 for the batch that prunes it and blocks it again. Each process reports
+its own view, and one that recorded the last failure, at the ceiling, and has nothing left to send —
+another instance drained the rows — holds 1 for up to two ceilings plus `MaxPollingInterval` after that
+failure (11 minutes with the defaults). Alert on the raw value held longer than that:
+`microkit_outbox_endpoints_backoff > 0` for 15 minutes with the defaults. An outbox store is reported
+from its first cycle. An inbox store is reported once its back-off state is created, by the first
+`InboxTenantBackoff.For` call for it, which a local delivery never makes: its retry loop's first cycle;
+a dependency outage, or the store unreachable, met by one of its transport deliveries; or, while some
+store's inbox is not quiet — a tenant in back-off, a probe pending or a suspicion standing — one of its
+transport deliveries with a tenant that passed the dedup read, or a transport success. So it can read 0
 with no outage of its own. Every known store reports, zeros included, so an alert resolves; a store none
 of these reaches reports nothing (event 1400 covers a processor that never activates). A configuration
 fault needs no metric: it is logged at `Critical` on every cycle (1006, 1402).
