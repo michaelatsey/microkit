@@ -345,12 +345,15 @@ internal sealed class OutboxProcessor : IOutboxProcessor
 
         // Settle before anything else can throw: a stranded lease is worse than a late
         // exception, because it blocks its message for the whole LockDuration.
-        var settled = await SettleAsync(claim.Token, outcomes).ConfigureAwait(false);
+        var written = await SettleAsync(claim.Token, outcomes).ConfigureAwait(false);
+        var settled = written >= outcomes.Count;
 
-        // Counted once the settlement wrote every outcome, as 1010. A failed settlement's rows come back and
-        // are counted then, once; a partial one (1007) is not counted at all — the store says how many rows
-        // it wrote, not which. Released rows were never counted.
-        if (settled)
+        // Counted at least once: whenever the settlement wrote rows, the whole batch — a partial
+        // settlement's (1007) written rows never come back, and its lost rows are counted again by whoever
+        // settles them, under a verdict that may differ. Nothing when it wrote nothing, or threw: what was
+        // committed is then unknown — the rows that come back are counted then, a commit that landed without
+        // the store verifying it is not. Released rows are never counted.
+        if (written > 0)
         {
             _metrics?.RecordSettled(_storeTag, in settledTally);
         }
@@ -789,8 +792,8 @@ internal sealed class OutboxProcessor : IOutboxProcessor
     /// message would be dispatched again. A brief flush window on shutdown is strictly
     /// cheaper than that.
     /// </remarks>
-    /// <returns><see langword="true"/> when every outcome was written.</returns>
-    private async ValueTask<bool> SettleAsync(Guid claimToken, List<OutboxOutcome> outcomes)
+    /// <returns>The rows written: the outcomes' count once all of them were, 0 when the write threw.</returns>
+    private async ValueTask<int> SettleAsync(Guid claimToken, List<OutboxOutcome> outcomes)
     {
         using var settleCts = new CancellationTokenSource(_options.OutcomeFlushTimeout);
 
@@ -805,10 +808,9 @@ internal sealed class OutboxProcessor : IOutboxProcessor
                 // Silent success is forbidden: fewer rows than outcomes means leases were
                 // lost mid-batch and another processor now owns those messages.
                 OutboxProcessorLogs.PartialSettlement(_logger, written, outcomes.Count);
-                return false;
             }
 
-            return true;
+            return written;
         }
         catch (Exception ex)
         {
@@ -816,7 +818,7 @@ internal sealed class OutboxProcessor : IOutboxProcessor
             // Letting this escape would take down the hosting BackgroundService over a
             // condition the outbox is designed to survive.
             OutboxProcessorLogs.SettlementFailed(_logger, ex, outcomes.Count);
-            return false;
+            return 0;
         }
     }
 

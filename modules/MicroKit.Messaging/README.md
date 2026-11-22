@@ -793,8 +793,8 @@ builder.Services.AddOpenTelemetry()
         .AddMeter(MessagingDiagnostics.OutboxMeterName));
 ```
 
-An endpoint's or a tenant's outage shows as a value above zero, not as a log level: a down endpoint or
-tenant is held in back-off, and the back-off counters count it while that back-off is in force.
+An endpoint's or a tenant's outage shows as a value above zero for as long as it lasts, not as a log
+level: the back-off counters count each endpoint and tenant that has not recovered (below).
 
 **`MessagingDiagnostics.OutboxMeterName`** (`MicroKit.Messaging.Outbox`). Every instrument is tagged
 `store.key` (the store's `MessageStoreKey`) and `endpoint` (`transport` or `local`), never a tenant: a
@@ -802,10 +802,10 @@ tenant's cardinality is unbounded, and events 1011 and 1009 name it.
 
 | Instrument | Kind, unit | What it is | Alert |
 |---|---|---|---|
-| `microkit.outbox.messages.settled` | counter, `{message}`, tag `outcome` | The rows a batch settled: `published`, `retry`, `dead_letter`, `deferred`. Counted once the settlement wrote the whole batch: a batch whose settlement fails is counted when its rows come back; a partial settlement (1007) is not counted — the store says how many rows it wrote, not which; a released row (host stop, configuration fault) is not counted | a `dead_letter` rate above 0 |
+| `microkit.outbox.messages.settled` | counter, `{message}`, tag `outcome` | The rows a batch settled: `published`, `retry`, `dead_letter`, `deferred`. Counted at least once: a partial settlement (1007) counts its whole batch, whose written rows never come back; a row whose lease was lost is counted under this processor's verdict and again under the verdict of whoever settles it, which may differ — `dead_letter` included. A settlement that wrote nothing, or threw, counts nothing: what it committed is unknown, its rows that come back are counted then, and a commit that landed without the store being able to verify it is not counted. A released row (host stop, configuration fault) is never counted | a `dead_letter` rate above 0 |
 | `microkit.outbox.dispatch.delay` | histogram, `s` | From the row's staging (`CreatedAtUtc`) to its endpoint taking it, on the dispatching instance's clock, at 0 when that clock is behind. A batch whose settlement fails is re-sent and sampled again. Bucket boundaries from 0.01 s to 3600 s are advised | a high percentile above what your consumers tolerate |
-| `microkit.outbox.endpoints.backoff` | up-down counter, `{endpoint}` | 1 while the endpoint is in back-off, else 0 | its maximum over a window above 0, sustained (below) |
-| `microkit.outbox.tenants.backoff` | up-down counter, `{tenant}` | The tenants in back-off on the endpoint | its maximum over a window above 0, sustained (below) |
+| `microkit.outbox.endpoints.backoff` | up-down counter, `{endpoint}` | 1 while the endpoint has not recovered, else 0 | `microkit_outbox_endpoints_backoff > 0` for 15 min (below) |
+| `microkit.outbox.tenants.backoff` | up-down counter, `{tenant}` | The tenants on the endpoint that have not recovered | `> 0` for 15 min (below) |
 
 **`MessagingDiagnostics.InboxMeterName`** (`MicroKit.Messaging.Inbox`). No tenant tag either: event 2013
 names the tenant.
@@ -815,18 +815,24 @@ names the tenant.
 | `microkit.inbox.messages.added` | counter, `{message}`, tag `consumer.type` | A new delivery whose handler wrote its inbox row, `Processed` or `Failed` | — |
 | `microkit.inbox.messages.deduplicated` | counter, `{message}`, tag `consumer.type` | A redelivery the inbox absorbed. Normal: watch the rate, not the value | a sustained climb in the rate |
 | `microkit.inbox.envelopes.unconsumed` | counter, `{message}`, tag `contract.name` | An envelope no handler consumes (above) | a sustained non-zero value |
-| `microkit.inbox.tenants.backoff` | up-down counter, `{tenant}`, tag `store.key` | The tenants in back-off on the store's inbox | its maximum over a window above 0, sustained (below) |
+| `microkit.inbox.tenants.backoff` | up-down counter, `{tenant}`, tag `store.key` | The tenants on the store's inbox that have not recovered | `> 0` for 15 min (below) |
 
 The back-off counters are observable up-down counters: their values add up across stores and endpoints,
-and Prometheus shows them as gauges. They read the engine's memory, never the database. A back-off
-counts while it is in force: during a long outage a counter reads 0 between the end of one back-off and
-the next failed attempt. Once only the blocked endpoint's or tenant's rows are left, the claim comes back
-empty while it is excluded, so the loop idles up to its `MaxPollingInterval` before that attempt. Alert on
-the maximum over a window of at least the back-off ceiling plus `MaxPollingInterval` — for the outbox,
-`TransportUnavailableBackoff` + `OutboxProcessorOptions.MaxPollingInterval`; for the inbox,
-`DependencyUnavailableBackoff` + `InboxProcessorOptions.MaxPollingInterval`. That is 6 minutes with the
-defaults, so `max_over_time(microkit_outbox_endpoints_backoff[10m]) > 0` works for them; never alert on the
-raw value. A store is reported from its first cycle (an inbox also
+and Prometheus shows them as gauges. They read the engine's memory, never the database. Each counts an
+endpoint or a tenant 1 from a down verdict until a success, or until a ceiling plus `MaxPollingInterval`
+after its back-off ended with no new attempt — for the outbox, `TransportUnavailableBackoff` +
+`OutboxProcessorOptions.MaxPollingInterval`; for the inbox, `DependencyUnavailableBackoff` +
+`InboxProcessorOptions.MaxPollingInterval` (6 minutes with the defaults). A back-off that has ended is
+half-open, not recovered: the next attempt comes within `MaxPollingInterval` plus a batch's own time, so
+an endpoint or a tenant still failing is blocked again before that bound, and the counter never drops to
+0 during an outage; one with nothing left to send drops out after it. A tenant also drops out when its
+entry is pruned, a ceiling after its back-off ended, by the next batch of its store: with
+`MaxPollingInterval` above the ceiling, a tenant still failing can read 0 for the batch that prunes it and
+blocks it again. Each process reports its own view, and one that recorded the last failure, at the
+ceiling, and has nothing left to send — another instance drained the rows — holds 1 for up to two
+ceilings plus `MaxPollingInterval` after that failure (11 minutes with the defaults). Alert on the raw
+value held longer than that: `microkit_outbox_endpoints_backoff > 0` for 15 minutes with the defaults.
+A store is reported from its first cycle (an inbox also
 from the first delivery its guard handles), zeros included so an alert resolves; a store whose processor
 never activates reports nothing (event 1400 covers it). A configuration fault needs no metric: it is
 logged at `Critical` on every cycle (1006, 1402).

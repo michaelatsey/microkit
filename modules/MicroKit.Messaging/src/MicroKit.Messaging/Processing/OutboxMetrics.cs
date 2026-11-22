@@ -7,23 +7,31 @@ namespace MicroKit.Messaging.Processing;
 
 /// <summary>
 /// The outbox's instruments (#126), on the meter named by <see cref="MessagingDiagnostics.OutboxMeterName"/>:
-/// what each batch settled, how long a row waited before its endpoint took it, and what is held in
-/// back-off right now — so an outage is observed as a value that stays above zero, not as a log level.
+/// what each batch settled, how long a row waited before its endpoint took it, and which endpoints and
+/// tenants have not recovered — so an outage is observed as a value that stays above zero, not as a log
+/// level.
 /// </summary>
 /// <remarks>
 /// <para>
 /// <b>Instruments.</b> <c>microkit.outbox.messages.settled</c> counts the dispositions a batch wrote,
-/// tagged <c>outcome</c> (<c>published</c>, <c>retry</c>, <c>dead_letter</c>, <c>deferred</c>): it is
-/// recorded once the settlement wrote every outcome, the condition of event 1010. A settlement that
-/// fails counts nothing, and its rows are counted when they come back. A partial one (event 1007) counts
-/// nothing either: the store returns how many rows it wrote, not which, so any count would be wrong by the
-/// rows written or by the rows lost. A released row is never counted. <c>microkit.outbox.dispatch.delay</c> is the processor's clock once the dispatch returned,
+/// tagged <c>outcome</c> (<c>published</c>, <c>retry</c>, <c>dead_letter</c>, <c>deferred</c>), at least
+/// once: a partial settlement (event 1007) counts its whole batch, since its written rows never come back;
+/// a row whose lease was lost is counted under this processor's verdict and again under the verdict of
+/// whoever settles it, which may differ — <c>dead_letter</c> included. A settlement that wrote nothing, or
+/// threw, counts nothing: what it committed is unknown, its rows that come back are counted then, and a
+/// commit that landed without the store being able to verify it is not counted. A released row is never
+/// counted.
+/// <c>microkit.outbox.dispatch.delay</c> is the processor's clock once the dispatch returned,
 /// minus the row's <see cref="OutboxMessage.CreatedAtUtc"/>, clamped at zero since another instance's
 /// clock stamped the row; it samples hand-offs to the endpoint, so a batch whose settlement fails is
 /// re-sent and sampled again — at least once, like the delivery. <c>microkit.outbox.endpoints.backoff</c>
-/// (1 while the endpoint is in back-off) and <c>microkit.outbox.tenants.backoff</c> (the tenants whose
-/// back-off is in force on it) are observable up-down counters: the values add up across stores and
-/// endpoints.
+/// and <c>microkit.outbox.tenants.backoff</c> are observable up-down counters — the values add up across
+/// stores and endpoints — of the endpoint, and of the tenants on it, that have not recovered: 1 from a down
+/// verdict until a success, or until a ceiling plus <c>MaxPollingInterval</c> after its back-off ended with
+/// no new attempt. Once a back-off ends the endpoint or tenant is half-open, not recovered, and the next
+/// attempt comes within <see cref="OutboxProcessorOptions.MaxPollingInterval"/> plus a batch's own time,
+/// so one still failing is blocked again before that bound; one with nothing left to send drops out after it.
+/// A tenant also drops out when its entry is pruned, a ceiling after its back-off ended, by the next batch.
 /// </para>
 /// <para>
 /// <b>Tags.</b> <c>store.key</c> (<see cref="MessageStoreKey.Value"/>, absent for a processor built with
@@ -37,11 +45,7 @@ namespace MicroKit.Messaging.Processing;
 /// collector's thread, in sequence with every other, so a slow one delays every metric. A store is
 /// reported from its first cycle, when its back-off state is created and handed here
 /// (<see cref="Track"/>); a store whose processor never activates reports nothing — event 1400 covers it.
-/// Each known store reports every endpoint, zeros included, so an alert resolves. A back-off counts
-/// while it is in force: between its end and the next attempt — up to the loop's
-/// <see cref="OutboxProcessorOptions.MaxPollingInterval"/> when nothing else is claimable — a down
-/// endpoint reads 0 until that attempt fails again, so an alert takes the maximum over a window longer
-/// than that interval.
+/// Each known store reports every endpoint, zeros included, so an alert resolves.
 /// </para>
 /// <para>
 /// The meter is constructed directly rather than obtained from an <c>IMeterFactory</c>, for the reasons
@@ -60,12 +64,18 @@ internal sealed class OutboxMetrics : IDisposable
     private readonly Counter<long> _settled;
     private readonly Histogram<double> _dispatchDelay;
     private readonly ConcurrentDictionary<MessageStoreKey, OutboxEndpointBackoff> _stores = new();
+    private readonly TimeSpan _halfOpen;
 
     /// <summary>Initializes a new <see cref="OutboxMetrics"/>.</summary>
     /// <param name="timeProvider">The clock the back-off counters compare each back-off's end with.</param>
-    public OutboxMetrics(TimeProvider timeProvider)
+    /// <param name="options">
+    /// The outbox options: a back-off counts until <see cref="OutboxProcessorOptions.TransportUnavailableBackoff"/>
+    /// plus <see cref="OutboxProcessorOptions.MaxPollingInterval"/> past its end, with no new attempt.
+    /// </param>
+    public OutboxMetrics(TimeProvider timeProvider, OutboxProcessorOptions options)
     {
         _timeProvider = timeProvider;
+        _halfOpen = options.TransportUnavailableBackoff + options.MaxPollingInterval;
         Meter = new Meter(MessagingDiagnostics.OutboxMeterName);
 
         _settled = Meter.CreateCounter<long>(
@@ -86,13 +96,13 @@ internal sealed class OutboxMetrics : IDisposable
             "microkit.outbox.endpoints.backoff",
             ObserveEndpoints,
             unit: "{endpoint}",
-            description: "1 while the endpoint is in back-off. Alert when above zero for a sustained period.");
+            description: "1 from the endpoint's down verdict until it recovers. Alert when above zero for a sustained period.");
 
         Meter.CreateObservableUpDownCounter<int>(
             "microkit.outbox.tenants.backoff",
             ObserveTenants,
             unit: "{tenant}",
-            description: "Tenants in back-off on the endpoint. Alert when above zero for a sustained period.");
+            description: "Tenants not recovered on the endpoint. Alert when above zero for a sustained period.");
     }
 
     /// <summary>Gets the meter, for a test to listen to its own instance.</summary>
@@ -195,8 +205,8 @@ internal sealed class OutboxMetrics : IDisposable
         var measurements = new List<Measurement<int>>();
         foreach (var (store, backoff) in _stores)
         {
-            measurements.Add(Measure(backoff.IsBlocked(OutboxDispatchers.Transport, now, out _) ? 1 : 0, store, TransportTag));
-            measurements.Add(Measure(backoff.IsBlocked(OutboxDispatchers.Local, now, out _) ? 1 : 0, store, LocalTag));
+            measurements.Add(Measure(backoff.IsUnrecoveredAt(OutboxDispatchers.Transport, now, _halfOpen) ? 1 : 0, store, TransportTag));
+            measurements.Add(Measure(backoff.IsUnrecoveredAt(OutboxDispatchers.Local, now, _halfOpen) ? 1 : 0, store, LocalTag));
         }
 
         return measurements;
@@ -208,8 +218,8 @@ internal sealed class OutboxMetrics : IDisposable
         var measurements = new List<Measurement<int>>();
         foreach (var (store, backoff) in _stores)
         {
-            measurements.Add(Measure(backoff.TenantsOf(OutboxDispatchers.Transport).CountBlockedAt(now), store, TransportTag));
-            measurements.Add(Measure(backoff.TenantsOf(OutboxDispatchers.Local).CountBlockedAt(now), store, LocalTag));
+            measurements.Add(Measure(backoff.TenantsOf(OutboxDispatchers.Transport).CountUnrecoveredAt(now, _halfOpen), store, TransportTag));
+            measurements.Add(Measure(backoff.TenantsOf(OutboxDispatchers.Local).CountUnrecoveredAt(now, _halfOpen), store, LocalTag));
         }
 
         return measurements;

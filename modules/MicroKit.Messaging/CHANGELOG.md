@@ -7,16 +7,17 @@
 - **The outbox's meter, `MessagingDiagnostics.OutboxMeterName`** (`MicroKit.Messaging.Outbox`), every
   instrument tagged `store.key` and `endpoint` (`transport` or `local`):
   `microkit.outbox.messages.settled` (counter, tag `outcome`: `published`, `retry`, `dead_letter`,
-  `deferred`; counted once a batch's settlement wrote it all, so a partial settlement is not counted), `microkit.outbox.dispatch.delay`
-  (histogram in seconds, from the row's staging to its endpoint taking it), and the observable up-down
-  counters `microkit.outbox.endpoints.backoff` (1 while an endpoint is in back-off) and
-  `microkit.outbox.tenants.backoff` (the tenants in back-off on it).
+  `deferred`; at least once: a partial settlement (1007) counts its whole batch),
+  `microkit.outbox.dispatch.delay` (histogram in seconds, from the row's staging to its endpoint taking
+  it), and the observable up-down counters `microkit.outbox.endpoints.backoff` (1 while an endpoint has
+  not recovered) and `microkit.outbox.tenants.backoff` (the tenants on it that have not).
 - **`microkit.inbox.tenants.backoff`** on the inbox meter: an observable up-down counter, tag
-  `store.key`, of the tenants in back-off on each store's inbox.
-- An endpoint's or a tenant's outage is observed as a back-off counter above zero, not through a log
-  level; alert on its maximum over a window of at least the back-off ceiling plus the loop's
-  `MaxPollingInterval` (README, *Metrics*). A host subscribes with `AddMeter(MessagingDiagnostics.OutboxMeterName)`; the README lists each
-  instrument and the alert it serves.
+  `store.key`, of the tenants that have not recovered on each store's inbox.
+- An endpoint's or a tenant's outage is observed as a back-off counter above zero for as long as it lasts,
+  not through a log level: each counts 1 from a down verdict until a success, or until a ceiling plus
+  `MaxPollingInterval` after its back-off ended with no new attempt. A host subscribes with
+  `AddMeter(MessagingDiagnostics.OutboxMeterName)`; the README lists each instrument and the alert it
+  serves.
 
 ## [Unreleased] — one tenant's failures no longer stall a store (#124)
 

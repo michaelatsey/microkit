@@ -4,7 +4,7 @@ namespace MicroKit.Messaging.Processing;
 
 /// <summary>
 /// Ingestion counters, so a deduplicated write is observable as a rate rather than only as a
-/// log line, and the tenants in back-off on each store's inbox (#126).
+/// log line, and the tenants not recovered on each store's inbox (#126).
 /// </summary>
 /// <remarks>
 /// <para>
@@ -28,9 +28,12 @@ namespace MicroKit.Messaging.Processing;
 /// change here plus <c>services.AddMetrics()</c> in the consumer's composition root.
 /// </para>
 /// <para>
-/// <b>The tenants in back-off</b> — <c>microkit.inbox.tenants.backoff</c>, tag <c>store.key</c> — are an
+/// <b>The tenants not recovered</b> — <c>microkit.inbox.tenants.backoff</c>, tag <c>store.key</c> — are an
 /// observable up-down counter read from <see cref="InboxTenantBackoff"/>'s memory, never the database: a
-/// tenant counts while its back-off is in force, not while its entry waits to be pruned. A store is
+/// tenant counts 1 from a down verdict until a success, or until a ceiling plus <c>MaxPollingInterval</c>
+/// (<see cref="InboxProcessorOptions.DependencyUnavailableBackoff"/> plus
+/// <see cref="InboxProcessorOptions.MaxPollingInterval"/>) after its back-off ended with no new attempt; it
+/// also drops out when its entry is pruned, a ceiling after its back-off ended, by the next retry batch. A store is
 /// reported from its first use — its retry loop's first cycle, or the first delivery its guard handles —
 /// when its state is created; a store used by neither reports nothing (event 1400 covers a retry loop
 /// whose processor never activates). Each known store reports, zero included, so an alert resolves.
@@ -47,6 +50,7 @@ internal sealed class InboxMetrics : IDisposable
     private readonly Counter<long> _unconsumed;
     private readonly InboxTenantBackoff? _tenantBackoff;
     private readonly TimeProvider _timeProvider;
+    private readonly TimeSpan _halfOpen;
 
     /// <summary>Initializes a new <see cref="InboxMetrics"/>.</summary>
     /// <param name="tenantBackoff">
@@ -54,10 +58,18 @@ internal sealed class InboxMetrics : IDisposable
     /// which then reports no store.
     /// </param>
     /// <param name="timeProvider">The clock each back-off's end is compared with; the system clock when null.</param>
-    public InboxMetrics(InboxTenantBackoff? tenantBackoff = null, TimeProvider? timeProvider = null)
+    /// <param name="options">
+    /// The inbox options, for how long past its end a back-off still counts; the defaults when null.
+    /// </param>
+    public InboxMetrics(
+        InboxTenantBackoff? tenantBackoff = null,
+        TimeProvider? timeProvider = null,
+        InboxProcessorOptions? options = null)
     {
         _tenantBackoff = tenantBackoff;
         _timeProvider = timeProvider ?? TimeProvider.System;
+        options ??= new InboxProcessorOptions();
+        _halfOpen = options.DependencyUnavailableBackoff + options.MaxPollingInterval;
         _meter = new Meter(MessagingDiagnostics.InboxMeterName);
 
         _added = _meter.CreateCounter<long>(
@@ -81,7 +93,7 @@ internal sealed class InboxMetrics : IDisposable
             "microkit.inbox.tenants.backoff",
             ObserveTenants,
             unit: "{tenant}",
-            description: "Tenants in back-off on the store's inbox. Alert when above zero for a sustained period.");
+            description: "Tenants not recovered on the store's inbox. Alert when above zero for a sustained period.");
     }
 
     /// <summary>Gets the meter, for a test to listen to its own instance.</summary>
@@ -134,7 +146,7 @@ internal sealed class InboxMetrics : IDisposable
         foreach (var (store, backoff) in _tenantBackoff.Stores)
         {
             measurements.Add(new Measurement<int>(
-                backoff.CountBlockedAt(now),
+                backoff.CountUnrecoveredAt(now, _halfOpen),
                 new KeyValuePair<string, object?>("store.key", store.Value)));
         }
 

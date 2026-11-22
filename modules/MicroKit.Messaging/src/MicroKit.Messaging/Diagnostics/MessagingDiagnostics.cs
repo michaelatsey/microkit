@@ -21,10 +21,9 @@ namespace MicroKit.Messaging;
 /// <para>
 /// The instruments do not follow the OpenTelemetry messaging semantic conventions, which have
 /// Development status. The back-off instruments are up-down counters — their values add up across stores
-/// and endpoints — which Prometheus shows as gauges. A back-off counts while it is in force, so a long
-/// outage reads 0 between the end of one back-off and the next failed attempt, which waits for the loop's
-/// own delay — up to <c>MaxPollingInterval</c>, <c>TransportUnavailableBackoff</c> or
-/// <c>DependencyUnavailableBackoff</c>: alert on the maximum over a window longer than the largest.
+/// and endpoints — which Prometheus shows as gauges. Each counts an endpoint or a tenant 1 from a down
+/// verdict until a success, or until a ceiling plus <c>MaxPollingInterval</c> after its back-off ended with
+/// no new attempt: an outage reads above zero for as long as it lasts.
 /// </para>
 /// </remarks>
 /// <example>
@@ -47,9 +46,8 @@ public static class MessagingDiagnostics
     /// The deduplication counter's <b>rate</b> is the signal, not its value: a steady low level is
     /// healthy, a sustained climb means a lease set too short, a stalling consumer, or a broker
     /// replaying. The unconsumed counter separates a correct zero-row delivery from a silent one.
-    /// <c>microkit.inbox.tenants.backoff</c> (tag <c>store.key</c>) is the number of tenants whose
-    /// back-off is in force on a store's inbox: above zero for a sustained period, a tenant's dependency
-    /// is down.
+    /// <c>microkit.inbox.tenants.backoff</c> (tag <c>store.key</c>) is the number of tenants not recovered
+    /// on a store's inbox: above zero for a sustained period, a tenant's dependency is down.
     /// </remarks>
     public const string InboxMeterName = "MicroKit.Messaging.Inbox";
 
@@ -62,10 +60,11 @@ public static class MessagingDiagnostics
     /// Every instrument is tagged <c>store.key</c> and <c>endpoint</c> (<c>transport</c> or
     /// <c>local</c>); never a tenant. <c>messages.settled</c> counts what a batch wrote, tagged
     /// <c>outcome</c> (<c>published</c>, <c>retry</c>, <c>dead_letter</c>, <c>deferred</c>): a
-    /// <c>dead_letter</c> rate above zero is lost work for an operator. <c>dispatch.delay</c>, in seconds,
-    /// runs from the row's staging to its endpoint taking it: alert on a percentile. The two back-off
-    /// counters — 1 while an endpoint is in back-off, and the tenants in back-off on it — observe an outage
-    /// as a value: above zero for a sustained period, an endpoint or a tenant is down.
+    /// <c>dead_letter</c> rate above zero is lost work for an operator; it counts at least once, a partial
+    /// settlement its whole batch. <c>dispatch.delay</c>, in seconds, runs from the row's staging to its
+    /// endpoint taking it: alert on a percentile. The two back-off counters — 1 while an endpoint has not
+    /// recovered, and the tenants on it that have not — observe an outage as a value: above zero for a
+    /// sustained period, an endpoint or a tenant is down.
     /// </remarks>
     public const string OutboxMeterName = "MicroKit.Messaging.Outbox";
 }

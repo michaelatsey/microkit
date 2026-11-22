@@ -6,9 +6,10 @@ using MicroKit.Messaging.Stores;
 namespace MicroKit.Messaging.UnitTests.Processing;
 
 /// <summary>
-/// The outbox's instruments (#126): what a batch settled, counted once its settlement wrote it all; the
-/// dispatch delay; and the back-off up-down counters, which count a back-off while it is in force — not
-/// the entries that wait to be pruned. Each test listens to its own <see cref="OutboxMetrics"/>'s meter.
+/// The outbox's instruments (#126): what a batch settled, counted at least once — whenever its settlement
+/// wrote rows; the dispatch delay; and the back-off up-down counters, which count an endpoint or a tenant
+/// from its down verdict until a success, or until a ceiling plus MaxPollingInterval after its back-off
+/// ended with no new attempt. Each test listens to its own <see cref="OutboxMetrics"/>'s meter.
 /// </summary>
 public sealed class OutboxMetricsTests
 {
@@ -20,6 +21,9 @@ public sealed class OutboxMetricsTests
     private static readonly DateTimeOffset Now = new(2026, 11, 22, 12, 0, 0, TimeSpan.Zero);
     private static readonly MessageStoreKey Store = new("tests:outbox-metrics");
     private static readonly OutboxProcessorOptions Options = new();
+
+    /// <summary>How long past its end a back-off still counts: the ceiling plus the loop's longest idle delay.</summary>
+    private static readonly TimeSpan HalfOpen = Options.TransportUnavailableBackoff + Options.MaxPollingInterval;
 
     private static OutboxMessage Row(string endpoint, string? tenant)
     {
@@ -97,15 +101,30 @@ public sealed class OutboxMetricsTests
     }
 
     [Fact]
-    public async Task APartialSettlement_RecordsNoSettledRow()
+    public async Task ASettlementThatWroteNothing_RecordsNoSettledRow()
     {
-        using var rig = new Rig { Settle = outcomes => outcomes.Count - 1 };
+        using var rig = new Rig { Settle = _ => 0 };
         rig.Claims.Enqueue(OutboxFixtures.Claim(Row("transport", "tenant-a"), Row("local", "tenant-a")));
 
         await rig.Processor.ProcessBatchAsync(Options.BatchSize);
 
         rig.Recorder.Of(Delay).Count.ShouldBe(2, "control: both rows were handed over and sampled");
-        rig.Recorder.Of(Settled).ShouldBeEmpty("a lease lost mid-batch: the rows are now another processor's to count");
+        rig.Recorder.Of(Settled).ShouldBeEmpty("every lease was lost: the rows are another processor's to count");
+    }
+
+    [Fact]
+    public async Task APartialSettlement_CountsItsWholeBatch_AtLeastOnce()
+    {
+        // The rows it wrote never come back; the row whose lease was lost is counted again by whoever
+        // settles it — at least once, as the dispatch delay is.
+        using var rig = new Rig { Settle = outcomes => outcomes.Count - 1 };
+        var poison = Row("local", "tenant-a");
+        rig.Script = m => m.Id == poison.Id ? new OutboxPayloadException("unreadable") : null;
+        rig.Claims.Enqueue(OutboxFixtures.Claim(Row("transport", "tenant-a"), Row("transport", "tenant-a"), poison));
+
+        await rig.Processor.ProcessBatchAsync(Options.BatchSize);
+
+        Cells(rig.Recorder.Of(Settled)).ShouldBe(["local/dead_letter=1", "transport/published=2"]);
     }
 
     [Fact]
@@ -190,7 +209,7 @@ public sealed class OutboxMetricsTests
     // ---------------------------------------------------------------------------
 
     [Fact]
-    public async Task ARowWithNoTenantDown_CountsItsEndpointInBackOff_UntilASuccess()
+    public async Task ARowWithNoTenantDown_CountsItsEndpointThroughItsHalfOpenState_UntilASuccess()
     {
         using var rig = new Rig();
         var down = true;
@@ -202,20 +221,42 @@ public sealed class OutboxMetricsTests
         rig.Observe(Endpoints).ShouldBe(["local=0", "transport=1"]);
         rig.Observe(Tenants).ShouldBe(["local=0", "transport=0"]);
 
-        down = false;
+        // The back-off is over: half-open, not recovered.
         rig.Clock.Advance(Options.PollingInterval);
+        rig.Backoff.IsBlocked(OutboxDispatchers.Transport, rig.Clock.GetUtcNow(), out _)
+            .ShouldBeFalse("control: the back-off has ended");
+        rig.Observe(Endpoints).ShouldBe(["local=0", "transport=1"]);
+
+        down = false;
         rig.Claims.Enqueue(OutboxFixtures.Claim(Row("transport", tenant: null)));
         await rig.Processor.ProcessBatchAsync(Options.BatchSize);
 
         rig.Settled[^1].Kind.ShouldBe(OutboxOutcomeKind.Published, "control: the endpoint dispatched a row");
-        rig.Observe(Endpoints).ShouldBe(["local=0", "transport=0"]);
+        rig.Observe(Endpoints).ShouldBe(["local=0", "transport=0"], "a success clears it at once");
     }
 
     [Fact]
-    public async Task OneTenantDown_CountsTheTenant_AndTheProbeFailing_CountsTheEndpoint_UntilEveryBackOffEnds()
+    public async Task ADownEndpointWithNoNewAttempt_DropsOut_ACeilingPlusMaxPollingIntervalAfterItsBackOffEnded()
     {
         using var rig = new Rig();
-        rig.Script = _ => new OutboxTransportUnavailableException("refused");
+        rig.Script = _ => new OutboxTransportUnavailableException("broker unreachable");
+        rig.Claims.Enqueue(OutboxFixtures.Claim(Row("transport", tenant: null)));
+        await rig.Processor.ProcessBatchAsync(Options.BatchSize);
+        rig.Backoff.IsBlocked(OutboxDispatchers.Transport, rig.Clock.GetUtcNow(), out var until).ShouldBeTrue();
+
+        rig.Clock.SetUtcNow(until + HalfOpen - TimeSpan.FromTicks(1));
+        rig.Observe(Endpoints).ShouldBe(["local=0", "transport=1"], "still within the bound");
+
+        rig.Clock.SetUtcNow(until + HalfOpen);
+        rig.Observe(Endpoints).ShouldBe(["local=0", "transport=0"], "nothing left to send: it drops out");
+    }
+
+    [Fact]
+    public async Task OneTenantDown_CountsTheTenant_TheProbeFailing_CountsTheEndpoint_AndEachClearsOnItsOwnSuccessOrBound()
+    {
+        using var rig = new Rig();
+        var down = true;
+        rig.Script = _ => down ? new OutboxTransportUnavailableException("refused") : null;
         rig.Claims.Enqueue(OutboxFixtures.Claim(Row("transport", "tenant-a")));
 
         await rig.Processor.ProcessBatchAsync(Options.BatchSize);
@@ -230,12 +271,49 @@ public sealed class OutboxMetricsTests
         rig.Observe(Tenants).ShouldBe(["local=0", "transport=2"]);
         rig.Observe(Endpoints).ShouldBe(["local=0", "transport=1"]);
 
-        // Every back-off over, none pruned yet: an entry waits a whole ceiling past its end.
+        // Every back-off over, no attempt since: half-open, still counted.
         rig.Clock.Advance(TimeSpan.FromMinutes(1));
-        rig.Backoff.TenantsOf(OutboxDispatchers.Transport).IsEmpty
-            .ShouldBeFalse("control: both entries are still there");
-        rig.Observe(Tenants).ShouldBe(["local=0", "transport=0"], "a tenant counts while its back-off is in force");
+        rig.Backoff.TenantsOf(OutboxDispatchers.Transport).BlockedAt(rig.Clock.GetUtcNow())
+            .ShouldBeEmpty("control: no back-off is in force any more");
+        rig.Observe(Tenants).ShouldBe(["local=0", "transport=2"]);
+        rig.Observe(Endpoints).ShouldBe(["local=0", "transport=1"]);
+
+        // Tenant A recovers: its entry and the endpoint clear at once; tenant B's stays.
+        down = false;
+        rig.Claims.Enqueue(OutboxFixtures.Claim(Row("transport", "tenant-a")));
+        await rig.Processor.ProcessBatchAsync(Options.BatchSize);
+
+        rig.Observe(Tenants).ShouldBe(["local=0", "transport=1"]);
         rig.Observe(Endpoints).ShouldBe(["local=0", "transport=0"]);
+
+        // Tenant B, with nothing left to send, drops out once the bound has passed.
+        rig.Backoff.TenantsOf(OutboxDispatchers.Transport).IsBlocked("tenant-b", rig.Clock.GetUtcNow(), out var untilB);
+        rig.Clock.SetUtcNow(untilB + HalfOpen - TimeSpan.FromTicks(1));
+        rig.Observe(Tenants).ShouldBe(["local=0", "transport=1"], "still within the bound");
+        rig.Clock.SetUtcNow(untilB + HalfOpen);
+        rig.Observe(Tenants).ShouldBe(["local=0", "transport=0"]);
+    }
+
+    [Fact]
+    public async Task ATenantWithNothingLeftToSend_DropsOutWhenABatchPrunesIt_ACeilingAfterItsBackOffEnded()
+    {
+        // The documented earlier exit: another tenant's batch prunes the entry before the counter's bound.
+        using var rig = new Rig();
+        rig.Script = m => m.TenantId == "tenant-a" ? new OutboxTransportUnavailableException("refused") : null;
+        rig.Claims.Enqueue(OutboxFixtures.Claim(Row("transport", "tenant-a")));
+        await rig.Processor.ProcessBatchAsync(Options.BatchSize);
+        rig.Backoff.TenantsOf(OutboxDispatchers.Transport).IsBlocked("tenant-a", rig.Clock.GetUtcNow(), out var until);
+
+        rig.Clock.SetUtcNow(until + Options.TransportUnavailableBackoff - TimeSpan.FromTicks(1));
+        rig.Claims.Enqueue(OutboxFixtures.Claim(Row("transport", "tenant-c")));
+        await rig.Processor.ProcessBatchAsync(Options.BatchSize);
+        rig.Observe(Tenants).ShouldBe(["local=0", "transport=1"], "not pruned yet: another tenant's success leaves it");
+
+        rig.Clock.SetUtcNow(until + Options.TransportUnavailableBackoff);
+        rig.Claims.Enqueue(OutboxFixtures.Claim(Row("transport", "tenant-c")));
+        await rig.Processor.ProcessBatchAsync(Options.BatchSize);
+        rig.Backoff.TenantsOf(OutboxDispatchers.Transport).IsEmpty.ShouldBeTrue("control: the batch pruned the entry");
+        rig.Observe(Tenants).ShouldBe(["local=0", "transport=0"]);
     }
 
     // ---------------------------------------------------------------------------
@@ -245,7 +323,7 @@ public sealed class OutboxMetricsTests
     [Fact]
     public void WithNoListener_TheRecordPathsAllocateNothing()
     {
-        using var metrics = new OutboxMetrics(TimeProvider.System);
+        using var metrics = new OutboxMetrics(TimeProvider.System, Options);
         metrics.DispatchDelayEnabled.ShouldBeFalse("control: nothing listens to this instance");
 
         static void RecordABatch(OutboxMetrics metrics)
@@ -283,7 +361,7 @@ public sealed class OutboxMetricsTests
         {
             var storeKey = withStore ? Store : null;
             Backoff = new OutboxEndpointBackoff(Options.PollingInterval, Options.TransportUnavailableBackoff);
-            Metrics = new OutboxMetrics(Clock);
+            Metrics = new OutboxMetrics(Clock, Options);
             if (storeKey is not null)
             {
                 Metrics.Track(storeKey, Backoff);
