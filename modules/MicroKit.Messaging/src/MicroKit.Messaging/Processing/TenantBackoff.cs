@@ -65,6 +65,13 @@ internal sealed class TenantBackoff
 
         /// <summary>The probe failed: the cause is shared, and the whole resource backs off.</summary>
         Shared,
+
+        /// <summary>
+        /// The tenant was already in back-off: an attempt begun before it was blocked — a delivery in
+        /// flight on another transport thread. Nothing changes: its work waits to the end of the same
+        /// back-off, the curve does not grow, and the probe is not touched.
+        /// </summary>
+        Held,
     }
 
     /// <summary>Gets a value indicating whether no tenant is in back-off.</summary>
@@ -180,13 +187,21 @@ internal sealed class TenantBackoff
     /// <param name="until">When the tenant's back-off ends.</param>
     /// <returns>
     /// <see cref="OutageScope.Shared"/> when this verdict is the probe failing: the caller backs the whole
-    /// resource off. The resource is then suspected until a success.
+    /// resource off. The resource is then suspected until a success. <see cref="OutageScope.Held"/> when
+    /// the tenant's back-off is still in force: the verdict carries no news, so the curve does not grow
+    /// once per attempt that was in flight, and a tenant cannot trip a probe it set itself.
     /// </returns>
     public OutageScope OnDown(string tenant, DateTimeOffset now, out DateTimeOffset until)
     {
         lock (_lock)
         {
             var known = _slots.TryGetValue(tenant, out var previous);
+            if (known && now < previous.Until)
+            {
+                until = previous.Until;
+                return OutageScope.Held;
+            }
+
             var delay = BackoffCurve.Next(known ? previous.Until : null, previous.Delay, now, _initial, _ceiling);
             var slot = new Slot(now + delay, delay);
             _slots[tenant] = slot;

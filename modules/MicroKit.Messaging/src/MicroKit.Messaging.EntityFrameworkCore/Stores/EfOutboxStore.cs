@@ -406,7 +406,7 @@ internal sealed class EfOutboxStore<TContext>(
         var now = timeProvider.GetUtcNow();
         var error = reason.Length <= OutboxMessageConfiguration.ErrorMessageMaxLength
             ? reason
-            : reason[..OutboxMessageConfiguration.ErrorMessageMaxLength];
+            : reason[..CutBefore(reason, OutboxMessageConfiguration.ErrorMessageMaxLength)];
 
         // One statement. ClaimToken null: a row a processor holds is left to its batch.
         return await context.Set<OutboxMessage>()
@@ -502,6 +502,12 @@ internal sealed class EfOutboxStore<TContext>(
     }
 
     private static string[] AsArray(IReadOnlyList<string> tenants) => tenants as string[] ?? [.. tenants];
+
+    /// <summary>
+    /// The length to cut <paramref name="text"/> to, at most <paramref name="max"/>, without splitting a
+    /// surrogate pair: half of one is not valid text, and a strict encoder (Npgsql's) rejects the write.
+    /// </summary>
+    private static int CutBefore(string text, int max) => char.IsHighSurrogate(text[max - 1]) ? max - 1 : max;
 
     /// <summary>Leaves out the rows of the endpoints in back-off (#188).</summary>
     private static IQueryable<OutboxMessage> Excluding(IQueryable<OutboxMessage> rows, OutboxEndpoints excluded)

@@ -163,6 +163,56 @@ public sealed class TenantBackoffInboxTests(PostgreSqlFixture fixture)
         (await rig.Host.InboxAsync()).ShouldAllBe(r => r.Status == InboxMessageStatus.Processed);
     }
 
+    /// <summary>
+    /// Deliveries of one tenant in flight together when its dependency goes down (prefetch, several
+    /// transport threads): the first puts the tenant in back-off, the others fail inside it and are
+    /// written to wait for that same back-off — one failure of the curve, one 2013 (PR #209 review).
+    /// </summary>
+    [DockerRequiredFact]
+    public async Task V6_DeliveriesOfATenantInFlightWhenItGoesDown_WaitForOneBackOff_WhichTheyDoNotGrow()
+    {
+        const int InFlight = 4;
+        await using var rig = await Rig.CreateAsync(fixture);
+        rig.Down.Add("A");
+        rig.InFlight = new Rendezvous(InFlight);
+
+        var deliveries = await Task.WhenAll(Enumerable.Range(0, InFlight).Select(_ => Task.Run(() => rig.ReceiveAsync("A"))));
+
+        deliveries.ShouldAllBe(d => d.Result.Disposition == ReceiveDisposition.Acknowledge);
+        rig.TakeCalls().Count.ShouldBe(InFlight, "control: every delivery was in its handler when A went down");
+        var rows = await rig.Host.InboxAsync();
+        rows.Count.ShouldBe(InFlight);
+        rows.ShouldAllBe(r => r.Status == InboxMessageStatus.Failed && r.RetryCount == 0 && r.NextRetryAtUtc == Now + Polling,
+            "one back-off, at the base delay, for every delivery in flight");
+        rig.Tenants.TryGetDelay("A", out var delay).ShouldBeTrue();
+        delay.ShouldBe(Polling, "one failure of the curve, not one per delivery");
+        rig.Host.Logs.Entries.Count(e => e.EventId == 2013).ShouldBe(1, "A entered back-off once");
+    }
+
+    /// <summary>
+    /// The same, while the store is suspected: the first failure is the probe's, and the tenant's own
+    /// deliveries in flight do not fail it — the transport is not paused for every tenant.
+    /// </summary>
+    [DockerRequiredFact]
+    public async Task V6_WhileTheStoreIsSuspected_ATenantsDeliveriesInFlight_DoNotFailTheProbeItSet()
+    {
+        const int InFlight = 2;
+        await using var rig = await Rig.CreateAsync(fixture);
+        rig.Tenants.MarkSuspected();
+        rig.Down.Add("A");
+        rig.InFlight = new Rendezvous(InFlight);
+
+        var deliveries = await Task.WhenAll(Enumerable.Range(0, InFlight).Select(_ => Task.Run(() => rig.ReceiveAsync("A"))));
+
+        deliveries.ShouldAllBe(d => d.Result.Disposition == ReceiveDisposition.Acknowledge, "A's cause is A's own");
+        (await rig.Host.InboxAsync()).Count.ShouldBe(InFlight);
+
+        // Control: the probe is still pending, so another tenant down now is the shared outage it was.
+        rig.InFlight = null;
+        rig.Down.Add("B");
+        (await rig.ReceiveAsync("B")).Result.Disposition.ShouldBe(ReceiveDisposition.PauseAndRedeliver);
+    }
+
     [DockerRequiredFact]
     public async Task V6_ADeferredRowThatCannotBeWritten_LeavesTheDeliveryPaused()
     {
@@ -308,11 +358,18 @@ public sealed class TenantBackoffInboxTests(PostgreSqlFixture fixture)
             {
                 var tenant = _tenantOf[call.Message.Id];
                 _calls.Enqueue(tenant);
-                return EveryTenantDown || Down.Contains(tenant)
-                    ? throw new InboxDependencyUnavailableException($"Tenant '{tenant}''s partner API is down.")
-                    : Task.CompletedTask;
+                var down = EveryTenantDown || Down.Contains(tenant);
+                if (InFlight is { } inFlight)
+                {
+                    return inFlight.ArriveAsync(down, tenant);
+                }
+
+                return down ? throw DownFor(tenant) : Task.CompletedTask;
             };
         }
+
+        /// <summary>When set, every handler call waits for the others before it answers: deliveries in flight together.</summary>
+        public Rendezvous? InFlight { get; set; }
 
         public GuardHost Host { get; }
 
@@ -402,6 +459,29 @@ public sealed class TenantBackoffInboxTests(PostgreSqlFixture fixture)
         {
             await Host.DisposeAsync();
             await Host.Database.DisposeAsync();
+        }
+    }
+
+    private static InboxDependencyUnavailableException DownFor(string tenant) => new($"Tenant '{tenant}''s partner API is down.");
+
+    /// <summary>Holds each handler call until <c>expected</c> calls are in flight, then lets them all answer.</summary>
+    private sealed class Rendezvous(int expected)
+    {
+        private readonly TaskCompletionSource _all = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private int _arrived;
+
+        public async Task ArriveAsync(bool down, string tenant)
+        {
+            if (Interlocked.Increment(ref _arrived) == expected)
+            {
+                _all.TrySetResult();
+            }
+
+            await _all.Task.WaitAsync(TimeSpan.FromSeconds(30));
+            if (down)
+            {
+                throw DownFor(tenant);
+            }
         }
     }
 

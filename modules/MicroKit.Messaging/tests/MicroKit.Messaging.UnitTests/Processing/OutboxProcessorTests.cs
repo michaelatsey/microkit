@@ -452,9 +452,9 @@ public sealed class OutboxProcessorTests
     /// <para>
     /// A tenant lookup failing with its own type — <see cref="KeyNotFoundException"/> here — is the
     /// case a catch wider than <see cref="InvalidOperationException"/> moves from a per-message retry,
-    /// which dead-letters while every other tenant keeps publishing, into the batch-wide verdict, which
-    /// stalls the outbox for every tenant (ADR-MSG-019, known defect). This test keeps it on the path it
-    /// had before the resolution was reworked.
+    /// which dead-letters while every other tenant keeps publishing, into the down verdict, which holds
+    /// that tenant on the endpoint with no retry consumed and never dead-letters it (#124). This test
+    /// keeps it on the path it had before the resolution was reworked.
     /// </para>
     /// <para>
     /// The fixture is test 1's, message for message, so the two tests differ in the exception type
@@ -692,6 +692,20 @@ public sealed class OutboxProcessorTests
         await Build(store, dispatcher, options).ProcessBatchAsync(10, CancellationToken.None);
 
         captured.Single().ErrorMessage!.Length.ShouldBe(32);
+    }
+
+    /// <summary>A cut that would end on half of a surrogate pair stops before the pair (PR #209 review).</summary>
+    [Fact]
+    public async Task ProcessBatch_WhenTheLimitFallsInsideASurrogatePair_CutsBeforeThePair()
+    {
+        var options = DefaultOptions with { MaxErrorMessageLength = 32 };
+        var (store, captured) = StoreReturning(OutboxFixtures.Claim(OutboxFixtures.Message()));
+        var text = new string('x', 31) + "\U0001F6A7" + new string('x', 100);
+        var dispatcher = new ScriptedDispatcher(_ => new InvalidOperationException(text));
+
+        await Build(store, dispatcher, options).ProcessBatchAsync(10, CancellationToken.None);
+
+        captured.Single().ErrorMessage.ShouldBe(new string('x', 31), "half a pair is not valid text");
     }
 
     [Fact]

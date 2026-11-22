@@ -682,7 +682,7 @@ internal sealed class EfInboxStore<TContext>(
         var now = timeProvider.GetUtcNow();
         var error = reason.Length <= InboxMessageConfiguration.ErrorMessageMaxLength
             ? reason
-            : reason[..InboxMessageConfiguration.ErrorMessageMaxLength];
+            : reason[..CutBefore(reason, InboxMessageConfiguration.ErrorMessageMaxLength)];
 
         // One statement. ClaimToken null: a row a retry loop holds is left to its batch.
         return await context.Set<InboxMessage>()
@@ -713,6 +713,12 @@ internal sealed class EfInboxStore<TContext>(
     }
 
     // ---------- helpers ----------
+
+    /// <summary>
+    /// The length to cut <paramref name="text"/> to, at most <paramref name="max"/>, without splitting a
+    /// surrogate pair: half of one is not valid text, and a strict encoder (Npgsql's) rejects the write.
+    /// </summary>
+    private static int CutBefore(string text, int max) => char.IsHighSurrogate(text[max - 1]) ? max - 1 : max;
 
     /// <summary>
     /// A row is retryable when its last attempt failed (or it was received by an earlier version and

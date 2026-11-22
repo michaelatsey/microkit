@@ -387,6 +387,50 @@ public sealed class InboxProcessorTests
         outcome.NextRetryAtUtc.ShouldBe(GuardHarness.Now + DefaultOptions.PollingInterval, "the end of A's back-off");
     }
 
+    /// <summary>
+    /// A transport delivery puts the row's tenant in back-off while its retry is in flight (the state is
+    /// shared): the retry's own failure is held — it waits for that back-off, and the batch goes on, as
+    /// for any tenant's deferral — instead of abandoning the batch (PR #209 review).
+    /// </summary>
+    [Fact]
+    public async Task ProcessBatch_WhenTheTenantEntersBackOffWhileItsRetryIsInFlight_DefersThatRow_AndGoesOn()
+    {
+        var rows = new[] { Row(retryCount: 2, tenantId: "A"), Row(tenantId: "B") };
+        var claim = InboxFixtures.Claim(rows);
+        var store = StoreReturning(claim);
+        var sut = Build(store, out var probe, out var harness);
+        foreach (var row in rows)
+        {
+            row.ClaimToken = claim.Token;
+            harness.Database.Add(row);
+        }
+
+        var tenants = harness.TenantBackoff.For(GuardHarness.Store);
+        DateTimeOffset blockedUntil = default;
+        probe.ThrowWhen = context =>
+        {
+            if (context.TenantId != "A")
+            {
+                return null;
+            }
+
+            // A delivery of A on a transport thread failed first and put A in back-off.
+            tenants.OnDown("A", harness.Clock.GetUtcNow(), out blockedUntil);
+            return new InboxDependencyUnavailableException("A's partner is down");
+        };
+
+        var result = await sut.ProcessBatchAsync(batchSize: 10, CancellationToken.None);
+
+        result.AbortReason.ShouldBe(InboxBatchAbortReason.None, "A's cause is A's own: the batch goes on");
+        result.Processed.ShouldBe(1);
+        var outcome = (await CapturedOutcomes(store)).ShouldHaveSingleItem();
+        outcome.Kind.ShouldBe(InboxOutcomeKind.Retry);
+        outcome.RetryCount.ShouldBe(2, "unchanged");
+        outcome.NextRetryAtUtc.ShouldBe(blockedUntil, "the back-off the delivery began");
+        tenants.TryGetDelay("A", out var delay).ShouldBeTrue();
+        delay.ShouldBe(DefaultOptions.PollingInterval, "one failure of the curve");
+    }
+
     // ── Transient failures ────────────────────────────────────────────────────────────────────
 
     [Fact]

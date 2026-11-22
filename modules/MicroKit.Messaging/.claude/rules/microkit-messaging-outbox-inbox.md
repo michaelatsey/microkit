@@ -257,6 +257,11 @@ with the first store); any other value → `OutboxPayloadException`.
     endpoint is *suspected* (it backed off and no success has cleared it since), where it counts as a
     probe like any other. Without P1, two tenants that never recover head every claim; without P2, a
     real outage costs one attempt per tenant once every tenant has an entry.
+  - **Held.** A down verdict while the tenant's back-off is still in force — an attempt in flight
+    when another blocked it, on another transport thread — changes nothing (`OutageScope.Held`): the
+    same end, no growth of the curve, the probe untouched, and the deferred delivery logs 2014, not
+    2013. Otherwise prefetched deliveries take one outage to the ceiling, and a suspected store's
+    tenant trips the probe it set itself.
   - **C1.** A stop or a configuration fault releases the remainder of the attempt order, whichever
     pass was running.
   - Entries leave on their tenant's success, or once expired for a whole ceiling (pruned once per

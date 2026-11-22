@@ -630,7 +630,9 @@ The inbox follows the same rule, on its own curve (`Inbox.PollingInterval` doubl
 - **New deliveries.** The delivery's row is written `Failed`, no attempt counted, due at the end of
   the tenant's back-off, and the delivery is acknowledged once that row has committed: the store's
   retry loop owns it, and the transport keeps delivering the other tenants. Later deliveries of the
-  held tenant are written the same way without running the handler. Event 2013 (`Warning`) fires when
+  held tenant are written the same way without running the handler, and so is a delivery already
+  running when its tenant entered back-off: it waits for the same back-off, which it neither extends
+  nor turns into a shared outage. Event 2013 (`Warning`) fires when
   a tenant enters back-off and once per retry batch and tenant; each deferred delivery logs 2014
   (`Debug`), since they arrive at the broker's rate.
 - **What that costs.** During a shared outage with tenants, a held tenant's deliveries move into the

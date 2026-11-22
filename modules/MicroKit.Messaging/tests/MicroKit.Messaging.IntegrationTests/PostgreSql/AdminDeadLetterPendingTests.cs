@@ -46,7 +46,7 @@ public sealed class AdminDeadLetterPendingTests(PostgreSqlFixture fixture)
             await seed.SaveChangesAsync();
         }
 
-        var reason = "Parked by an operator: tenant A is de-provisioned. " + new string('x', 3000);
+        var reason = ReasonWithAPairOnTheCut();
         int parked;
         await using (var scope = provider.CreateAsyncScope())
         {
@@ -60,8 +60,7 @@ public sealed class AdminDeadLetterPendingTests(PostgreSqlFixture fixture)
             rows[id].Status.ShouldBe(OutboxMessageStatus.Failed);
             rows[id].DeadLettered.ShouldBeTrue();
             rows[id].ProcessedAtUtc.ShouldBe(Now);
-            rows[id].ErrorMessage.ShouldNotBeNull().Length.ShouldBe(2048, "cut to the mapped column");
-            rows[id].ErrorMessage!.ShouldStartWith("Parked by an operator");
+            rows[id].ErrorMessage.ShouldBe(reason[..2047], "cut to the mapped column, before the pair it would split");
         }
 
         rows[pendingA2.Id].RetryCount.ShouldBe(2, "its retry count is left alone");
@@ -115,7 +114,7 @@ public sealed class AdminDeadLetterPendingTests(PostgreSqlFixture fixture)
         await using (var scope = host.Provider.CreateAsyncScope())
         {
             parked = await scope.ServiceProvider.GetRequiredKeyedService<IInboxAdminStore>(GuardHost.Store)
-                .DeadLetterPendingAsync("A", "Parked by an operator");
+                .DeadLetterPendingAsync("A", ReasonWithAPairOnTheCut());
         }
 
         parked.ShouldBe(2, "A's unclaimed Failed and Received rows");
@@ -125,7 +124,7 @@ public sealed class AdminDeadLetterPendingTests(PostgreSqlFixture fixture)
             rows[id].Status.ShouldBe(InboxMessageStatus.Failed);
             rows[id].DeadLettered.ShouldBeTrue();
             rows[id].ProcessedAtUtc.ShouldBe(Now);
-            rows[id].ErrorMessage.ShouldBe("Parked by an operator");
+            rows[id].ErrorMessage.ShouldBe(ReasonWithAPairOnTheCut()[..2047], "cut to the mapped column, before the pair it would split");
         }
 
         rows[failedA.RowId].RetryCount.ShouldBe(3, "its retry count is left alone");
@@ -151,6 +150,19 @@ public sealed class AdminDeadLetterPendingTests(PostgreSqlFixture fixture)
     }
 
     private static int s_order;
+
+    /// <summary>
+    /// A reason longer than the 2,048-character column whose 2,048th character is the first half of a
+    /// surrogate pair: a cut at the column's length would write half of it, which Npgsql's strict UTF-8
+    /// encoder rejects.
+    /// </summary>
+    private static string ReasonWithAPairOnTheCut()
+    {
+        const string Prefix = "Parked by an operator: tenant A is de-provisioned. ";
+        var reason = Prefix + new string('x', 2047 - Prefix.Length) + "\U0001F6A7" + new string('x', 1000);
+        char.IsHighSurrogate(reason[2047]).ShouldBeTrue("control: the pair straddles the cut");
+        return reason;
+    }
 
     private static OutboxMessage Outbox(
         string? tenant,

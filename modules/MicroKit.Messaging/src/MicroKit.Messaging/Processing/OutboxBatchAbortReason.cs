@@ -51,12 +51,13 @@ internal enum OutboxBatchAbortReason
     /// reported here: it is classified as if the dispatcher had thrown it.
     /// </para>
     /// <para>
-    /// ⚠ <b>Known defect — not every cause passes.</b> The dispatcher is activated in the scope of the
-    /// message being dispatched, built from its tenant, so the cause can be one tenant's. One that never
-    /// clears, such as a de-provisioned tenant, fails each time the endpoint's back-off ends: the
-    /// endpoint's rows of every tenant wait, and nothing dead-letters. Treat this value persisting as an
-    /// incident, not as back-pressure. #124 is the defect and the fix owed; the module README gives the
-    /// way out.
+    /// <b>Not every cause passes.</b> The dispatcher is activated in the scope of the message being
+    /// dispatched, built from its tenant, so the cause can be one tenant's. On a row with a tenant, the
+    /// verdict holds that tenant on the endpoint, not the endpoint (#124): its rows wait out its own
+    /// back-off and every other tenant's go out. One that never clears, such as a de-provisioned tenant,
+    /// is tried once per its back-off and never dead-letters on its own: its persisting is an incident,
+    /// and <c>IOutboxAdminStore.DeadLetterPendingAsync</c> is the way out (module README, <i>One tenant
+    /// down</i>).
     /// </para>
     /// </remarks>
     DispatcherActivationFailed = 4,

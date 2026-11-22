@@ -24,6 +24,18 @@ public sealed class InboxRetryPolicyTests
         => Policy().ComputeBackoffCeiling(attempts).ShouldBe(TimeSpan.FromSeconds(expectedSeconds));
 
     [Fact]
+    public void Truncate_CutsToTheLimit_NeverInsideASurrogatePair()
+    {
+        var policy = new InboxRetryPolicy(
+            new InboxProcessorOptions { MaxErrorMessageLength = 32 }, new FakeTimeProvider(GuardHarness.Now), FixedRandom.NoJitter);
+
+        policy.Truncate(new string('x', 500)).ShouldBe(new string('x', 32));
+        policy.Truncate(new string('x', 31) + "\U0001F6A7" + "x").ShouldBe(new string('x', 31), "half a pair is not valid text");
+        policy.Truncate(new string('x', 30) + "\U0001F6A7" + "x").ShouldBe(new string('x', 30) + "\U0001F6A7", "a whole pair is kept");
+        policy.Truncate(null).ShouldBeNull();
+    }
+
+    [Fact]
     public void ComputeBackoffCeiling_IsCappedAtMaxRetryBackoff()
         => Policy().ComputeBackoffCeiling(12).ShouldBe(TimeSpan.FromHours(1));
 

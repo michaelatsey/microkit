@@ -393,7 +393,7 @@ internal sealed class OutboxProcessor : IOutboxProcessor
         }
 
         var scope = _endpointBackoff.TenantsOf(key).OnDown(tenant, now, out var tenantUntil);
-        if (scope is TenantBackoff.OutageScope.Tenant)
+        if (scope is not TenantBackoff.OutageScope.Shared)
         {
             outcomes.Add(OutboxOutcome.Deferred(message.Id, tenantUntil));
             TenantTally.Add(ref tenantsDeferred, key, tenant, tenantUntil);
@@ -816,8 +816,5 @@ internal sealed class OutboxProcessor : IOutboxProcessor
             claimedCount, published, retried, deadLettered, released, abortReason);
     }
 
-    private string? Truncate(string? value) =>
-        value is null || value.Length <= _options.MaxErrorMessageLength
-            ? value
-            : value[.._options.MaxErrorMessageLength];
+    private string? Truncate(string? value) => ErrorText.Cut(value, _options.MaxErrorMessageLength);
 }

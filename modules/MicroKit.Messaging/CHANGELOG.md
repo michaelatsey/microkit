@@ -43,6 +43,14 @@
   delivery with no tenant, when the store is unreachable, and when the probe fails. Local deliveries
   keep the outbox's rule. Events 2013 (`Warning`) and 2014 (`Debug`).
 
+### Fixed
+
+- **An error text cut to its column no longer ends on half of a surrogate pair** (an emoji, say,
+  across the limit). Npgsql's strict UTF-8 encoder rejected the write: on the outbox the whole batch's
+  settlement failed with it and its rows were re-sent each time their leases expired; on the inbox a
+  failure could not be recorded. The processors' `MaxErrorMessageLength` cut and the EF store's
+  `DeadLetterPendingAsync` reason now stop before the pair.
+
 ## [Unreleased] — the outbox and the inbox are opt-in durability on the bus (#188)
 
 The bus publishes and consumes without persistence (#186); a store makes both durable. A store is

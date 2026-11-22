@@ -202,7 +202,7 @@ internal sealed class InboxProcessor(
                 if (!outcome.StoreUnreachable
                     && message.TenantId is { } tenant
                     && _tenants.OnDown(tenant, policy.Clock.GetUtcNow(), out var tenantUntil)
-                        is TenantBackoff.OutageScope.Tenant)
+                        is not TenantBackoff.OutageScope.Shared)
                 {
                     // That tenant's dependency (#124 D5): the row waits to the end of its back-off with
                     // no attempt counted, and the batch goes on.

@@ -81,18 +81,47 @@ public sealed class TenantBackoffTests
     public void OnDown_AKnownTenantFailingAgain_IsItsOwnCause_UnlessTheResourceIsSuspected()
     {
         var backoff = New();
-        backoff.OnDown("A", Now, out _);
+        backoff.OnDown("A", Now, out var until);
         backoff.Succeeded("C");
-        var later = Now + Initial;
 
         // Not suspected: its own back-off ended and it failed again — never the resource's.
-        backoff.OnDown("A", later, out _).ShouldBe(OutageScope.Tenant);
-        backoff.OnDown("A", later, out _).ShouldBe(OutageScope.Tenant, "however often");
+        backoff.OnDown("A", until, out until).ShouldBe(OutageScope.Tenant);
+        backoff.OnDown("A", until, out until).ShouldBe(OutageScope.Tenant, "however often");
 
         // Suspected (P2): a known tenant counts as a probe like any other.
         backoff.MarkSuspected();
-        backoff.OnDown("A", later, out _).ShouldBe(OutageScope.Tenant, "the first sets the probe");
-        backoff.OnDown("A", later, out _).ShouldBe(OutageScope.Shared, "the second, before any success, trips");
+        backoff.OnDown("A", until, out until).ShouldBe(OutageScope.Tenant, "the first sets the probe");
+        backoff.OnDown("A", until, out _).ShouldBe(OutageScope.Shared, "the second, before any success, trips");
+    }
+
+    /// <summary>
+    /// A failure while the tenant's back-off is still in force — a delivery in flight on another transport
+    /// thread when the first one blocked it — carries no news: the curve does not grow once per attempt in
+    /// flight, and the tenant cannot trip the probe it set itself (PR #209 review).
+    /// </summary>
+    [Fact]
+    public void OnDown_WhileTheTenantsBackOffIsInForce_IsHeld_AndChangesNothing()
+    {
+        var backoff = New();
+        backoff.OnDown("A", Now, out var until).ShouldBe(OutageScope.Tenant);
+
+        for (var inFlight = 1; inFlight <= 7; inFlight++)
+        {
+            backoff.OnDown("A", Now + TimeSpan.FromMilliseconds(inFlight), out var held).ShouldBe(OutageScope.Held);
+            held.ShouldBe(until, "the same back-off");
+        }
+
+        backoff.TryGetDelay("A", out var delay).ShouldBeTrue();
+        delay.ShouldBe(Initial, "seven attempts in flight are one failure, not seven doublings");
+        backoff.OnDown("A", until, out var next).ShouldBe(OutageScope.Tenant, "its back-off ended: a failure again");
+        (next - until).ShouldBe(Initial * 2, "the curve grows once per back-off");
+
+        // Suspected: the first failure sets the probe; the tenant's own attempts in flight do not trip it.
+        backoff.MarkSuspected();
+        backoff.OnDown("A", next, out var suspectedUntil).ShouldBe(OutageScope.Tenant, "sets the probe");
+        backoff.OnDown("A", next + TimeSpan.FromMilliseconds(1), out var held2).ShouldBe(OutageScope.Held, "not the probe failing");
+        held2.ShouldBe(suspectedUntil);
+        backoff.OnDown("B", next, out _).ShouldBe(OutageScope.Shared, "control: the probe is still pending for another tenant");
     }
 
     [Fact]

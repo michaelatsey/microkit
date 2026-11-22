@@ -532,7 +532,7 @@ internal sealed class MessageReceivePipeline(
                         logger, key.MessageId.Value, entry.HandlerType.FullName!, blockedTenant, store.Value, blockedUntil);
                     var notAttempted = new InboxDependencyUnavailableException(
                         $"Not attempted: tenant '{blockedTenant}' is in back-off in store '{store}' until {blockedUntil:O}.");
-                    return await WriteDeferredAsync(attempt, rows, notAttempted, blockedUntil, ct).ConfigureAwait(false);
+                    return await WriteDeferredAsync(attempt, rows, notAttempted, blockedUntil, enteredBackOff: null, ct).ConfigureAwait(false);
                 }
 
                 try
@@ -821,12 +821,15 @@ internal sealed class MessageReceivePipeline(
             return paused;
         }
 
-        if (tenants.OnDown(tenant, retryPolicy.Clock.GetUtcNow(), out var until) is TenantBackoff.OutageScope.Shared)
+        var scope = tenants.OnDown(tenant, retryPolicy.Clock.GetUtcNow(), out var until);
+        if (scope is TenantBackoff.OutageScope.Shared)
         {
             return paused;
         }
 
-        return await WriteDeferredAsync(attempt, rows, failure, until, ct, enteredBackOff: tenant).ConfigureAwait(false);
+        // Held: a delivery in flight when another put the tenant in back-off — it did not enter it (2014).
+        var entered = scope is TenantBackoff.OutageScope.Tenant ? tenant : null;
+        return await WriteDeferredAsync(attempt, rows, failure, until, entered, ct).ConfigureAwait(false);
     }
 
     /// <summary>
@@ -838,18 +841,18 @@ internal sealed class MessageReceivePipeline(
     /// <param name="rows">Builds its row.</param>
     /// <param name="failure">What its row records.</param>
     /// <param name="until">When its row is due.</param>
-    /// <param name="ct">The host's token.</param>
     /// <param name="enteredBackOff">
     /// The tenant this delivery put in back-off, reported (2013) once the row has committed; null for a
     /// delivery of a tenant already in back-off (2014 reports it).
     /// </param>
+    /// <param name="ct">The host's token.</param>
     private async ValueTask<DeliveryOutcome> WriteDeferredAsync(
         GuardedAttempt attempt,
         RowFactory rows,
         Exception failure,
         DateTimeOffset until,
-        CancellationToken ct,
-        string? enteredBackOff = null)
+        string? enteredBackOff,
+        CancellationToken ct)
     {
         var handlerType = attempt.Entry.HandlerType.FullName!;
         var messageId = attempt.Key.MessageId.Value;
