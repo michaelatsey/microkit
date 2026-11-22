@@ -1,5 +1,23 @@
 # Changelog — MicroKit.Messaging
 
+## [Unreleased] — an endpoint's or a tenant's outage is observed through metrics (#126)
+
+### Added
+
+- **The outbox's meter, `MessagingDiagnostics.OutboxMeterName`** (`MicroKit.Messaging.Outbox`), every
+  instrument tagged `store.key` and `endpoint` (`transport` or `local`):
+  `microkit.outbox.messages.settled` (counter, tag `outcome`: `published`, `retry`, `dead_letter`,
+  `deferred`; counted once a batch's settlement wrote it all, so a partial settlement is not counted), `microkit.outbox.dispatch.delay`
+  (histogram in seconds, from the row's staging to its endpoint taking it), and the observable up-down
+  counters `microkit.outbox.endpoints.backoff` (1 while an endpoint is in back-off) and
+  `microkit.outbox.tenants.backoff` (the tenants in back-off on it).
+- **`microkit.inbox.tenants.backoff`** on the inbox meter: an observable up-down counter, tag
+  `store.key`, of the tenants in back-off on each store's inbox.
+- An endpoint's or a tenant's outage is observed as a back-off counter above zero, not through a log
+  level; alert on its maximum over a window of at least the back-off ceiling plus the loop's
+  `MaxPollingInterval` (README, *Metrics*). A host subscribes with `AddMeter(MessagingDiagnostics.OutboxMeterName)`; the README lists each
+  instrument and the alert it serves.
+
 ## [Unreleased] — one tenant's failures no longer stall a store (#124)
 
 ### Breaking

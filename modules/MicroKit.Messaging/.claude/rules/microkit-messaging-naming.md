@@ -44,7 +44,7 @@ internal, or does not exist. Adding a public type means editing that list on pur
 | `MessageId` | `sealed record MessageId(Guid Value) : IComparable<MessageId>` |
 | `PermanentMessageException`, `InboxDependencyUnavailableException` | Thrown by a handler: dead-letter now, or pause and redeliver without counting an attempt |
 | `IntegrationEventConfigurationException`, `IntegrationEventPublishException` | Composition fault (start or publication), refused publication |
-| Core: `MessagingBuilder`, `ServiceCollectionExtensions`, `MessagingDiagnostics`, `InMemoryBroker` | Composition, the inbox meter name (`InboxMeterName`), the in-memory broker a host may supply |
+| Core: `MessagingBuilder`, `ServiceCollectionExtensions`, `MessagingDiagnostics`, `InMemoryBroker` | Composition, the meter names (`InboxMeterName`, `OutboxMeterName`), the in-memory broker a host may supply |
 | `MicroKit.Messaging.Options` | `MessagingOptions` (section `MicroKit:Messaging`), `OutboxProcessorOptions`, `InboxProcessorOptions` |
 
 ## SPI (`MicroKit.Messaging.Spi`) — for store, transport and integration-package authors
