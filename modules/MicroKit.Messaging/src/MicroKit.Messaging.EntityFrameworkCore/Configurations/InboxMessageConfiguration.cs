@@ -14,6 +14,9 @@ namespace MicroKit.Messaging.EntityFrameworkCore;
 /// </remarks>
 public sealed class InboxMessageConfiguration : IEntityTypeConfiguration<InboxMessage>
 {
+    /// <summary>The mapped length of the error text column, which the admin store's reasons are cut to.</summary>
+    internal const int ErrorMessageMaxLength = 2048;
+
     /// <inheritdoc/>
     public void Configure(EntityTypeBuilder<InboxMessage> builder)
     {
@@ -94,7 +97,7 @@ public sealed class InboxMessageConfiguration : IEntityTypeConfiguration<InboxMe
             .HasMaxLength(32);
 
         builder.Property(m => m.ErrorMessage)
-            .HasMaxLength(2048);
+            .HasMaxLength(ErrorMessageMaxLength);
 
         builder.Property(m => m.CorrelationId)
             .HasConversion(new ValueConverter<CorrelationId?, Guid?>(

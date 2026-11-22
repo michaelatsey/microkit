@@ -6,16 +6,19 @@ namespace MicroKit.Messaging;
 /// </summary>
 /// <remarks>
 /// <para>
-/// <b>Application code raises this one.</b> It is part of the application surface, not the SPI:
-/// nothing inside the module ever throws it, and an <see cref="IMessageHandler{T}"/>
-/// implementation is its only source. The engine catches it and draws a verdict from it, which
-/// is the opposite direction from the exceptions in <c>MicroKit.Messaging.Spi</c>.
+/// <b>Application code raises this one.</b> It is part of the application surface: an
+/// <see cref="IMessageHandler{T}"/>, a receive middleware or a scope initializer throws it, and the
+/// engine catches it and draws a verdict from it. A store raises it too, to report its own database
+/// unreachable (<see cref="Spi.IInboxGuardStore"/>); the engine tells the two apart.
 /// </para>
 /// <para>
-/// On a store's retry loop the batch is abandoned and every unattempted row released, with no
-/// attempt counted. On a delivery it writes no row and asks the transport to pause and redeliver.
-/// Turning a five-minute outage into a hundred rows pushed one step closer to dead-lettering is
-/// the failure mode this prevents.
+/// No attempt is ever counted for it. For a message with a tenant, in a store, it is first that
+/// tenant's (#124): the tenant is put in back-off on the store's inbox — a retry's rows wait to the end
+/// of it, a new delivery is written to wait the same way and acknowledged — and the store's other
+/// tenants are handled meanwhile. Only once a second tenant fails before any success, for a message
+/// with no tenant, or without a store, does the retry loop abandon its batch and the transport pause
+/// and redeliver. Turning a five-minute outage into a hundred rows pushed one step closer to
+/// dead-lettering is the failure mode this prevents.
 /// </para>
 /// <para>
 /// <b>Throw for:</b> a downstream service that is down, connection refused, authentication

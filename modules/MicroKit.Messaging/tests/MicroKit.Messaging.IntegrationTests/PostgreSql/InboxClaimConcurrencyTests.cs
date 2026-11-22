@@ -60,7 +60,7 @@ public sealed class InboxClaimConcurrencyTests(PostgreSqlFixture fixture)
 
             while (true)
             {
-                var claim = await store.ClaimBatchAsync(BatchSize, Lease);
+                var claim = await store.ClaimBatchAsync(BatchSize, Lease, []);
                 if (claim.Count == 0)
                 {
                     return;
@@ -122,7 +122,7 @@ public sealed class InboxClaimConcurrencyTests(PostgreSqlFixture fixture)
             var store = new EfInboxStore<TestMessagingDbContext>(context, new FakeTimeProvider(Now));
 
             await start.Task;
-            return await store.ClaimBatchAsync(10, Lease);
+            return await store.ClaimBatchAsync(10, Lease, []);
         }).ToList();
 
         start.SetResult();
@@ -152,7 +152,7 @@ public sealed class InboxClaimConcurrencyTests(PostgreSqlFixture fixture)
 
         var store = new EfInboxStore<TestMessagingDbContext>(context, new FakeTimeProvider(Now));
 
-        var claim = await store.ClaimBatchAsync(batchSize: 12, Lease);
+        var claim = await store.ClaimBatchAsync(batchSize: 12, Lease, []);
 
         claim.Count.ShouldBe(
             12, "a client-side evaluation or a broken IN list would not claim all 12");

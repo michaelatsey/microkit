@@ -16,6 +16,9 @@ namespace MicroKit.Messaging.EntityFrameworkCore;
 /// </remarks>
 public sealed class OutboxMessageConfiguration : IEntityTypeConfiguration<OutboxMessage>
 {
+    /// <summary>The mapped length of the error text column, which the admin store's reasons are cut to.</summary>
+    internal const int ErrorMessageMaxLength = 2048;
+
     /// <inheritdoc/>
     public void Configure(EntityTypeBuilder<OutboxMessage> builder)
     {
@@ -69,7 +72,7 @@ public sealed class OutboxMessageConfiguration : IEntityTypeConfiguration<Outbox
             .HasMaxLength(32);
 
         builder.Property(m => m.ErrorMessage)
-            .HasMaxLength(2048);
+            .HasMaxLength(ErrorMessageMaxLength);
 
         // A W3C traceparent is 55 characters in the current version; 64 leaves room for the next
         // one without inviting anything else into the column. Null on every local row.

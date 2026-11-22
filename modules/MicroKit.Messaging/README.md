@@ -343,7 +343,9 @@ assembly-version bump, so a redelivery across a deployment still finds its row.
 - a handler that fails rolls back everything it did; its row is then written `Failed` in a
   transaction of its own, and only once that row is committed is the delivery acknowledged. From
   there the store's loop retries it. A permanent failure is dead-lettered at once, counting no
-  attempt; a dependency outage writes no row and redelivers.
+  attempt; a dependency outage of one tenant writes its row to wait out that tenant's back-off, and
+  one with no tenant, or shared by every tenant, writes no row and redelivers (*One tenant down*,
+  under *Sending to a broker*).
 
 **Exactly-once covers every database effect written through the store's `DbContext`.** A replayed
 attempt reruns the handler, so what it does through another connection or `DbContext`, and every
@@ -574,7 +576,8 @@ Only the transport rows wait. A down endpoint has a back-off of its own: it star
 and clears on the first row the endpoint sends. Until it ends, the endpoint's rows are left out of
 the claim — neither attempted nor rewritten — and the batch that met the failure is settled back to
 `Pending` with its next attempt at the end of the back-off, so the store's local rows, behind them in
-the queue or not, are delivered at the normal cadence. Event 1010 (`Warning`) says what is deferred
+the queue or not, are delivered at the normal cadence. On rows with a tenant, the endpoint backs off
+once a second tenant fails too (*One tenant down*, below); until then only the first tenant waits. Event 1010 (`Warning`) says what is deferred
 and until when. A broker outage works the same way, and a local consumer's dependency outage
 (`OutboxTransportUnavailableException` from a local consumer) defers the local rows while the
 transport rows go out. That verdict follows the exception's type: any
@@ -582,47 +585,114 @@ transport rows go out. That verdict follows the exception's type: any
 the type Microsoft.Extensions.DependencyInjection reports a missing dependency with. Any other type
 thrown there is treated like a failed send.
 
-### A known defect: one tenant's row can stall a store's outbox (#124)
+### One tenant down: its messages wait, the others go out (#124)
 
 The dispatcher is activated inside the scope of the row being dispatched, and that scope carries the
-row's `TenantId`. If your composition resolves something per tenant while that graph is built — a
-transport with per-tenant credentials — and that lookup throws `InvalidOperationException`,
-activation fails for one tenant only and is still handled as above: the transport is put in back-off.
-When the cause never clears, as with a de-provisioned tenant:
+row's `TenantId`. A composition that resolves something per tenant while that graph is built — a
+transport with per-tenant credentials — can fail for one tenant only, and so can a broker that
+refuses one tenant (`OutboxTransportUnavailableException`). Such a verdict on a row **with a tenant**
+holds that tenant, not the endpoint:
 
-- the claim orders on `CreatedAtUtc` and a deferred row keeps its place, so each time the back-off
-  ends the failing row is tried first, fails again, and the back-off grows to its ceiling;
-- that store's transport rows make **no progress for any tenant** (its local rows still go out);
-- no retry budget moves, so the row never dead-letters, and no API steps past a `Pending` row.
+- that tenant's rows of the endpoint wait to the end of **its own back-off** — the endpoint's curve,
+  from `Outbox.PollingInterval` doubling to `Outbox.TransportUnavailableBackoff` — no retry consumed,
+  and the other tenants' rows go out at the normal cadence. Event 1011 (`Warning`) says, per batch and
+  tenant, what waits and until when; 1009 or 1004 still say why. A success of the tenant clears it.
+- **The probe.** Once a tenant is held, the next attempt from a tenant with no back-off is the probe.
+  It succeeds: the cause was the first tenant's, and the endpoint stays open. It fails too: the cause
+  is shared, so that tenant is held as well and the endpoint backs off for every tenant, as above
+  (1010). A real outage costs at most two attempts per batch, never one per tenant.
+- **Two tenants that never recover cannot hold a third.** While a tenant is in back-off, the batch
+  tries the rows of tenants not known to fail first, then the others, those that failed least first;
+  and once the endpoint has backed off, a held tenant failing again counts as a probe only until a
+  success clears the endpoint. Claim order is not a contract: it changes while a tenant is in back-off.
+- A row **with no tenant** has nothing to narrow the verdict to: its endpoint backs off as above.
+- **A held tenant's rows are left out of the claim**, on that endpoint only, until its back-off ends:
+  neither claimed nor rewritten meanwhile, as a down endpoint's are. When it ends, one batch of them
+  is claimed: the first row is tried and, if it fails, the rest of that batch waits again — so a store
+  whose rows all carry one tenant (a database per tenant) touches one batch per back-off period, not
+  its whole backlog. A row with no tenant is never left out. Tenant ids are compared by the column's
+  collation: under a case-insensitive one, holding `Acme` also holds `acme`. The EF store needs a
+  provider that translates a collection parameter (SQL Server: compatibility level 130 or above).
+- **The bound.** Each claim reads, and never writes, a held tenant's claimable rows: the filter is
+  not an index range, so the cost of every claim, for every other tenant, grows with that backlog,
+  not with the batch size — a slower store, not a stalled one. It is what the claim read over the same
+  backlog once deferred, before tenants were left out, and adding `TenantId` to the claim indexes
+  does not change it. `DeadLetterPendingAsync` (*A tenant that never recovers*, below) is the exit
+  for a tenant that will not recover.
 
-The fix is owed (#124). Until it ships, event 1009 (`Error`, each time the transport is tried) names the blocking row's
-`MessageId`, `TenantId` and `Endpoint`, and **the way out is SQL**: dead-letter that tenant's
-pending rows. That takes them out of the claim, and every other tenant drains once the transport's
-current back-off ends — at most `Outbox.TransportUnavailableBackoff` later.
+The inbox follows the same rule, on its own curve (`Inbox.PollingInterval` doubling to
+`Inbox.DependencyUnavailableBackoff`), for an `InboxDependencyUnavailableException` a handler throws:
 
-```sql
--- PostgreSQL, default mapping: table "OutboxMessages", enums stored as strings.
-UPDATE "OutboxMessages"
-SET    "Status"         = 'Failed',
-       "DeadLettered"   = TRUE,
-       "ProcessedAtUtc" = now(),
-       "ErrorMessage"   = 'Parked by an operator: tenant cannot be dispatched'
-WHERE  "TenantId" = '<TenantId from event 1009>'
-  AND  "Status"   = 'Pending'
-  AND  NOT "DeadLettered";
+- **Retries.** A held tenant's rows wait to the end of its back-off with their attempt count
+  unchanged, left out of the retry claim meanwhile, and the store's other tenants are retried. The batch is abandoned with the store-wide
+  back-off, as before, only when the probe fails, for a row with no tenant, or when the store itself
+  is unreachable.
+- **New deliveries.** The delivery's row is written `Failed`, no attempt counted, due at the end of
+  the tenant's back-off, and the delivery is acknowledged once that row has committed: the store's
+  retry loop owns it, and the transport keeps delivering the other tenants. Later deliveries of the
+  held tenant are written the same way without running the handler, and so is a delivery already
+  running when its tenant entered back-off: it waits for the same back-off, which it neither extends
+  nor turns into a shared outage. Event 2013 (`Warning`) fires when
+  a tenant enters back-off and once per retry batch and tenant; each deferred delivery logs 2014
+  (`Debug`), since they arrive at the broker's rate.
+- **What that costs.** During a shared outage with tenants, a held tenant's deliveries move into the
+  inbox table instead of waiting in the broker — CAP persists every received message the same way.
+  The transport still pauses and redelivers (`PauseAndRedeliver`) when the store is unreachable, for a
+  delivery with no tenant, and when the probe fails.
+- A local consumer's dependency down for one tenant holds that tenant's local rows on the local
+  endpoint, by the outbox's rule above; no inbox row is written for them.
+
+**A tenant that never recovers** — a de-provisioned one — holds only itself: it is tried once per its
+back-off and never dead-lettered on its own, because an automatic cap would dead-letter a long but
+legitimate outage. To park it, dead-letter its waiting messages, in the outbox and in the inbox; to
+bring them back once it is healthy, requeue them:
+
+<!-- snippet: tenant-admin-exit -->
+```csharp
+// A tenant that will not recover: dead-letter the messages it holds, in one statement per table.
+// Only the rows no loop holds are parked; run it again if the tenant's events still report rows.
+public static async Task ParkTenantAsync(
+    IServiceProvider services, MessageStoreKey store, string tenantId, CancellationToken ct = default)
+{
+    await using var scope = services.CreateAsyncScope();
+    var outbox = scope.ServiceProvider.GetRequiredKeyedService<IOutboxAdminStore>(store);
+    var inbox = scope.ServiceProvider.GetRequiredKeyedService<IInboxAdminStore>(store);
+
+    await outbox.DeadLetterPendingAsync(tenantId, ParkedReason, ct);
+    await inbox.DeadLetterPendingAsync(tenantId, ParkedReason, ct);
+}
+
+// The tenant is healthy again: requeue what was parked — not what dead-lettered on its own.
+public static async Task RestoreTenantAsync(
+    IServiceProvider services, MessageStoreKey store, string tenantId, CancellationToken ct = default)
+{
+    await using var scope = services.CreateAsyncScope();
+    var outbox = scope.ServiceProvider.GetRequiredKeyedService<IOutboxAdminStore>(store);
+    var inbox = scope.ServiceProvider.GetRequiredKeyedService<IInboxAdminStore>(store);
+
+    foreach (var message in await outbox.GetDeadLetteredAsync(1000, tenantId, ct))
+    {
+        if (message.ErrorMessage == ParkedReason)
+        {
+            await outbox.RequeueAsync(message.Id, ct);
+        }
+    }
+
+    foreach (var row in await inbox.GetDeadLetteredAsync(1000, tenantId, ct))
+    {
+        if (row.ErrorMessage == ParkedReason)
+        {
+            await inbox.RequeueAsync(new InboxMessageKey(row.MessageId, row.ConsumerType), ct);
+        }
+    }
+}
+
+private const string ParkedReason = "Parked by an operator: the tenant cannot be served.";
 ```
 
-Event 1009 renders a null `TenantId` as `(null)`, and that string matches no row: write
-`WHERE "TenantId" IS NULL` instead. Only do so where other rows carry a real tenant. In a
-single-tenant deployment every row's tenant is null, so the cause cannot be tenant-scoped, and the
-statement would park the whole queue: fix the composition instead.
-
-- A row a loop holds at that instant is `Processing` and is left alone. The batch settles it back to
-  `Pending`, so run the statement again if the next 1009 still names that tenant.
-- Once the tenant is restored, bring its rows back one at a time with
-  `IOutboxAdminStore.RequeueAsync`, which also resets their retry count.
-- If the next 1009 names a row from a **different** tenant, the cause is not tenant-scoped. Fix the
-  composition instead of parking rows.
+Both admin stores are registered under the store's key; `EntityFrameworkOutbox.KeyOf<TContext>()` is
+the EF store's. A row a loop holds at that instant is left to its batch, and settled back to wait:
+run `ParkTenantAsync` again if 1011 or 2013 still name the tenant.
 
 ### One thing worth knowing before an incident
 
@@ -731,7 +801,6 @@ bridge.
 drives a consume loop into `IEnvelopeReceiver`, and writes no messaging machinery of its own.
 
 **Known defects.**
-- One tenant's row can stall a store's outbox (#124) — see *Sending to a broker*.
 - The store set is read once, at start: a store per tenant database is #191.
 
 **Tested providers.** PostgreSQL (through Testcontainers) and SQLite. The outbox schema no longer

@@ -81,6 +81,7 @@ internal static class StoreEngineRegistration
             sp.GetRequiredService<InboxProcessorOptions>(),
             sp.GetRequiredService<InboxRetryPolicy>(),
             sp.GetRequiredService<ILogger<InboxProcessor>>(),
-            (MessageStoreKey)key!));
+            (MessageStoreKey)key!,
+            sp.GetRequiredService<InboxTenantBackoff>().For((MessageStoreKey)key!)));
     }
 }

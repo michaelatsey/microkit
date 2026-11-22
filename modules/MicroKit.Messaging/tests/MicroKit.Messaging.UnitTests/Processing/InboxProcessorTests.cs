@@ -44,7 +44,33 @@ public sealed class InboxProcessorTests
         var sut = Build(store, out _, out _, options);
         await sut.ProcessBatchAsync(batchSize: 7, CancellationToken.None);
 
-        await store.Received(1).ClaimBatchAsync(7, TimeSpan.FromSeconds(97), Arg.Any<CancellationToken>());
+        await store.Received(1).ClaimBatchAsync(7, TimeSpan.FromSeconds(97), Arg.Any<IReadOnlyList<string>>(), Arg.Any<CancellationToken>());
+    }
+
+    /// <summary>
+    /// A tenant in back-off on the store's inbox is left out of the claim (#124 A7); with no tenant in
+    /// back-off the list is empty.
+    /// </summary>
+    [Fact]
+    public async Task ProcessBatch_LeavesATenantInBackOffOutOfTheClaim()
+    {
+        var lists = new List<IReadOnlyList<string>>();
+        var store = StoreReturning(InboxClaim.Empty);
+        store.ClaimBatchAsync(Arg.Any<int>(), Arg.Any<TimeSpan>(), Arg.Any<IReadOnlyList<string>>(), Arg.Any<CancellationToken>())
+            .Returns(ci =>
+            {
+                lists.Add(ci.ArgAt<IReadOnlyList<string>>(2));
+                return ValueTask.FromResult(InboxClaim.Empty);
+            });
+        var sut = Build(store, out _, out var harness);
+
+        await sut.ProcessBatchAsync(batchSize: 10, CancellationToken.None);
+        harness.TenantBackoff.For(GuardHarness.Store).OnDown("tenant-b", harness.Clock.GetUtcNow(), out _);
+        await sut.ProcessBatchAsync(batchSize: 10, CancellationToken.None);
+
+        lists.Count.ShouldBe(2);
+        lists[0].ShouldBeEmpty("control: nobody in back-off");
+        lists[1].ShouldBe(["tenant-b"]);
     }
 
     // ── Success: the row is written Processed in the handler's transaction ───────────────────
@@ -311,6 +337,100 @@ public sealed class InboxProcessorTests
         probe.Calls.ShouldBe(1, "the row is Processed: the attempt committed and is not replayed");
     }
 
+    /// <summary>
+    /// The store reporting itself unreachable while it verifies an attempt raises the same exception type
+    /// a handler raises for its own dependency (F2): it is the store's outage, never one tenant's, so the
+    /// batch is abandoned as before #124 and the row's tenant is not put in back-off.
+    /// </summary>
+    [Fact]
+    public async Task ProcessBatch_WhenTheStoreIsUnreachableWhileVerifyingARetry_AbandonsTheBatch_AndBacksOffNoTenant()
+    {
+        var (store, _, row) = ClaimOne();
+        var sut = Build(store, out var probe, out var harness);
+        harness.Database.Add(row);
+        harness.Database.RetryOn = ex => ex is TimeoutException;
+        harness.Database.FailAfterNextCommit = new TimeoutException("lost after the commit");
+        probe.During = () => harness.Database.FailReadsWith = new InboxDependencyUnavailableException("the store's database is down");
+
+        var result = await sut.ProcessBatchAsync(batchSize: 10, CancellationToken.None);
+
+        row.TenantId.ShouldNotBeNull("control: the row has a tenant to blame");
+        result.AbortReason.ShouldBe(InboxBatchAbortReason.DependencyUnavailable);
+        harness.TenantBackoff.For(GuardHarness.Store).IsEmpty.ShouldBeTrue("no tenant is blamed for the store's outage");
+    }
+
+    /// <summary>A dependency of the row's tenant (#124 D5): that row waits, nothing counted, and the batch goes on.</summary>
+    [Fact]
+    public async Task ProcessBatch_WhenATenantsDependencyIsUnavailable_DefersThatRow_WithItsAttemptCountUnchanged_AndGoesOn()
+    {
+        var rows = new[] { Row(retryCount: 2, tenantId: "A"), Row(tenantId: "B") };
+        var claim = InboxFixtures.Claim(rows);
+        var store = StoreReturning(claim);
+        var sut = Build(store, out var probe, out var harness);
+        foreach (var row in rows)
+        {
+            row.ClaimToken = claim.Token;
+            harness.Database.Add(row);
+        }
+
+        probe.ThrowWhen = context => context.TenantId == "A" ? new InboxDependencyUnavailableException("A's partner is down") : null;
+
+        var result = await sut.ProcessBatchAsync(batchSize: 10, CancellationToken.None);
+
+        result.AbortReason.ShouldBe(InboxBatchAbortReason.None);
+        result.Processed.ShouldBe(1);
+        result.Released.ShouldBe(1, "a tenant's deferral counts no attempt");
+        result.Retried.ShouldBe(0);
+        var outcome = (await CapturedOutcomes(store)).ShouldHaveSingleItem();
+        outcome.Kind.ShouldBe(InboxOutcomeKind.Retry);
+        outcome.RetryCount.ShouldBe(2, "unchanged");
+        outcome.NextRetryAtUtc.ShouldBe(GuardHarness.Now + DefaultOptions.PollingInterval, "the end of A's back-off");
+    }
+
+    /// <summary>
+    /// A transport delivery puts the row's tenant in back-off while its retry is in flight (the state is
+    /// shared): the retry's own failure is held — it waits for that back-off, and the batch goes on, as
+    /// for any tenant's deferral — instead of abandoning the batch (PR #209 review).
+    /// </summary>
+    [Fact]
+    public async Task ProcessBatch_WhenTheTenantEntersBackOffWhileItsRetryIsInFlight_DefersThatRow_AndGoesOn()
+    {
+        var rows = new[] { Row(retryCount: 2, tenantId: "A"), Row(tenantId: "B") };
+        var claim = InboxFixtures.Claim(rows);
+        var store = StoreReturning(claim);
+        var sut = Build(store, out var probe, out var harness);
+        foreach (var row in rows)
+        {
+            row.ClaimToken = claim.Token;
+            harness.Database.Add(row);
+        }
+
+        var tenants = harness.TenantBackoff.For(GuardHarness.Store);
+        DateTimeOffset blockedUntil = default;
+        probe.ThrowWhen = context =>
+        {
+            if (context.TenantId != "A")
+            {
+                return null;
+            }
+
+            // A delivery of A on a transport thread failed first and put A in back-off.
+            tenants.OnDown("A", harness.Clock.GetUtcNow(), out blockedUntil);
+            return new InboxDependencyUnavailableException("A's partner is down");
+        };
+
+        var result = await sut.ProcessBatchAsync(batchSize: 10, CancellationToken.None);
+
+        result.AbortReason.ShouldBe(InboxBatchAbortReason.None, "A's cause is A's own: the batch goes on");
+        result.Processed.ShouldBe(1);
+        var outcome = (await CapturedOutcomes(store)).ShouldHaveSingleItem();
+        outcome.Kind.ShouldBe(InboxOutcomeKind.Retry);
+        outcome.RetryCount.ShouldBe(2, "unchanged");
+        outcome.NextRetryAtUtc.ShouldBe(blockedUntil, "the back-off the delivery began");
+        tenants.TryGetDelay("A", out var delay).ShouldBeTrue();
+        delay.ShouldBe(DefaultOptions.PollingInterval, "one failure of the curve");
+    }
+
     // ── Transient failures ────────────────────────────────────────────────────────────────────
 
     [Fact]
@@ -369,7 +489,8 @@ public sealed class InboxProcessorTests
     [Fact]
     public async Task ProcessBatch_WhenDependencyUnavailable_ReleasesTheRemainderWithoutRetries()
     {
-        var rows = Enumerable.Range(0, 3).Select(_ => Row()).ToArray();
+        // No tenant to narrow the outage to: the batch is abandoned as before #124.
+        var rows = Enumerable.Range(0, 3).Select(_ => Row(tenantId: null)).ToArray();
         var claim = InboxFixtures.Claim(rows);
         var store = StoreReturning(claim);
         var sut = Build(store, out var probe, out var harness);
@@ -547,7 +668,7 @@ public sealed class InboxProcessorTests
     private static IInboxProcessorStore StoreReturning(InboxClaim claim)
     {
         var store = Substitute.For<IInboxProcessorStore>();
-        store.ClaimBatchAsync(Arg.Any<int>(), Arg.Any<TimeSpan>(), Arg.Any<CancellationToken>())
+        store.ClaimBatchAsync(Arg.Any<int>(), Arg.Any<TimeSpan>(), Arg.Any<IReadOnlyList<string>>(), Arg.Any<CancellationToken>())
             .Returns(ValueTask.FromResult(claim));
         store.ApplyOutcomesAsync(
                 Arg.Any<Guid>(), Arg.Any<IReadOnlyList<InboxOutcome>>(), Arg.Any<CancellationToken>())
@@ -607,7 +728,8 @@ public sealed class InboxProcessorTests
             options,
             harness.Policy,
             NullLogger<InboxProcessor>.Instance,
-            GuardHarness.Store);
+            GuardHarness.Store,
+            harness.TenantBackoff.For(GuardHarness.Store));
     }
 
     private static IMessageSerializer RoundTripSerializer()
@@ -631,6 +753,9 @@ public sealed class InboxProcessorTests
         public List<Guid> ScopeIds { get; } = [];
 
         public Exception? Throw { get; set; }
+
+        /// <summary>Gets or sets a fault chosen from the handler's context: a tenant-scoped one, say.</summary>
+        public Func<MessageContext, Exception?>? ThrowWhen { get; set; }
 
         public Action? During { get; set; }
     }
@@ -656,6 +781,11 @@ public sealed class InboxProcessorTests
             if (probe.Throw is not null)
             {
                 throw probe.Throw;
+            }
+
+            if (probe.ThrowWhen?.Invoke(context) is { } fault)
+            {
+                throw fault;
             }
 
             return ValueTask.CompletedTask;

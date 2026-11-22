@@ -203,9 +203,9 @@ with the first store); any other value → `OutboxPayloadException`.
 |---|---|
 | dispatched | `Published` |
 | `OutboxPayloadException` — unroutable endpoint, transport row without `ContractName` or `Source`, local payload no process can read | dead-letter **on first sight** |
-| `OutboxTransportUnavailableException` — also a local consumer's dependency outage | **defer** that row's endpoint: the row and its endpoint's later rows are settled `Deferred` — `NextRetryAtUtc` at the end of the endpoint's back-off, `RetryCount` and error text untouched — no retry consumed, the claim skips them; the other endpoint's rows are still dispatched |
+| `OutboxTransportUnavailableException` — also a local consumer's dependency outage | on a row **with a tenant**, defer that tenant on the endpoint (below, #124); otherwise **defer** that row's endpoint: the row and its endpoint's later rows are settled `Deferred` — `NextRetryAtUtc` at the end of the endpoint's back-off, `RetryCount` and error text untouched — no retry consumed, the claim skips them; the other endpoint's rows are still dispatched |
 | no dispatcher registered for the key (`GetKeyedService` returns null) → `OutboxConfigurationException` | release the rest of the batch (earlier rows keep their outcomes), settle it, **rethrow**: that store's outbox loop backs off on the idle curve and reports it each time (event 1402, `Critical`) — it never ends a loop. Every store registers both dispatchers, so a host composed through `AddMessageStore` never meets it: a missing transport is the activation row below |
-| `GetKeyedService` throws `InvalidOperationException` (not `ObjectDisposedException`) | **defer** the endpoint as above, **not** rethrown: `DispatcherActivationFailed`, event 1009 per failed activation (row's `MessageId`, `TenantId`, `Endpoint`; with no transport, its message names the call to add). A store with no transport still delivers its local rows |
+| `GetKeyedService` throws `InvalidOperationException` (not `ObjectDisposedException`) | **defer** the tenant, or the endpoint, as above, **not** rethrown: `DispatcherActivationFailed`, event 1009 per failed activation (row's `MessageId`, `TenantId`, `Endpoint`; with no transport, its message names the call to add). A store with no transport still delivers its local rows |
 | `OperationCanceledException` / `ObjectDisposedException` **while the host stops** (`HostStop`) | release the rest, nothing counted |
 | anything else | transient: retry with back-off until `MaxRetries` |
 
@@ -228,12 +228,48 @@ with the first store); any other value → `OutboxPayloadException`.
   in back-off are deferred unattempted: those of an endpoint the claim excluded (a store breaking the
   contract — this alone sets `HandedOverInBackOff`), and those of a back-off begun after the claim.
   Events: 1004 / 1009 why the endpoint is down, 1010 what is deferred and until when.
-- **Known defect (#124).** Activation runs in the row's scope, built from its `TenantId`, so an
-  `InvalidOperationException` can be tenant-scoped. One that never clears fails each time the
-  endpoint is tried — its back-off grows toward the ceiling, or restarts from the base delay whenever
-  another tenant's row of the endpoint gets through first — and the row never dead-letters; the
-  other endpoint's rows still go out. Do not copy the endpoint-wide verdict into the inbox: there, a guard
-  that cannot be activated fails that one delivery or retry, never the batch.
+- **A down verdict is the tenant's first (#124).** Activation runs in the row's scope, built from its
+  `TenantId`, and a broker can refuse one tenant, so both verdicts can be tenant-scoped. Each endpoint
+  keeps its tenants in back-off (`OutboxEndpointBackoff.TenantsOf`, a `TenantBackoff` on the same
+  curve). A down verdict on a row with a tenant blocks that tenant on the endpoint: its rows of the
+  batch are settled `Deferred` unattempted, and until its back-off ends the processor passes it to
+  the claim on that endpoint (`excludedTransportTenants` / `excludedLocalTenants`, from
+  `TenantBackoff.BlockedAt`; the shared empty array when there is none), so its rows are neither
+  claimed nor rewritten (A7): when the back-off ends one batch is claimed, its first row tried and the
+  rest deferred again, so a one-tenant store touches one batch per back-off period. A row of a
+  listed tenant handed over anyway is deferred and sets `HandedOverInBackOff`, as for an endpoint. The
+  EF store sends each list as one array parameter (`EF.Parameter`: EF Core 10 otherwise sends one
+  parameter per value), adds nothing for an empty list, and spells out `TenantId == null` so a row
+  with no tenant is never left out, even under `UseRelationalNulls()`. **The bound:** the filter is
+  residual, not an index range, so each claim reads, and never writes, a held tenant's claimable rows,
+  as it reads past waiting rows (`TenantExclusionPlanTests`): its cost grows with that backlog, not the
+  batch size. `TenantId` appended to the claim indexes changed neither plan nor buffers at 20,000 and
+  200,000 rows (A8): do not add it. The exit for a tenant that will not recover is
+  `DeadLetterPendingAsync`. A row with no tenant blocks the endpoint as above.
+  - **The probe (half-open).** After a tenant is blocked, the next down verdict from a tenant with
+    no entry — before any success — blocks that tenant **and** the endpoint, and clears the probe
+    (`OutageScope.Shared`, event 1010). A success clears the probe. So a real outage costs at most two
+    attempts per batch.
+  - **P1, the order.** While a tenant has an entry, a batch attempts the rows of tenants with no
+    entry first, in claim order, then the others by their entry's current delay (fewest failures),
+    claim order on ties. One array and one list per batch; none with an empty map.
+  - **P2, suspicion.** A tenant with an entry that fails again re-blocks only itself — unless the
+    endpoint is *suspected* (it backed off and no success has cleared it since), where it counts as a
+    probe like any other. Without P1, two tenants that never recover head every claim; without P2, a
+    real outage costs one attempt per tenant once every tenant has an entry.
+  - **Held.** A down verdict while the tenant's back-off is still in force — an attempt in flight
+    when another blocked it, on another transport thread — changes nothing (`OutageScope.Held`): the
+    same end, no growth of the curve, the probe untouched, and the deferred delivery logs 2014, not
+    2013. Otherwise prefetched deliveries take one outage to the ceiling, and a suspected store's
+    tenant trips the probe it set itself.
+  - **C1.** A stop or a configuration fault releases the remainder of the attempt order, whichever
+    pass was running.
+  - Entries leave on their tenant's success, or once expired for a whole ceiling (pruned once per
+    batch). Event 1011 reports, per batch and (endpoint, tenant), what waits. The operator's exit for a
+    tenant that never recovers is `IOutboxAdminStore.DeadLetterPendingAsync`; nothing dead-letters a
+    tenant on its own.
+  - Do not copy the endpoint-wide verdict into the inbox: there, a guard that cannot be activated
+    fails that one delivery or retry, never the batch.
 - **Never throw `OutboxPayloadException`** for a broker nack, a timeout, a refused connection, an
   HTTP 503 or a database timeout. Only proven permanence dead-letters.
 
@@ -321,8 +357,15 @@ drain.
      `RetryCount` 0, `ProcessedAtUtc` set (2203). A permanent verdict counts no attempt.
    - **Transient**: `RetryCount` 1, `NextRetryAtUtc` from the back-off (2202) — or dead-lettered at
      once if `MaxRetries` is 1.
-   - **Dependency unavailable** (`InboxDependencyUnavailableException`): **no row**; the transport
-     pauses and redelivers, nothing counted.
+   - **Dependency unavailable** (`InboxDependencyUnavailableException`) on a delivery **with a
+     tenant** (#124 D6): the tenant is blocked in the store's inbox state (`InboxTenantBackoff`, one
+     `TenantBackoff` per store, shared with the retry loop and thread-safe), and the row is written
+     `Failed`, `RetryCount` 0, `NextRetryAtUtc` at the end of the tenant's back-off (2013); the
+     delivery is acknowledged once that row committed. A later delivery of a blocked tenant runs
+     `FindAsync`, then writes the same row **without running the handler** (2014, `Debug`). **No
+     row** — the transport pauses and redelivers, nothing counted — for a delivery with no tenant, a
+     local delivery (the outbox defers it, D1), the store unreachable, the probe failing, or a deferred
+     row that cannot be written.
    - A row already there → another delivery owns it (2208): success.
    - The `Failed` row cannot be written (2204): transient — the transport redelivers, counted.
    - **The store reports itself unreachable** — `FindAsync` or `TryInsertFailedAsync` throws
@@ -441,7 +484,8 @@ settled in one `ApplyOutcomesAsync`.
 | lease lost (`MarkClaimedProcessedAsync` false, or `IsLeaseLost`) — 2205 | untouched, owned elsewhere | continues |
 | permanent — `PermanentMessageException`, `InboxPayloadException`, unknown consumer, type that no longer resolves, unreadable payload | dead-letter **now**, `RetryCount` unchanged | continues |
 | transient (anything unrecognised) | `Retry` with back-off; `DeadLetter` at `MaxRetries` | continues |
-| `InboxDependencyUnavailableException` | released, nothing counted | abandoned; back-off toward `DependencyUnavailableBackoff` |
+| `InboxDependencyUnavailableException`, a row with a tenant (#124 D5) | `Retry` with `RetryCount` unchanged, `NextRetryAtUtc` at the end of the tenant's back-off; its later rows of the batch the same, unattempted (2013); the tenant is left out of the claims until then (`excludedTenants`, A7) | continues; counted as released |
+| `InboxDependencyUnavailableException`: no tenant, the store unreachable (`RetryOutcome.StoreUnreachable`, set when the guard's verify read throws it), or the probe failing | released, nothing counted | abandoned; back-off toward `DependencyUnavailableBackoff`; the store's inbox suspected |
 | `InboxConfigurationException` (no guard for the store) | released | abandoned, rethrown: that store's inbox loop backs off on the idle curve (1402), and never ends |
 | host stop | released, nothing counted | abandoned |
 
@@ -454,7 +498,8 @@ settled in one `ApplyOutcomesAsync`.
 
 Same shape as the outbox — candidates by `RowId` ordered on `ReceivedAtUtc`, sorted, stamped with the
 eligibility predicate replayed (`NOT DeadLettered AND (Status IN (Failed, Received) OR (Processing
-AND LockedUntilUtc <= now)) AND NextRetryAtUtc` reached) — with two differences:
+AND LockedUntilUtc <= now)) AND NextRetryAtUtc` reached), the tenants in back-off left out of the
+candidates as in the outbox (one array parameter, never a row with no tenant) — with two differences:
 
 - The read-back by token always runs, and fills a key → `RowId` map. **Settlement must run on the
   same store instance that claimed** (the loop's scope): an outcome whose key is not in the map is

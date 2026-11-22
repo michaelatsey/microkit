@@ -132,7 +132,9 @@ FIRST DELIVERY, per handler:
      a success
   4. the handler failed → everything rolled back; TryInsertFailedAsync writes the row Failed in a
      transaction of its own, and only then is the delivery acknowledged. A permanent verdict
-     counts no attempt; a dependency outage writes no row and redelivers
+     counts no attempt; a dependency outage of one tenant writes the row Failed, uncounted, due at
+     the end of that tenant's back-off (#124), and one with no tenant, of the store itself or shared
+     by every tenant (the probe failed) writes no row and redelivers
 
 RETRY (the store's inbox loop → InboxProcessor; it never invokes a handler itself):
   1. IInboxProcessorStore.ClaimBatchAsync — atomic, selects candidates by single-column RowId,
@@ -164,8 +166,9 @@ Any proposal that claims by filtering an UPDATE on the compound key with two Con
 FORBIDDEN". That was wrong and would REJECT the shipped design.
 
 OutboxMessage and InboxMessage are INFRASTRUCTURE tables, deliberately read CROSS-TENANT by the
-processors: ADR-MSG-002 specifies shared-DB cross-tenant reservation, ClaimBatchAsync takes no
-tenantId, and neither entity configuration carries a global query filter.
+processors: ADR-MSG-002 specifies shared-DB cross-tenant reservation, ClaimBatchAsync is scoped to no
+tenant — it only leaves out the tenants in back-off (#124 A7), never a row with no tenant — and
+neither entity configuration carries a global query filter.
 
 The model is: TenantId TRAVELS ON THE ROW, and the processor contextualises per message by
 building an IExecutionContext from message.TenantId. Isolation is achieved by the execution scope,

@@ -24,10 +24,18 @@ namespace MicroKit.Messaging.Processing;
 /// </para>
 /// <para>
 /// <b>Failure classification.</b> A failure known to be permanent dead-letters on sight; a
-/// dependency outage abandons the batch and releases the remainder with no attempt counted; a lost
-/// claim writes nothing; a host stop releases the remainder with no attempt counted; everything
-/// else is transient, retried with full-jitter back-off until <see cref="InboxProcessorOptions.MaxRetries"/>.
-/// Failures are settled in one call at the end of the batch, each conditioned on the claim.
+/// dependency outage on a row with a tenant puts that tenant in back-off — its rows of the batch wait
+/// to the end of it with no attempt counted, and the batch goes on (#124) — and only the probe failing
+/// (a second tenant down before any success), a row with no tenant, or the store itself unreachable
+/// abandon the batch and release the remainder with no attempt counted; a lost claim writes nothing; a
+/// host stop releases the remainder with no attempt counted; everything else is transient, retried with
+/// full-jitter back-off until <see cref="InboxProcessorOptions.MaxRetries"/>. Failures are settled in
+/// one call at the end of the batch, each conditioned on the claim.
+/// </para>
+/// <para>
+/// <b>Ordering.</b> Rows are retried in claim order — except while a tenant is in back-off: the rows
+/// of tenants with no back-off entry are then retried first, then the others, those that failed least
+/// first (<see cref="TenantBackoff"/>). No order is promised.
 /// </para>
 /// </remarks>
 /// <param name="store">
@@ -44,6 +52,10 @@ namespace MicroKit.Messaging.Processing;
 /// <param name="policy">Attempts and back-off.</param>
 /// <param name="logger">Logger.</param>
 /// <param name="storeKey">The store this processor drains.</param>
+/// <param name="tenantBackoff">
+/// The store's inbox tenant back-off, shared with the deliveries guarded by the store (#124). Null only
+/// for a processor built by hand, which then gets one of its own.
+/// </param>
 internal sealed class InboxProcessor(
     IInboxProcessorStore store,
     MessageHandlerRegistry registry,
@@ -54,16 +66,26 @@ internal sealed class InboxProcessor(
     InboxProcessorOptions options,
     InboxRetryPolicy policy,
     ILogger<InboxProcessor> logger,
-    MessageStoreKey storeKey)
+    MessageStoreKey storeKey,
+    TenantBackoff? tenantBackoff = null)
     : IInboxProcessor
 {
+    private readonly TenantBackoff _tenants = tenantBackoff
+        ?? new TenantBackoff(options.PollingInterval, options.DependencyUnavailableBackoff);
+
     /// <inheritdoc />
     public async ValueTask<InboxBatchResult> ProcessBatchAsync(
         int batchSize,
         CancellationToken cancellationToken = default)
     {
+        // A tenant in back-off is left out of the claim (#124 A7): its rows are neither claimed nor
+        // rewritten while its dependency is down, and the other tenants' rows behind them are reached.
+        // The shared empty array while no tenant is in back-off.
+        var start = policy.Clock.GetUtcNow();
+        _tenants.Prune(start);
+
         var claim = await store
-            .ClaimBatchAsync(batchSize, options.LeaseDuration, cancellationToken)
+            .ClaimBatchAsync(batchSize, options.LeaseDuration, _tenants.BlockedAt(start), cancellationToken)
             .ConfigureAwait(false);
 
         if (claim.Count == 0)
@@ -82,19 +104,41 @@ internal sealed class InboxProcessor(
         InboxConfigurationException? configurationFault = null;
         var processed = 0;
         var leasesLost = 0;
-        var index = 0;
 
-        for (; index < messages.Count; index++)
+        // While a tenant is in back-off, the rows of tenants with no entry are retried first (#124 P1);
+        // null — the happy path — is claim order, and allocates nothing.
+        var order = AttemptOrder(messages);
+        var position = 0;
+
+        // The rows a tenant's back-off deferred in this batch, unattempted or attempted with no attempt
+        // counted: reported with the released ones, and by 2013 per tenant once settled.
+        var tenantDeferred = 0;
+        List<(string Tenant, int Count, DateTimeOffset Until)>? tenantsDeferred = null;
+
+        for (; position < messages.Count; position++)
         {
             if (cancellationToken.IsCancellationRequested)
             {
                 abortReason = InboxBatchAbortReason.Cancelled;
-                InboxProcessorLogs.BatchCancelled(logger, messages.Count - index);
+                InboxProcessorLogs.BatchCancelled(logger, messages.Count - position);
                 break;
             }
 
-            var message = messages[index];
+            var message = order is null ? messages[position] : messages[order[position]];
             var key = new InboxMessageKey(message.MessageId, message.ConsumerType);
+
+            // A row of a tenant in back-off (#124 D5): due again at the end of the tenant's back-off,
+            // its attempt count and its error left as they are — the rest of the batch in which the
+            // tenant was blocked, or a row a delivery blocked since the claim (A7).
+            if (message.TenantId is { } blocked
+                && !_tenants.IsEmpty
+                && _tenants.IsBlocked(blocked, policy.Clock.GetUtcNow(), out var blockedUntil))
+            {
+                deferred.Add(InboxOutcome.Retry(key, message.RetryCount, blockedUntil, message.ErrorMessage));
+                tenantDeferred++;
+                Tally(ref tenantsDeferred, blocked, blockedUntil);
+                continue;
+            }
 
             RetryOutcome outcome;
             try
@@ -111,7 +155,7 @@ internal sealed class InboxProcessor(
                 // below, then the fault is rethrown: this store's loop reports it and backs off.
                 abortReason = InboxBatchAbortReason.ConfigurationError;
                 configurationFault = ex;
-                InboxProcessorLogs.ServiceUnresolvable(logger, ex, messages.Count - index);
+                InboxProcessorLogs.ServiceUnresolvable(logger, ex, messages.Count - position);
                 break;
             }
             catch (Exception ex) when (ex is InboxPayloadException)
@@ -134,7 +178,7 @@ internal sealed class InboxProcessor(
                 // landed. Charging an attempt would penalise a message for a shutdown it had no
                 // part in.
                 abortReason = InboxBatchAbortReason.Cancelled;
-                InboxProcessorLogs.BatchCancelled(logger, messages.Count - index);
+                InboxProcessorLogs.BatchCancelled(logger, messages.Count - position);
                 break;
             }
 
@@ -142,6 +186,7 @@ internal sealed class InboxProcessor(
             {
                 case RetryResult.Processed:
                     processed++;
+                    _tenants.Succeeded(message.TenantId);
                     continue;
 
                 case RetryResult.LeaseLost:
@@ -152,13 +197,32 @@ internal sealed class InboxProcessor(
                     break;
             }
 
+            if (outcome.Verdict is DeliveryVerdict.DependencyUnavailable)
+            {
+                if (!outcome.StoreUnreachable
+                    && message.TenantId is { } tenant
+                    && _tenants.OnDown(tenant, policy.Clock.GetUtcNow(), out var tenantUntil)
+                        is not TenantBackoff.OutageScope.Shared)
+                {
+                    // That tenant's dependency (#124 D5): the row waits to the end of its back-off with
+                    // no attempt counted, and the batch goes on.
+                    deferred.Add(InboxOutcome.Retry(
+                        key, message.RetryCount, tenantUntil, policy.Truncate(outcome.Error?.Message)));
+                    tenantDeferred++;
+                    Tally(ref tenantsDeferred, tenant, tenantUntil);
+                    continue;
+                }
+
+                // The store unreachable, a row with no tenant, or the probe failing (its tenant is in
+                // back-off now too): the cause is shared, and the batch is abandoned as before #124.
+                _tenants.MarkSuspected();
+                abortReason = InboxBatchAbortReason.DependencyUnavailable;
+                InboxProcessorLogs.DependencyUnavailable(logger, outcome.Error!, messages.Count - position);
+                break;
+            }
+
             switch (outcome.Verdict)
             {
-                case DeliveryVerdict.DependencyUnavailable:
-                    abortReason = InboxBatchAbortReason.DependencyUnavailable;
-                    InboxProcessorLogs.DependencyUnavailable(logger, outcome.Error!, messages.Count - index);
-                    break;
-
                 case DeliveryVerdict.Permanent:
                     InboxProcessorLogs.PermanentFailure(
                         logger, outcome.Error!, message.MessageId.Value, message.ConsumerType);
@@ -171,31 +235,96 @@ internal sealed class InboxProcessor(
                     deferred.Add(BuildTransientOutcome(message, key, outcome.Error!));
                     continue;
             }
-
-            // Only the dependency-unavailable arm reaches here: the batch is abandoned.
-            break;
         }
 
-        // Everything from `index` onward was claimed but never attempted — including the row
-        // that triggered the break. Released, never Retry: an outage must not consume the
-        // retry budget of rows it never reached.
-        for (var i = index; i < messages.Count; i++)
+        // Every row from `position` onward in the attempt order was claimed but never attempted —
+        // including the row that triggered the break — whichever pass was running (C1). Released,
+        // never Retry: an outage must not consume the retry budget of rows it never reached.
+        for (var i = position; i < messages.Count; i++)
         {
-            var pending = messages[i];
+            var pending = order is null ? messages[i] : messages[order[i]];
             deferred.Add(InboxOutcome.Released(
                 new InboxMessageKey(pending.MessageId, pending.ConsumerType)));
         }
 
         // Settle before anything else can throw: a stranded lease is worse than a late
         // exception, because it blocks its row for the whole LeaseDuration.
-        await SettleAsync(claim.Token, deferred).ConfigureAwait(false);
+        var settled = await SettleAsync(claim.Token, deferred).ConfigureAwait(false);
+
+        if (settled && tenantsDeferred is not null)
+        {
+            foreach (var (tenant, count, until) in tenantsDeferred)
+            {
+                InboxProcessorLogs.TenantDeferred(logger, storeKey.Value, tenant, count, until);
+            }
+        }
 
         if (configurationFault is not null)
         {
             throw configurationFault;
         }
 
-        return Summarize(deferred, messages.Count, processed, leasesLost, abortReason);
+        return Summarize(deferred, messages.Count, processed, leasesLost, tenantDeferred, abortReason);
+    }
+
+    /// <summary>
+    /// The order the batch's rows are retried in, as indexes into the claim; <see langword="null"/> for
+    /// claim order (#124 P1).
+    /// </summary>
+    /// <remarks>
+    /// With no tenant in back-off, claim order, and nothing is allocated. Otherwise the rows whose tenant
+    /// has no entry come first, in claim order — the probe is a tenant not known to fail — then the rows
+    /// of tenants with one, the smallest current delay first, claim order on ties. One array and one list
+    /// per batch, never per row.
+    /// </remarks>
+    private int[]? AttemptOrder(IReadOnlyList<InboxMessage> messages)
+    {
+        if (_tenants.IsEmpty)
+        {
+            return null;
+        }
+
+        var order = new int[messages.Count];
+        var known = new List<(long DelayTicks, int Index)>();
+        var next = 0;
+        for (var i = 0; i < messages.Count; i++)
+        {
+            if (messages[i].TenantId is { } tenant && _tenants.TryGetDelay(tenant, out var delay))
+            {
+                known.Add((delay.Ticks, i));
+            }
+            else
+            {
+                order[next++] = i;
+            }
+        }
+
+        // ValueTuple's own ordering: the delay, then the claim index.
+        known.Sort();
+        foreach (var (_, index) in known)
+        {
+            order[next++] = index;
+        }
+
+        return order;
+    }
+
+    /// <summary>Adds a row to its tenant's tally for event 2013; the latest end of back-off wins.</summary>
+    private static void Tally(
+        ref List<(string Tenant, int Count, DateTimeOffset Until)>? tallies, string tenant, DateTimeOffset until)
+    {
+        tallies ??= [];
+        for (var i = 0; i < tallies.Count; i++)
+        {
+            var (name, count, latest) = tallies[i];
+            if (string.Equals(name, tenant, StringComparison.Ordinal))
+            {
+                tallies[i] = (name, count + 1, until > latest ? until : latest);
+                return;
+            }
+        }
+
+        tallies.Add((tenant, 1, until));
     }
 
     /// <summary>Reads the row back and runs it through the pipeline's guarded retry.</summary>
@@ -326,11 +455,12 @@ internal sealed class InboxProcessor(
     /// lease in the batch would stay held until expiry. A brief flush window on shutdown is
     /// strictly cheaper.
     /// </remarks>
-    private async ValueTask SettleAsync(Guid claimToken, List<InboxOutcome> outcomes)
+    /// <returns><see langword="true"/> when every outcome was written.</returns>
+    private async ValueTask<bool> SettleAsync(Guid claimToken, List<InboxOutcome> outcomes)
     {
         if (outcomes.Count == 0)
         {
-            return;
+            return true;
         }
 
         using var settleCts = new CancellationTokenSource(options.OutcomeFlushTimeout);
@@ -346,7 +476,10 @@ internal sealed class InboxProcessor(
                 // Silent success is forbidden: fewer rows than outcomes means those rows no
                 // longer carry this batch's token — their claim was lost, and nothing was counted.
                 InboxProcessorLogs.PartialSettlement(logger, written, outcomes.Count);
+                return false;
             }
+
+            return true;
         }
         catch (Exception ex)
         {
@@ -354,6 +487,7 @@ internal sealed class InboxProcessor(
             // Letting this escape would take down the loop over a condition the inbox is designed
             // to survive.
             InboxProcessorLogs.SettlementFailed(logger, ex, outcomes.Count);
+            return false;
         }
     }
 
@@ -362,11 +496,14 @@ internal sealed class InboxProcessor(
         int claimedCount,
         int processed,
         int leasesLost,
+        int tenantDeferred,
         InboxBatchAbortReason abortReason)
     {
-        var retried = 0;
+        // A tenant's deferral is settled as a Retry with its attempt count unchanged: no attempt was
+        // counted, so it is reported with the released rows.
+        var retried = -tenantDeferred;
         var deadLettered = 0;
-        var released = 0;
+        var released = tenantDeferred;
 
         foreach (var outcome in deferred)
         {

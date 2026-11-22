@@ -31,8 +31,9 @@ internal readonly record struct OutboxBatchResult(
     OutboxBatchAbortReason AbortReason)
 {
     /// <summary>
-    /// Gets a value indicating whether the store handed over rows of an endpoint the claim asked it to
-    /// leave out — a store that does not honour the claim's endpoint filter, against its contract —
+    /// Gets a value indicating whether the store handed over rows of an endpoint, or of a tenant on an
+    /// endpoint, the claim asked it to leave out — a store that does not honour the claim's endpoint or
+    /// tenant filters, against its contract —
     /// whatever endpoint verdict <see cref="AbortReason"/> holds (cancellation aside): the loop waits
     /// rather than polling again at once. A back-off that began within the batch does not set it:
     /// the rows it deferred wait out their next attempt, and such a store's next batch sets it if it

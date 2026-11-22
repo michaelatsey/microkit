@@ -61,12 +61,12 @@ internal, or does not exist. Adding a public type means editing that list on pur
 | `MessageStoreBuilder` | `Key`, `Services`, `BindAssembly(Assembly)`, `AddStartupCheck(...)` |
 | `MessageStoreRegistrationExtensions` | `AddMessageStore(this MessagingBuilder, MessageStoreKey, Action<MessageStoreBuilder>)` — how any store provider adds a store; the first call registers the engine and both outbox dispatchers |
 | `IOutboxWriter` | `AddAsync`, `AddBatchAsync`. Enlists rows in the scope's unit of work; never saves |
-| `IOutboxProcessorStore` | `ClaimBatchAsync(batchSize, lockDuration, OutboxEndpoints excluded, ct)` → `OutboxClaim`, one signature, no default: the rows of an endpoint in back-off must be left out; `ApplyOutcomesAsync(claimToken, outcomes, ct)` → rows written, every `OutboxOutcomeKind` settled |
+| `IOutboxProcessorStore` | `ClaimBatchAsync(batchSize, lockDuration, OutboxEndpoints excluded, IReadOnlyList<string> excludedTransportTenants, IReadOnlyList<string> excludedLocalTenants, ct)` → `OutboxClaim`, one signature, no default: the rows of an endpoint in back-off, and each endpoint's rows of the tenants in back-off on it, must be left out — never a row with no tenant; `ApplyOutcomesAsync(claimToken, outcomes, ct)` → rows written, every `OutboxOutcomeKind` settled |
 | `OutboxEndpoints` | `[Flags]` `None`, `Transport`, `Local` — the endpoints a claim leaves out |
 | `IOutboxAdminStore` / `IOutboxRetentionStore` | `GetDeadLetteredAsync`, `RequeueAsync` / `DeleteProcessedAsync` |
 | `IInboxGuardStore` | `FindAsync`, `ExecuteAsync<TState, TResult>` (the store's execution strategy, with commit verification; the state reaches both callbacks), `BeginAsync`, `EnlistProcessedAsync` (new delivery), `MarkClaimedProcessedAsync` (retry), `CommitAsync`, `IsLeaseLost`, `TryInsertFailedAsync`. Scoped, keyed by the store key, one instance per attempt scope |
 | `InboxRowState` | `(InboxMessageStatus Status, bool DeadLettered, Guid RowId)` — what `FindAsync` reads |
-| `IInboxProcessorStore` | `ClaimBatchAsync(batchSize, leaseDuration, ct)` → `InboxClaim`; `ApplyOutcomesAsync` |
+| `IInboxProcessorStore` | `ClaimBatchAsync(batchSize, leaseDuration, IReadOnlyList<string> excludedTenants, ct)` → `InboxClaim`, one signature, no default: the tenants in back-off are left out, never a row with no tenant; `ApplyOutcomesAsync` |
 | `IInboxAdminStore` / `IInboxRetentionStore` | `GetDeadLetteredAsync`, `RequeueAsync(InboxMessageKey)` / `DeleteProcessedAsync` |
 | `ILocalMessageSender` | `SendAsync(object message, MessageId messageId, DateTimeOffset occurredOnUtc, ct)` — a local message: never handed to a transport |
 | `MessageConsumerKey` | `Of(Type)`, `FromAssemblyQualifiedName(string)` — the version-free inbox key of a handler type: no `Version`, `Culture` or `PublicKeyToken`, generic arguments included |

@@ -143,6 +143,5 @@ PostgreSQL suites skip on a machine with no Docker.
 
 ## Known defects and owed work
 
-- One tenant's row can stall a store's outbox (#124): event 1009 names the row; README has the SQL.
 - The store set is static; a store per tenant database is #191.
 - Versioning and releases: ADR-GLOBAL-002.

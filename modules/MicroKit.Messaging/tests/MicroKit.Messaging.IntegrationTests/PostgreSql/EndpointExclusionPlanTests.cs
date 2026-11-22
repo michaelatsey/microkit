@@ -43,7 +43,7 @@ public sealed class EndpointExclusionPlanTests(PostgreSqlFixture fixture, ITestO
             .Options);
         var store = new EfOutboxStore<TestMessagingDbContext>(context, new FakeTimeProvider(Now));
         var query = capture.Arm();
-        var claim = await store.ClaimBatchAsync(100, TimeSpan.FromMinutes(5), excluded);
+        var claim = await store.ClaimBatchAsync(100, TimeSpan.FromMinutes(5), excluded, [], []);
         claim.Messages.ShouldAllBe(m => m.Endpoint == up, "only the other endpoint's rows are claimed");
         claim.Count.ShouldBe(Wanted);
 

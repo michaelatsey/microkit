@@ -146,8 +146,16 @@ internal sealed class EfOutboxStore<TContext>(
 
     /// <inheritdoc/>
     public async ValueTask<OutboxClaim> ClaimBatchAsync(
-        int batchSize, TimeSpan lockDuration, OutboxEndpoints excluded, CancellationToken ct = default)
+        int batchSize,
+        TimeSpan lockDuration,
+        OutboxEndpoints excluded,
+        IReadOnlyList<string> excludedTransportTenants,
+        IReadOnlyList<string> excludedLocalTenants,
+        CancellationToken ct = default)
     {
+        ArgumentNullException.ThrowIfNull(excludedTransportTenants);
+        ArgumentNullException.ThrowIfNull(excludedLocalTenants);
+
         var now = timeProvider.GetUtcNow();
         var lockExpiry = now.Add(lockDuration);
         var token = Guid.NewGuid();
@@ -164,9 +172,11 @@ internal sealed class EfOutboxStore<TContext>(
         //    business timestamp the caller supplies, or a backdated event jumps every row ahead of
         //    it. This clause and the contended read-back below must always agree — two different
         //    sorts would make the claim's contents depend on whether it was contended.
-        //    The excluded endpoints' rows are left out here only: the stamp below matches the
-        //    candidates by id, and the read-back by token.
-        var candidates = await Excluding(Dispatchable(now), excluded)
+        //    The excluded endpoints' and tenants' rows are left out here only: the stamp below
+        //    matches the candidates by id, and the read-back by token.
+        var candidates = await Excluding(
+                ExcludingTenants(Dispatchable(now), excluded, excludedTransportTenants, excludedLocalTenants),
+                excluded)
             .OrderBy(m => m.CreatedAtUtc)
             .Take(batchSize)
             .ToListAsync(ct)
@@ -387,6 +397,32 @@ internal sealed class EfOutboxStore<TContext>(
         return rows == 1;
     }
 
+    /// <inheritdoc/>
+    public async ValueTask<int> DeadLetterPendingAsync(string tenantId, string reason, CancellationToken ct = default)
+    {
+        ArgumentNullException.ThrowIfNull(tenantId);
+        ArgumentException.ThrowIfNullOrWhiteSpace(reason);
+
+        var now = timeProvider.GetUtcNow();
+        var error = reason.Length <= OutboxMessageConfiguration.ErrorMessageMaxLength
+            ? reason
+            : reason[..CutBefore(reason, OutboxMessageConfiguration.ErrorMessageMaxLength)];
+
+        // One statement. ClaimToken null: a row a processor holds is left to its batch.
+        return await context.Set<OutboxMessage>()
+            .Where(m => m.TenantId == tenantId
+                        && m.Status == OutboxMessageStatus.Pending
+                        && !m.DeadLettered
+                        && m.ClaimToken == null)
+            .ExecuteUpdateAsync(s => s
+                .SetProperty(m => m.Status, OutboxMessageStatus.Failed)
+                .SetProperty(m => m.DeadLettered, true)
+                .SetProperty(m => m.ErrorMessage, error)
+                .SetProperty(m => m.ProcessedAtUtc, now),
+                ct)
+            .ConfigureAwait(false);
+    }
+
     // ---------- IOutboxRetentionStore ----------
 
     /// <inheritdoc/>
@@ -402,6 +438,76 @@ internal sealed class EfOutboxStore<TContext>(
     }
 
     // ---------- helpers ----------
+
+    /// <summary>
+    /// Leaves out the rows of the tenants in back-off on each endpoint (#124): a tenant's transport rows
+    /// while the transport refuses it, its local rows while a local consumer's dependency is down for it.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Each list is one array parameter (<see cref="EF.Parameter{T}"/>), so the SQL text does not change
+    /// with the number of tenants: by default EF Core 10 sends a collection as one parameter per value.
+    /// An empty list adds no predicate — the claim's SQL is then exactly #188's. A list for an endpoint
+    /// the claim already leaves out is not sent. The provider must translate a collection parameter:
+    /// PostgreSQL and SQLite do (the tested providers); SQL Server needs compatibility level 130 or
+    /// above, for <c>OPENJSON</c>.
+    /// </para>
+    /// <para>
+    /// Membership is decided by the column's collation, as the endpoint ranges are (<see cref="Excluding"/>),
+    /// while the processor keys tenants ordinally: under a case-insensitive collation, holding
+    /// <c>Acme</c> also holds <c>acme</c>'s rows until <c>Acme</c>'s back-off ends.
+    /// </para>
+    /// <para>
+    /// <b>A row with no tenant is never left out.</b> The <c>TenantId == null</c> arm is spelled out
+    /// rather than left to EF Core's null compensation: under <c>UseRelationalNulls()</c>, a context
+    /// option the host owns, <c>NOT (TenantId = ANY(@p))</c> is null for a null tenant, and the row would
+    /// never be claimed again. The same holds for the endpoint arm of each predicate.
+    /// </para>
+    /// <para>
+    /// <b>The bound.</b> Each claim reads, and never writes, a held tenant's claimable rows: the filter is
+    /// a residual one, no index being ordered by tenant within the claim's order, so the cost of every
+    /// claim, for every other tenant, grows with that backlog, not with the batch size
+    /// (TenantExclusionPlanTests) — a slower store, not a stalled one. It is what the claim read over the
+    /// same backlog once deferred, before tenants were left out; past a size the planner scans the table
+    /// either way. Appending <c>TenantId</c> to <c>IX_OutboxMessages_Endpoint_Dispatchable</c> and
+    /// <c>IX_InboxMessages_Processable</c> was measured on PostgreSQL at 20,000 and 200,000 held rows and
+    /// changed neither plan nor buffer count (#124 A8). <c>DeadLetterPendingAsync</c> is the exit for a
+    /// tenant that will not recover.
+    /// </para>
+    /// </remarks>
+    private static IQueryable<OutboxMessage> ExcludingTenants(
+        IQueryable<OutboxMessage> rows,
+        OutboxEndpoints excluded,
+        IReadOnlyList<string> transportTenants,
+        IReadOnlyList<string> localTenants)
+    {
+        if (transportTenants.Count > 0 && (excluded & OutboxEndpoints.Transport) == 0)
+        {
+            var tenants = AsArray(transportTenants);
+            rows = rows.Where(m => m.Endpoint != null
+                                   || m.TenantId == null
+                                   || !EF.Parameter(tenants).Contains(m.TenantId));
+        }
+
+        if (localTenants.Count > 0 && (excluded & OutboxEndpoints.Local) == 0)
+        {
+            var tenants = AsArray(localTenants);
+            rows = rows.Where(m => m.Endpoint == null
+                                   || m.Endpoint != OutboxMessage.LocalEndpoint
+                                   || m.TenantId == null
+                                   || !EF.Parameter(tenants).Contains(m.TenantId));
+        }
+
+        return rows;
+    }
+
+    private static string[] AsArray(IReadOnlyList<string> tenants) => tenants as string[] ?? [.. tenants];
+
+    /// <summary>
+    /// The length to cut <paramref name="text"/> to, at most <paramref name="max"/>, without splitting a
+    /// surrogate pair: half of one is not valid text, and a strict encoder (Npgsql's) rejects the write.
+    /// </summary>
+    private static int CutBefore(string text, int max) => char.IsHighSurrogate(text[max - 1]) ? max - 1 : max;
 
     /// <summary>Leaves out the rows of the endpoints in back-off (#188).</summary>
     private static IQueryable<OutboxMessage> Excluding(IQueryable<OutboxMessage> rows, OutboxEndpoints excluded)

@@ -32,6 +32,11 @@ public interface IInboxProcessorStore
     /// </summary>
     /// <param name="batchSize">Maximum number of rows to claim.</param>
     /// <param name="leaseDuration">How long the lease is held.</param>
+    /// <param name="excludedTenants">
+    /// The tenants in back-off on this store's inbox (#124), whose rows must not be claimed: they are
+    /// neither claimed nor rewritten while the tenant's dependency is down, and the other tenants' rows
+    /// behind them are reached. Empty leaves no tenant out.
+    /// </param>
     /// <param name="ct">Cancellation token.</param>
     /// <returns>The rows actually won, and the token proving ownership.</returns>
     /// <remarks>
@@ -42,6 +47,20 @@ public interface IInboxProcessorStore
     /// count returned must never exceed <paramref name="batchSize"/>.
     /// </para>
     /// <para>
+    /// <b>The tenant filter is part of the contract.</b> A store that ignores it claims and re-defers a
+    /// blocked tenant's whole backlog, a batch at a time, every time its back-off ends — all of a store
+    /// whose rows carry one tenant. A row with no tenant (<see cref="InboxMessage.TenantId"/>
+    /// <see langword="null"/>) is never left out, whatever the provider's null semantics: a plain
+    /// <c>NOT IN</c> over a nullable column leaves it out.
+    /// </para>
+    /// <para>
+    /// <b>The bound.</b> Each claim reads, and never writes, a held tenant's claimable rows: no claim index
+    /// orders them by tenant, so the cost of every claim, for every other tenant, grows with that backlog,
+    /// not with <paramref name="batchSize"/> — a slower store, not a stalled one.
+    /// <see cref="IInboxAdminStore.DeadLetterPendingAsync"/> is the exit for a tenant that will not
+    /// recover.
+    /// </para>
+    /// <para>
     /// <b>Clock.</b> The expiry is computed from the application clock via
     /// <see cref="TimeProvider"/>, not from the database clock. That keeps the implementation
     /// provider-neutral and unit-testable, at the cost of being sensitive to drift between the
@@ -50,7 +69,7 @@ public interface IInboxProcessorStore
     /// </para>
     /// </remarks>
     ValueTask<InboxClaim> ClaimBatchAsync(
-        int batchSize, TimeSpan leaseDuration, CancellationToken ct = default);
+        int batchSize, TimeSpan leaseDuration, IReadOnlyList<string> excludedTenants, CancellationToken ct = default);
 
     /// <summary>
     /// Persists the dispositions the handler transaction did not already settle, in one call at

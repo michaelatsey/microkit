@@ -259,34 +259,28 @@ public sealed class OutboxProcessorTests
     // ---------------------------------------------------------------------------
 
     /// <summary>
-    /// A dispatcher that is registered but cannot be activated abandons the batch: the remainder is
-    /// released, no retry budget moves, and nothing is rethrown, so the worker keeps running.
+    /// A dispatcher that cannot be activated for one tenant's row defers that tenant's rows only (#124
+    /// D1): no retry budget moves, nothing is rethrown, the endpoint stays open, and the other tenants'
+    /// rows behind it are dispatched.
     /// </summary>
     /// <remarks>
     /// <para>
     /// <b>The fixture fails activation for message 2 only, and that shape is realistic.</b> Activation
     /// runs in the message's own scope, built from its <c>TenantId</c>, so a tenant-scoped cause fails
-    /// for some messages and not others. It is also the only shape that makes batch-wide handling
-    /// visible: a per-message implementation would retry message 2 and go on to publish message 3.
-    /// This test pins today's verdict. Releasing message 3 for message 2's cause is the known defect
-    /// ADR-MSG-019 records, so the owed fix is expected to change this test.
-    /// </para>
-    /// <para>
-    /// <b>Which assertion discriminates against what.</b> The outcomes —
-    /// <c>[Published, Released, Released]</c> — rule out a per-message implementation. They do
-    /// <i>not</i> rule out the catch-based implementation this replaced, which produces the same
-    /// three: against that one, the discriminators are the absent rethrow, the abort reason, and
-    /// event 1009 where it logged 1006.
+    /// for some messages and not others. Message 3 belongs to another tenant: it is the probe, and its
+    /// success keeps the endpoint open.
     /// </para>
     /// <para>
     /// The fault is an <see cref="InvalidOperationException"/> on purpose — the type the container
-    /// throws for a dependency it cannot supply, the one a catch-based implementation swallows, and the
-    /// only one the resolution tags. Every other type stays per message, pinned by
+    /// throws for a dependency it cannot supply, and the only one the resolution tags. Every other type
+    /// stays per message, pinned by
     /// <c>ProcessBatch_WhenActivationThrowsAnythingButInvalidOperationException_RetriesOnlyThatMessage</c>.
+    /// The row with no tenant keeps #188's endpoint verdict:
+    /// <c>ProcessBatch_WhenTheDispatcherCannotBeActivatedForARowWithNoTenant_DefersItsEndpointsRows</c>.
     /// </para>
     /// </remarks>
     [Fact]
-    public async Task ProcessBatch_WhenTheDispatcherCannotBeActivated_DefersItsEndpointsRowsWithoutConsumingRetriesOrRethrowing()
+    public async Task ProcessBatch_WhenTheDispatcherCannotBeActivatedForOneTenant_DefersThatTenantsRows_AndDispatchesTheOthers()
     {
         var first = OutboxFixtures.Message(retryCount: 1);
         // Its own tenant and kind, so the 1009 assertion below cannot pass on a neighbour's values.
@@ -297,6 +291,7 @@ public sealed class OutboxProcessorTests
 
         var dispatcher = new ScriptedDispatcher();
         var logger = new CapturingLogger<OutboxProcessor>();
+        var backoff = new OutboxEndpointBackoff(DefaultOptions.PollingInterval, DefaultOptions.TransportUnavailableBackoff);
         var sut = BuildFailingActivationFor(
             store,
             dispatcher,
@@ -304,7 +299,8 @@ public sealed class OutboxProcessorTests
             () => new InvalidOperationException(
                 "Unable to resolve service for type 'IMessageTransport' while attempting to " +
                 "activate 'TransportOutboxDispatcher'."),
-            logger);
+            logger,
+            backoff);
 
         // Not rethrown: a registered dispatcher that cannot be built must not stop the worker.
         var result = await sut.ProcessBatchAsync(10, CancellationToken.None);
@@ -312,29 +308,109 @@ public sealed class OutboxProcessorTests
         result.AbortReason.ShouldBe(OutboxBatchAbortReason.DispatcherActivationFailed);
         logger.Records.ShouldContain(
             r => r.EventId == 1009 && r.Level == LogLevel.Error,
-            "a batch abandoned with no rethrow and no retry movement must not be silent");
+            "a deferral with no rethrow and no retry movement must not be silent");
 
-        // The row an operator has to find when the cause never clears (ADR-MSG-019, known defect).
+        // The row an operator has to find when the cause never clears.
         var activationFailure = logger.Records.Single(r => r.EventId == 1009).Message;
         activationFailure.ShouldContain(second.Id.Value.ToString());
         activationFailure.ShouldContain("tenant-b");
         activationFailure.ShouldContain("endpoint", Case.Sensitive, "the row's endpoint names the dispatcher that failed");
+        logger.Records.ShouldContain(r => r.EventId == 1011 && r.Message.Contains("tenant-b"), "1011 says what waits for that tenant");
+        logger.Records.ShouldNotContain(r => r.EventId == 1010, "the endpoint is not down");
 
-        result.Published.ShouldBe(1, "message 1 was delivered before message 2's dispatcher failed");
-        result.Released.ShouldBe(2, "the message that hit the fault AND every later row of its endpoint");
+        result.Published.ShouldBe(2, "the other tenant's rows, before and after, are dispatched");
+        result.Released.ShouldBe(1, "only the row of the tenant that failed waits");
         result.Retried.ShouldBe(0, "an activation failure is not a per-message fault");
         result.DeadLettered.ShouldBe(0);
 
-        captured.Single(o => o.MessageId == first.Id).Kind.ShouldBe(OutboxOutcomeKind.Published);
+        var deferred = captured.Single(o => o.MessageId == second.Id);
+        deferred.Kind.ShouldBe(OutboxOutcomeKind.Deferred, "the row keeps its own count: no attempt is charged");
+        deferred.NextRetryAtUtc.ShouldBe(Now + DefaultOptions.PollingInterval, "to the end of the tenant's back-off");
+        dispatcher.Dispatched.Select(m => m.Id).ShouldBe([first.Id, third.Id]);
+        backoff.BlockedAt(Now).ShouldBe(OutboxEndpoints.None, "the endpoint stays open for every other tenant");
+        backoff.TenantsOf(OutboxDispatchers.Transport).IsBlocked("tenant-b", Now, out _).ShouldBeTrue();
+        await store.Received(1).ApplyOutcomesAsync(
+            claim.Token, Arg.Any<IReadOnlyList<OutboxOutcome>>(), Arg.Any<CancellationToken>());
+    }
+
+    /// <summary>
+    /// A tenant in back-off on an endpoint is left out of the claim on that endpoint only (#124 A7), and
+    /// a row of it handed over anyway — a store that does not honour the tenant filter — is deferred and
+    /// reported to the loop, as an endpoint's is. With no tenant in back-off both lists are empty.
+    /// </summary>
+    [Fact]
+    public async Task ProcessBatch_LeavesATenantInBackOffOutOfTheClaim_OnItsEndpointOnly_AndReportsARowOfItHandedOverAnyway()
+    {
+        var blocked = OutboxFixtures.Message(tenantId: "tenant-b");
+        var other = OutboxFixtures.Message(tenantId: "tenant-a");
+        var claim = OutboxFixtures.Claim(blocked, other);
+        var (store, captured) = StoreReturning(claim);
+        var lists = new List<(IReadOnlyList<string> Transport, IReadOnlyList<string> Local)>();
+        store.ClaimBatchAsync(Arg.Any<int>(), Arg.Any<TimeSpan>(), Arg.Any<OutboxEndpoints>(), Arg.Any<IReadOnlyList<string>>(), Arg.Any<IReadOnlyList<string>>(), Arg.Any<CancellationToken>())
+            .Returns(ci =>
+            {
+                lists.Add((ci.ArgAt<IReadOnlyList<string>>(3), ci.ArgAt<IReadOnlyList<string>>(4)));
+                return ValueTask.FromResult(claim);
+            });
+        var backoff = new OutboxEndpointBackoff(DefaultOptions.PollingInterval, DefaultOptions.TransportUnavailableBackoff);
+        var dispatcher = new ScriptedDispatcher();
+        var sut = BuildFailingActivationFor(
+            store, dispatcher, MessageId.New(), () => new InvalidOperationException("never"), new CapturingLogger<OutboxProcessor>(), backoff);
+
+        (await sut.ProcessBatchAsync(10, CancellationToken.None)).HandedOverInBackOff.ShouldBeFalse("control: nobody in back-off");
+        lists[0].Transport.ShouldBeEmpty();
+        lists[0].Local.ShouldBeEmpty();
+
+        backoff.TenantsOf(OutboxDispatchers.Transport).OnDown("tenant-b", Now, out var until);
+        captured.Clear();
+        dispatcher.Dispatched.Clear();
+        var result = await sut.ProcessBatchAsync(10, CancellationToken.None);
+
+        lists[1].Transport.ShouldBe(["tenant-b"], "left out of the transport's rows");
+        lists[1].Local.ShouldBeEmpty("its local rows are still claimed");
+        result.HandedOverInBackOff.ShouldBeTrue("a row the claim was asked to leave out came back: the loop waits");
+        captured.Single(o => o.MessageId == blocked.Id).ShouldBe(OutboxOutcome.Deferred(blocked.Id, until));
+        dispatcher.Dispatched.Select(m => m.Id).ShouldBe([other.Id]);
+    }
+
+    /// <summary>
+    /// A row with no tenant has no tenant to narrow the verdict to: its endpoint is deferred as #188
+    /// made it — the row and every later row of the endpoint, no retry consumed, nothing rethrown (#124 V4).
+    /// </summary>
+    [Fact]
+    public async Task ProcessBatch_WhenTheDispatcherCannotBeActivatedForARowWithNoTenant_DefersItsEndpointsRows()
+    {
+        var first = OutboxFixtures.Message(retryCount: 1, tenantId: null);
+        var second = OutboxFixtures.ContractMessage(retryCount: 1, tenantId: null);
+        var third = OutboxFixtures.Message(retryCount: 1, tenantId: null);
+        var claim = OutboxFixtures.Claim(first, second, third);
+        var (store, captured) = StoreReturning(claim);
+
+        var dispatcher = new ScriptedDispatcher();
+        var logger = new CapturingLogger<OutboxProcessor>();
+        var backoff = new OutboxEndpointBackoff(DefaultOptions.PollingInterval, DefaultOptions.TransportUnavailableBackoff);
+        var sut = BuildFailingActivationFor(
+            store, dispatcher, second.Id, () => new InvalidOperationException("no IMessageTransport"), logger, backoff);
+
+        var result = await sut.ProcessBatchAsync(10, CancellationToken.None);
+
+        result.AbortReason.ShouldBe(OutboxBatchAbortReason.DispatcherActivationFailed);
+        logger.Records.Single(r => r.EventId == 1009).Message.ShouldContain(second.Id.Value.ToString());
+        logger.Records.ShouldContain(r => r.EventId == 1010, "the endpoint is down");
+        logger.Records.ShouldNotContain(r => r.EventId == 1011, "no tenant is involved");
+
+        result.Published.ShouldBe(1, "message 1 was delivered before message 2's dispatcher failed");
+        result.Released.ShouldBe(2, "the message that hit the fault AND every later row of its endpoint");
+        result.Retried.ShouldBe(0);
         foreach (var deferred in captured.Where(o => o.MessageId != first.Id))
         {
-            deferred.Kind.ShouldBe(OutboxOutcomeKind.Deferred, "the row keeps its own count: no attempt is charged");
-            deferred.NextRetryAtUtc.ShouldNotBeNull("deferred to the end of the endpoint's back-off");
+            deferred.Kind.ShouldBe(OutboxOutcomeKind.Deferred);
+            deferred.NextRetryAtUtc.ShouldBe(Now + DefaultOptions.PollingInterval);
         }
 
         dispatcher.Dispatched.ShouldHaveSingleItem().Id.ShouldBe(first.Id, "message 3 is never attempted");
-        await store.Received(1).ApplyOutcomesAsync(
-            claim.Token, Arg.Any<IReadOnlyList<OutboxOutcome>>(), Arg.Any<CancellationToken>());
+        backoff.BlockedAt(Now).ShouldBe(OutboxEndpoints.Transport);
+        backoff.TenantsOf(OutboxDispatchers.Transport).IsEmpty.ShouldBeTrue();
     }
 
     /// <summary>
@@ -376,9 +452,9 @@ public sealed class OutboxProcessorTests
     /// <para>
     /// A tenant lookup failing with its own type — <see cref="KeyNotFoundException"/> here — is the
     /// case a catch wider than <see cref="InvalidOperationException"/> moves from a per-message retry,
-    /// which dead-letters while every other tenant keeps publishing, into the batch-wide verdict, which
-    /// stalls the outbox for every tenant (ADR-MSG-019, known defect). This test keeps it on the path it
-    /// had before the resolution was reworked.
+    /// which dead-letters while every other tenant keeps publishing, into the down verdict, which holds
+    /// that tenant on the endpoint with no retry consumed and never dead-letters it (#124). This test
+    /// keeps it on the path it had before the resolution was reworked.
     /// </para>
     /// <para>
     /// The fixture is test 1's, message for message, so the two tests differ in the exception type
@@ -545,7 +621,7 @@ public sealed class OutboxProcessorTests
     public async Task ProcessBatch_WhenClaimEmpty_DoesNotDispatchOrSettle()
     {
         var store = Substitute.For<IOutboxProcessorStore>();
-        store.ClaimBatchAsync(Arg.Any<int>(), Arg.Any<TimeSpan>(), Arg.Any<OutboxEndpoints>(), Arg.Any<CancellationToken>())
+        store.ClaimBatchAsync(Arg.Any<int>(), Arg.Any<TimeSpan>(), Arg.Any<OutboxEndpoints>(), Arg.Any<IReadOnlyList<string>>(), Arg.Any<IReadOnlyList<string>>(), Arg.Any<CancellationToken>())
             .Returns(ValueTask.FromResult(OutboxClaim.Empty));
         var dispatcher = new ScriptedDispatcher();
 
@@ -596,7 +672,7 @@ public sealed class OutboxProcessorTests
     {
         // Leases expire on their own; taking the host down over a settlement fault would be worse.
         var store = Substitute.For<IOutboxProcessorStore>();
-        store.ClaimBatchAsync(Arg.Any<int>(), Arg.Any<TimeSpan>(), Arg.Any<OutboxEndpoints>(), Arg.Any<CancellationToken>())
+        store.ClaimBatchAsync(Arg.Any<int>(), Arg.Any<TimeSpan>(), Arg.Any<OutboxEndpoints>(), Arg.Any<IReadOnlyList<string>>(), Arg.Any<IReadOnlyList<string>>(), Arg.Any<CancellationToken>())
             .Returns(ValueTask.FromResult(OutboxFixtures.Claim(OutboxFixtures.Message())));
         store.ApplyOutcomesAsync(Arg.Any<Guid>(), Arg.Any<IReadOnlyList<OutboxOutcome>>(), Arg.Any<CancellationToken>())
             .Returns(ValueTask.FromException<int>(new InvalidOperationException("db down")));
@@ -616,6 +692,20 @@ public sealed class OutboxProcessorTests
         await Build(store, dispatcher, options).ProcessBatchAsync(10, CancellationToken.None);
 
         captured.Single().ErrorMessage!.Length.ShouldBe(32);
+    }
+
+    /// <summary>A cut that would end on half of a surrogate pair stops before the pair (PR #209 review).</summary>
+    [Fact]
+    public async Task ProcessBatch_WhenTheLimitFallsInsideASurrogatePair_CutsBeforeThePair()
+    {
+        var options = DefaultOptions with { MaxErrorMessageLength = 32 };
+        var (store, captured) = StoreReturning(OutboxFixtures.Claim(OutboxFixtures.Message()));
+        var text = new string('x', 31) + "\U0001F6A7" + new string('x', 100);
+        var dispatcher = new ScriptedDispatcher(_ => new InvalidOperationException(text));
+
+        await Build(store, dispatcher, options).ProcessBatchAsync(10, CancellationToken.None);
+
+        captured.Single().ErrorMessage.ShouldBe(new string('x', 31), "half a pair is not valid text");
     }
 
     [Fact]
@@ -652,7 +742,7 @@ public sealed class OutboxProcessorTests
         var captured = new List<OutboxOutcome>();
         var store = Substitute.For<IOutboxProcessorStore>();
 
-        store.ClaimBatchAsync(Arg.Any<int>(), Arg.Any<TimeSpan>(), Arg.Any<OutboxEndpoints>(), Arg.Any<CancellationToken>())
+        store.ClaimBatchAsync(Arg.Any<int>(), Arg.Any<TimeSpan>(), Arg.Any<OutboxEndpoints>(), Arg.Any<IReadOnlyList<string>>(), Arg.Any<IReadOnlyList<string>>(), Arg.Any<CancellationToken>())
             .Returns(ValueTask.FromResult(claim));
 
         store.ApplyOutcomesAsync(Arg.Any<Guid>(), Arg.Any<IReadOnlyList<OutboxOutcome>>(), Arg.Any<CancellationToken>())
@@ -817,7 +907,8 @@ public sealed class OutboxProcessorTests
         ScriptedDispatcher dispatcher,
         MessageId failOn,
         Func<Exception> fault,
-        ILogger<OutboxProcessor> logger)
+        ILogger<OutboxProcessor> logger,
+        OutboxEndpointBackoff? backoff = null)
     {
         // The scope being activated is the last one created; its context names the row being
         // dispatched as its causation.
@@ -834,7 +925,7 @@ public sealed class OutboxProcessorTests
         scopes = new TestExecutionScopeFactory(provider.GetRequiredService<IServiceScopeFactory>());
 
         return new OutboxProcessor(
-            store, scopes, DefaultOptions, new FakeTimeProvider(Now), FixedRandom.NoJitter, logger, TestStore);
+            store, scopes, DefaultOptions, new FakeTimeProvider(Now), FixedRandom.NoJitter, logger, TestStore, backoff);
     }
 
     private static OutboxProcessor BuildCore(

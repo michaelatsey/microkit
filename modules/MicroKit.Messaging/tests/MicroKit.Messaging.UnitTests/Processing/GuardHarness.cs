@@ -23,8 +23,12 @@ internal sealed class GuardHarness
         TestExecutionScopeFactory scopes,
         CapturingLogger<MessageReceivePipeline> logs,
         InboxRetryPolicy policy,
-        IServiceProvider provider)
+        IServiceProvider provider,
+        InboxTenantBackoff tenantBackoff,
+        FakeTimeProvider clock)
     {
+        TenantBackoff = tenantBackoff;
+        Clock = clock;
         Pipeline = pipeline;
         Database = database;
         Scopes = scopes;
@@ -44,6 +48,12 @@ internal sealed class GuardHarness
     public InboxRetryPolicy Policy { get; }
 
     public IServiceProvider Provider { get; }
+
+    /// <summary>Gets the tenants in back-off on each store's inbox (#124), shared with an inbox processor.</summary>
+    public InboxTenantBackoff TenantBackoff { get; }
+
+    /// <summary>Gets the clock of the retry policy and the guard.</summary>
+    public FakeTimeProvider Clock { get; }
 
     /// <summary>Builds the harness.</summary>
     /// <param name="services">The handlers and anything else the test's scopes resolve.</param>
@@ -95,7 +105,9 @@ internal sealed class GuardHarness
             composition.GetOrAddStore(Store, out _);
         }
 
-        var policy = new InboxRetryPolicy(options ?? new InboxProcessorOptions(), clock, random ?? FixedRandom.NoJitter);
+        var inboxOptions = options ?? new InboxProcessorOptions();
+        var policy = new InboxRetryPolicy(inboxOptions, clock, random ?? FixedRandom.NoJitter);
+        var tenantBackoff = new InboxTenantBackoff(inboxOptions);
         var logs = new CapturingLogger<MessageReceivePipeline>();
         var pipeline = new MessageReceivePipeline(
             contracts,
@@ -106,9 +118,10 @@ internal sealed class GuardHarness
             new MessageStoreResolver(composition, new StaticMessageStoreSet(composition)),
             policy,
             new InboxMetrics(),
+            tenantBackoff,
             logs);
 
-        return new GuardHarness(pipeline, database, scopes, logs, policy, provider);
+        return new GuardHarness(pipeline, database, scopes, logs, policy, provider, tenantBackoff, clock);
     }
 }
 

@@ -211,7 +211,7 @@ return dispatcher ?? throw new OutboxConfigurationException(...);   // not regis
 | `OutboxPayloadException` | dead-letter **on first sight**: unroutable endpoint, a transport row without `ContractName` or `Source`, a local payload no process can read |
 | `OutboxTransportUnavailableException` | defer the endpoint: that row and its endpoint's later rows settled `Deferred` — `NextRetryAtUtc` at the end of the endpoint's back-off, `RetryCount` and error text untouched (`OutboxEndpointBackoff`: `PollingInterval` doubling to `TransportUnavailableBackoff`, cleared by a sent row); **no retry consumed**; the other endpoint's rows are still dispatched |
 | `OutboxConfigurationException` (no dispatcher registered for the key — a container composed outside `AddMessageStore`) | release, settle, rethrow: that store's outbox loop backs off and reports it (1402); it never ends |
-| activation `InvalidOperationException` — e.g. a transport row with no `IMessageTransport` registered, which the transport dispatcher takes in its constructor | defer the endpoint as above, **no retry consumed**, no rethrow: `DispatcherActivationFailed`, event 1009 naming the call to add; the local rows are still delivered, and the transport is tried once per back-off period until one is deployed. Known defect #124: tenant-scoped, it holds the endpoint's rows of every tenant |
+| activation `InvalidOperationException` — e.g. a transport row with no `IMessageTransport` registered, which the transport dispatcher takes in its constructor | defer the endpoint as above, **no retry consumed**, no rethrow: `DispatcherActivationFailed`, event 1009 naming the call to add; the local rows are still delivered, and the transport is tried once per back-off period until one is deployed. On a row with a tenant it holds that tenant only, and the endpoint once the probe fails (#124) |
 | host stop | release the rest, nothing counted |
 | anything else | transient: retry with back-off until `MaxRetries` |
 
@@ -306,7 +306,8 @@ outage produces.
 No outage arm on the outbox: a down endpoint's rows are deferred by the processor to the end of the
 endpoint's own back-off, and while it runs the claim leaves the endpoint's rows out
 (`ClaimBatchAsync(…, OutboxEndpoints excluded, …)`), so the other endpoint keeps this cadence and the
-waiting rows are not rewritten. A batch carrying rows handed over in back-off (`HandedOverInBackOff`,
+waiting rows are not rewritten; a tenant in back-off on an endpoint is left out the same way, on that
+endpoint only (`excludedTransportTenants`, `excludedLocalTenants`, #124). A batch carrying rows handed over in back-off (`HandedOverInBackOff`,
 a store breaking the claim's contract by not honouring the filter) waits `PollingInterval`, whatever
 its endpoint verdict and even if it
 delivered something.

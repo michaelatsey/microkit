@@ -52,11 +52,8 @@ internal sealed class InboxRetryPolicy(InboxProcessorOptions options, TimeProvid
             ? TimeSpan.Zero
             : TimeSpan.FromTicks((long)(ceiling.Ticks * random.NextDouble()));
 
-    /// <summary>Truncates an error text to the column's length.</summary>
+    /// <summary>Truncates an error text to the column's length, never splitting a surrogate pair.</summary>
     /// <param name="value">The text.</param>
     /// <returns>The text, at most <see cref="InboxProcessorOptions.MaxErrorMessageLength"/> long.</returns>
-    public string? Truncate(string? value) =>
-        value is null || value.Length <= options.MaxErrorMessageLength
-            ? value
-            : value[..options.MaxErrorMessageLength];
+    public string? Truncate(string? value) => ErrorText.Cut(value, options.MaxErrorMessageLength);
 }

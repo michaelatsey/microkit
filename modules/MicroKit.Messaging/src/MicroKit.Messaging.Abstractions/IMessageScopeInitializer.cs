@@ -14,7 +14,8 @@ namespace MicroKit.Messaging;
 /// Initializers run in registration order, once per handler scope, and are resolved from that
 /// scope. Keep their own constructor dependencies free of the services they prepare. An exception
 /// is classified like a handler's: <see cref="PermanentMessageException"/> dead-letters,
-/// <see cref="InboxDependencyUnavailableException"/> pauses the endpoint, anything else redelivers.
+/// <see cref="InboxDependencyUnavailableException"/> pauses the endpoint — or, with a store, backs the
+/// message's tenant off (#124) — anything else redelivers.
 /// </para>
 /// </remarks>
 public interface IMessageScopeInitializer
