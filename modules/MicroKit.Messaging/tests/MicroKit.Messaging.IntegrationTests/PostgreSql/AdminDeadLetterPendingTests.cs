@@ -1,3 +1,4 @@
+using System.Text.Json;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Time.Testing;
 
@@ -90,6 +91,65 @@ public sealed class AdminDeadLetterPendingTests(PostgreSqlFixture fixture)
         transport.Tenants.ShouldContain("A");
     }
 
+    [DockerRequiredFact]
+    public async Task Inbox_DeadLetterPendingAsync_ParksOnlyThatTenantsUnclaimedWaitingRows_AndRequeueBringsOneBack()
+    {
+        await using var db = await StoreDatabase.CreateAsync<TestMessagingDbContext>(fixture.ConnectionString, o => new(o));
+        var clock = new FakeTimeProvider(Now);
+        await using var host = GuardHost.Create(db, bus => bus.AddHandler<FirstGuardHandler>(), clock: clock);
+
+        var failedA = Inbox("A", InboxMessageStatus.Failed, retryCount: 3);
+        var receivedA = Inbox("A", InboxMessageStatus.Received);
+        var claimedA = Inbox("A", InboxMessageStatus.Processing, claimToken: Guid.NewGuid());
+        var processedA = Inbox("A", InboxMessageStatus.Processed);
+        var deadA = Inbox("A", InboxMessageStatus.Failed, deadLettered: true, error: "earlier");
+        var failedB = Inbox("B", InboxMessageStatus.Failed);
+        InboxMessage[] all = [failedA, receivedA, claimedA, processedA, deadA, failedB];
+        await using (var seed = host.NewContext())
+        {
+            seed.InboxMessages.AddRange(all);
+            await seed.SaveChangesAsync();
+        }
+
+        int parked;
+        await using (var scope = host.Provider.CreateAsyncScope())
+        {
+            parked = await scope.ServiceProvider.GetRequiredKeyedService<IInboxAdminStore>(GuardHost.Store)
+                .DeadLetterPendingAsync("A", "Parked by an operator");
+        }
+
+        parked.ShouldBe(2, "A's unclaimed Failed and Received rows");
+        var rows = (await host.InboxAsync()).ToDictionary(r => r.RowId);
+        foreach (var id in new[] { failedA.RowId, receivedA.RowId })
+        {
+            rows[id].Status.ShouldBe(InboxMessageStatus.Failed);
+            rows[id].DeadLettered.ShouldBeTrue();
+            rows[id].ProcessedAtUtc.ShouldBe(Now);
+            rows[id].ErrorMessage.ShouldBe("Parked by an operator");
+        }
+
+        rows[failedA.RowId].RetryCount.ShouldBe(3, "its retry count is left alone");
+        foreach (var untouched in new[] { claimedA, processedA, deadA, failedB })
+        {
+            rows[untouched.RowId].Status.ShouldBe(untouched.Status);
+            rows[untouched.RowId].DeadLettered.ShouldBe(untouched.DeadLettered);
+            rows[untouched.RowId].ErrorMessage.ShouldBe(untouched.ErrorMessage);
+        }
+
+        await using (var scope = host.Provider.CreateAsyncScope())
+        {
+            var admin = scope.ServiceProvider.GetRequiredKeyedService<IInboxAdminStore>(GuardHost.Store);
+            var listed = await admin.GetDeadLetteredAsync(10, "A");
+            listed.Select(m => m.RowId).ShouldBe([failedA.RowId, receivedA.RowId, deadA.RowId], ignoreOrder: true);
+            (await admin.RequeueAsync(new InboxMessageKey(failedA.MessageId, failedA.ConsumerType))).ShouldBeTrue();
+        }
+
+        await host.RetryOnceAsync();
+
+        (await host.InboxAsync()).Single(r => r.RowId == failedA.RowId).Status.ShouldBe(InboxMessageStatus.Processed,
+            "A healthy again, the requeued row is handled");
+    }
+
     private static int s_order;
 
     private static OutboxMessage Outbox(
@@ -117,6 +177,35 @@ public sealed class AdminDeadLetterPendingTests(PostgreSqlFixture fixture)
         CreatedAtUtc = Now.AddSeconds(Interlocked.Increment(ref s_order) - 10_000),
         CorrelationId = CorrelationId.New(),
     };
+
+    private static InboxMessage Inbox(
+        string tenant,
+        InboxMessageStatus status,
+        int retryCount = 1,
+        bool deadLettered = false,
+        Guid? claimToken = null,
+        string? error = null)
+    {
+        var id = Guid.NewGuid();
+        return new InboxMessage
+        {
+            MessageId = MessageId.From(id),
+            ConsumerType = MessageConsumerKey.Of(typeof(FirstGuardHandler)),
+            TenantId = tenant,
+            EventType = typeof(GuardEvent).AssemblyQualifiedName!,
+            Payload = JsonSerializer.Serialize(new GuardEvent(id), JsonSerializerOptions.Web),
+            Source = GuardHost.ServiceName,
+            Status = status,
+            RetryCount = retryCount,
+            DeadLettered = deadLettered,
+            ClaimToken = claimToken,
+            LockedUntilUtc = claimToken is null ? null : Now.AddMinutes(5),
+            ErrorMessage = error,
+            ProcessedAtUtc = status is InboxMessageStatus.Processed || deadLettered ? Now.AddDays(-1) : null,
+            ReceivedAtUtc = Now.AddSeconds(Interlocked.Increment(ref s_order) - 10_000),
+            OccurredOnUtc = Now,
+        };
+    }
 
     private static TestMessagingDbContext NewContext(StoreDatabase db)
         => new(new DbContextOptionsBuilder<TestMessagingDbContext>().UseNpgsql(db.ConnectionString).Options);

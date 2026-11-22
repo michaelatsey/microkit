@@ -13,7 +13,11 @@ namespace MicroKit.Messaging.Processing;
 /// <param name="Processed">Rows whose handler completed successfully.</param>
 /// <param name="Retried">Rows that failed transiently and were rescheduled.</param>
 /// <param name="DeadLettered">Rows permanently rejected or past the retry ceiling.</param>
-/// <param name="Released">Rows claimed but never attempted, returned to the queue untouched.</param>
+/// <param name="Released">
+/// Rows returned with no attempt counted: claimed but never attempted, returned to the queue untouched,
+/// or held by their tenant's back-off — due again at its end, the row whose failure began it included
+/// (#124).
+/// </param>
 /// <param name="LeasesLost">
 /// Rows skipped because the lease had expired and another processor owned them. A persistently
 /// non-zero value means <c>LeaseDuration</c> is shorter than the real handler duration — the

@@ -221,7 +221,8 @@ public sealed class EnvelopeReceiverTests
         var harness = Harness.Build(consumers: 1);
         harness.Probe.Throw[ConsumerA] = new InboxDependencyUnavailableException("the partner API is down");
 
-        var result = await harness.Receiver.ReceiveAsync(Envelope());
+        // No tenant to narrow the outage to (#124 D6): the transport keeps the delivery, paused.
+        var result = await harness.Receiver.ReceiveAsync(Envelope(tenant: null));
 
         result.Disposition.ShouldBe(ReceiveDisposition.PauseAndRedeliver);
         harness.Guard.Database.Rows.ShouldBeEmpty("an outage counts no attempt");
@@ -424,7 +425,7 @@ public sealed class EnvelopeReceiverTests
         harness.Probe.Throw[ConsumerA] = new InboxDependencyUnavailableException("down");
         harness.Probe.OnHit = () => harness.Guard.Database.FailReads = true;
 
-        var result = await harness.Receiver.ReceiveAsync(Envelope());
+        var result = await harness.Receiver.ReceiveAsync(Envelope(tenant: null));
 
         result.Disposition.ShouldBe(ReceiveDisposition.PauseAndRedeliver);
     }
@@ -465,13 +466,18 @@ public sealed class EnvelopeReceiverTests
     private static MessageEnvelope Envelope(
         bool withCorrelation = true,
         string id = EnvelopeId,
-        string contentType = "application/json")
+        string contentType = "application/json",
+        string? tenant = Tenant)
     {
         var headers = new Dictionary<string, string>(StringComparer.Ordinal)
         {
-            [MessageHeaders.TenantId] = Tenant,
             [MessageHeaders.CausationId] = Causation,
         };
+
+        if (tenant is not null)
+        {
+            headers[MessageHeaders.TenantId] = tenant;
+        }
 
         if (withCorrelation)
         {

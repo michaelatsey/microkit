@@ -31,4 +31,33 @@ public interface IInboxAdminStore
     /// able to see.
     /// </returns>
     ValueTask<bool> RequeueAsync(InboxMessageKey key, CancellationToken ct = default);
+
+    /// <summary>
+    /// Dead-letters one tenant's rows awaiting a retry: the operator's way out for a tenant whose
+    /// handlers' dependency will not recover (#124).
+    /// </summary>
+    /// <param name="tenantId">
+    /// The tenant. Never <see langword="null"/>: a tenant's back-off holds that tenant's rows only, and a
+    /// deployment whose messages carry no tenant has none to park.
+    /// </param>
+    /// <param name="reason">Recorded as each row's error text, so <see cref="GetDeadLetteredAsync"/> shows why.</param>
+    /// <param name="ct">Cancellation token.</param>
+    /// <returns>The number of rows dead-lettered.</returns>
+    /// <remarks>
+    /// <para>
+    /// Only the tenant's rows that await an attempt and that no retry loop holds — status
+    /// <see cref="InboxMessageStatus.Failed"/> or <see cref="InboxMessageStatus.Received"/>, not
+    /// dead-lettered, no claim token — in one set-based statement. A row a loop holds at that instant is
+    /// left to its batch: call again if it still waits. So is a row a crashed retry loop left claimed: it is held until its lease
+    /// expires and the store reclaims and settles it; call again then. Each is left <see cref="InboxMessageStatus.Failed"/>
+    /// and dead-lettered, its error text the reason, its processing time now; its retry count is left
+    /// alone.
+    /// </para>
+    /// <para>
+    /// The way back is <see cref="GetDeadLetteredAsync"/> narrowed to the tenant, then
+    /// <see cref="RequeueAsync"/> for each row, once the tenant is healthy again. Nothing in the engine
+    /// dead-letters a tenant on its own.
+    /// </para>
+    /// </remarks>
+    ValueTask<int> DeadLetterPendingAsync(string tenantId, string reason, CancellationToken ct = default);
 }

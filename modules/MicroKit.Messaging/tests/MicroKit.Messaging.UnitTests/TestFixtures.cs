@@ -239,10 +239,18 @@ internal sealed class InMemoryInboxDatabase
     /// <summary>Gets or sets whether every read fails: the database is down.</summary>
     public bool FailReads { get; set; }
 
+    /// <summary>Gets or sets what a read throws, as the store reporting itself unreachable would.</summary>
+    public Exception? FailReadsWith { get; set; }
+
     public InboxMessage? Find(InboxMessageKey key)
     {
         lock (_gate)
         {
+            if (FailReadsWith is { } fault)
+            {
+                throw fault;
+            }
+
             if (FailReads)
             {
                 throw new TimeoutException("the database is unreachable");

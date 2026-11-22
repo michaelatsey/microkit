@@ -69,6 +69,7 @@ internal sealed class MessageReceivePipeline(
     MessageStoreResolver stores,
     InboxRetryPolicy retryPolicy,
     InboxMetrics metrics,
+    InboxTenantBackoff tenantBackoff,
     ILogger<MessageReceivePipeline> logger)
 {
     /// <summary>Delivers one envelope to every handler of its contract.</summary>
@@ -257,7 +258,7 @@ internal sealed class MessageReceivePipeline(
         }
         catch (Exception ex)
         {
-            return new RetryOutcome(RetryResult.Failed, Classify(ex), ex);
+            return new RetryOutcome(RetryResult.Failed, Classify(ex), ex) { StoreUnreachable = attempt.GuardUnreachable };
         }
     }
 
@@ -431,6 +432,9 @@ internal sealed class MessageReceivePipeline(
     {
         /// <summary>The payload as text: the row's, or the body decoded as UTF-8.</summary>
         public string PayloadText() => Text ?? Encoding.UTF8.GetString(Body.Span);
+
+        /// <summary>Gets a value indicating whether this is a local row's delivery, not a transport's.</summary>
+        public bool IsLocal => Text is not null;
     }
 
     /// <summary>One handler, with no store: the #186 path, unchanged.</summary>
@@ -480,6 +484,7 @@ internal sealed class MessageReceivePipeline(
         var attempt = new GuardedAttempt(entry, prepared.Message, context, ExecutionContextOf(context), store, key)
         {
             NewRow = rows,
+            Local = envelope.IsLocal,
         };
 
         try
@@ -504,7 +509,7 @@ internal sealed class MessageReceivePipeline(
                 }
                 catch (Exception ex) when (IsGuardOutage(ex, ct))
                 {
-                    return GuardUnreachable(ex, entry.HandlerType, key, store);
+                    return GuardUnreachable(ex, attempt);
                 }
 
                 if (existing is { } owned)
@@ -512,6 +517,22 @@ internal sealed class MessageReceivePipeline(
                     InboxGuardLogs.Skipped(logger, entry.HandlerType.FullName!, key.MessageId.Value, store.Value, owned.Status);
                     metrics.RecordDeduplicated(entry.ConsumerType);
                     return DeliveryOutcome.Success;
+                }
+
+                // A tenant in back-off on this store's inbox (#124): its handler's dependency is down, so
+                // the delivery is not attempted. Its row is written Failed, unattempted, due at the end of
+                // the back-off, and the delivery acknowledged once that row is committed: the store's
+                // retry loop owns it from there. A local delivery is the outbox's (D1), never deferred here.
+                if (!attempt.Local
+                    && context.TenantId is { } blockedTenant
+                    && !tenantBackoff.IsQuiet
+                    && tenantBackoff.For(store).IsBlocked(blockedTenant, retryPolicy.Clock.GetUtcNow(), out var blockedUntil))
+                {
+                    InboxProcessorLogs.DeliveryDeferred(
+                        logger, key.MessageId.Value, entry.HandlerType.FullName!, blockedTenant, store.Value, blockedUntil);
+                    var notAttempted = new InboxDependencyUnavailableException(
+                        $"Not attempted: tenant '{blockedTenant}' is in back-off in store '{store}' until {blockedUntil:O}.");
+                    return await WriteDeferredAsync(attempt, rows, notAttempted, blockedUntil, ct).ConfigureAwait(false);
                 }
 
                 try
@@ -524,6 +545,7 @@ internal sealed class MessageReceivePipeline(
                     {
                         InboxGuardLogs.FaultAfterCommit(logger, ex, entry.HandlerType.FullName!, key.MessageId.Value, store.Value);
                         metrics.RecordAdded(entry.ConsumerType);
+                        Succeeded(attempt);
                         return DeliveryOutcome.Success;
                     }
 
@@ -537,7 +559,7 @@ internal sealed class MessageReceivePipeline(
                         }
                         catch (Exception unreachable) when (IsGuardOutage(unreachable, ct))
                         {
-                            return GuardUnreachable(unreachable, entry.HandlerType, key, store);
+                            return GuardUnreachable(unreachable, attempt);
                         }
                     }
 
@@ -547,6 +569,7 @@ internal sealed class MessageReceivePipeline(
                     {
                         InboxGuardLogs.FaultAfterCommit(logger, ex, entry.HandlerType.FullName!, key.MessageId.Value, store.Value);
                         metrics.RecordAdded(entry.ConsumerType);
+                        Succeeded(attempt);
                         return DeliveryOutcome.Success;
                     }
 
@@ -563,6 +586,7 @@ internal sealed class MessageReceivePipeline(
                 }
 
                 metrics.RecordAdded(entry.ConsumerType);
+                Succeeded(attempt);
                 return DeliveryOutcome.Success;
             }
         }
@@ -592,13 +616,32 @@ internal sealed class MessageReceivePipeline(
 
     /// <summary>
     /// The guard's store is unreachable (#188): a dependency outage, never the handler's failure —
-    /// nothing is charged. A transport pauses and redelivers; a local row is deferred under the
-    /// local endpoint's back-off.
+    /// nothing is charged. A transport pauses and redelivers, and the store's inbox is suspected until
+    /// a success (#124); a local row is deferred under the local endpoint's back-off.
     /// </summary>
-    private DeliveryOutcome GuardUnreachable(Exception ex, Type handlerType, InboxMessageKey key, MessageStoreKey store)
+    private DeliveryOutcome GuardUnreachable(Exception ex, GuardedAttempt attempt)
     {
-        InboxGuardLogs.GuardUnreachable(logger, ex, handlerType.FullName!, key.MessageId.Value, store.Value);
+        InboxGuardLogs.GuardUnreachable(
+            logger, ex, attempt.Entry.HandlerType.FullName!, attempt.Key.MessageId.Value, attempt.Store.Value);
+        if (!attempt.Local)
+        {
+            tenantBackoff.For(attempt.Store).MarkSuspected();
+        }
+
         return new DeliveryOutcome(DeliveryVerdict.DependencyUnavailable, ex, ex.Message);
+    }
+
+    /// <summary>
+    /// A guarded handler of a transport delivery succeeded: its tenant leaves the back-off of the
+    /// store's inbox, and the probe and the suspicion clear (#124). One read while nothing is in
+    /// back-off.
+    /// </summary>
+    private void Succeeded(GuardedAttempt attempt)
+    {
+        if (!attempt.Local && !tenantBackoff.IsQuiet)
+        {
+            tenantBackoff.For(attempt.Store).Succeeded(attempt.Context.TenantId);
+        }
     }
 
     /// <summary>
@@ -611,10 +654,27 @@ internal sealed class MessageReceivePipeline(
         => await guard.ExecuteAsync(
             (Pipeline: this, Guard: guard, Attempt: attempt),
             static (s, token) => s.Pipeline.AttemptAsync(s.Attempt, token),
-            static async (s, token) => await s.Guard.FindAsync(s.Attempt.Key, token).ConfigureAwait(false)
-                is { Status: InboxMessageStatus.Processed },
+            static (s, token) => VerifyAsync(s.Guard, s.Attempt, token),
             AttemptResult.Committed,
             ct).ConfigureAwait(false);
+
+    /// <summary>
+    /// Reads the row after a fault of unknown outcome: committed means <c>Processed</c>. A store that
+    /// reports itself unreachable here is marked on the attempt, so its outage is never taken for the
+    /// handler's dependency — one tenant's (#124).
+    /// </summary>
+    private static async ValueTask<bool> VerifyAsync(IInboxGuardStore guard, GuardedAttempt attempt, CancellationToken ct)
+    {
+        try
+        {
+            return await guard.FindAsync(attempt.Key, ct).ConfigureAwait(false) is { Status: InboxMessageStatus.Processed };
+        }
+        catch (InboxDependencyUnavailableException)
+        {
+            attempt.GuardUnreachable = true;
+            throw;
+        }
+    }
 
     /// <summary>
     /// One attempt, from a clean state: a fresh scope with its initializers run, its own transaction,
@@ -632,6 +692,7 @@ internal sealed class MessageReceivePipeline(
     /// </remarks>
     private async ValueTask<AttemptResult> AttemptAsync(GuardedAttempt attempt, CancellationToken ct)
     {
+        attempt.GuardUnreachable = false;
         var scope = await OpenScopeAsync(attempt.ExecutionContext, attempt.Store, attempt.Context, ct).ConfigureAwait(false);
         await using (scope.ConfigureAwait(false))
         {
@@ -677,10 +738,8 @@ internal sealed class MessageReceivePipeline(
 
         if (verdict is DeliveryVerdict.DependencyUnavailable)
         {
-            // No row: the dependency is down for every message, so the transport pauses and
-            // redelivers this one rather than the store counting an attempt it never really had.
             BusLogs.HandlerFailed(logger, failure, handlerType, messageId.ToString(), attempt.Context.ContractName, verdict);
-            return new DeliveryOutcome(verdict, failure, failure.Message);
+            return await RecordDependencyDownAsync(attempt, rows, failure, ct).ConfigureAwait(false);
         }
 
         // A permanent verdict counts no attempt: no number of attempts would change it.
@@ -712,7 +771,7 @@ internal sealed class MessageReceivePipeline(
         catch (Exception ex) when (IsGuardOutage(ex, ct))
         {
             // The store is down: a dependency outage — not acknowledged, nothing charged (#188).
-            return GuardUnreachable(ex, attempt.Entry.HandlerType, attempt.Key, attempt.Store);
+            return GuardUnreachable(ex, attempt);
         }
         catch (Exception ex) when (!IsShutdown(ex, ct))
         {
@@ -728,6 +787,108 @@ internal sealed class MessageReceivePipeline(
         {
             InboxGuardLogs.FailedRowWritten(
                 logger, failure, handlerType, messageId, attempt.Store.Value, attempts, row.NextRetryAtUtc!.Value);
+        }
+
+        metrics.RecordAdded(attempt.Entry.ConsumerType);
+        return DeliveryOutcome.Success;
+    }
+
+    /// <summary>
+    /// A new delivery's handler met its dependency down (#124 D6). With a tenant, the tenant is put in
+    /// back-off on the store's inbox and the row is written <c>Failed</c>, unattempted and uncounted,
+    /// due at the end of the back-off: the store's retry loop owns it, and the transport keeps
+    /// delivering the other tenants. Otherwise no row: the transport pauses and redelivers, nothing
+    /// counted, as before — for a row with no tenant, the store itself unreachable, a local delivery
+    /// (the outbox defers it, D1), and the probe failing (a second tenant down before any success). The
+    /// failed probe's tenant is in back-off too, so its redeliveries are written to wait like any held
+    /// tenant's: during an outage shared by every tenant, the held tenants' deliveries move into the
+    /// inbox table instead of waiting in the broker — the documented cost of never holding one tenant
+    /// behind another (README, <i>One tenant down</i>).
+    /// </summary>
+    private async ValueTask<DeliveryOutcome> RecordDependencyDownAsync(
+        GuardedAttempt attempt, RowFactory rows, Exception failure, CancellationToken ct)
+    {
+        var paused = new DeliveryOutcome(DeliveryVerdict.DependencyUnavailable, failure, failure.Message);
+        if (attempt.Local)
+        {
+            return paused;
+        }
+
+        var tenants = tenantBackoff.For(attempt.Store);
+        if (attempt.GuardUnreachable || attempt.Context.TenantId is not { } tenant)
+        {
+            tenants.MarkSuspected();
+            return paused;
+        }
+
+        if (tenants.OnDown(tenant, retryPolicy.Clock.GetUtcNow(), out var until) is TenantBackoff.OutageScope.Shared)
+        {
+            return paused;
+        }
+
+        return await WriteDeferredAsync(attempt, rows, failure, until, ct, enteredBackOff: tenant).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// Writes a new delivery's row <c>Failed</c> with no attempt counted, due at <paramref name="until"/>,
+    /// in a scope of its own; only once it is committed is the delivery a success for the transport. A
+    /// row that cannot be written leaves the delivery with the transport, paused, as before #124.
+    /// </summary>
+    /// <param name="attempt">The delivery's guarded handler.</param>
+    /// <param name="rows">Builds its row.</param>
+    /// <param name="failure">What its row records.</param>
+    /// <param name="until">When its row is due.</param>
+    /// <param name="ct">The host's token.</param>
+    /// <param name="enteredBackOff">
+    /// The tenant this delivery put in back-off, reported (2013) once the row has committed; null for a
+    /// delivery of a tenant already in back-off (2014 reports it).
+    /// </param>
+    private async ValueTask<DeliveryOutcome> WriteDeferredAsync(
+        GuardedAttempt attempt,
+        RowFactory rows,
+        Exception failure,
+        DateTimeOffset until,
+        CancellationToken ct,
+        string? enteredBackOff = null)
+    {
+        var handlerType = attempt.Entry.HandlerType.FullName!;
+        var messageId = attempt.Key.MessageId.Value;
+
+        var row = rows.Create(InboxMessageStatus.Failed);
+        row.RetryCount = 0;
+        row.DeadLettered = false;
+        row.ErrorMessage = retryPolicy.Truncate(failure.Message);
+        row.NextRetryAtUtc = until;
+        row.ProcessedAtUtc = null;
+
+        try
+        {
+            var scope = await OpenScopeAsync(attempt.ExecutionContext, attempt.Store, attempt.Context, ct).ConfigureAwait(false);
+            await using (scope.ConfigureAwait(false))
+            {
+                var guard = ResolveGuard(scope.ServiceProvider, attempt.Store) ?? throw Unregistered(attempt.Store);
+                if (!await guard.TryInsertFailedAsync(row, ct).ConfigureAwait(false))
+                {
+                    // Another delivery owns the row now: acknowledged.
+                    InboxGuardLogs.FailureAlreadyOwned(logger, failure, handlerType, messageId, attempt.Store.Value);
+                    metrics.RecordDeduplicated(attempt.Entry.ConsumerType);
+                    return DeliveryOutcome.Success;
+                }
+            }
+        }
+        catch (Exception ex) when (IsGuardOutage(ex, ct))
+        {
+            return GuardUnreachable(ex, attempt);
+        }
+        catch (Exception ex) when (!IsShutdown(ex, ct))
+        {
+            InboxGuardLogs.FailedRowUnwritable(logger, ex, handlerType, messageId, attempt.Store.Value);
+            return new DeliveryOutcome(DeliveryVerdict.DependencyUnavailable, failure, failure.Message);
+        }
+
+        if (enteredBackOff is not null)
+        {
+            InboxProcessorLogs.TenantDeferred(logger, attempt.Store.Value, enteredBackOff, 1, until);
         }
 
         metrics.RecordAdded(attempt.Entry.ConsumerType);
@@ -929,6 +1090,15 @@ internal sealed class MessageReceivePipeline(
 
         /// <summary>Gets or sets whether an attempt committed: what escapes afterwards is not a failure.</summary>
         public bool Committed { get; set; }
+
+        /// <summary>
+        /// Gets or sets whether the guard reported its store unreachable while verifying the last attempt:
+        /// a <see cref="InboxDependencyUnavailableException"/> that is the store's, not the handler's (#124).
+        /// </summary>
+        public bool GuardUnreachable { get; set; }
+
+        /// <summary>Gets a value indicating whether this is a local row's delivery (#188 D7).</summary>
+        public bool Local { get; init; }
     }
 
     /// <summary>Builds the inbox row of a new delivery, a fresh instance per attempt.</summary>
@@ -1001,4 +1171,12 @@ internal enum RetryResult
 /// <param name="Verdict">The failure's verdict, for <see cref="RetryResult.Failed"/>.</param>
 /// <param name="Error">The exception behind it, if any.</param>
 internal readonly record struct RetryOutcome(
-    RetryResult Result, DeliveryVerdict Verdict = DeliveryVerdict.Succeeded, Exception? Error = null);
+    RetryResult Result, DeliveryVerdict Verdict = DeliveryVerdict.Succeeded, Exception? Error = null)
+{
+    /// <summary>
+    /// Gets a value indicating whether a <see cref="DeliveryVerdict.DependencyUnavailable"/> came from the
+    /// store itself — its guard reporting its database unreachable — rather than from the handler's
+    /// dependency: the store's outage, never one tenant's (#124).
+    /// </summary>
+    public bool StoreUnreachable { get; init; }
+}

@@ -97,6 +97,29 @@ internal static partial class InboxProcessorLogs
     public static partial void PostCommitFault(
         ILogger logger, Exception exception, Guid messageId, string consumerType);
 
+    /// <remarks>
+    /// A dependency unavailable for one tenant of a store's inbox (#124): that tenant is in back-off,
+    /// and the store's other tenants are retried and delivered meanwhile. Logged when a delivery puts
+    /// the tenant in back-off (count 1), and once per retry batch and tenant with the rows that batch
+    /// deferred — never per deferred delivery, which arrive at the broker's rate (2014).
+    /// </remarks>
+    [LoggerMessage(EventId = 2013, Level = LogLevel.Warning,
+        Message = "A dependency of tenant {TenantId} is unavailable in store {Store}'s inbox: {DeferredCount} " +
+                  "row(s) wait until {Until:O}, no attempt counted; the store's other tenants are handled.")]
+    public static partial void TenantDeferred(
+        ILogger logger, string store, string tenantId, int deferredCount, DateTimeOffset until);
+
+    /// <remarks>
+    /// One per delivery of a tenant in back-off (#124): its row is written <c>Failed</c>, unattempted,
+    /// due at the end of the back-off, and the delivery acknowledged. Debug, because these arrive at the
+    /// broker's rate; 2013 reports the back-off itself.
+    /// </remarks>
+    [LoggerMessage(EventId = 2014, Level = LogLevel.Debug,
+        Message = "Message {MessageId} for {HandlerType} (tenant {TenantId}) was written to store {Store}'s " +
+                  "inbox unattempted, due at {Until:O}: the tenant is in back-off.")]
+    public static partial void DeliveryDeferred(
+        ILogger logger, Guid messageId, string handlerType, string tenantId, string store, DateTimeOffset until);
+
     [LoggerMessage(EventId = 2020, Level = LogLevel.Debug,
         Message = "Inbox retention pass deleted {DeletedCount} processed row(s) older than " +
                   "{Cutoff:O}.")]

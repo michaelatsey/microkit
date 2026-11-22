@@ -141,6 +141,49 @@ public sealed class ShutdownReleaseTests(PostgreSqlFixture fixture)
         }
     }
 
+    /// <summary>The inbox side of the test above (#124 V9, C1).</summary>
+    [DockerRequiredFact]
+    public async Task AHostStoppedDuringTheSecondPassOfAnInboxBatch_ReleasesEveryUnattemptedRowWithItsAttemptCountUnchanged()
+    {
+        await using var db = await StoreDatabase.CreateAsync<TestMessagingDbContext>(fixture.ConnectionString, o => new(o));
+        var gate = new TenantGate("A");
+        using var host = BuildHost(db, transport: null, configure: bus =>
+        {
+            bus.Services.AddSingleton(gate);
+            bus.AddHandler<TenantBlockingHandler>();
+        });
+
+        host.Services.GetRequiredService<InboxTenantBackoff>()
+            .For(EntityFrameworkOutbox.KeyOf<TestMessagingDbContext>())
+            .OnDown("A", DateTimeOffset.UtcNow.AddMinutes(-1), out _);
+
+        var a1 = InboxRow("A", -3, retryCount: 2);
+        var a2 = InboxRow("A", -2, retryCount: 2);
+        var c1 = InboxRow("C", -1, retryCount: 1);
+        await using (var seed = NewContext(db))
+        {
+            seed.InboxMessages.AddRange(a1, a2, c1);
+            await seed.SaveChangesAsync();
+        }
+
+        await host.StartAsync();
+        await gate.Entered.Task.WaitAsync(TimeSpan.FromSeconds(10));
+        gate.Handled.ShouldBe(["C"], "control: the first pass ran, the host stops in the second");
+
+        await host.StopAsync();
+
+        var rows = (await ReadInboxAsync(db)).ToDictionary(r => r.RowId);
+        rows[c1.RowId].Status.ShouldBe(InboxMessageStatus.Processed);
+        foreach (var id in new[] { a1.RowId, a2.RowId })
+        {
+            rows[id].Status.ShouldBe(InboxMessageStatus.Failed, "released back to the retry loop, not retried");
+            rows[id].RetryCount.ShouldBe(2, "the attempt count is the one the rows had");
+            rows[id].ClaimToken.ShouldBeNull();
+            rows[id].LockedUntilUtc.ShouldBeNull();
+            rows[id].DeadLettered.ShouldBeFalse();
+        }
+    }
+
     private static OutboxMessage OutboxRow(string tenant, int secondsAgo, int retryCount) => new()
     {
         Id = MessageId.New(),
@@ -154,6 +197,19 @@ public sealed class ShutdownReleaseTests(PostgreSqlFixture fixture)
         OccurredOnUtc = DateTimeOffset.UtcNow,
         CreatedAtUtc = DateTimeOffset.UtcNow.AddSeconds(secondsAgo - 60),
         CorrelationId = CorrelationId.New(),
+    };
+
+    private static InboxMessage InboxRow(string tenant, int secondsAgo, int retryCount) => new()
+    {
+        MessageId = MessageId.New(),
+        ConsumerType = MessageConsumerKey.Of(typeof(TenantBlockingHandler)),
+        TenantId = tenant,
+        EventType = typeof(ShutdownEvent).AssemblyQualifiedName!,
+        Payload = $"{{\"id\":\"{Guid.NewGuid()}\"}}",
+        Status = InboxMessageStatus.Failed,
+        RetryCount = retryCount,
+        ReceivedAtUtc = DateTimeOffset.UtcNow.AddSeconds(secondsAgo - 60),
+        OccurredOnUtc = DateTimeOffset.UtcNow,
     };
 
     /// <summary>Sends every tenant's envelope but one, which it holds until the host stops.</summary>
@@ -242,5 +298,32 @@ public sealed class BlockingShutdownHandler(HandlerGate gate) : IMessageHandler<
     {
         gate.Entered.TrySetResult();
         await Task.Delay(Timeout.Infinite, ct);
+    }
+}
+
+/// <summary>Holds one tenant's handler until the host stops; records the others.</summary>
+public sealed class TenantGate(string blocked)
+{
+    public string Blocked { get; } = blocked;
+
+    public TaskCompletionSource Entered { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+    public List<string?> Handled { get; } = [];
+}
+
+public sealed class TenantBlockingHandler(TenantGate gate) : IMessageHandler<ShutdownEvent>
+{
+    public async ValueTask HandleAsync(ShutdownEvent message, MessageContext context, CancellationToken ct = default)
+    {
+        if (context.TenantId == gate.Blocked)
+        {
+            gate.Entered.TrySetResult();
+            await Task.Delay(Timeout.Infinite, ct);
+        }
+
+        lock (gate.Handled)
+        {
+            gate.Handled.Add(context.TenantId);
+        }
     }
 }

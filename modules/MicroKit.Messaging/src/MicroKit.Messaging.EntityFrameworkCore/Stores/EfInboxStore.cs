@@ -653,6 +653,32 @@ internal sealed class EfInboxStore<TContext>(
         return rows == 1;
     }
 
+    /// <inheritdoc/>
+    public async ValueTask<int> DeadLetterPendingAsync(string tenantId, string reason, CancellationToken ct = default)
+    {
+        ArgumentNullException.ThrowIfNull(tenantId);
+        ArgumentException.ThrowIfNullOrWhiteSpace(reason);
+
+        var now = timeProvider.GetUtcNow();
+        var error = reason.Length <= InboxMessageConfiguration.ErrorMessageMaxLength
+            ? reason
+            : reason[..InboxMessageConfiguration.ErrorMessageMaxLength];
+
+        // One statement. ClaimToken null: a row a retry loop holds is left to its batch.
+        return await context.Set<InboxMessage>()
+            .Where(m => m.TenantId == tenantId
+                        && (m.Status == InboxMessageStatus.Failed || m.Status == InboxMessageStatus.Received)
+                        && !m.DeadLettered
+                        && m.ClaimToken == null)
+            .ExecuteUpdateAsync(s => s
+                .SetProperty(m => m.Status, InboxMessageStatus.Failed)
+                .SetProperty(m => m.DeadLettered, true)
+                .SetProperty(m => m.ErrorMessage, error)
+                .SetProperty(m => m.ProcessedAtUtc, now),
+                ct)
+            .ConfigureAwait(false);
+    }
+
     // ---------- IInboxRetentionStore ----------
 
     /// <inheritdoc/>

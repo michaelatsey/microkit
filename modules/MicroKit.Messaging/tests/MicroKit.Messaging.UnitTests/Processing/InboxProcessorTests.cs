@@ -311,6 +311,56 @@ public sealed class InboxProcessorTests
         probe.Calls.ShouldBe(1, "the row is Processed: the attempt committed and is not replayed");
     }
 
+    /// <summary>
+    /// The store reporting itself unreachable while it verifies an attempt raises the same exception type
+    /// a handler raises for its own dependency (F2): it is the store's outage, never one tenant's, so the
+    /// batch is abandoned as before #124 and the row's tenant is not put in back-off.
+    /// </summary>
+    [Fact]
+    public async Task ProcessBatch_WhenTheStoreIsUnreachableWhileVerifyingARetry_AbandonsTheBatch_AndBacksOffNoTenant()
+    {
+        var (store, _, row) = ClaimOne();
+        var sut = Build(store, out var probe, out var harness);
+        harness.Database.Add(row);
+        harness.Database.RetryOn = ex => ex is TimeoutException;
+        harness.Database.FailAfterNextCommit = new TimeoutException("lost after the commit");
+        probe.During = () => harness.Database.FailReadsWith = new InboxDependencyUnavailableException("the store's database is down");
+
+        var result = await sut.ProcessBatchAsync(batchSize: 10, CancellationToken.None);
+
+        row.TenantId.ShouldNotBeNull("control: the row has a tenant to blame");
+        result.AbortReason.ShouldBe(InboxBatchAbortReason.DependencyUnavailable);
+        harness.TenantBackoff.For(GuardHarness.Store).IsEmpty.ShouldBeTrue("no tenant is blamed for the store's outage");
+    }
+
+    /// <summary>A dependency of the row's tenant (#124 D5): that row waits, nothing counted, and the batch goes on.</summary>
+    [Fact]
+    public async Task ProcessBatch_WhenATenantsDependencyIsUnavailable_DefersThatRow_WithItsAttemptCountUnchanged_AndGoesOn()
+    {
+        var rows = new[] { Row(retryCount: 2, tenantId: "A"), Row(tenantId: "B") };
+        var claim = InboxFixtures.Claim(rows);
+        var store = StoreReturning(claim);
+        var sut = Build(store, out var probe, out var harness);
+        foreach (var row in rows)
+        {
+            row.ClaimToken = claim.Token;
+            harness.Database.Add(row);
+        }
+
+        probe.ThrowWhen = context => context.TenantId == "A" ? new InboxDependencyUnavailableException("A's partner is down") : null;
+
+        var result = await sut.ProcessBatchAsync(batchSize: 10, CancellationToken.None);
+
+        result.AbortReason.ShouldBe(InboxBatchAbortReason.None);
+        result.Processed.ShouldBe(1);
+        result.Released.ShouldBe(1, "a tenant's deferral counts no attempt");
+        result.Retried.ShouldBe(0);
+        var outcome = (await CapturedOutcomes(store)).ShouldHaveSingleItem();
+        outcome.Kind.ShouldBe(InboxOutcomeKind.Retry);
+        outcome.RetryCount.ShouldBe(2, "unchanged");
+        outcome.NextRetryAtUtc.ShouldBe(GuardHarness.Now + DefaultOptions.PollingInterval, "the end of A's back-off");
+    }
+
     // ── Transient failures ────────────────────────────────────────────────────────────────────
 
     [Fact]
@@ -369,7 +419,8 @@ public sealed class InboxProcessorTests
     [Fact]
     public async Task ProcessBatch_WhenDependencyUnavailable_ReleasesTheRemainderWithoutRetries()
     {
-        var rows = Enumerable.Range(0, 3).Select(_ => Row()).ToArray();
+        // No tenant to narrow the outage to: the batch is abandoned as before #124.
+        var rows = Enumerable.Range(0, 3).Select(_ => Row(tenantId: null)).ToArray();
         var claim = InboxFixtures.Claim(rows);
         var store = StoreReturning(claim);
         var sut = Build(store, out var probe, out var harness);
@@ -607,7 +658,8 @@ public sealed class InboxProcessorTests
             options,
             harness.Policy,
             NullLogger<InboxProcessor>.Instance,
-            GuardHarness.Store);
+            GuardHarness.Store,
+            harness.TenantBackoff.For(GuardHarness.Store));
     }
 
     private static IMessageSerializer RoundTripSerializer()
@@ -631,6 +683,9 @@ public sealed class InboxProcessorTests
         public List<Guid> ScopeIds { get; } = [];
 
         public Exception? Throw { get; set; }
+
+        /// <summary>Gets or sets a fault chosen from the handler's context: a tenant-scoped one, say.</summary>
+        public Func<MessageContext, Exception?>? ThrowWhen { get; set; }
 
         public Action? During { get; set; }
     }
@@ -656,6 +711,11 @@ public sealed class InboxProcessorTests
             if (probe.Throw is not null)
             {
                 throw probe.Throw;
+            }
+
+            if (probe.ThrowWhen?.Invoke(context) is { } fault)
+            {
+                throw fault;
             }
 
             return ValueTask.CompletedTask;
