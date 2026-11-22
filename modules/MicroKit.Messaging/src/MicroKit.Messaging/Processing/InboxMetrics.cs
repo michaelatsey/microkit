@@ -4,7 +4,7 @@ namespace MicroKit.Messaging.Processing;
 
 /// <summary>
 /// Ingestion counters, so a deduplicated write is observable as a rate rather than only as a
-/// log line.
+/// log line, and the tenants in back-off on each store's inbox (#126).
 /// </summary>
 /// <remarks>
 /// <para>
@@ -28,6 +28,14 @@ namespace MicroKit.Messaging.Processing;
 /// change here plus <c>services.AddMetrics()</c> in the consumer's composition root.
 /// </para>
 /// <para>
+/// <b>The tenants in back-off</b> — <c>microkit.inbox.tenants.backoff</c>, tag <c>store.key</c> — are an
+/// observable up-down counter read from <see cref="InboxTenantBackoff"/>'s memory, never the database: a
+/// tenant counts while its back-off is in force, not while its entry waits to be pruned. A store is
+/// reported from its first use — its retry loop's first cycle, or the first delivery its guard handles —
+/// when its state is created; a store used by neither reports nothing (event 1400 covers a retry loop
+/// whose processor never activates). Each known store reports, zero included, so an alert resolves.
+/// </para>
+/// <para>
 /// Registered as a singleton by <c>AddMicroKitMessaging()</c>.
 /// </para>
 /// </remarks>
@@ -37,10 +45,19 @@ internal sealed class InboxMetrics : IDisposable
     private readonly Counter<long> _added;
     private readonly Counter<long> _deduplicated;
     private readonly Counter<long> _unconsumed;
+    private readonly InboxTenantBackoff? _tenantBackoff;
+    private readonly TimeProvider _timeProvider;
 
     /// <summary>Initializes a new <see cref="InboxMetrics"/>.</summary>
-    public InboxMetrics()
+    /// <param name="tenantBackoff">
+    /// The stores' tenant back-off the back-off counter reads. Null only for an instance built by hand,
+    /// which then reports no store.
+    /// </param>
+    /// <param name="timeProvider">The clock each back-off's end is compared with; the system clock when null.</param>
+    public InboxMetrics(InboxTenantBackoff? tenantBackoff = null, TimeProvider? timeProvider = null)
     {
+        _tenantBackoff = tenantBackoff;
+        _timeProvider = timeProvider ?? TimeProvider.System;
         _meter = new Meter(MessagingDiagnostics.InboxMeterName);
 
         _added = _meter.CreateCounter<long>(
@@ -59,7 +76,16 @@ internal sealed class InboxMetrics : IDisposable
             description:
                 "Envelopes whose contract this process understands but no handler consumes. " +
                 "Zero rows written; alert on any sustained non-zero value.");
+
+        _meter.CreateObservableUpDownCounter<int>(
+            "microkit.inbox.tenants.backoff",
+            ObserveTenants,
+            unit: "{tenant}",
+            description: "Tenants in back-off on the store's inbox. Alert when above zero for a sustained period.");
     }
+
+    /// <summary>Gets the meter, for a test to listen to its own instance.</summary>
+    internal Meter Meter => _meter;
 
     /// <summary>Counts a new delivery whose handler wrote its inbox row, Processed or Failed.</summary>
     /// <param name="consumerType">The handler's consumer type.</param>
@@ -95,4 +121,23 @@ internal sealed class InboxMetrics : IDisposable
 
     /// <inheritdoc/>
     public void Dispose() => _meter.Dispose();
+
+    private List<Measurement<int>> ObserveTenants()
+    {
+        var measurements = new List<Measurement<int>>();
+        if (_tenantBackoff is null)
+        {
+            return measurements;
+        }
+
+        var now = _timeProvider.GetUtcNow();
+        foreach (var (store, backoff) in _tenantBackoff.Stores)
+        {
+            measurements.Add(new Measurement<int>(
+                backoff.CountBlockedAt(now),
+                new KeyValuePair<string, object?>("store.key", store.Value)));
+        }
+
+        return measurements;
+    }
 }

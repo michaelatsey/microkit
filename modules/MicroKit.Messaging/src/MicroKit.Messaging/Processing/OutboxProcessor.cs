@@ -94,6 +94,8 @@ internal sealed class OutboxProcessor : IOutboxProcessor
     private readonly ILogger<OutboxProcessor> _logger;
     private readonly MessageStoreKey? _storeKey;
     private readonly OutboxEndpointBackoff _endpointBackoff;
+    private readonly OutboxMetrics? _metrics;
+    private readonly string? _storeTag;
 
     /// <summary>Initializes a new <see cref="OutboxProcessor"/>.</summary>
     /// <param name="store">Claim and settlement operations. Batch-scoped, not per-message.</param>
@@ -113,6 +115,7 @@ internal sealed class OutboxProcessor : IOutboxProcessor
     /// The store's endpoint back-off, shared by every cycle's processor. Null only for a processor
     /// built by hand, which then gets one of its own.
     /// </param>
+    /// <param name="metrics">The outbox's instruments (#126). Null only for a processor built by hand, which records nothing.</param>
     public OutboxProcessor(
         IOutboxProcessorStore store,
         IExecutionScopeFactory executionScopeFactory,
@@ -121,7 +124,8 @@ internal sealed class OutboxProcessor : IOutboxProcessor
         Random random,
         ILogger<OutboxProcessor> logger,
         MessageStoreKey? storeKey = null,
-        OutboxEndpointBackoff? endpointBackoff = null)
+        OutboxEndpointBackoff? endpointBackoff = null,
+        OutboxMetrics? metrics = null)
     {
         _store = store;
         _executionScopeFactory = executionScopeFactory;
@@ -132,6 +136,8 @@ internal sealed class OutboxProcessor : IOutboxProcessor
         _storeKey = storeKey;
         _endpointBackoff = endpointBackoff
             ?? new OutboxEndpointBackoff(options.PollingInterval, options.TransportUnavailableBackoff);
+        _metrics = metrics;
+        _storeTag = storeKey?.Value;
     }
 
     /// <inheritdoc />
@@ -185,6 +191,10 @@ internal sealed class OutboxProcessor : IOutboxProcessor
         List<TenantTally>? tenantsDeferred = null;
         var handedOver = false;
 
+        // What the batch settles, per endpoint and outcome, for microkit.outbox.messages.settled (#126):
+        // counted here, where each row's endpoint is known, and recorded once the settlement wrote it all.
+        var settledTally = default(OutboxMetrics.SettledTally);
+
         for (; position < messages.Count; position++)
         {
             if (cancellationToken.IsCancellationRequested)
@@ -213,6 +223,7 @@ internal sealed class OutboxProcessor : IOutboxProcessor
                 handedOver |= (excluded & EndpointOf(endpointKey)) != 0;
                 outcomes.Add(OutboxOutcome.Deferred(message.Id, blockedUntil));
                 deferred.Add(endpointKey, blockedUntil);
+                settledTally.Add(endpointKey, OutboxOutcomeKind.Deferred);
                 continue;
             }
 
@@ -230,13 +241,20 @@ internal sealed class OutboxProcessor : IOutboxProcessor
                     blockedTenant) >= 0;
                 outcomes.Add(OutboxOutcome.Deferred(message.Id, tenantUntil));
                 TenantTally.Add(ref tenantsDeferred, endpointKey, blockedTenant, tenantUntil);
+                settledTally.Add(endpointKey, OutboxOutcomeKind.Deferred);
                 continue;
             }
 
             try
             {
                 await DispatchAsync(message, cancellationToken).ConfigureAwait(false);
+                if (_metrics is { DispatchDelayEnabled: true } metrics)
+                {
+                    metrics.RecordDispatchDelay(_timeProvider.GetUtcNow() - message.CreatedAtUtc, _storeTag, endpointKey);
+                }
+
                 outcomes.Add(OutboxOutcome.Published(message.Id));
+                settledTally.Add(endpointKey, OutboxOutcomeKind.Published);
                 if (endpointKey is not null)
                 {
                     _endpointBackoff.Succeeded(endpointKey, message.TenantId);
@@ -258,14 +276,15 @@ internal sealed class OutboxProcessor : IOutboxProcessor
                 abortReason = FirstOf(abortReason, OutboxBatchAbortReason.TransportUnavailable);
                 OutboxProcessorLogs.TransportUnavailable(_logger, ex, message.Endpoint);
                 Down(message, endpointKey, outcomes, ref deferred, ref tenantsDeferred);
+                settledTally.Add(endpointKey, OutboxOutcomeKind.Deferred);
             }
             catch (OutboxConfigurationException ex)
             {
                 // A missing registration is a deployment defect, not a transient fault:
                 // treating it as transient would dead-letter the whole queue over one missing
                 // line in the composition root. The batch is settled below — the rest of it
-                // released untouched — and only then is the fault rethrown, so the worker can
-                // stop without stranding a single lease.
+                // released untouched — and only then is the fault rethrown: the loop reports it
+                // (1402) and backs off on the idle curve, without stranding a single lease.
                 abortReason = OutboxBatchAbortReason.ConfigurationError;
                 configurationFault = ex;
                 OutboxProcessorLogs.DispatchMisconfigured(_logger, ex, messages.Count - position);
@@ -293,6 +312,7 @@ internal sealed class OutboxProcessor : IOutboxProcessor
                     message.TenantId,
                     message.Endpoint);
                 Down(message, endpointKey, outcomes, ref deferred, ref tenantsDeferred);
+                settledTally.Add(endpointKey, OutboxOutcomeKind.Deferred);
             }
             catch (OutboxPayloadException ex)
             {
@@ -300,10 +320,13 @@ internal sealed class OutboxProcessor : IOutboxProcessor
 
                 outcomes.Add(OutboxOutcome.DeadLetter(
                     message.Id, message.RetryCount, Truncate(ex.Message)));
+                settledTally.Add(endpointKey, OutboxOutcomeKind.DeadLetter);
             }
             catch (Exception ex)
             {
-                outcomes.Add(BuildTransientOutcome(message, ex));
+                var transient = BuildTransientOutcome(message, ex);
+                outcomes.Add(transient);
+                settledTally.Add(endpointKey, transient.Kind);
             }
         }
 
@@ -323,6 +346,14 @@ internal sealed class OutboxProcessor : IOutboxProcessor
         // Settle before anything else can throw: a stranded lease is worse than a late
         // exception, because it blocks its message for the whole LockDuration.
         var settled = await SettleAsync(claim.Token, outcomes).ConfigureAwait(false);
+
+        // Counted once the settlement wrote every outcome, as 1010. A failed settlement's rows come back and
+        // are counted then, once; a partial one (1007) is not counted at all — the store says how many rows
+        // it wrote, not which. Released rows were never counted.
+        if (settled)
+        {
+            _metrics?.RecordSettled(_storeTag, in settledTally);
+        }
 
         // 1010 reports a deferral that was written: a failed or partial settlement is reported by
         // its own event, and its rows wait out their lease instead.

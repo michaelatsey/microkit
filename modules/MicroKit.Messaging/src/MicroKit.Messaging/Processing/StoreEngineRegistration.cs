@@ -29,6 +29,7 @@ internal static class StoreEngineRegistration
     {
         services.TryAddEnumerable(ServiceDescriptor.Singleton<IHostedService, MessageStoreEngine>());
         services.TryAddSingleton<InboxMetrics>();
+        services.TryAddSingleton<OutboxMetrics>();
 
         // Both dispatchers of a store's outbox come with the first store: a local row (#188 D7) is
         // delivered through the receive pipeline whatever the transport, and a transport row goes to
@@ -51,11 +52,15 @@ internal static class StoreEngineRegistration
                     "sent on the next attempt; the store's local rows are delivered meanwhile."),
                 sp.GetRequiredService<ILogger<Dispatch.TransportOutboxDispatcher>>()));
 
-        // The store's endpoint back-off: a singleton, it outlives each cycle's scoped processor.
-        services.AddKeyedSingleton(store, static (sp, _) =>
+        // The store's endpoint back-off: a singleton, it outlives each cycle's scoped processor. Handed to
+        // the outbox's instruments as it is created, so its back-off counters report the store from its
+        // first cycle (#126).
+        services.AddKeyedSingleton(store, static (sp, key) =>
         {
             var options = sp.GetRequiredService<OutboxProcessorOptions>();
-            return new OutboxEndpointBackoff(options.PollingInterval, options.TransportUnavailableBackoff);
+            var backoff = new OutboxEndpointBackoff(options.PollingInterval, options.TransportUnavailableBackoff);
+            sp.GetRequiredService<OutboxMetrics>().Track((MessageStoreKey)key!, backoff);
+            return backoff;
         });
 
         // The processors are keyed by store and built over that store's keyed services, resolved
@@ -69,7 +74,8 @@ internal static class StoreEngineRegistration
             sp.GetRequiredService<Random>(),
             sp.GetRequiredService<ILogger<OutboxProcessor>>(),
             (MessageStoreKey)key!,
-            sp.GetRequiredKeyedService<OutboxEndpointBackoff>(key)));
+            sp.GetRequiredKeyedService<OutboxEndpointBackoff>(key),
+            sp.GetRequiredService<OutboxMetrics>()));
 
         services.AddKeyedScoped<IInboxProcessor>(store, static (sp, key) => new InboxProcessor(
             sp.GetRequiredKeyedService<IInboxProcessorStore>(key),

@@ -152,6 +152,35 @@ internal sealed class TenantBackoff
     }
 
     /// <summary>
+    /// The number of tenants in back-off at <paramref name="now"/>, for the back-off up-down counters
+    /// (#126): an entry whose back-off has ended counts for nothing, though it stays until pruned.
+    /// </summary>
+    /// <param name="now">The current time.</param>
+    /// <returns>The tenants whose back-off is in force. One volatile read, no lock, when there is none.</returns>
+    /// <remarks>Allocates nothing: an observable instrument's callback calls it.</remarks>
+    public int CountBlockedAt(DateTimeOffset now)
+    {
+        if (IsEmpty)
+        {
+            return 0;
+        }
+
+        lock (_lock)
+        {
+            var blocked = 0;
+            foreach (var slot in _slots.Values)
+            {
+                if (now < slot.Until)
+                {
+                    blocked++;
+                }
+            }
+
+            return blocked;
+        }
+    }
+
+    /// <summary>
     /// The current delay of <paramref name="tenant"/>'s entry — it doubles on each failure, so it ranks
     /// the tenants that failed least — whether or not its back-off is still in force.
     /// </summary>
