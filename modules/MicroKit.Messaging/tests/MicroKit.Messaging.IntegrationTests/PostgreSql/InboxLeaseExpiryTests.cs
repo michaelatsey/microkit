@@ -37,7 +37,7 @@ public sealed class InboxLeaseExpiryTests(PostgreSqlFixture fixture)
         await using var contextA = InboxTestDatabase.NewContext(schema.ConnectionString);
         var storeA = new EfInboxStore<TestMessagingDbContext>(contextA, new FakeTimeProvider(Now));
 
-        var claimA = await storeA.ClaimBatchAsync(10, ShortLease);
+        var claimA = await storeA.ClaimBatchAsync(10, ShortLease, []);
         claimA.Count.ShouldBe(1);
 
         var key = new InboxMessageKey(
@@ -55,7 +55,7 @@ public sealed class InboxLeaseExpiryTests(PostgreSqlFixture fixture)
         var storeB = new EfInboxStore<TestMessagingDbContext>(
             contextB, new FakeTimeProvider(Now.Add(ShortLease).AddMinutes(1)));
 
-        var claimB = await storeB.ClaimBatchAsync(10, TimeSpan.FromMinutes(5));
+        var claimB = await storeB.ClaimBatchAsync(10, TimeSpan.FromMinutes(5), []);
         claimB.Count.ShouldBe(1, "an expired lease must be re-claimable");
         claimB.Token.ShouldNotBe(claimA.Token);
 
@@ -95,7 +95,7 @@ public sealed class InboxLeaseExpiryTests(PostgreSqlFixture fixture)
         await using var context = InboxTestDatabase.NewContext(schema.ConnectionString);
         var store = new EfInboxStore<TestMessagingDbContext>(context, new FakeTimeProvider(Now));
 
-        var claim = await store.ClaimBatchAsync(10, TimeSpan.FromMinutes(5));
+        var claim = await store.ClaimBatchAsync(10, TimeSpan.FromMinutes(5), []);
         var key = new InboxMessageKey(claim.Messages[0].MessageId, claim.Messages[0].ConsumerType);
 
         await store.BeginAsync();
@@ -128,7 +128,7 @@ public sealed class InboxLeaseExpiryTests(PostgreSqlFixture fixture)
         await using var context = InboxTestDatabase.NewContext(schema.ConnectionString);
         var store = new EfInboxStore<TestMessagingDbContext>(context, new FakeTimeProvider(Now));
 
-        var claim = await store.ClaimBatchAsync(10, TimeSpan.FromMinutes(5));
+        var claim = await store.ClaimBatchAsync(10, TimeSpan.FromMinutes(5), []);
         var key = new InboxMessageKey(claim.Messages[0].MessageId, claim.Messages[0].ConsumerType);
 
         await store.BeginAsync();

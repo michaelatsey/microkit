@@ -2,6 +2,7 @@ using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.Text;
 using System.Text.Json;
+using MicroKit.Messaging.Options;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Time.Testing;
 
@@ -22,6 +23,9 @@ public sealed class TenantBackoffInboxTests(PostgreSqlFixture fixture)
 {
     private static readonly DateTimeOffset Now = new(2026, 11, 22, 12, 0, 0, TimeSpan.Zero);
     private static readonly TimeSpan Polling = TimeSpan.FromMilliseconds(50);
+
+    /// <summary>What the handler script records for a row with no tenant.</summary>
+    private const string NoTenant = "(no tenant)";
 
     // ---------- D5: retries ----------
 
@@ -221,6 +225,75 @@ public sealed class TenantBackoffInboxTests(PostgreSqlFixture fixture)
         rowOfA.NextRetryAtUtc.ShouldNotBeNull();
     }
 
+    // ---------- A7: the claim leaves a tenant in back-off out ----------
+
+    [DockerRequiredFact]
+    public async Task V11_AOneTenantStore_DependencyDownForReal_ClaimsAndWritesNoneOfItsRetries_UntilItsBackOffEnds_OneAttemptPerPeriod()
+    {
+        await using var rig = await Rig.CreateAsync(fixture);
+        rig.Down.Add("A");
+        for (var i = 0; i < 25; i++)
+        {
+            await rig.SeedFailedAsync("A");
+        }
+
+        (await rig.Host.RetryOnceAsync()).Claimed.ShouldBe(10, "control: the first claim reaches A's rows");
+        rig.TakeCalls().ShouldBe(["A"], "A's first retry fails; the rest of that batch waits unattempted");
+        rig.Tenants.IsBlocked("A", Now, out var until).ShouldBeTrue();
+
+        var ceiling = rig.Host.Provider.GetRequiredService<InboxProcessorOptions>().DependencyUnavailableBackoff;
+        var expected = Polling;
+        for (var period = 0; period < 6; period++)
+        {
+            var snapshot = Snapshot(await rig.Host.InboxAsync());
+            foreach (var step in new[] { TimeSpan.Zero, expected / 4, expected / 2, expected - TimeSpan.FromTicks(1) })
+            {
+                rig.Clock.SetUtcNow(until - expected + step);
+                (await rig.Host.RetryOnceAsync()).Claimed.ShouldBe(0, $"period {period}, +{step}: A is left out of the claim");
+            }
+
+            Snapshot(await rig.Host.InboxAsync()).ShouldBe(snapshot, $"period {period}: none of A's rows written while it is excluded");
+            rig.TakeCalls().ShouldBeEmpty($"period {period}: no attempt within the back-off");
+
+            rig.Clock.SetUtcNow(until);
+            (await rig.Host.RetryOnceAsync()).Claimed.ShouldBeGreaterThan(0, $"period {period}: A is claimed again once its back-off ends");
+            rig.TakeCalls().ShouldBe(["A"], $"period {period}: at most one attempt per back-off period");
+            expected = expected * 2 > ceiling ? ceiling : expected * 2;
+            rig.Tenants.IsBlocked("A", until, out var next).ShouldBeTrue();
+            next.ShouldBe(until + expected, $"period {period}: A's own back-off grows");
+            until = next;
+        }
+
+        (await rig.Host.InboxAsync()).ShouldAllBe(r =>
+            r.Status == InboxMessageStatus.Failed && r.RetryCount == 1 && !r.DeadLettered && r.ClaimToken == null);
+    }
+
+    [DockerRequiredFact]
+    public async Task V12_WhileATenantIsExcluded_RowsWithNoTenantAndTheOtherTenantsRows_AreClaimedAndProcessed()
+    {
+        await using var rig = await Rig.CreateAsync(fixture);
+        rig.Down.Add("A");
+        await rig.SeedFailedAsync("A");
+        await rig.SeedFailedAsync("A");
+        await rig.Host.RetryOnceAsync();
+        rig.TakeCalls().ShouldBe(["A"]);
+        rig.Tenants.IsBlocked("A", Now, out _).ShouldBeTrue("control: A is excluded");
+        var aBefore = Snapshot((await rig.Host.InboxAsync()).Where(r => r.TenantId == "A"));
+
+        await rig.SeedFailedAsync("B");
+        await rig.SeedFailedAsync(null);
+        rig.Clock.Advance(Polling / 2);
+        (await rig.Host.RetryOnceAsync()).Claimed.ShouldBe(2, "B's row and the row with no tenant, not A's");
+
+        var rows = await rig.Host.InboxAsync();
+        rows.Where(r => r.TenantId != "A").ShouldAllBe(r => r.Status == InboxMessageStatus.Processed);
+        rig.TakeCalls().ShouldBe(["B", NoTenant]);
+        Snapshot(rows.Where(r => r.TenantId == "A")).ShouldBe(aBefore, "A's rows are not written");
+    }
+
+    private static string Snapshot(IEnumerable<InboxMessage> rows) => string.Join(
+        ";", rows.OrderBy(r => r.RowId).Select(r => $"{r.RowId}|{r.Status}|{r.NextRetryAtUtc:O}|{r.ClaimToken}|{r.LockedUntilUtc:O}|{r.RetryCount}"));
+
     private sealed class Rig : IAsyncDisposable
     {
         private readonly ConcurrentDictionary<Guid, string> _tenantOf = new();
@@ -270,10 +343,10 @@ public sealed class TenantBackoffInboxTests(PostgreSqlFixture fixture)
             return taken;
         }
 
-        public async Task<InboxMessage> SeedFailedAsync(string tenant)
+        public async Task<InboxMessage> SeedFailedAsync(string? tenant)
         {
             var id = Guid.NewGuid();
-            _tenantOf[id] = tenant;
+            _tenantOf[id] = tenant ?? NoTenant;
             var row = new InboxMessage
             {
                 MessageId = MessageId.From(id),

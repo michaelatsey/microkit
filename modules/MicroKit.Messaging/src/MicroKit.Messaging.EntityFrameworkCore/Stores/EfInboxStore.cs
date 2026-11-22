@@ -422,8 +422,9 @@ internal sealed class EfInboxStore<TContext>(
 
     /// <inheritdoc/>
     public async ValueTask<InboxClaim> ClaimBatchAsync(
-        int batchSize, TimeSpan leaseDuration, CancellationToken ct = default)
+        int batchSize, TimeSpan leaseDuration, IReadOnlyList<string> excludedTenants, CancellationToken ct = default)
     {
+        ArgumentNullException.ThrowIfNull(excludedTenants);
         var now = timeProvider.GetUtcNow();
         var lockExpiry = now.Add(leaseDuration);
         var token = Guid.NewGuid();
@@ -439,9 +440,23 @@ internal sealed class EfInboxStore<TContext>(
         //    A separate query rather than OrderBy/Take inside ExecuteUpdate: whether
         //    row-limiting operators translate there varies by EF Core version and provider, and
         //    the claim path is the wrong place to rely on an unverified capability.
-        var candidateRowIds = await context.Set<InboxMessage>()
+        //
+        //    The tenants in back-off are left out here only (#124), as one array parameter
+        //    (EF.Parameter), so the SQL text does not change with their number; an empty list adds no
+        //    predicate. A row with no tenant is never left out: the TenantId == null arm is spelled out
+        //    because under UseRelationalNulls(), a context option the host owns, NOT (TenantId =
+        //    ANY(@p)) is null for it, and the row would never be claimed again. The stamp below matches
+        //    the candidates by RowId.
+        var processable = context.Set<InboxMessage>()
             .AsNoTracking()
-            .Where(Processable(now))
+            .Where(Processable(now));
+        if (excludedTenants.Count > 0)
+        {
+            var tenants = excludedTenants as string[] ?? [.. excludedTenants];
+            processable = processable.Where(m => m.TenantId == null || !EF.Parameter(tenants).Contains(m.TenantId));
+        }
+
+        var candidateRowIds = await processable
             .OrderBy(m => m.ReceivedAtUtc)
             .Take(batchSize)
             .Select(m => m.RowId)

@@ -334,6 +334,46 @@ public sealed class OutboxProcessorTests
     }
 
     /// <summary>
+    /// A tenant in back-off on an endpoint is left out of the claim on that endpoint only (#124 A7), and
+    /// a row of it handed over anyway — a store that does not honour the tenant filter — is deferred and
+    /// reported to the loop, as an endpoint's is. With no tenant in back-off both lists are empty.
+    /// </summary>
+    [Fact]
+    public async Task ProcessBatch_LeavesATenantInBackOffOutOfTheClaim_OnItsEndpointOnly_AndReportsARowOfItHandedOverAnyway()
+    {
+        var blocked = OutboxFixtures.Message(tenantId: "tenant-b");
+        var other = OutboxFixtures.Message(tenantId: "tenant-a");
+        var claim = OutboxFixtures.Claim(blocked, other);
+        var (store, captured) = StoreReturning(claim);
+        var lists = new List<(IReadOnlyList<string> Transport, IReadOnlyList<string> Local)>();
+        store.ClaimBatchAsync(Arg.Any<int>(), Arg.Any<TimeSpan>(), Arg.Any<OutboxEndpoints>(), Arg.Any<IReadOnlyList<string>>(), Arg.Any<IReadOnlyList<string>>(), Arg.Any<CancellationToken>())
+            .Returns(ci =>
+            {
+                lists.Add((ci.ArgAt<IReadOnlyList<string>>(3), ci.ArgAt<IReadOnlyList<string>>(4)));
+                return ValueTask.FromResult(claim);
+            });
+        var backoff = new OutboxEndpointBackoff(DefaultOptions.PollingInterval, DefaultOptions.TransportUnavailableBackoff);
+        var dispatcher = new ScriptedDispatcher();
+        var sut = BuildFailingActivationFor(
+            store, dispatcher, MessageId.New(), () => new InvalidOperationException("never"), new CapturingLogger<OutboxProcessor>(), backoff);
+
+        (await sut.ProcessBatchAsync(10, CancellationToken.None)).HandedOverInBackOff.ShouldBeFalse("control: nobody in back-off");
+        lists[0].Transport.ShouldBeEmpty();
+        lists[0].Local.ShouldBeEmpty();
+
+        backoff.TenantsOf(OutboxDispatchers.Transport).OnDown("tenant-b", Now, out var until);
+        captured.Clear();
+        dispatcher.Dispatched.Clear();
+        var result = await sut.ProcessBatchAsync(10, CancellationToken.None);
+
+        lists[1].Transport.ShouldBe(["tenant-b"], "left out of the transport's rows");
+        lists[1].Local.ShouldBeEmpty("its local rows are still claimed");
+        result.HandedOverInBackOff.ShouldBeTrue("a row the claim was asked to leave out came back: the loop waits");
+        captured.Single(o => o.MessageId == blocked.Id).ShouldBe(OutboxOutcome.Deferred(blocked.Id, until));
+        dispatcher.Dispatched.Select(m => m.Id).ShouldBe([other.Id]);
+    }
+
+    /// <summary>
     /// A row with no tenant has no tenant to narrow the verdict to: its endpoint is deferred as #188
     /// made it — the row and every later row of the endpoint, no retry consumed, nothing rethrown (#124 V4).
     /// </summary>
@@ -581,7 +621,7 @@ public sealed class OutboxProcessorTests
     public async Task ProcessBatch_WhenClaimEmpty_DoesNotDispatchOrSettle()
     {
         var store = Substitute.For<IOutboxProcessorStore>();
-        store.ClaimBatchAsync(Arg.Any<int>(), Arg.Any<TimeSpan>(), Arg.Any<OutboxEndpoints>(), Arg.Any<CancellationToken>())
+        store.ClaimBatchAsync(Arg.Any<int>(), Arg.Any<TimeSpan>(), Arg.Any<OutboxEndpoints>(), Arg.Any<IReadOnlyList<string>>(), Arg.Any<IReadOnlyList<string>>(), Arg.Any<CancellationToken>())
             .Returns(ValueTask.FromResult(OutboxClaim.Empty));
         var dispatcher = new ScriptedDispatcher();
 
@@ -632,7 +672,7 @@ public sealed class OutboxProcessorTests
     {
         // Leases expire on their own; taking the host down over a settlement fault would be worse.
         var store = Substitute.For<IOutboxProcessorStore>();
-        store.ClaimBatchAsync(Arg.Any<int>(), Arg.Any<TimeSpan>(), Arg.Any<OutboxEndpoints>(), Arg.Any<CancellationToken>())
+        store.ClaimBatchAsync(Arg.Any<int>(), Arg.Any<TimeSpan>(), Arg.Any<OutboxEndpoints>(), Arg.Any<IReadOnlyList<string>>(), Arg.Any<IReadOnlyList<string>>(), Arg.Any<CancellationToken>())
             .Returns(ValueTask.FromResult(OutboxFixtures.Claim(OutboxFixtures.Message())));
         store.ApplyOutcomesAsync(Arg.Any<Guid>(), Arg.Any<IReadOnlyList<OutboxOutcome>>(), Arg.Any<CancellationToken>())
             .Returns(ValueTask.FromException<int>(new InvalidOperationException("db down")));
@@ -688,7 +728,7 @@ public sealed class OutboxProcessorTests
         var captured = new List<OutboxOutcome>();
         var store = Substitute.For<IOutboxProcessorStore>();
 
-        store.ClaimBatchAsync(Arg.Any<int>(), Arg.Any<TimeSpan>(), Arg.Any<OutboxEndpoints>(), Arg.Any<CancellationToken>())
+        store.ClaimBatchAsync(Arg.Any<int>(), Arg.Any<TimeSpan>(), Arg.Any<OutboxEndpoints>(), Arg.Any<IReadOnlyList<string>>(), Arg.Any<IReadOnlyList<string>>(), Arg.Any<CancellationToken>())
             .Returns(ValueTask.FromResult(claim));
 
         store.ApplyOutcomesAsync(Arg.Any<Guid>(), Arg.Any<IReadOnlyList<OutboxOutcome>>(), Arg.Any<CancellationToken>())

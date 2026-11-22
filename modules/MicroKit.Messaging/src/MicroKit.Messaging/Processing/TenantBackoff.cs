@@ -101,6 +101,49 @@ internal sealed class TenantBackoff
         }
     }
 
+    /// <summary>The tenants in back-off at <paramref name="now"/>, for the claim to leave out (#124 A7).</summary>
+    /// <param name="now">The current time.</param>
+    /// <returns>
+    /// The tenants whose back-off is in force; the shared empty array when there is none, so the happy
+    /// path allocates nothing. One array per call otherwise: once per batch, per endpoint for the outbox.
+    /// </returns>
+    public string[] BlockedAt(DateTimeOffset now)
+    {
+        if (IsEmpty)
+        {
+            return [];
+        }
+
+        lock (_lock)
+        {
+            var blocked = 0;
+            foreach (var slot in _slots.Values)
+            {
+                if (now < slot.Until)
+                {
+                    blocked++;
+                }
+            }
+
+            if (blocked == 0)
+            {
+                return [];
+            }
+
+            var tenants = new string[blocked];
+            var i = 0;
+            foreach (var (tenant, slot) in _slots)
+            {
+                if (now < slot.Until)
+                {
+                    tenants[i++] = tenant;
+                }
+            }
+
+            return tenants;
+        }
+    }
+
     /// <summary>
     /// The current delay of <paramref name="tenant"/>'s entry — it doubles on each failure, so it ranks
     /// the tenants that failed least — whether or not its back-off is still in force.

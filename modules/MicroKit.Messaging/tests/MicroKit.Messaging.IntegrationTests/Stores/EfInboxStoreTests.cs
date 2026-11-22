@@ -212,7 +212,7 @@ public sealed class EfInboxStoreTests
             ctx.InboxMessages.Add(message);
             await ctx.SaveChangesAsync();
 
-            var claim = await Store(ctx).ClaimBatchAsync(10, Lease);
+            var claim = await Store(ctx).ClaimBatchAsync(10, Lease, []);
 
             claim.Count.ShouldBe(1);
             claim.Token.ShouldNotBe(Guid.Empty);
@@ -237,7 +237,7 @@ public sealed class EfInboxStoreTests
                 BuildInboxMessage(consumerType: "C", nextRetryAtUtc: Now.AddMinutes(5)));
             await ctx.SaveChangesAsync();
 
-            (await Store(ctx).ClaimBatchAsync(10, Lease)).Count.ShouldBe(0);
+            (await Store(ctx).ClaimBatchAsync(10, Lease, [])).Count.ShouldBe(0);
         });
 
     [Fact]
@@ -255,7 +255,7 @@ public sealed class EfInboxStoreTests
                 claimToken: Guid.NewGuid()));
             await ctx.SaveChangesAsync();
 
-            (await Store(ctx).ClaimBatchAsync(10, Lease)).Count.ShouldBe(1);
+            (await Store(ctx).ClaimBatchAsync(10, Lease, [])).Count.ShouldBe(1);
         });
 
     [Fact]
@@ -272,7 +272,7 @@ public sealed class EfInboxStoreTests
                 claimToken: Guid.NewGuid()));
             await ctx.SaveChangesAsync();
 
-            (await Store(ctx).ClaimBatchAsync(10, Lease)).Count.ShouldBe(0);
+            (await Store(ctx).ClaimBatchAsync(10, Lease, [])).Count.ShouldBe(0);
         });
 
     [Fact]
@@ -295,7 +295,7 @@ public sealed class EfInboxStoreTests
 
             await ctx.SaveChangesAsync();
 
-            var claim = await Store(ctx).ClaimBatchAsync(batchSize: 4, Lease);
+            var claim = await Store(ctx).ClaimBatchAsync(batchSize: 4, Lease, []);
 
             claim.Count.ShouldBe(4);
             (await SecondContext(conn).InboxMessages.AsNoTracking()
@@ -313,9 +313,9 @@ public sealed class EfInboxStoreTests
             ctx.InboxMessages.Add(BuildInboxMessage());
             await ctx.SaveChangesAsync();
 
-            var first = await Store(ctx).ClaimBatchAsync(10, Lease);
+            var first = await Store(ctx).ClaimBatchAsync(10, Lease, []);
             await using var ctx2 = SecondContext(conn);
-            var second = await Store(ctx2).ClaimBatchAsync(10, Lease);
+            var second = await Store(ctx2).ClaimBatchAsync(10, Lease, []);
 
             first.Count.ShouldBe(1);
             second.Count.ShouldBe(0, "the eligibility predicate is replayed inside the UPDATE");
@@ -336,7 +336,7 @@ public sealed class EfInboxStoreTests
                 BuildInboxMessage(consumerType: "C", receivedAtUtc: Now.AddMinutes(-10)));
             await ctx.SaveChangesAsync();
 
-            var claim = await Store(ctx).ClaimBatchAsync(batchSize: 1, Lease);
+            var claim = await Store(ctx).ClaimBatchAsync(batchSize: 1, Lease, []);
 
             claim.Messages[0].MessageId.ShouldBe(oldest.MessageId);
         });
@@ -361,7 +361,7 @@ public sealed class EfInboxStoreTests
             await ctx.SaveChangesAsync();
 
             var store = Store(ctx);
-            var claim = await store.ClaimBatchAsync(10, Lease);
+            var claim = await store.ClaimBatchAsync(10, Lease, []);
             var keys = claim.Messages
                 .Select(m => new InboxMessageKey(m.MessageId, m.ConsumerType))
                 .ToList();
@@ -418,11 +418,11 @@ public sealed class EfInboxStoreTests
             await ctx.SaveChangesAsync();
 
             var staleStore = Store(ctx);
-            var staleClaim = await staleStore.ClaimBatchAsync(10, Lease);
+            var staleClaim = await staleStore.ClaimBatchAsync(10, Lease, []);
 
             await using var ctx2 = SecondContext(conn);
             var freshStore = Store(ctx2, Now.Add(Lease).AddMinutes(1));
-            var freshClaim = await freshStore.ClaimBatchAsync(10, Lease);
+            var freshClaim = await freshStore.ClaimBatchAsync(10, Lease, []);
 
             freshClaim.Count.ShouldBe(1, "an expired lease must be re-claimable");
             freshClaim.Token.ShouldNotBe(staleClaim.Token);
@@ -455,7 +455,7 @@ public sealed class EfInboxStoreTests
             await ctx.SaveChangesAsync();
 
             var store = Store(ctx);
-            var claim = await store.ClaimBatchAsync(10, Lease);
+            var claim = await store.ClaimBatchAsync(10, Lease, []);
 
             await store.ApplyOutcomesAsync(claim.Token,
                 [InboxOutcome.Processed(new InboxMessageKey(sharedMessageId, "HandlerA"))]);
@@ -486,7 +486,7 @@ public sealed class EfInboxStoreTests
             ctx.ChangeTracker.Clear();
 
             var store = Store(ctx);
-            var claim = await store.ClaimBatchAsync(10, Lease);
+            var claim = await store.ClaimBatchAsync(10, Lease, []);
             var key = new InboxMessageKey(claim.Messages[0].MessageId, claim.Messages[0].ConsumerType);
 
             await store.BeginAsync();
@@ -514,7 +514,7 @@ public sealed class EfInboxStoreTests
             await ctx.SaveChangesAsync();
 
             var store = Store(ctx);
-            var claim = await store.ClaimBatchAsync(10, Lease);
+            var claim = await store.ClaimBatchAsync(10, Lease, []);
             var key = new InboxMessageKey(claim.Messages[0].MessageId, claim.Messages[0].ConsumerType);
 
             (await store.MarkClaimedProcessedAsync(key, Guid.NewGuid())).ShouldBeFalse();
@@ -534,9 +534,28 @@ public sealed class EfInboxStoreTests
                 BuildInboxMessage(status: InboxMessageStatus.Failed, consumerType: "Dead", deadLettered: true));
             await ctx.SaveChangesAsync();
 
-            var claim = await Store(ctx).ClaimBatchAsync(10, Lease);
+            var claim = await Store(ctx).ClaimBatchAsync(10, Lease, []);
 
             claim.Messages.Select(m => m.ConsumerType).ShouldBe(["Due"]);
+        });
+
+    [Fact]
+    public Task ClaimBatchAsync_LeavesOutTheExcludedTenantsRows_AndNeverARowWithNoTenant()
+        => Task.Run(async () =>
+        {
+            var (conn, ctx) = CreateIsolatedDb();
+            await using var _ = conn;
+            await using var __ = ctx;
+
+            ctx.InboxMessages.AddRange(
+                BuildInboxMessage(status: InboxMessageStatus.Failed, consumerType: "A", tenantId: "A"),
+                BuildInboxMessage(status: InboxMessageStatus.Failed, consumerType: "B", tenantId: "B"),
+                BuildInboxMessage(status: InboxMessageStatus.Failed, consumerType: "None", tenantId: null));
+            await ctx.SaveChangesAsync();
+
+            var claim = await Store(ctx).ClaimBatchAsync(10, Lease, ["A", "C"]);
+
+            claim.Messages.Select(m => m.ConsumerType).Order(StringComparer.Ordinal).ShouldBe(["B", "None"]);
         });
 
     [Fact]
@@ -694,7 +713,7 @@ public sealed class EfInboxStoreTests
                     occurredOnUtc: Now.AddDays(-3)));     // ...and occurred FIRST
             await ctx.SaveChangesAsync();
 
-            var claim = await Store(ctx).ClaimBatchAsync(batchSize: 2, Lease);
+            var claim = await Store(ctx).ClaimBatchAsync(batchSize: 2, Lease, []);
 
             claim.Messages.Select(m => m.ConsumerType).ShouldBe(
                 ["received-first", "received-second"],

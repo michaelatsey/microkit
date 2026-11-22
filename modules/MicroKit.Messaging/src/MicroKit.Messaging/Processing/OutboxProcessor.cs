@@ -140,13 +140,21 @@ internal sealed class OutboxProcessor : IOutboxProcessor
         CancellationToken cancellationToken = default)
     {
         // An endpoint in back-off is left out of the claim (#188): its rows are neither claimed nor
-        // rewritten while it is down, and the other endpoint's rows behind them are reached. A tenant in
-        // back-off is not (#124 D3): its rows leave the claim through their next attempt.
+        // rewritten while it is down, and the other endpoint's rows behind them are reached. So is a
+        // tenant in back-off on an endpoint (#124 A7), on that endpoint only: a store whose rows all carry
+        // one tenant would otherwise claim and defer its whole backlog each time the back-off ends. With
+        // no tenant in back-off both lists are the shared empty array.
         var start = _timeProvider.GetUtcNow();
         _endpointBackoff.Prune(start);
         var excluded = _endpointBackoff.BlockedAt(start);
+        var transportTenants = (excluded & OutboxEndpoints.Transport) != 0
+            ? []
+            : _endpointBackoff.TenantsOf(OutboxDispatchers.Transport).BlockedAt(start);
+        var localTenants = (excluded & OutboxEndpoints.Local) != 0
+            ? []
+            : _endpointBackoff.TenantsOf(OutboxDispatchers.Local).BlockedAt(start);
         var claim = await _store
-            .ClaimBatchAsync(batchSize, _options.LockDuration, excluded, cancellationToken)
+            .ClaimBatchAsync(batchSize, _options.LockDuration, excluded, transportTenants, localTenants, cancellationToken)
             .ConfigureAwait(false);
 
         if (claim.Count == 0)
@@ -209,13 +217,17 @@ internal sealed class OutboxProcessor : IOutboxProcessor
             }
 
             // A row of a tenant in back-off on its endpoint (#124 D1): deferred unattempted to the end
-            // of the tenant's back-off. Handed over by design — the claim is not filtered by tenant
-            // (D3) — so it never sets HandedOverInBackOff.
+            // of the tenant's back-off — the rest of the batch in which the tenant was blocked. Only a
+            // row of a tenant the claim was asked to leave out tells the loop to wait, as for an
+            // endpoint: a store that does not honour the tenant filter (A7).
             if (endpointKey is not null
                 && message.TenantId is { } blockedTenant
                 && _endpointBackoff.TenantsOf(endpointKey) is { IsEmpty: false } tenants
                 && tenants.IsBlocked(blockedTenant, _timeProvider.GetUtcNow(), out var tenantUntil))
             {
+                handedOver |= Array.IndexOf(
+                    endpointKey is OutboxDispatchers.Local ? localTenants : transportTenants,
+                    blockedTenant) >= 0;
                 outcomes.Add(OutboxOutcome.Deferred(message.Id, tenantUntil));
                 TenantTally.Add(ref tenantsDeferred, endpointKey, blockedTenant, tenantUntil);
                 continue;

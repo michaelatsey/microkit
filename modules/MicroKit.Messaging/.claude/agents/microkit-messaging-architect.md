@@ -166,8 +166,9 @@ Any proposal that claims by filtering an UPDATE on the compound key with two Con
 FORBIDDEN". That was wrong and would REJECT the shipped design.
 
 OutboxMessage and InboxMessage are INFRASTRUCTURE tables, deliberately read CROSS-TENANT by the
-processors: ADR-MSG-002 specifies shared-DB cross-tenant reservation, ClaimBatchAsync takes no
-tenantId, and neither entity configuration carries a global query filter.
+processors: ADR-MSG-002 specifies shared-DB cross-tenant reservation, ClaimBatchAsync is scoped to no
+tenant — it only leaves out the tenants in back-off (#124 A7), never a row with no tenant — and
+neither entity configuration carries a global query filter.
 
 The model is: TenantId TRAVELS ON THE ROW, and the processor contextualises per message by
 building an IExecutionContext from message.TenantId. Isolation is achieved by the execution scope,

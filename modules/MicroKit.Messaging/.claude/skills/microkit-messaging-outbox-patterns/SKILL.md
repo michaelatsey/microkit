@@ -306,7 +306,8 @@ outage produces.
 No outage arm on the outbox: a down endpoint's rows are deferred by the processor to the end of the
 endpoint's own back-off, and while it runs the claim leaves the endpoint's rows out
 (`ClaimBatchAsync(…, OutboxEndpoints excluded, …)`), so the other endpoint keeps this cadence and the
-waiting rows are not rewritten. A batch carrying rows handed over in back-off (`HandedOverInBackOff`,
+waiting rows are not rewritten; a tenant in back-off on an endpoint is left out the same way, on that
+endpoint only (`excludedTransportTenants`, `excludedLocalTenants`, #124). A batch carrying rows handed over in back-off (`HandedOverInBackOff`,
 a store breaking the claim's contract by not honouring the filter) waits `PollingInterval`, whatever
 its endpoint verdict and even if it
 delivered something.

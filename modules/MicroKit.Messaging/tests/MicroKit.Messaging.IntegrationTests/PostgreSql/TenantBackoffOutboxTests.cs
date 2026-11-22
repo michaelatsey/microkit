@@ -192,6 +192,80 @@ public sealed class TenantBackoffOutboxTests(PostgreSqlFixture fixture)
         }
     }
 
+    // ---------- A7: the claim leaves a tenant in back-off out ----------
+
+    [DockerRequiredFact]
+    public async Task V11_AOneTenantStore_TransportDownForReal_ClaimsAndWritesNoneOfItsRows_UntilItsBackOffEnds_OneSendPerPeriod()
+    {
+        await using var rig = await Rig.CreateAsync(fixture);
+        rig.Faults.EveryTransportFails = true;
+        var backlog = (rig.Options.BatchSize * 2) + 5;
+        await rig.SeedAsync([.. Enumerable.Repeat<(string?, string?)>(("A", null), backlog)]);
+
+        var first = await rig.CycleAsync();
+        first.Claimed.ShouldBe(rig.Options.BatchSize, "control: the first claim reaches A's rows");
+        rig.Faults.TakeAttempts().ShouldBe(["A"], "A's first row fails; the rest of that batch is deferred unattempted");
+        rig.Backoff.TenantsOf(OutboxDispatchers.Transport).IsBlocked("A", Now, out var until).ShouldBeTrue();
+        rig.Backoff.BlockedAt(Now).ShouldBe(OutboxEndpoints.None, "one tenant: the probe never fires, the endpoint is never blocked");
+
+        var expected = rig.Options.PollingInterval;
+        for (var period = 0; period < 6; period++)
+        {
+            // Within A's back-off: polled as the loop would, the claim returns none of A's rows and writes
+            // none of them — their next attempt, claim token and lease are left as they are.
+            var snapshot = Snapshot(await rig.ReadAsync());
+            foreach (var step in new[] { TimeSpan.Zero, expected / 4, expected / 2, expected - TimeSpan.FromTicks(1) })
+            {
+                rig.Clock.SetUtcNow(until - expected + step);
+                (await rig.CycleAsync()).Claimed.ShouldBe(0, $"period {period}, +{step}: A is left out of the claim");
+            }
+
+            Snapshot(await rig.ReadAsync()).ShouldBe(snapshot, $"period {period}: none of A's rows written while it is excluded");
+            rig.Faults.TakeAttempts().ShouldBeEmpty($"period {period}: no send within the back-off");
+
+            // A's back-off over: one send, which fails again; A alone backs off further.
+            rig.Clock.SetUtcNow(until);
+            (await rig.CycleAsync()).Claimed.ShouldBeGreaterThan(0, $"period {period}: A is claimed again once its back-off ends");
+            rig.Faults.TakeAttempts().ShouldBe(["A"], $"period {period}: at most one send per back-off period");
+            expected = expected * 2 > rig.Options.TransportUnavailableBackoff ? rig.Options.TransportUnavailableBackoff : expected * 2;
+            rig.Backoff.TenantsOf(OutboxDispatchers.Transport).IsBlocked("A", until, out var next).ShouldBeTrue();
+            next.ShouldBe(until + expected, $"period {period}: A's own back-off grows");
+            until = next;
+        }
+
+        (await rig.ReadAsync()).ShouldAllBe(r =>
+            r.Status == OutboxMessageStatus.Pending && r.RetryCount == 0 && !r.DeadLettered && r.ClaimToken == null);
+    }
+
+    [DockerRequiredFact]
+    public async Task V12_WhileATenantIsExcluded_RowsWithNoTenantAndTheOtherTenantsRows_AreClaimedAndPublished()
+    {
+        await using var rig = await Rig.CreateAsync(fixture, bus => bus.AddLocalConsumerSource(new TenantNoticeConsumers()));
+        rig.Faults.TransportFails.Add("A");
+        await rig.SeedAsync(("A", null), ("A", null), ("A", OutboxMessage.LocalEndpoint));
+        await rig.CycleAsync();
+        rig.Faults.TakeAttempts().ShouldBe(["A"]);
+        rig.Backoff.TenantsOf(OutboxDispatchers.Transport).IsBlocked("A", Now, out _).ShouldBeTrue("control: A is excluded");
+        var aBefore = Snapshot((await rig.ReadAsync()).Where(r => r.TenantId == "A" && r.Endpoint is null));
+
+        // Rows written while A is excluded: B's and rows with no tenant, on both endpoints.
+        await rig.SeedAsync(("B", null), (null, null), ("B", OutboxMessage.LocalEndpoint), (null, OutboxMessage.LocalEndpoint));
+        rig.Clock.Advance(rig.Options.PollingInterval / 2);
+        await rig.CycleAsync();
+
+        var rows = await rig.ReadAsync();
+        rows.Where(r => r.TenantId != "A").ShouldAllBe(r => r.Status == OutboxMessageStatus.Published,
+            "B's rows and the rows with no tenant are claimed and published");
+        rows.Count(r => r.TenantId != "A").ShouldBe(4);
+        rig.Faults.TakeAttempts().ShouldBe(["B", null], "the transport is tried for B and for no tenant, never for A");
+        Snapshot(rows.Where(r => r.TenantId == "A" && r.Endpoint is null)).ShouldBe(aBefore, "A's transport rows are not written");
+        rows.Single(r => r.TenantId == "A" && r.Endpoint is not null).Status.ShouldBe(OutboxMessageStatus.Published,
+            "A's local row: A is excluded on the transport only");
+    }
+
+    private static string Snapshot(IEnumerable<OutboxMessage> rows) => string.Join(
+        ";", rows.OrderBy(r => r.Id).Select(r => $"{r.Id.Value}|{r.Status}|{r.NextRetryAtUtc:O}|{r.ClaimToken}|{r.LockedUntilUtc:O}|{r.RetryCount}"));
+
     private sealed record TenantNotice;
 
     private sealed class TenantNoticeConsumers : ILocalConsumerSource

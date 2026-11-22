@@ -214,8 +214,14 @@ tenant is deferred and the other tenants' rows dispatched (#124); a row with no 
 endpoint verdict (`…ForARowWithNoTenant_DefersItsEndpointsRows`); the `InvalidOperationException`
 boundary is pinned on both sides. #188's endpoint tests (`EndpointIsolationTests`) use rows with no
 tenant. The tenant back-off is pinned by `TenantBackoffTests` (unit) and, on PostgreSQL,
-`TenantBackoffOutboxTests` (V1–V3, V1b, a known tenant recovering while the endpoint is suspected),
-`TenantBackoffInboxTests` (retries, new deliveries, the in-memory transport not paused),
+`TenantBackoffOutboxTests` (V1–V3, V1b, a known tenant recovering while the endpoint is suspected,
+V11–V12: a one-tenant store's claims leave it out and write nothing until its back-off ends),
+`TenantBackoffInboxTests` (retries, new deliveries, the in-memory transport not paused, V11–V12),
+`TenantClaimFilterTests` (each endpoint's list; never a row with no tenant, under
+`UseRelationalNulls()` too), `TenantExclusionPlanTests` (one array parameter, one SQL text, nothing for
+an empty list; no write, the published history not walked, no more read than the deferred backlog
+cost before A7; with the local endpoint also excluded, the local backlog's heap not walked — a
+planner property no code mutation turns red, so keep the local backlog larger than the held tenant's),
 `AdminDeadLetterPendingTests` and `ShutdownReleaseTests.AHostStoppedDuringTheSecondPassOf…`.
 
 ### InboxProcessor and the inbox retry policy (`UnitTests/Processing`)
@@ -362,8 +368,10 @@ EndpointBindingTests.APublicationBeforeHostStart_ReachesTheHostsOwnHandlerOnceIt
 
 ## Architecture tests (`MicroKit.Messaging.ArchitectureTests`)
 
-- `StoreContractTests.IOutboxProcessorStore_HasOneClaim_TakingTheEndpointFilter_WithNoDefaultImplementation`
-  — a default that ignored the filter would let a store provider bring back local-row starvation.
+- `StoreContractTests.IOutboxProcessorStore_HasOneClaim_TakingTheEndpointAndTenantFilters_WithNoDefaultImplementation`,
+  `…IInboxProcessorStore_HasOneClaim_TakingTheTenantFilter_WithNoDefaultImplementation` — a default
+  that ignored a filter would let a store provider bring back local-row starvation, or the
+  re-deferral of a held tenant's backlog (#124).
 - `PublicSurfaceTests` — the full exported surface of all four assemblies, both directions (an
   unexpected type fails, a listed type that no longer exists fails). Uses
   `Assembly.GetExportedTypes()`, not NetArchTest, which breaks under coverlet instrumentation.

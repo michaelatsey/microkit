@@ -41,7 +41,7 @@ public sealed class OutboxClaimConcurrencyTests(PostgreSqlFixture fixture)
 
             while (true)
             {
-                var claim = await store.ClaimBatchAsync(BatchSize, Lease, OutboxEndpoints.None);
+                var claim = await store.ClaimBatchAsync(BatchSize, Lease, OutboxEndpoints.None, [], []);
                 if (claim.Count == 0)
                 {
                     return;
@@ -92,7 +92,7 @@ public sealed class OutboxClaimConcurrencyTests(PostgreSqlFixture fixture)
             var store = new EfOutboxStore<TestMessagingDbContext>(context, new FakeTimeProvider(Now));
 
             await start.Task;
-            return await store.ClaimBatchAsync(10, Lease, OutboxEndpoints.None);
+            return await store.ClaimBatchAsync(10, Lease, OutboxEndpoints.None, [], []);
         }).ToList();
 
         start.SetResult();
@@ -110,7 +110,7 @@ public sealed class OutboxClaimConcurrencyTests(PostgreSqlFixture fixture)
 
         await using var contextA = NewContext(schema.ConnectionString);
         var storeA = new EfOutboxStore<TestMessagingDbContext>(contextA, new FakeTimeProvider(Now));
-        var staleClaim = await storeA.ClaimBatchAsync(10, Lease, OutboxEndpoints.None);
+        var staleClaim = await storeA.ClaimBatchAsync(10, Lease, OutboxEndpoints.None, [], []);
         staleClaim.Count.ShouldBe(1);
         var messageId = staleClaim.Messages[0].Id;
 
@@ -118,7 +118,7 @@ public sealed class OutboxClaimConcurrencyTests(PostgreSqlFixture fixture)
         await using var contextB = NewContext(schema.ConnectionString);
         var storeB = new EfOutboxStore<TestMessagingDbContext>(
             contextB, new FakeTimeProvider(Now.Add(Lease).AddMinutes(1)));
-        var freshClaim = await storeB.ClaimBatchAsync(10, Lease, OutboxEndpoints.None);
+        var freshClaim = await storeB.ClaimBatchAsync(10, Lease, OutboxEndpoints.None, [], []);
         freshClaim.Count.ShouldBe(1, "an expired lease must be re-claimable");
         freshClaim.Token.ShouldNotBe(staleClaim.Token);
 
@@ -146,7 +146,7 @@ public sealed class OutboxClaimConcurrencyTests(PostgreSqlFixture fixture)
         await using var context = NewContext(schema.ConnectionString);
         var store = new EfOutboxStore<TestMessagingDbContext>(context, new FakeTimeProvider(Now));
 
-        var claim = await store.ClaimBatchAsync(12, Lease, OutboxEndpoints.None);
+        var claim = await store.ClaimBatchAsync(12, Lease, OutboxEndpoints.None, [], []);
 
         claim.Count.ShouldBe(12, "a client-side evaluation or a broken IN list would not claim all 12");
     }

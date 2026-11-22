@@ -24,8 +24,9 @@ namespace MicroKit.Messaging.Processing;
 /// <para>
 /// <b>Tenants (#124).</b> Each endpoint keeps its tenants in back-off (<see cref="TenantsOf"/>), on the
 /// same curve. A down verdict on a row with a tenant blocks that tenant on the endpoint; only the
-/// probe failing — a second tenant down before any success — blocks the endpoint as above. The claim
-/// is not filtered by tenant: a blocked tenant's rows leave it through their next attempt.
+/// probe failing — a second tenant down before any success — blocks the endpoint as above. While it
+/// runs, <see cref="TenantBackoff.BlockedAt"/> tells the claim to leave that tenant's rows of the
+/// endpoint out, as for an endpoint; the rows the blocking batch had already claimed are deferred.
 /// </para>
 /// </remarks>
 internal sealed class OutboxEndpointBackoff(TimeSpan initial, TimeSpan ceiling)

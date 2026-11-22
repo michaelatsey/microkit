@@ -17,6 +17,21 @@ public sealed class TenantBackoffTests
     private static TenantBackoff New(StrongBox<int>? loud = null) => new(Initial, Ceiling, loud);
 
     [Fact]
+    public void BlockedAt_ListsTheTenantsWhoseBackOffIsInForce_AndIsTheSharedEmptyArrayWhenThereIsNone()
+    {
+        var backoff = New();
+        backoff.BlockedAt(Now).ShouldBeSameAs(Array.Empty<string>(), "nothing in back-off: no allocation");
+
+        backoff.OnDown("A", Now, out var untilA);
+        backoff.Succeeded(null);
+        backoff.OnDown("B", Now + TimeSpan.FromSeconds(2), out _);
+
+        backoff.BlockedAt(Now).Order(StringComparer.Ordinal).ShouldBe(["A", "B"]);
+        backoff.BlockedAt(untilA).ShouldBe(["B"], "A's back-off has ended: it is claimed again");
+        backoff.BlockedAt(untilA + Initial).ShouldBeSameAs(Array.Empty<string>(), "both ended, entries kept for the curve");
+    }
+
+    [Fact]
     public void OnDown_FollowsTheEndpointCurve_DoublingToTheCeiling_AndStartingOverAfterAFullCeiling()
     {
         var backoff = New();

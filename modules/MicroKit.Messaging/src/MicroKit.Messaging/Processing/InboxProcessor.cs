@@ -78,10 +78,14 @@ internal sealed class InboxProcessor(
         int batchSize,
         CancellationToken cancellationToken = default)
     {
-        _tenants.Prune(policy.Clock.GetUtcNow());
+        // A tenant in back-off is left out of the claim (#124 A7): its rows are neither claimed nor
+        // rewritten while its dependency is down, and the other tenants' rows behind them are reached.
+        // The shared empty array while no tenant is in back-off.
+        var start = policy.Clock.GetUtcNow();
+        _tenants.Prune(start);
 
         var claim = await store
-            .ClaimBatchAsync(batchSize, options.LeaseDuration, cancellationToken)
+            .ClaimBatchAsync(batchSize, options.LeaseDuration, _tenants.BlockedAt(start), cancellationToken)
             .ConfigureAwait(false);
 
         if (claim.Count == 0)
@@ -124,7 +128,8 @@ internal sealed class InboxProcessor(
             var key = new InboxMessageKey(message.MessageId, message.ConsumerType);
 
             // A row of a tenant in back-off (#124 D5): due again at the end of the tenant's back-off,
-            // its attempt count and its error left as they are.
+            // its attempt count and its error left as they are — the rest of the batch in which the
+            // tenant was blocked, or a row a delivery blocked since the claim (A7).
             if (message.TenantId is { } blocked
                 && !_tenants.IsEmpty
                 && _tenants.IsBlocked(blocked, policy.Clock.GetUtcNow(), out var blockedUntil))

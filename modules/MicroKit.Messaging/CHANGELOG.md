@@ -11,6 +11,16 @@
   and `Received` rows, not dead-lettered and with no claim token — with the reason as their error text,
   and returns the count. The way back is `GetDeadLetteredAsync` and `RequeueAsync`. The EF store
   implements both.
+- **Store providers: `IOutboxProcessorStore.ClaimBatchAsync(batchSize, lockDuration, OutboxEndpoints
+  excluded, IReadOnlyList<string> excludedTransportTenants, IReadOnlyList<string> excludedLocalTenants,
+  ct)`** and **`IInboxProcessorStore.ClaimBatchAsync(batchSize, leaseDuration, IReadOnlyList<string>
+  excludedTenants, ct)`** are each the one claim signature, with no default implementation. A store
+  must leave out the listed tenants' rows — in the outbox, a tenant's transport rows or its local rows,
+  per list — and never a row whose `TenantId` is null: a plain `NOT IN` over the nullable column leaves
+  those out under SQL null semantics. A store that ignores the lists re-defers a held tenant's whole
+  backlog, a batch at a time, each time its back-off ends. Empty lists leave nothing out. The EF store
+  sends each list as one array parameter (`EF.Parameter`), so the SQL text does not change with the
+  number of tenants, and adds no predicate for an empty list.
 
 ### Changed
 
@@ -19,10 +29,12 @@
   defers that tenant's rows of the endpoint to the end of the tenant's back-off — the endpoint's curve,
   no retry consumed — and the other tenants' rows are dispatched. The endpoint backs off for every
   tenant only when the probe fails: a second tenant down before any success. While a tenant is in
-  back-off, a batch attempts the rows of tenants not known to fail first. Event 1011 (`Warning`)
-  reports, per batch and tenant, what waits. A row with no tenant keeps #188's endpoint behaviour.
+  back-off, a batch attempts the rows of tenants not known to fail first, and the claim leaves that
+  tenant's rows of the endpoint out, as a down endpoint's are. Event 1011 (`Warning`) reports, per
+  batch and tenant, what waits. A row with no tenant keeps #188's endpoint behaviour.
 - **Inbox retries**: an `InboxDependencyUnavailableException` on a retry of a tenant's row defers that
-  tenant's rows of the batch, attempt count unchanged, and the batch goes on; it is abandoned as before
+  tenant's rows of the batch, attempt count unchanged, and leaves that tenant out of the retry claims
+  until its back-off ends; the batch goes on. It is abandoned as before
   only when the probe fails, for a row with no tenant, or when the store is unreachable.
 - **New deliveries with a store**: the same exception for a delivery with a tenant writes its row
   `Failed`, no attempt counted, due at the end of the tenant's back-off, and acknowledges the delivery

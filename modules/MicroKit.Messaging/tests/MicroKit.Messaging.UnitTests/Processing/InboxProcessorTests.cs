@@ -44,7 +44,33 @@ public sealed class InboxProcessorTests
         var sut = Build(store, out _, out _, options);
         await sut.ProcessBatchAsync(batchSize: 7, CancellationToken.None);
 
-        await store.Received(1).ClaimBatchAsync(7, TimeSpan.FromSeconds(97), Arg.Any<CancellationToken>());
+        await store.Received(1).ClaimBatchAsync(7, TimeSpan.FromSeconds(97), Arg.Any<IReadOnlyList<string>>(), Arg.Any<CancellationToken>());
+    }
+
+    /// <summary>
+    /// A tenant in back-off on the store's inbox is left out of the claim (#124 A7); with no tenant in
+    /// back-off the list is empty.
+    /// </summary>
+    [Fact]
+    public async Task ProcessBatch_LeavesATenantInBackOffOutOfTheClaim()
+    {
+        var lists = new List<IReadOnlyList<string>>();
+        var store = StoreReturning(InboxClaim.Empty);
+        store.ClaimBatchAsync(Arg.Any<int>(), Arg.Any<TimeSpan>(), Arg.Any<IReadOnlyList<string>>(), Arg.Any<CancellationToken>())
+            .Returns(ci =>
+            {
+                lists.Add(ci.ArgAt<IReadOnlyList<string>>(2));
+                return ValueTask.FromResult(InboxClaim.Empty);
+            });
+        var sut = Build(store, out _, out var harness);
+
+        await sut.ProcessBatchAsync(batchSize: 10, CancellationToken.None);
+        harness.TenantBackoff.For(GuardHarness.Store).OnDown("tenant-b", harness.Clock.GetUtcNow(), out _);
+        await sut.ProcessBatchAsync(batchSize: 10, CancellationToken.None);
+
+        lists.Count.ShouldBe(2);
+        lists[0].ShouldBeEmpty("control: nobody in back-off");
+        lists[1].ShouldBe(["tenant-b"]);
     }
 
     // ── Success: the row is written Processed in the handler's transaction ───────────────────
@@ -598,7 +624,7 @@ public sealed class InboxProcessorTests
     private static IInboxProcessorStore StoreReturning(InboxClaim claim)
     {
         var store = Substitute.For<IInboxProcessorStore>();
-        store.ClaimBatchAsync(Arg.Any<int>(), Arg.Any<TimeSpan>(), Arg.Any<CancellationToken>())
+        store.ClaimBatchAsync(Arg.Any<int>(), Arg.Any<TimeSpan>(), Arg.Any<IReadOnlyList<string>>(), Arg.Any<CancellationToken>())
             .Returns(ValueTask.FromResult(claim));
         store.ApplyOutcomesAsync(
                 Arg.Any<Guid>(), Arg.Any<IReadOnlyList<InboxOutcome>>(), Arg.Any<CancellationToken>())

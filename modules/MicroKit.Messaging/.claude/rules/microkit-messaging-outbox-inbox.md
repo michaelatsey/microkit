@@ -232,9 +232,17 @@ with the first store); any other value → `OutboxPayloadException`.
   `TenantId`, and a broker can refuse one tenant, so both verdicts can be tenant-scoped. Each endpoint
   keeps its tenants in back-off (`OutboxEndpointBackoff.TenantsOf`, a `TenantBackoff` on the same
   curve). A down verdict on a row with a tenant blocks that tenant on the endpoint: its rows of the
-  batch, and of later batches until its back-off ends, are settled `Deferred` unattempted, without
-  setting `HandedOverInBackOff` (the claim is not filtered by tenant: their `NextRetryAtUtc` takes
-  them out of it). A row with no tenant blocks the endpoint as above.
+  batch are settled `Deferred` unattempted, and until its back-off ends the processor passes it to
+  the claim on that endpoint (`excludedTransportTenants` / `excludedLocalTenants`, from
+  `TenantBackoff.BlockedAt`; the shared empty array when there is none), so its rows are neither
+  claimed nor rewritten (A7): when the back-off ends one batch is claimed, its first row tried and the
+  rest deferred again, so a one-tenant store touches one batch per back-off period. A row of a
+  listed tenant handed over anyway is deferred and sets `HandedOverInBackOff`, as for an endpoint. The
+  EF store sends each list as one array parameter (`EF.Parameter`: EF Core 10 otherwise sends one
+  parameter per value), adds nothing for an empty list, and spells out `TenantId == null` so a row
+  with no tenant is never left out, even under `UseRelationalNulls()`. The filter is residual, not an
+  index range: the claim reads past the held tenant's claimable rows, as it reads past waiting rows
+  (`TenantExclusionPlanTests`). A row with no tenant blocks the endpoint as above.
   - **The probe (half-open).** After a tenant is blocked, the next down verdict from a tenant with
     no entry — before any success — blocks that tenant **and** the endpoint, and clears the probe
     (`OutageScope.Shared`, event 1010). A success clears the probe. So a real outage costs at most two
@@ -468,7 +476,7 @@ settled in one `ApplyOutcomesAsync`.
 | lease lost (`MarkClaimedProcessedAsync` false, or `IsLeaseLost`) — 2205 | untouched, owned elsewhere | continues |
 | permanent — `PermanentMessageException`, `InboxPayloadException`, unknown consumer, type that no longer resolves, unreadable payload | dead-letter **now**, `RetryCount` unchanged | continues |
 | transient (anything unrecognised) | `Retry` with back-off; `DeadLetter` at `MaxRetries` | continues |
-| `InboxDependencyUnavailableException`, a row with a tenant (#124 D5) | `Retry` with `RetryCount` unchanged, `NextRetryAtUtc` at the end of the tenant's back-off; its later rows of the batch the same, unattempted (2013) | continues; counted as released |
+| `InboxDependencyUnavailableException`, a row with a tenant (#124 D5) | `Retry` with `RetryCount` unchanged, `NextRetryAtUtc` at the end of the tenant's back-off; its later rows of the batch the same, unattempted (2013); the tenant is left out of the claims until then (`excludedTenants`, A7) | continues; counted as released |
 | `InboxDependencyUnavailableException`: no tenant, the store unreachable (`RetryOutcome.StoreUnreachable`, set when the guard's verify read throws it), or the probe failing | released, nothing counted | abandoned; back-off toward `DependencyUnavailableBackoff`; the store's inbox suspected |
 | `InboxConfigurationException` (no guard for the store) | released | abandoned, rethrown: that store's inbox loop backs off on the idle curve (1402), and never ends |
 | host stop | released, nothing counted | abandoned |
@@ -482,7 +490,8 @@ settled in one `ApplyOutcomesAsync`.
 
 Same shape as the outbox — candidates by `RowId` ordered on `ReceivedAtUtc`, sorted, stamped with the
 eligibility predicate replayed (`NOT DeadLettered AND (Status IN (Failed, Received) OR (Processing
-AND LockedUntilUtc <= now)) AND NextRetryAtUtc` reached) — with two differences:
+AND LockedUntilUtc <= now)) AND NextRetryAtUtc` reached), the tenants in back-off left out of the
+candidates as in the outbox (one array parameter, never a row with no tenant) — with two differences:
 
 - The read-back by token always runs, and fills a key → `RowId` map. **Settlement must run on the
   same store instance that claimed** (the loop's scope): an outcome whose key is not in the map is

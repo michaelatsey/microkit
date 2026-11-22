@@ -53,7 +53,7 @@ public sealed class EndpointIsolationTests
         rig.Store = store;
         // A store that does not honour the filter (against the contract): the processor still defers
         // the excluded endpoint's rows.
-        store.ClaimBatchAsync(Arg.Any<int>(), Arg.Any<TimeSpan>(), Arg.Any<OutboxEndpoints>(), Arg.Any<CancellationToken>())
+        store.ClaimBatchAsync(Arg.Any<int>(), Arg.Any<TimeSpan>(), Arg.Any<OutboxEndpoints>(), Arg.Any<IReadOnlyList<string>>(), Arg.Any<IReadOnlyList<string>>(), Arg.Any<CancellationToken>())
             .Returns(ci =>
             {
                 rig.Excluded.Add(ci.Arg<OutboxEndpoints>());

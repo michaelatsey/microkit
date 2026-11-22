@@ -146,8 +146,16 @@ internal sealed class EfOutboxStore<TContext>(
 
     /// <inheritdoc/>
     public async ValueTask<OutboxClaim> ClaimBatchAsync(
-        int batchSize, TimeSpan lockDuration, OutboxEndpoints excluded, CancellationToken ct = default)
+        int batchSize,
+        TimeSpan lockDuration,
+        OutboxEndpoints excluded,
+        IReadOnlyList<string> excludedTransportTenants,
+        IReadOnlyList<string> excludedLocalTenants,
+        CancellationToken ct = default)
     {
+        ArgumentNullException.ThrowIfNull(excludedTransportTenants);
+        ArgumentNullException.ThrowIfNull(excludedLocalTenants);
+
         var now = timeProvider.GetUtcNow();
         var lockExpiry = now.Add(lockDuration);
         var token = Guid.NewGuid();
@@ -164,9 +172,11 @@ internal sealed class EfOutboxStore<TContext>(
         //    business timestamp the caller supplies, or a backdated event jumps every row ahead of
         //    it. This clause and the contended read-back below must always agree — two different
         //    sorts would make the claim's contents depend on whether it was contended.
-        //    The excluded endpoints' rows are left out here only: the stamp below matches the
-        //    candidates by id, and the read-back by token.
-        var candidates = await Excluding(Dispatchable(now), excluded)
+        //    The excluded endpoints' and tenants' rows are left out here only: the stamp below
+        //    matches the candidates by id, and the read-back by token.
+        var candidates = await Excluding(
+                ExcludingTenants(Dispatchable(now), excluded, excludedTransportTenants, excludedLocalTenants),
+                excluded)
             .OrderBy(m => m.CreatedAtUtc)
             .Take(batchSize)
             .ToListAsync(ct)
@@ -428,6 +438,64 @@ internal sealed class EfOutboxStore<TContext>(
     }
 
     // ---------- helpers ----------
+
+    /// <summary>
+    /// Leaves out the rows of the tenants in back-off on each endpoint (#124): a tenant's transport rows
+    /// while the transport refuses it, its local rows while a local consumer's dependency is down for it.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Each list is one array parameter (<see cref="EF.Parameter{T}"/>), so the SQL text does not change
+    /// with the number of tenants: by default EF Core 10 sends a collection as one parameter per value.
+    /// An empty list adds no predicate — the claim's SQL is then exactly #188's. A list for an endpoint
+    /// the claim already leaves out is not sent. The provider must translate a collection parameter:
+    /// PostgreSQL and SQLite do (the tested providers); SQL Server needs compatibility level 130 or
+    /// above, for <c>OPENJSON</c>.
+    /// </para>
+    /// <para>
+    /// Membership is decided by the column's collation, as the endpoint ranges are (<see cref="Excluding"/>),
+    /// while the processor keys tenants ordinally: under a case-insensitive collation, holding
+    /// <c>Acme</c> also holds <c>acme</c>'s rows until <c>Acme</c>'s back-off ends.
+    /// </para>
+    /// <para>
+    /// <b>A row with no tenant is never left out.</b> The <c>TenantId == null</c> arm is spelled out
+    /// rather than left to EF Core's null compensation: under <c>UseRelationalNulls()</c>, a context
+    /// option the host owns, <c>NOT (TenantId = ANY(@p))</c> is null for a null tenant, and the row would
+    /// never be claimed again. The same holds for the endpoint arm of each predicate.
+    /// </para>
+    /// <para>
+    /// The filter is a residual one: no index is ordered by tenant within the claim's order, so the
+    /// claim reads past the excluded tenants' claimable rows ahead of the first ones it may take
+    /// (TenantExclusionPlanTests), and writes none of them.
+    /// </para>
+    /// </remarks>
+    private static IQueryable<OutboxMessage> ExcludingTenants(
+        IQueryable<OutboxMessage> rows,
+        OutboxEndpoints excluded,
+        IReadOnlyList<string> transportTenants,
+        IReadOnlyList<string> localTenants)
+    {
+        if (transportTenants.Count > 0 && (excluded & OutboxEndpoints.Transport) == 0)
+        {
+            var tenants = AsArray(transportTenants);
+            rows = rows.Where(m => m.Endpoint != null
+                                   || m.TenantId == null
+                                   || !EF.Parameter(tenants).Contains(m.TenantId));
+        }
+
+        if (localTenants.Count > 0 && (excluded & OutboxEndpoints.Local) == 0)
+        {
+            var tenants = AsArray(localTenants);
+            rows = rows.Where(m => m.Endpoint == null
+                                   || m.Endpoint != OutboxMessage.LocalEndpoint
+                                   || m.TenantId == null
+                                   || !EF.Parameter(tenants).Contains(m.TenantId));
+        }
+
+        return rows;
+    }
+
+    private static string[] AsArray(IReadOnlyList<string> tenants) => tenants as string[] ?? [.. tenants];
 
     /// <summary>Leaves out the rows of the endpoints in back-off (#188).</summary>
     private static IQueryable<OutboxMessage> Excluding(IQueryable<OutboxMessage> rows, OutboxEndpoints excluded)

@@ -34,7 +34,7 @@ public interface IOutboxProcessorStore
     /// <summary>
     /// Atomically reserves up to <paramref name="batchSize"/> dispatchable messages and
     /// stamps them with a lease and an ownership token, leaving out the rows of the
-    /// <paramref name="excluded"/> endpoints.
+    /// <paramref name="excluded"/> endpoints, and the rows of the tenants in back-off on an endpoint.
     /// </summary>
     /// <param name="batchSize">Maximum number of messages to claim.</param>
     /// <param name="lockDuration">How long the lease is held.</param>
@@ -42,6 +42,17 @@ public interface IOutboxProcessorStore
     /// The endpoints in back-off, whose rows must not be claimed (#188): the claim then reaches the
     /// other endpoint's rows behind them, however many there are, and the down endpoint's rows are not
     /// rewritten while it is down. <see cref="OutboxEndpoints.None"/> leaves nothing out.
+    /// </param>
+    /// <param name="excludedTransportTenants">
+    /// The tenants in back-off on the transport (#124), whose transport rows must not be claimed: the
+    /// rows of a tenant the transport refuses are neither claimed nor rewritten while it is refused, and
+    /// its local rows are still claimed. Empty leaves no tenant out; ignored when
+    /// <paramref name="excluded"/> already leaves the transport out.
+    /// </param>
+    /// <param name="excludedLocalTenants">
+    /// The tenants in back-off on the local endpoint, whose local rows must not be claimed; their
+    /// transport rows are still claimed. Empty leaves no tenant out; ignored when
+    /// <paramref name="excluded"/> already leaves the local endpoint out.
     /// </param>
     /// <param name="ct">A cancellation token.</param>
     /// <returns>The messages actually won, and the token proving ownership.</returns>
@@ -62,6 +73,14 @@ public interface IOutboxProcessorStore
     /// <see cref="ApplyOutcomesAsync"/> must settle like every other kind.
     /// </para>
     /// <para>
+    /// <b>The tenant filters are part of the contract too.</b> A store that ignores them brings back the
+    /// sweep #124 removed: a store whose rows all carry one tenant — a database per tenant — claims and
+    /// defers that tenant's whole backlog, a batch at a time, every time its back-off ends. A row with no
+    /// tenant (<see cref="OutboxMessage.TenantId"/> <see langword="null"/>) is never left out by a tenant
+    /// filter, whatever the provider's null semantics: a plain <c>NOT IN</c> over a nullable column leaves
+    /// it out. A row of a listed tenant handed over anyway is deferred unattempted, as for an endpoint.
+    /// </para>
+    /// <para>
     /// <b>Clock.</b> The lease expiry is computed from the application clock via
     /// <see cref="TimeProvider"/>, not from the database clock. That keeps the implementation
     /// provider-neutral and unit-testable, at the cost of being sensitive to drift between the
@@ -73,6 +92,8 @@ public interface IOutboxProcessorStore
         int batchSize,
         TimeSpan lockDuration,
         OutboxEndpoints excluded,
+        IReadOnlyList<string> excludedTransportTenants,
+        IReadOnlyList<string> excludedLocalTenants,
         CancellationToken ct = default);
 
     /// <summary>

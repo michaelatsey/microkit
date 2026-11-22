@@ -18,7 +18,7 @@ namespace MicroKit.Messaging.Processing;
 /// (<see cref="OutboxEndpointBackoff"/>), so the next claim skips them and the other endpoint's rows
 /// keep this cadence. One exception, before saturation: a batch that carried rows handed over in
 /// back-off (<see cref="OutboxBatchResult.HandedOverInBackOff"/> — a store that breaks the claim's
-/// contract by not honouring its endpoint filter) waits <see cref="OutboxProcessorOptions.PollingInterval"/>,
+/// contract by not honouring its endpoint or tenant filters) waits <see cref="OutboxProcessorOptions.PollingInterval"/>,
 /// or the loop would rewrite the down endpoint's backlog back to back. Such a store still costs a
 /// down endpoint's backlog a rewrite each back-off period, and holds the other endpoint to one batch
 /// per polling interval while it keeps handing that backlog over. A processor that
@@ -112,9 +112,10 @@ internal sealed class OutboxLoop(
         // No outage arm: a down endpoint's rows were deferred by the processor (OutboxEndpointBackoff),
         // so a batch that hit one is sized like any other — a full one cannot re-claim its own rows.
         { AbortReason: OutboxBatchAbortReason.Cancelled } => current,
-        // Rows handed over while their endpoint is in back-off — a store that does not honour the
-        // claim's endpoint filter, against its contract: polling again at once, even after a batch that also delivered something,
-        // would rewrite the down endpoint's whole backlog a batch at a time.
+        // Rows handed over while their endpoint, or their tenant on it, is in back-off — a store that
+        // does not honour the claim's endpoint or tenant filters, against its contract: polling again
+        // at once, even after a batch that also delivered something, would rewrite the down
+        // endpoint's or tenant's whole backlog a batch at a time.
         { HandedOverInBackOff: true } => options.PollingInterval,
         var r when r.IsSaturated(options.BatchSize) => TimeSpan.Zero,
         { HasWork: false } => Grow(current, options.MaxPollingInterval),

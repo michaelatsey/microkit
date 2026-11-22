@@ -606,14 +606,20 @@ holds that tenant, not the endpoint:
   and once the endpoint has backed off, a held tenant failing again counts as a probe only until a
   success clears the endpoint. Claim order is not a contract: it changes while a tenant is in back-off.
 - A row **with no tenant** has nothing to narrow the verdict to: its endpoint backs off as above.
-- The claim is not filtered by tenant: when a held tenant's back-off ends, its first row is tried and
-  the rest of its backlog is settled to wait again, a batch at a time, with no attempt.
+- **A held tenant's rows are left out of the claim**, on that endpoint only, until its back-off ends:
+  neither claimed nor rewritten meanwhile, as a down endpoint's are. When it ends, one batch of them
+  is claimed: the first row is tried and, if it fails, the rest of that batch waits again — so a store
+  whose rows all carry one tenant (a database per tenant) touches one batch per back-off period, not
+  its whole backlog. A row with no tenant is never left out. Tenant ids are compared by the column's
+  collation: under a case-insensitive one, holding `Acme` also holds `acme`. The EF store needs a
+  provider that translates a collection parameter (SQL Server: compatibility level 130 or above). The filter is not an index range: each claim reads past the held tenant's
+  claimable rows, as it read past them once they were deferred before.
 
 The inbox follows the same rule, on its own curve (`Inbox.PollingInterval` doubling to
 `Inbox.DependencyUnavailableBackoff`), for an `InboxDependencyUnavailableException` a handler throws:
 
 - **Retries.** A held tenant's rows wait to the end of its back-off with their attempt count
-  unchanged, and the store's other tenants are retried. The batch is abandoned with the store-wide
+  unchanged, left out of the retry claim meanwhile, and the store's other tenants are retried. The batch is abandoned with the store-wide
   back-off, as before, only when the probe fails, for a row with no tenant, or when the store itself
   is unreachable.
 - **New deliveries.** The delivery's row is written `Failed`, no attempt counted, due at the end of
