@@ -33,13 +33,16 @@ namespace MicroKit.Messaging.Processing;
 /// tenant counts 1 from a down verdict until a success, or until a ceiling plus <c>MaxPollingInterval</c>
 /// (<see cref="InboxProcessorOptions.DependencyUnavailableBackoff"/> plus
 /// <see cref="InboxProcessorOptions.MaxPollingInterval"/>) after its back-off ended with no new attempt; it
-/// also drops out when its entry is pruned, a ceiling after its back-off ended, by the next retry batch. The
-/// bound assumes the retry loop makes the next attempt: a transport delivery whose tenant fails the probe
-/// writes no row, so its next attempt is the transport's redelivery, and a provider pausing longer than the
-/// bound reads 0 before it. A store is
-/// reported from its first use — its retry loop's first cycle, or the first outage one of its deliveries meets —
-/// when its state is created; a store used by neither reports nothing (event 1400 covers a retry loop
-/// whose processor never activates). Each known store reports, zero included, so an alert resolves.
+/// also drops out when its entry is pruned, a ceiling after its back-off ended, by the next retry batch.
+/// The bound assumes the retry loop makes the next attempt: a transport delivery that leaves its tenant in
+/// back-off with no row — the tenant fails the probe, or its deferred row cannot be written, or the store
+/// is unreachable while writing it — is next attempted by the transport's redelivery, and a provider
+/// pausing longer than the bound reads 0 before it. A store is reported once its state is created, by the
+/// first <see cref="InboxTenantBackoff.For"/> call for it: its retry loop's first cycle, an outage one of
+/// its deliveries meets, or any of its deliveries while some store's inbox has something in back-off — so
+/// it can read 0 with no outage of its own. A store none of these reaches reports nothing (event 1400
+/// covers a retry loop whose processor never activates). Each known store reports, zero included, so an
+/// alert resolves.
 /// </para>
 /// <para>
 /// Registered as a singleton by <c>AddMicroKitMessaging()</c>.

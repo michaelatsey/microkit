@@ -147,7 +147,10 @@ internal sealed class OutboxMetrics : IDisposable
         }
     }
 
-    /// <summary>Records what a fully settled batch wrote: one measurement per non-zero (endpoint, outcome).</summary>
+    /// <summary>
+    /// Records a batch's whole tally once its settlement wrote at least one row, a partial settlement
+    /// (1007) included — at least once: one measurement per non-zero (endpoint, outcome).
+    /// </summary>
     /// <param name="store">The <c>store.key</c> tag; <see langword="null"/> for none.</param>
     /// <param name="tally">The batch's tally.</param>
     /// <remarks>
