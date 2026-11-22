@@ -11,6 +11,7 @@ internal sealed class MeterRecorder : IDisposable
 {
     private readonly MeterListener _listener = new();
     private readonly ConcurrentQueue<Recorded> _recorded = new();
+    private readonly ConcurrentQueue<Recorded> _observed = new();
     private readonly ConcurrentQueue<string> _published = new();
 
     public MeterRecorder(params Meter[] meters)
@@ -32,15 +33,18 @@ internal sealed class MeterRecorder : IDisposable
     /// <summary>Gets the names of the instruments published on the listened meters.</summary>
     public IReadOnlyList<string> Published => [.. _published];
 
-    /// <summary>The measurements of <paramref name="instrument"/> recorded so far.</summary>
+    /// <summary>The measurements a synchronous <paramref name="instrument"/> recorded so far.</summary>
     public List<Recorded> Of(string instrument) => [.. _recorded.Where(r => r.Instrument == instrument)];
 
-    /// <summary>Runs the observable callbacks once and returns what <paramref name="instrument"/> observed.</summary>
+    /// <summary>
+    /// Runs the observable callbacks once and returns what <paramref name="instrument"/> observed; what the
+    /// synchronous instruments recorded is kept.
+    /// </summary>
     public List<Recorded> Observe(string instrument)
     {
-        _recorded.Clear();
+        _observed.Clear();
         _listener.RecordObservableInstruments();
-        return Of(instrument);
+        return [.. _observed.Where(r => r.Instrument == instrument)];
     }
 
     public void Dispose() => _listener.Dispose();
@@ -53,7 +57,7 @@ internal sealed class MeterRecorder : IDisposable
             copy[tag.Key] = tag.Value;
         }
 
-        _recorded.Enqueue(new Recorded(instrument.Name, value, copy));
+        (instrument.IsObservable ? _observed : _recorded).Enqueue(new Recorded(instrument.Name, value, copy));
     }
 
     internal sealed record Recorded(string Instrument, double Value, IReadOnlyDictionary<string, object?> Tags)

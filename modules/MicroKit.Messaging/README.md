@@ -825,7 +825,9 @@ after its back-off ended with no new attempt — for the outbox, `TransportUnava
 `InboxProcessorOptions.MaxPollingInterval` (6 minutes with the defaults). A back-off that has ended is
 half-open, not recovered: the next attempt comes within `MaxPollingInterval` plus a batch's own time, so
 an endpoint or a tenant still failing is blocked again before that bound, and the counter never drops to
-0 during an outage; one with nothing left to send drops out after it. A tenant also drops out when its
+0 during an outage; one with nothing left to send drops out after it. One exception on the inbox: a
+transport delivery whose tenant fails the probe writes no row, so that tenant's next attempt is the
+transport's redelivery, and a provider pausing longer than the bound reads 0 before it. A tenant also drops out when its
 entry is pruned, a ceiling after its back-off ended, by the next batch of its store: with
 `MaxPollingInterval` above the ceiling, a tenant still failing can read 0 for the batch that prunes it and
 blocks it again. Each process reports its own view, and one that recorded the last failure, at the
@@ -833,7 +835,7 @@ ceiling, and has nothing left to send — another instance drained the rows — 
 ceilings plus `MaxPollingInterval` after that failure (11 minutes with the defaults). Alert on the raw
 value held longer than that: `microkit_outbox_endpoints_backoff > 0` for 15 minutes with the defaults.
 A store is reported from its first cycle (an inbox also
-from the first delivery its guard handles), zeros included so an alert resolves; a store whose processor
+from the first outage one of its deliveries meets), zeros included so an alert resolves; a store whose processor
 never activates reports nothing (event 1400 covers it). A configuration fault needs no metric: it is
 logged at `Critical` on every cycle (1006, 1402).
 

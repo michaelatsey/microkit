@@ -33,8 +33,11 @@ namespace MicroKit.Messaging.Processing;
 /// tenant counts 1 from a down verdict until a success, or until a ceiling plus <c>MaxPollingInterval</c>
 /// (<see cref="InboxProcessorOptions.DependencyUnavailableBackoff"/> plus
 /// <see cref="InboxProcessorOptions.MaxPollingInterval"/>) after its back-off ended with no new attempt; it
-/// also drops out when its entry is pruned, a ceiling after its back-off ended, by the next retry batch. A store is
-/// reported from its first use — its retry loop's first cycle, or the first delivery its guard handles —
+/// also drops out when its entry is pruned, a ceiling after its back-off ended, by the next retry batch. The
+/// bound assumes the retry loop makes the next attempt: a transport delivery whose tenant fails the probe
+/// writes no row, so its next attempt is the transport's redelivery, and a provider pausing longer than the
+/// bound reads 0 before it. A store is
+/// reported from its first use — its retry loop's first cycle, or the first outage one of its deliveries meets —
 /// when its state is created; a store used by neither reports nothing (event 1400 covers a retry loop
 /// whose processor never activates). Each known store reports, zero included, so an alert resolves.
 /// </para>

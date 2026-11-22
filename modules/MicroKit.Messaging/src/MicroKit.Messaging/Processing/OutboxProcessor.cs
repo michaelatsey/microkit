@@ -792,7 +792,10 @@ internal sealed class OutboxProcessor : IOutboxProcessor
     /// message would be dispatched again. A brief flush window on shutdown is strictly
     /// cheaper than that.
     /// </remarks>
-    /// <returns>The rows written: the outcomes' count once all of them were, 0 when the write threw.</returns>
+    /// <returns>
+    /// The rows written: the outcomes' count once all of them were, fewer on a partial settlement (1007),
+    /// 0 when the write threw. The settled counter records on any count above 0.
+    /// </returns>
     private async ValueTask<int> SettleAsync(Guid claimToken, List<OutboxOutcome> outcomes)
     {
         using var settleCts = new CancellationTokenSource(_options.OutcomeFlushTimeout);
