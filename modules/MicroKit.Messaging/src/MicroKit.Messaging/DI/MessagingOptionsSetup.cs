@@ -37,8 +37,9 @@ internal static class MessagingOptionsSetup
     /// </para>
     /// <para>
     /// The processors keep their own option types, registered as forwards of
-    /// <see cref="MessagingOptions.Outbox"/> and <see cref="MessagingOptions.Inbox"/>; resolving
-    /// either validates the whole <see cref="MessagingOptions"/> first.
+    /// <see cref="MessagingOptions.Outbox"/>, <see cref="MessagingOptions.Inbox"/> and
+    /// <see cref="MessagingOptions.Instances"/>; resolving any validates the whole
+    /// <see cref="MessagingOptions"/> first.
     /// </para>
     /// </remarks>
     public static void Register(IServiceCollection services, MessagingComposition composition)
@@ -57,6 +58,7 @@ internal static class MessagingOptionsSetup
 
         services.TryAddSingleton(sp => sp.GetRequiredService<IOptions<MessagingOptions>>().Value.Outbox);
         services.TryAddSingleton(sp => sp.GetRequiredService<IOptions<MessagingOptions>>().Value.Inbox);
+        services.TryAddSingleton(sp => sp.GetRequiredService<IOptions<MessagingOptions>>().Value.Instances);
     }
 
     /// <summary>Applies the two outer levels of the service-name precedence.</summary>

@@ -8,7 +8,7 @@ namespace MicroKit.Messaging.Processing;
 /// <para>
 /// <b>Internal since #185</b>, for the reason recorded on <see cref="IOutboxProcessor"/>: the
 /// per-tenant coordinator ADR-MSG-002 kept it public for is superseded, and the
-/// database-per-tenant engine it served is #191, inside Core.
+/// database-per-tenant topology it served is a partitioned store, inside Core (#191).
 /// </para>
 /// <para>
 /// <b>Breaking change (ADR-MSG-017).</b> Previously returned <see cref="Task"/>. It now returns

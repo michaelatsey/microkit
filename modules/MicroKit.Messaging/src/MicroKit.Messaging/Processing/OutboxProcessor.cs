@@ -85,7 +85,8 @@ internal sealed class OutboxProcessor : IOutboxProcessor
 {
     // Batch-scoped by design (ADR-MSG-002 shared-DB cross-tenant reservation): NOT resolved
     // from the per-message IExecutionScope. It is the store this processor drains, resolved by
-    // the store's key from its loop's scope (#188); a dynamic store set is #191's.
+    // the store's key from its loop's scope (#188) — prepared for its instance when the store is
+    // partitioned (#191).
     private readonly IOutboxProcessorStore _store;
     private readonly IExecutionScopeFactory _executionScopeFactory;
     private readonly OutboxProcessorOptions _options;
@@ -96,6 +97,8 @@ internal sealed class OutboxProcessor : IOutboxProcessor
     private readonly OutboxEndpointBackoff _endpointBackoff;
     private readonly OutboxMetrics? _metrics;
     private readonly string? _storeTag;
+    private readonly StoreInstanceState? _instance;
+    private readonly string? _instanceTag;
 
     /// <summary>Initializes a new <see cref="OutboxProcessor"/>.</summary>
     /// <param name="store">Claim and settlement operations. Batch-scoped, not per-message.</param>
@@ -116,6 +119,10 @@ internal sealed class OutboxProcessor : IOutboxProcessor
     /// built by hand, which then gets one of its own.
     /// </param>
     /// <param name="metrics">The outbox's instruments (#126). Null only for a processor built by hand, which records nothing.</param>
+    /// <param name="instance">
+    /// The instance of a partitioned store this processor drains (#191): each row's dispatch scope is
+    /// prepared for it, and its instruments carry it when instances are tagged. Null for a single store.
+    /// </param>
     public OutboxProcessor(
         IOutboxProcessorStore store,
         IExecutionScopeFactory executionScopeFactory,
@@ -125,7 +132,8 @@ internal sealed class OutboxProcessor : IOutboxProcessor
         ILogger<OutboxProcessor> logger,
         MessageStoreKey? storeKey = null,
         OutboxEndpointBackoff? endpointBackoff = null,
-        OutboxMetrics? metrics = null)
+        OutboxMetrics? metrics = null,
+        StoreInstanceState? instance = null)
     {
         _store = store;
         _executionScopeFactory = executionScopeFactory;
@@ -138,6 +146,8 @@ internal sealed class OutboxProcessor : IOutboxProcessor
             ?? new OutboxEndpointBackoff(options.PollingInterval, options.TransportUnavailableBackoff);
         _metrics = metrics;
         _storeTag = storeKey?.Value;
+        _instance = instance;
+        _instanceTag = instance?.InstanceTag;
     }
 
     /// <inheritdoc />
@@ -250,7 +260,7 @@ internal sealed class OutboxProcessor : IOutboxProcessor
                 await DispatchAsync(message, cancellationToken).ConfigureAwait(false);
                 if (_metrics is { DispatchDelayEnabled: true } metrics)
                 {
-                    metrics.RecordDispatchDelay(_timeProvider.GetUtcNow() - message.CreatedAtUtc, _storeTag, endpointKey);
+                    metrics.RecordDispatchDelay(_timeProvider.GetUtcNow() - message.CreatedAtUtc, _storeTag, endpointKey, _instanceTag);
                 }
 
                 outcomes.Add(OutboxOutcome.Published(message.Id));
@@ -355,7 +365,7 @@ internal sealed class OutboxProcessor : IOutboxProcessor
         // the store verifying it is not. Released rows are never counted.
         if (written > 0)
         {
-            _metrics?.RecordSettled(_storeTag, in settledTally);
+            _metrics?.RecordSettled(_storeTag, in settledTally, _instanceTag);
         }
 
         // 1010 reports a deferral that was written: a failed or partial settlement is reported by
@@ -621,6 +631,14 @@ internal sealed class OutboxProcessor : IOutboxProcessor
         if (_storeKey is not null && scope.ServiceProvider.GetService<DeliveryStoreHolder>() is { } holder)
         {
             holder.Store = _storeKey;
+        }
+
+        // A row of an instance of a partitioned store (#191 D3) is dispatched in a scope prepared for
+        // that instance — named on the scope, then its initializer run — before the dispatcher, or
+        // anything it builds, is resolved. Its failure is this row's, like the scope's creation.
+        if (_instance is not null)
+        {
+            await _instance.InitializeScopeAsync(scope.ServiceProvider, cancellationToken).ConfigureAwait(false);
         }
 
         var dispatcher = ResolveDispatcher(scope.ServiceProvider, message);

@@ -32,4 +32,10 @@ public sealed record MessagingOptions
 
     /// <summary>Gets or sets the inbox engine options (section <c>MicroKit:Messaging:Inbox</c>).</summary>
     public InboxProcessorOptions Inbox { get; set; } = new();
+
+    /// <summary>
+    /// Gets or sets the options of the instances of partitioned stores (section
+    /// <c>MicroKit:Messaging:Instances</c>, #191). A host with no partitioned store ignores them.
+    /// </summary>
+    public StoreInstanceOptions Instances { get; set; } = new();
 }

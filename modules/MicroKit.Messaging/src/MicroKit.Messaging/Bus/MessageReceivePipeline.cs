@@ -59,6 +59,16 @@ using MessageCtx = MicroKit.Messaging.Execution.ExecutionContext;
 /// provider (or raised while the host token is cancelled), stops the delivery at once with
 /// <see cref="DeliveryVerdict.Unsettled"/>: never classified, never counted.
 /// </para>
+/// <para>
+/// <b>A partitioned store (#191).</b> A handler guarded by a partitioned store runs against one of its
+/// instances: a local delivery against the instance whose outbox row it is, a transport delivery
+/// against the instance the store's source maps it to (<see cref="StoreInstanceRegistry.Find(MessageStoreKey, MessageContext)"/>),
+/// a retry against the instance whose loop claimed it. Every scope of the handler is prepared for
+/// that instance — its initializer, then the <see cref="IMessageScopeInitializer"/>s — and its tenant
+/// back-off is the instance's. A delivery that maps to no instance drained here is a counted failure
+/// (<see cref="DeliveryVerdict.Transient"/>, event 1410): the transport redelivers it and holds nothing
+/// else back, where pausing the endpoint would hold every tenant behind it.
+/// </para>
 /// </remarks>
 internal sealed class MessageReceivePipeline(
     IntegrationEventRegistry contracts,
@@ -70,7 +80,8 @@ internal sealed class MessageReceivePipeline(
     InboxRetryPolicy retryPolicy,
     InboxMetrics metrics,
     InboxTenantBackoff tenantBackoff,
-    ILogger<MessageReceivePipeline> logger)
+    ILogger<MessageReceivePipeline> logger,
+    StoreInstanceRegistry? instances = null)
 {
     /// <summary>Delivers one envelope to every handler of its contract.</summary>
     /// <param name="envelope">The envelope.</param>
@@ -107,7 +118,7 @@ internal sealed class MessageReceivePipeline(
                 ex);
         }
 
-        return await DeliverPreparedAsync(prepared, ct).ConfigureAwait(false);
+        return await DeliverPreparedAsync(prepared, origin: null, ct).ConfigureAwait(false);
     }
 
     /// <summary>
@@ -121,6 +132,10 @@ internal sealed class MessageReceivePipeline(
     /// One consumer to deliver to — an entry of the in-memory queue of a host with no store — or
     /// <see langword="null"/> for every consumer of the type, each guarded by its own inbox row.
     /// </param>
+    /// <param name="origin">
+    /// The instance of a partitioned store whose outbox row this is (#191): a consumer guarded by that
+    /// store runs against it. Null for a single store's row, or the in-memory queue's entry.
+    /// </param>
     /// <param name="ct">The host's token; its cancellation means shutdown.</param>
     /// <returns>The verdict, for the outbox loop or the local queue to settle.</returns>
     /// <remarks>
@@ -129,7 +144,10 @@ internal sealed class MessageReceivePipeline(
     /// row's columns, as the transport dispatcher builds an envelope's.
     /// </remarks>
     public async ValueTask<DeliveryOutcome> DeliverLocalAsync(
-        OutboxMessage message, string? consumerType = null, CancellationToken ct = default)
+        OutboxMessage message,
+        string? consumerType = null,
+        StoreInstanceState? origin = null,
+        CancellationToken ct = default)
     {
         ArgumentNullException.ThrowIfNull(message);
 
@@ -155,20 +173,38 @@ internal sealed class MessageReceivePipeline(
                 ex);
         }
 
-        return await DeliverPreparedAsync(prepared, ct).ConfigureAwait(false);
+        return await DeliverPreparedAsync(prepared, origin, ct).ConfigureAwait(false);
     }
 
     /// <summary>The per-handler stage, shared by a transport delivery and a local one.</summary>
-    private async ValueTask<DeliveryOutcome> DeliverPreparedAsync(Prepared prepared, CancellationToken ct)
+    private async ValueTask<DeliveryOutcome> DeliverPreparedAsync(
+        Prepared prepared, StoreInstanceState? origin, CancellationToken ct)
     {
         var outcome = DeliveryOutcome.Success;
 
         foreach (var entry in prepared.Entries)
         {
             var store = stores.ForHandler(entry.HandlerType);
-            var handlerOutcome = store is null
-                ? await DeliverToHandlerAsync(entry, prepared, ct).ConfigureAwait(false)
-                : await DeliverGuardedAsync(entry, prepared, store, ct).ConfigureAwait(false);
+            DeliveryOutcome handlerOutcome;
+            if (store is null)
+            {
+                handlerOutcome = await DeliverToHandlerAsync(entry, prepared, ct).ConfigureAwait(false);
+            }
+            else if (instances is { HasPartitions: true } && instances.IsPartitioned(store))
+            {
+                // A partitioned store (#191 D4): the row's own instance for a local row of that store,
+                // else the one its source maps the delivery to — a lookup that never creates state.
+                var instance = origin is not null && origin.Store == store
+                    ? origin
+                    : instances.Find(store, prepared.Context);
+                handlerOutcome = instance is null
+                    ? NotDrained(entry, prepared, store)
+                    : await DeliverGuardedAsync(entry, prepared, store, instance, ct).ConfigureAwait(false);
+            }
+            else
+            {
+                handlerOutcome = await DeliverGuardedAsync(entry, prepared, store, instance: null, ct).ConfigureAwait(false);
+            }
 
             if (handlerOutcome.Verdict is DeliveryVerdict.Unsettled)
             {
@@ -192,6 +228,7 @@ internal sealed class MessageReceivePipeline(
     /// <param name="context">The handler's context, rebuilt from the row.</param>
     /// <param name="claimToken">The token of the claim that owns the row.</param>
     /// <param name="store">The store the row lives in.</param>
+    /// <param name="instance">The instance of a partitioned store the row lives in (#191); null for a single store.</param>
     /// <param name="ct">The host's token; its cancellation means shutdown.</param>
     /// <returns>What happened to the row; the caller settles failures through the claim.</returns>
     /// <remarks>
@@ -206,6 +243,7 @@ internal sealed class MessageReceivePipeline(
         MessageContext context,
         Guid claimToken,
         MessageStoreKey store,
+        StoreInstanceState? instance,
         CancellationToken ct)
     {
         ArgumentNullException.ThrowIfNull(row);
@@ -217,12 +255,13 @@ internal sealed class MessageReceivePipeline(
         var attempt = new GuardedAttempt(entry, message, context, ExecutionContextOf(context), store, key)
         {
             ClaimToken = claimToken,
+            Instance = instance,
         };
 
         IInboxGuardStore? guard = null;
         try
         {
-            var outer = await OpenScopeAsync(attempt.ExecutionContext, store, context, ct).ConfigureAwait(false);
+            var outer = await OpenScopeAsync(attempt.ExecutionContext, store, instance, context, ct).ConfigureAwait(false);
             await using (outer.ConfigureAwait(false))
             {
                 guard = ResolveGuard(outer.ServiceProvider, store) ?? throw Unregistered(store);
@@ -448,7 +487,7 @@ internal sealed class MessageReceivePipeline(
         {
             var executionContext = ExecutionContextOf(context);
 
-            var scope = await OpenScopeAsync(executionContext, store: null, context, ct).ConfigureAwait(false);
+            var scope = await OpenScopeAsync(executionContext, store: null, instance: null, context, ct).ConfigureAwait(false);
             await using (scope.ConfigureAwait(false))
             {
                 await RunHandlerAsync(scope.ServiceProvider, entry, message, context, ct).ConfigureAwait(false);
@@ -470,11 +509,29 @@ internal sealed class MessageReceivePipeline(
         }
     }
 
+    /// <summary>
+    /// A handler of a partitioned store whose delivery maps to no instance drained here (A1, #191): a
+    /// counted failure the transport redelivers — dead-lettered at its delivery limit, recoverable by
+    /// requeue — never a pause, which would hold every other tenant of the endpoint behind it.
+    /// </summary>
+    private DeliveryOutcome NotDrained(MessageHandlerRegistry.HandlerEntry entry, Prepared prepared, MessageStoreKey store)
+    {
+        var context = prepared.Context;
+        StoreInstanceLogs.DeliveryNotDrained(
+            logger, entry.HandlerType.FullName!, context.MessageId.Value, context.TenantId, store.Value);
+        return new DeliveryOutcome(
+            DeliveryVerdict.Transient,
+            new InvalidOperationException(
+                $"Message {context.MessageId} (tenant '{context.TenantId}') maps to no instance of store " +
+                $"'{store}' this host drains."));
+    }
+
     /// <summary>One handler of a new delivery, guarded by its inbox row in <paramref name="store"/>.</summary>
     private async ValueTask<DeliveryOutcome> DeliverGuardedAsync(
         MessageHandlerRegistry.HandlerEntry entry,
         Prepared prepared,
         MessageStoreKey store,
+        StoreInstanceState? instance,
         CancellationToken ct)
     {
         var context = prepared.Context;
@@ -485,11 +542,12 @@ internal sealed class MessageReceivePipeline(
         {
             NewRow = rows,
             Local = envelope.IsLocal,
+            Instance = instance,
         };
 
         try
         {
-            var outer = await OpenScopeAsync(attempt.ExecutionContext, store, context, ct).ConfigureAwait(false);
+            var outer = await OpenScopeAsync(attempt.ExecutionContext, store, instance, context, ct).ConfigureAwait(false);
             await using (outer.ConfigureAwait(false))
             {
                 var guard = ResolveGuard(outer.ServiceProvider, store);
@@ -526,7 +584,7 @@ internal sealed class MessageReceivePipeline(
                 if (!attempt.Local
                     && context.TenantId is { } blockedTenant
                     && !tenantBackoff.IsQuiet
-                    && tenantBackoff.For(store).IsBlocked(blockedTenant, retryPolicy.Clock.GetUtcNow(), out var blockedUntil))
+                    && TenantsOf(attempt).IsBlocked(blockedTenant, retryPolicy.Clock.GetUtcNow(), out var blockedUntil))
                 {
                     InboxProcessorLogs.DeliveryDeferred(
                         logger, key.MessageId.Value, entry.HandlerType.FullName!, blockedTenant, store.Value, blockedUntil);
@@ -625,7 +683,7 @@ internal sealed class MessageReceivePipeline(
             logger, ex, attempt.Entry.HandlerType.FullName!, attempt.Key.MessageId.Value, attempt.Store.Value);
         if (!attempt.Local)
         {
-            tenantBackoff.For(attempt.Store).MarkSuspected();
+            TenantsOf(attempt).MarkSuspected();
         }
 
         return new DeliveryOutcome(DeliveryVerdict.DependencyUnavailable, ex, ex.Message);
@@ -640,7 +698,7 @@ internal sealed class MessageReceivePipeline(
     {
         if (!attempt.Local && !tenantBackoff.IsQuiet)
         {
-            tenantBackoff.For(attempt.Store).Succeeded(attempt.Context.TenantId);
+            TenantsOf(attempt).Succeeded(attempt.Context.TenantId);
         }
     }
 
@@ -693,7 +751,7 @@ internal sealed class MessageReceivePipeline(
     private async ValueTask<AttemptResult> AttemptAsync(GuardedAttempt attempt, CancellationToken ct)
     {
         attempt.GuardUnreachable = false;
-        var scope = await OpenScopeAsync(attempt.ExecutionContext, attempt.Store, attempt.Context, ct).ConfigureAwait(false);
+        var scope = await OpenScopeAsync(attempt.ExecutionContext, attempt.Store, attempt.Instance, attempt.Context, ct).ConfigureAwait(false);
         await using (scope.ConfigureAwait(false))
         {
             var services = scope.ServiceProvider;
@@ -755,7 +813,7 @@ internal sealed class MessageReceivePipeline(
 
         try
         {
-            var scope = await OpenScopeAsync(attempt.ExecutionContext, attempt.Store, attempt.Context, ct).ConfigureAwait(false);
+            var scope = await OpenScopeAsync(attempt.ExecutionContext, attempt.Store, attempt.Instance, attempt.Context, ct).ConfigureAwait(false);
             await using (scope.ConfigureAwait(false))
             {
                 var guard = ResolveGuard(scope.ServiceProvider, attempt.Store) ?? throw Unregistered(attempt.Store);
@@ -814,7 +872,7 @@ internal sealed class MessageReceivePipeline(
             return paused;
         }
 
-        var tenants = tenantBackoff.For(attempt.Store);
+        var tenants = TenantsOf(attempt);
         if (attempt.GuardUnreachable || attempt.Context.TenantId is not { } tenant)
         {
             tenants.MarkSuspected();
@@ -866,7 +924,7 @@ internal sealed class MessageReceivePipeline(
 
         try
         {
-            var scope = await OpenScopeAsync(attempt.ExecutionContext, attempt.Store, attempt.Context, ct).ConfigureAwait(false);
+            var scope = await OpenScopeAsync(attempt.ExecutionContext, attempt.Store, attempt.Instance, attempt.Context, ct).ConfigureAwait(false);
             await using (scope.ConfigureAwait(false))
             {
                 var guard = ResolveGuard(scope.ServiceProvider, attempt.Store) ?? throw Unregistered(attempt.Store);
@@ -900,18 +958,28 @@ internal sealed class MessageReceivePipeline(
 
     /// <summary>
     /// Opens a message scope ready for anything to be resolved from it: its execution context and,
-    /// for a guarded handler, its store written, then the <see cref="IMessageScopeInitializer"/>
+    /// for a guarded handler, its store written; for an instance of a partitioned store, its instance
+    /// named and its initializer run (#191 D3); then the <see cref="IMessageScopeInitializer"/>
     /// instances run — before any service of the scope, the store's <c>DbContext</c> included, is
     /// built. A tenant-aware context reads what the initializers set.
     /// </summary>
     private async ValueTask<IExecutionScope> OpenScopeAsync(
-        MessageCtx executionContext, MessageStoreKey? store, MessageContext context, CancellationToken ct)
+        MessageCtx executionContext,
+        MessageStoreKey? store,
+        StoreInstanceState? instance,
+        MessageContext context,
+        CancellationToken ct)
     {
         var scope = await scopeFactory.CreateScopeAsync(executionContext, ct).ConfigureAwait(false);
         try
         {
             var services = scope.ServiceProvider;
             PrepareScope(services, executionContext, store);
+            if (instance is not null)
+            {
+                await instance.InitializeScopeAsync(services, ct).ConfigureAwait(false);
+            }
+
             foreach (var initializer in services.GetServices<IMessageScopeInitializer>())
             {
                 await initializer.InitializeAsync(context, services, ct).ConfigureAwait(false);
@@ -992,6 +1060,13 @@ internal sealed class MessageReceivePipeline(
     {
         public ValueTask ProceedAsync() => chain.RunAsync(next);
     }
+
+    /// <summary>
+    /// The inbox tenant back-off of an attempt's store: its instance's for a partitioned store (#191),
+    /// never created here; a single store's, created on first use, as before.
+    /// </summary>
+    private TenantBackoff TenantsOf(GuardedAttempt attempt)
+        => attempt.Instance?.InboxTenants ?? tenantBackoff.For(attempt.Store);
 
     private static IInboxGuardStore? ResolveGuard(IServiceProvider services, MessageStoreKey store)
         => services.GetKeyedService<IInboxGuardStore>(store);
@@ -1084,6 +1159,9 @@ internal sealed class MessageReceivePipeline(
 
         /// <summary>Gets the claim of a retry; <see langword="null"/> for a new delivery.</summary>
         public Guid? ClaimToken { get; init; }
+
+        /// <summary>Gets the instance of a partitioned store the attempt runs against (#191); null for a single store.</summary>
+        public StoreInstanceState? Instance { get; init; }
 
         /// <summary>Gets the row builder of a new delivery; <see langword="null"/> for a retry.</summary>
         public RowFactory? NewRow { get; init; }

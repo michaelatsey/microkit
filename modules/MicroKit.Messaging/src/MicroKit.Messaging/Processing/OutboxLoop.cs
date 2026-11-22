@@ -2,8 +2,8 @@ namespace MicroKit.Messaging.Processing;
 
 
 /// <summary>
-/// The outbox drain loop of one store: claims a batch, dispatches it, and adapts its cadence to the
-/// result. One instance per store, run by <see cref="MessageStoreEngine"/>.
+/// The outbox drain loop of one store, or of one instance of a partitioned store (#191): claims a
+/// batch, dispatches it, and adapts its cadence to the result. Run by <see cref="MessageStoreEngine"/>.
 /// </summary>
 /// <remarks>
 /// <para>
@@ -36,12 +36,19 @@ namespace MicroKit.Messaging.Processing;
 /// while the host runs — an <see cref="ObjectDisposedException"/> included — is a failed cycle,
 /// logged and backed off.
 /// </para>
+/// <para>
+/// <b>An instance's loop (#191)</b> prepares each cycle's scope for its instance before resolving
+/// anything, holds the engine's <see cref="FifoGate"/> from its claim to its settlement, logs its own
+/// events (1411–1414) inside a logging scope naming the store and the instance, and also ends once the
+/// instance is removed — between batches: the batch in flight settles on the host's token.
+/// </para>
 /// </remarks>
 internal sealed class OutboxLoop(
     IServiceScopeFactory scopeFactory,
     MessageStoreKey store,
     OutboxProcessorOptions options,
-    ILogger<OutboxLoop> logger)
+    ILogger<OutboxLoop> logger,
+    StoreInstanceState? instance = null)
 {
     private const string Loop = "outbox";
 
@@ -58,6 +65,30 @@ internal sealed class OutboxLoop(
                 var scope = scopeFactory.CreateAsyncScope();
                 await using (scope.ConfigureAwait(false))
                 {
+                    using var instanceScope = instance is null ? null : logger.BeginScope(instance.LogScope);
+                    if (instance is not null)
+                    {
+                        bool ready;
+                        try
+                        {
+                            ready = await instance.PrepareLoopScopeAsync(scope.ServiceProvider, ct).ConfigureAwait(false);
+                        }
+                        catch (Exception ex) when (!HostStop.Is(ex, ct))
+                        {
+                            delay = Grow(delay, options.TransportUnavailableBackoff);
+                            var preparationDelay = delay;
+                            GuardedLoop.Log(() => StoreInstanceLogs.PreparationFailed(
+                                logger, ex, Loop, store.Value, instance.Instance.Id, preparationDelay));
+                            return delay;
+                        }
+
+                        if (!ready)
+                        {
+                            // The store was refused at its check (1409): this instance does not start.
+                            return null;
+                        }
+                    }
+
                     IOutboxProcessor processor;
                     try
                     {
@@ -67,9 +98,13 @@ internal sealed class OutboxLoop(
                     {
                         delay = Grow(delay, options.TransportUnavailableBackoff);
                         var activationDelay = delay;
-                        GuardedLoop.Log(() => StoreEngineLogs.ActivationFailed(
-                            logger, ex, Loop, store.Value, nameof(IOutboxProcessor), activationDelay));
+                        GuardedLoop.Log(() => ActivationFailed(ex, activationDelay));
                         return delay;
+                    }
+
+                    if (instance is not null && !await EnterAsync(instance, ct).ConfigureAwait(false))
+                    {
+                        return null;
                     }
 
                     try
@@ -85,8 +120,14 @@ internal sealed class OutboxLoop(
                         // ends a loop: it backs off on the idle curve and reports it each time.
                         delay = Grow(delay, options.MaxPollingInterval);
                         var faultDelay = delay;
-                        GuardedLoop.Log(() => StoreEngineLogs.ConfigurationFault(logger, ex, Loop, store.Value, faultDelay));
+                        GuardedLoop.Log(() => ConfigurationFault(ex, faultDelay));
                         return delay;
+                    }
+                    finally
+                    {
+                        // Every path out of a batch returns its permit: a leaked one would stop every
+                        // instance's loops.
+                        instance?.Gate.Release();
                     }
                 }
             },
@@ -96,11 +137,65 @@ internal sealed class OutboxLoop(
                 // unreachable. Back off on the idle curve rather than polling at full speed.
                 delay = Grow(delay, options.MaxPollingInterval);
                 var failureDelay = delay;
-                GuardedLoop.Log(() => StoreEngineLogs.LoopFailed(logger, ex, Loop, store.Value, failureDelay));
+                GuardedLoop.Log(() => LoopFailed(ex, failureDelay));
                 return delay;
             },
             TimeProvider.System,
-            stoppingToken);
+            stoppingToken,
+            instance?.Stopping ?? default);
+    }
+
+    /// <summary>
+    /// Waits for the engine's gate (#191 D6), behind every instance that asked first. False when the
+    /// instance was removed meanwhile: the loop ends, having claimed nothing.
+    /// </summary>
+    internal static async ValueTask<bool> EnterAsync(StoreInstanceState instance, CancellationToken ct = default)
+    {
+        try
+        {
+            await instance.Gate.EnterAsync(instance.Stopping).ConfigureAwait(false);
+            return true;
+        }
+        catch (OperationCanceledException) when (!ct.IsCancellationRequested)
+        {
+            return false;
+        }
+    }
+
+    private void ActivationFailed(Exception ex, TimeSpan delay)
+    {
+        if (instance is null)
+        {
+            StoreEngineLogs.ActivationFailed(logger, ex, Loop, store.Value, nameof(IOutboxProcessor), delay);
+        }
+        else
+        {
+            StoreInstanceLogs.ActivationFailed(logger, ex, Loop, store.Value, instance.Instance.Id, nameof(IOutboxProcessor), delay);
+        }
+    }
+
+    private void ConfigurationFault(Exception ex, TimeSpan delay)
+    {
+        if (instance is null)
+        {
+            StoreEngineLogs.ConfigurationFault(logger, ex, Loop, store.Value, delay);
+        }
+        else
+        {
+            StoreInstanceLogs.ConfigurationFault(logger, ex, Loop, store.Value, instance.Instance.Id, delay);
+        }
+    }
+
+    private void LoopFailed(Exception ex, TimeSpan delay)
+    {
+        if (instance is null)
+        {
+            StoreEngineLogs.LoopFailed(logger, ex, Loop, store.Value, delay);
+        }
+        else
+        {
+            StoreInstanceLogs.LoopFailed(logger, ex, Loop, store.Value, instance.Instance.Id, delay);
+        }
     }
 
     /// <summary>The delay before the next batch, from the result of this one.</summary>

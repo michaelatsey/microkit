@@ -101,6 +101,13 @@ internal sealed class MessagingCompositionValidator(
                     "the store's key: fix the provider's registration.");
             }
 
+            if (store.PartitionCalls > 1)
+            {
+                problems.Add(
+                    $"Store '{store.Key}' is given an instance source {store.PartitionCalls} times; a " +
+                    "partitioned store has one. Call PartitionedBy once for it.");
+            }
+
             foreach (var check in store.StartupChecks)
             {
                 problems.AddRange(check(services));

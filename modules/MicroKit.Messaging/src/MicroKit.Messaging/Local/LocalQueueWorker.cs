@@ -115,7 +115,7 @@ internal sealed class LocalQueueWorker(
         DeliveryOutcome outcome;
         try
         {
-            outcome = await pipeline.DeliverLocalAsync(entry.Message, entry.ConsumerType, stoppingToken).ConfigureAwait(false);
+            outcome = await pipeline.DeliverLocalAsync(entry.Message, entry.ConsumerType, ct: stoppingToken).ConfigureAwait(false);
         }
         catch (Exception ex) when (MessageReceivePipeline.IsShutdown(ex, stoppingToken))
         {

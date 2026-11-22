@@ -41,7 +41,8 @@ namespace MicroKit.Messaging.Processing;
 /// <param name="store">
 /// Claim and settlement of failures. Batch-scoped by design (ADR-MSG-002 shared-DB cross-tenant
 /// reservation): NOT resolved from a per-message scope. It is the store this processor drains,
-/// resolved by the store's key from its loop's scope (#188); a dynamic store set is #191's.
+/// resolved by the store's key from its loop's scope (#188) — prepared for its instance when the
+/// store is partitioned (#191).
 /// </param>
 /// <param name="registry">Maps a consumer type and a message type to its handler and invoker.</param>
 /// <param name="localConsumers">The local consumers (#188 D7), looked up when the bus has no handler of the pair.</param>
@@ -56,6 +57,10 @@ namespace MicroKit.Messaging.Processing;
 /// The store's inbox tenant back-off, shared with the deliveries guarded by the store (#124). Null only
 /// for a processor built by hand, which then gets one of its own.
 /// </param>
+/// <param name="instance">
+/// The instance of a partitioned store this processor drains (#191): each retry's scopes are prepared
+/// for it. Null for a single store.
+/// </param>
 internal sealed class InboxProcessor(
     IInboxProcessorStore store,
     MessageHandlerRegistry registry,
@@ -67,7 +72,8 @@ internal sealed class InboxProcessor(
     InboxRetryPolicy policy,
     ILogger<InboxProcessor> logger,
     MessageStoreKey storeKey,
-    TenantBackoff? tenantBackoff = null)
+    TenantBackoff? tenantBackoff = null,
+    StoreInstanceState? instance = null)
     : IInboxProcessor
 {
     private readonly TenantBackoff _tenants = tenantBackoff
@@ -355,7 +361,7 @@ internal sealed class InboxProcessor(
         var evt = Deserialize(message, eventType, local);
         var context = BuildContext(message, eventType);
 
-        return pipeline.RetryAsync(message, entry, evt, context, claimToken, storeKey, cancellationToken);
+        return pipeline.RetryAsync(message, entry, evt, context, claimToken, storeKey, instance, cancellationToken);
     }
 
     /// <summary>Deserializes the payload, treating every failure as permanent.</summary>
