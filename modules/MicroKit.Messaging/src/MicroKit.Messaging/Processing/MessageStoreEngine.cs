@@ -29,7 +29,8 @@ internal sealed class MessageStoreEngine(
     OutboxMetrics? outboxMetrics = null,
     StoreInstanceOptions? instanceOptions = null,
     FifoGate? gate = null,
-    InboxMetrics? inboxMetrics = null)
+    InboxMetrics? inboxMetrics = null,
+    OutboxWakes? outboxWakes = null)
     : BackgroundService
 {
     /// <summary>
@@ -73,11 +74,15 @@ internal sealed class MessageStoreEngine(
         return Task.WhenAll(loops);
     }
 
-    /// <summary>Runs the four loops of a single store, or of one instance, until they end.</summary>
+    /// <summary>
+    /// Runs the four loops of a single store, or of one instance, until they end. Only the outbox loop
+    /// has a wake (#215): a single store's from <see cref="OutboxWakes"/>, an instance's its own.
+    /// </summary>
     private Task RunLoopsAsync(MessageStoreKey store, StoreInstanceState? instance, CancellationToken stoppingToken)
         => Task.WhenAll(
             new OutboxLoop(
-                scopeFactory, store, outboxOptions, loggerFactory.CreateLogger<OutboxLoop>(), instance)
+                scopeFactory, store, outboxOptions, loggerFactory.CreateLogger<OutboxLoop>(), instance,
+                instance?.OutboxWake ?? outboxWakes?.Of(store))
                 .RunAsync(stoppingToken),
             new InboxLoop(
                 scopeFactory, store, inboxOptions, loggerFactory.CreateLogger<InboxLoop>(), instance)

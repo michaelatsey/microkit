@@ -13,7 +13,8 @@ namespace MicroKit.Messaging.Processing;
 /// <para>
 /// <b>Cadence.</b> A saturated batch polls again at once; an empty queue grows the delay toward
 /// <see cref="OutboxProcessorOptions.MaxPollingInterval"/>; a partial batch returns to
-/// <see cref="OutboxProcessorOptions.PollingInterval"/>. A down endpoint is not the loop's to back
+/// <see cref="OutboxProcessorOptions.PollingInterval"/>; a commit cuts either of these two delays
+/// (below). A down endpoint is not the loop's to back
 /// off (#188): the processor defers its rows to the end of the endpoint's own back-off
 /// (<see cref="OutboxEndpointBackoff"/>), so the next claim skips them and the other endpoint's rows
 /// keep this cadence. One exception, before saturation: a batch that carried rows handed over in
@@ -24,6 +25,17 @@ namespace MicroKit.Messaging.Processing;
 /// per polling interval while it keeps handing that backlog over. A processor that
 /// cannot be activated grows the delay toward
 /// <see cref="OutboxProcessorOptions.TransportUnavailableBackoff"/>.
+/// </para>
+/// <para>
+/// <b>Woken by a commit (#215).</b> A store provider reports a commit through
+/// <see cref="IOutboxCommitSignal"/>, which signals this loop's <see cref="LoopWake"/>. The signal is
+/// drained right before each claim, so a commit landing during a batch ends the next wait at once. A
+/// signal cuts only the delay after an empty or a partial batch, and starts a claim no sooner than
+/// <see cref="OutboxProcessorOptions.PollingInterval"/> after the previous claim began, to the timer's
+/// precision: during a
+/// transport outage, commits would otherwise cost a claim each, each reading the down endpoint's
+/// backlog. It never cuts the hand-over guard, a failure's, an activation's, a preparation's or a
+/// configuration fault's back-off. An empty claim after a wake grows the delay from where it was.
 /// </para>
 /// <para>
 /// <b>Activation is not registration.</b> The processor and its store are registered — host start
@@ -48,9 +60,14 @@ internal sealed class OutboxLoop(
     MessageStoreKey store,
     OutboxProcessorOptions options,
     ILogger<OutboxLoop> logger,
-    StoreInstanceState? instance = null)
+    StoreInstanceState? instance = null,
+    LoopWake? wake = null)
 {
     private const string Loop = "outbox";
+
+    // The clock the loop waits on, and so the one its wake's floor is read on (#213 owns making it
+    // the host's).
+    private static readonly TimeProvider Clock = TimeProvider.System;
 
     /// <summary>Runs until <paramref name="stoppingToken"/> is cancelled: only a host stop ends it.</summary>
     /// <param name="stoppingToken">The host's token.</param>
@@ -109,8 +126,20 @@ internal sealed class OutboxLoop(
 
                     try
                     {
+                        // Drained right before the claim, after the gate (#215 D5): a commit signalled
+                        // before this point is visible to the claim, one signalled during the batch
+                        // stays pending and ends the next wait at once.
+                        wake?.ClaimStarting();
                         var result = await processor.ProcessBatchAsync(options.BatchSize, ct).ConfigureAwait(false);
-                        delay = NextDelay(result, delay);
+                        (delay, var wakeable) = Next(result, delay);
+                        if (wakeable)
+                        {
+                            // Only the delay of an idle or a partial batch is cut by a commit (D6),
+                            // no sooner than a polling interval after this claim began, to the timer's
+                            // precision (D6b).
+                            wake?.Arm(options.PollingInterval);
+                        }
+
                         return delay;
                     }
                     catch (OutboxConfigurationException ex)
@@ -140,7 +169,8 @@ internal sealed class OutboxLoop(
                 GuardedLoop.Log(() => LoopFailed(ex, failureDelay));
                 return delay;
             },
-            TimeProvider.System,
+            Clock,
+            wake,
             stoppingToken,
             instance?.Stopping ?? default);
     }
@@ -202,19 +232,28 @@ internal sealed class OutboxLoop(
     /// <param name="result">The batch result.</param>
     /// <param name="current">The current delay.</param>
     /// <returns>The next delay.</returns>
-    internal TimeSpan NextDelay(OutboxBatchResult result, TimeSpan current) => result switch
+    internal TimeSpan NextDelay(OutboxBatchResult result, TimeSpan current) => Next(result, current).Delay;
+
+    /// <summary>
+    /// The delay before the next batch, and whether a commit may cut it (#215 D6): only the idle and
+    /// the partial-batch delays may.
+    /// </summary>
+    /// <param name="result">The batch result.</param>
+    /// <param name="current">The current delay.</param>
+    /// <returns>The next delay, and whether it is wakeable.</returns>
+    internal (TimeSpan Delay, bool Wakeable) Next(OutboxBatchResult result, TimeSpan current) => result switch
     {
         // No outage arm: a down endpoint's rows were deferred by the processor (OutboxEndpointBackoff),
         // so a batch that hit one is sized like any other — a full one cannot re-claim its own rows.
-        { AbortReason: OutboxBatchAbortReason.Cancelled } => current,
+        { AbortReason: OutboxBatchAbortReason.Cancelled } => (current, false),
         // Rows handed over while their endpoint, or their tenant on it, is in back-off — a store that
         // does not honour the claim's endpoint or tenant filters, against its contract: polling again
         // at once, even after a batch that also delivered something, would rewrite the down
-        // endpoint's or tenant's whole backlog a batch at a time.
-        { HandedOverInBackOff: true } => options.PollingInterval,
-        var r when r.IsSaturated(options.BatchSize) => TimeSpan.Zero,
-        { HasWork: false } => Grow(current, options.MaxPollingInterval),
-        _ => options.PollingInterval,
+        // endpoint's or tenant's whole backlog a batch at a time. A commit does not cut this guard.
+        { HandedOverInBackOff: true } => (options.PollingInterval, false),
+        var r when r.IsSaturated(options.BatchSize) => (TimeSpan.Zero, false),
+        { HasWork: false } => (Grow(current, options.MaxPollingInterval), true),
+        _ => (options.PollingInterval, true),
     };
 
     private TimeSpan Grow(TimeSpan current, TimeSpan ceiling)

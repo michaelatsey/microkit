@@ -19,6 +19,14 @@ namespace MicroKit.Messaging.Processing;
 /// flight never sees it, so a batch it holds runs to its settlement.
 /// </para>
 /// <para>
+/// <b>A wake cuts only what its iteration armed (#215).</b> A loop given a <see cref="LoopWake"/> ends
+/// a delay on its signal only when the iteration that returned the delay armed the wake; a failed
+/// iteration's delay never is. The floor still holds: a wake starts the next iteration no sooner than
+/// the floor after the previous claim began, to the timer's precision. The losing wait is cancelled and observed, so
+/// neither a timer nor a channel waiter is left behind. A removal and a host stop cut either wait. A
+/// loop given no wake waits as it always has, and allocates nothing more.
+/// </para>
+/// <para>
 /// <b>Logging cannot throw.</b> Every log call of a loop goes through <see cref="Log"/>, which swallows
 /// a logging provider's fault: there is nowhere left to report it, and it must not end the loop or
 /// undo a settlement.
@@ -46,6 +54,25 @@ internal static class GuardedLoop
     /// an iteration in flight — a batch — runs to its settlement on the host's token alone.
     /// </param>
     /// <returns>A task that completes when the loop ends.</returns>
+    public static Task RunAsync(
+        Func<CancellationToken, ValueTask<TimeSpan?>> iteration,
+        Func<Exception, TimeSpan> onFault,
+        TimeProvider timeProvider,
+        CancellationToken stoppingToken,
+        CancellationToken removal = default)
+        => RunAsync(iteration, onFault, timeProvider, wake: null, stoppingToken, removal);
+
+    /// <summary>
+    /// Runs <paramref name="iteration"/> as the overload without a wake does; a delay the iteration
+    /// armed on <paramref name="wake"/> also ends on its signal, no sooner than its floor (#215).
+    /// </summary>
+    /// <param name="iteration">One pass, as for the overload without a wake.</param>
+    /// <param name="onFault">Reports a failed iteration; its delay is never cut by a signal.</param>
+    /// <param name="timeProvider">The clock the delays run on, and the wake's floor is read on.</param>
+    /// <param name="wake">The outbox loop's wake, or null: the loop then waits as without one.</param>
+    /// <param name="stoppingToken">The host's token.</param>
+    /// <param name="removal">The removal token, as for the overload without a wake.</param>
+    /// <returns>A task that completes when the loop ends.</returns>
     [System.Diagnostics.CodeAnalysis.SuppressMessage(
         "Design",
         "CA1031:Do not catch general exception types",
@@ -54,6 +81,7 @@ internal static class GuardedLoop
         Func<CancellationToken, ValueTask<TimeSpan?>> iteration,
         Func<Exception, TimeSpan> onFault,
         TimeProvider timeProvider,
+        LoopWake? wake,
         CancellationToken stoppingToken,
         CancellationToken removal = default)
     {
@@ -63,13 +91,17 @@ internal static class GuardedLoop
             ? CancellationTokenSource.CreateLinkedTokenSource(stoppingToken, removal)
             : null;
         var delayToken = linked?.Token ?? stoppingToken;
+        wake?.Bind(timeProvider);
 
         while (!stoppingToken.IsCancellationRequested && !removal.IsCancellationRequested)
         {
             TimeSpan? next;
+            var wakeable = false;
+            wake?.Disarm();
             try
             {
                 next = await iteration(stoppingToken).ConfigureAwait(false);
+                wakeable = wake is { Armed: true };
             }
             catch (Exception ex) when (HostStop.Is(ex, stoppingToken))
             {
@@ -92,12 +124,50 @@ internal static class GuardedLoop
 
             try
             {
-                await Task.Delay(delay, timeProvider, delayToken).ConfigureAwait(false);
+                if (wakeable)
+                {
+                    await WaitOrWakeAsync(delay, wake!, timeProvider, delayToken).ConfigureAwait(false);
+                }
+                else
+                {
+                    await Task.Delay(delay, timeProvider, delayToken).ConfigureAwait(false);
+                }
             }
             catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested || removal.IsCancellationRequested)
             {
                 return;
             }
+        }
+    }
+
+    /// <summary>
+    /// Waits for <paramref name="delay"/> or a signal of <paramref name="wake"/>, whichever comes first;
+    /// on a signal, then for what remains of the wake's floor. The losing wait is cancelled and
+    /// observed, as <see cref="StoreInstanceReconciler"/>'s poll does.
+    /// </summary>
+    private static async Task WaitOrWakeAsync(TimeSpan delay, LoopWake wake, TimeProvider timeProvider, CancellationToken ct = default)
+    {
+        // A commit during the batch left its signal pending (D5): no race to run.
+        if (!wake.Reader.TryPeek(out _))
+        {
+            using var race = CancellationTokenSource.CreateLinkedTokenSource(ct);
+            var signalled = wake.Reader.WaitToReadAsync(race.Token).AsTask();
+            var elapsed = Task.Delay(delay, timeProvider, race.Token);
+            var first = await Task.WhenAny(signalled, elapsed).ConfigureAwait(false);
+            await race.CancelAsync().ConfigureAwait(false);
+            await Task.WhenAll(signalled, elapsed).ContinueWith(static _ => { }, TaskScheduler.Default).ConfigureAwait(false);
+            ct.ThrowIfCancellationRequested();
+            if (first == elapsed)
+            {
+                return;
+            }
+        }
+
+        // D6b: no sooner than the floor after the previous claim began, to the timer's precision: one
+        // wait of the remainder, never a loop on it.
+        if (wake.FloorRemaining is var rest && rest > TimeSpan.Zero)
+        {
+            await Task.Delay(rest, timeProvider, ct).ConfigureAwait(false);
         }
     }
 
