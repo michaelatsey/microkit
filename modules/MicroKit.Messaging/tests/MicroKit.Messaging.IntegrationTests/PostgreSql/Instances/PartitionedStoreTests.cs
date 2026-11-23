@@ -319,6 +319,61 @@ public sealed class PartitionedStoreTests(InstanceServerFixture server, ITestOut
         await producer.StopAsync();
     }
 
+    [DockerRequiredFact]
+    public async Task ADeliveryBeforeTheFirstSnapshotIsApplied_WaitsForIt_AndIsNotCounted()
+    {
+        var broker = new InMemoryBroker { MaxDeliveryAttempts = 3 };
+        GatedInstanceSource? source = null;
+        await using var host = PartitionedHost.Build(
+            scopedTransport: false,
+            services: s =>
+            {
+                s.AddSingleton<TestInstanceSource>(sp => source = new GatedInstanceSource(
+                    sp.GetRequiredService<InstanceCatalog>(), sp.GetRequiredService<InstanceMapping>()));
+
+                // The transport registered before the store: it consumes while the engine still reads its
+                // first snapshot — the startup window a host with a broker provider meets.
+                s.AddMicroKitMessaging(b => b.UseInMemoryTransport(broker));
+            });
+        host.Output = output;
+        await host.ProvisionAsync(server, 1, prefix: "w");
+        host.Declare("w0");
+        var starting = Task.Run(() => host.StartAsync());
+        await Eventually.HoldsAsync(() => source is { FirstReadStarted: true }, "the reconciler's first read has started");
+
+        var publisher = Host.CreateApplicationBuilder(new HostApplicationBuilderSettings { DisableDefaults = true });
+        publisher.Services.AddMicroKitMessaging(b =>
+        {
+            b.ServiceName = "tests.instances.publisher";
+            b.Publishes<InstanceEvent>();
+            b.UseInMemoryTransport(broker);
+        });
+        using var producer = publisher.Build();
+        await producer.StartAsync();
+        // The recorder names the event's payload id; the broker counts attempts by the bus's message id.
+        Guid message, payload = Guid.NewGuid();
+        await using (var scope = producer.Services.CreateAsyncScope())
+        {
+            message = (await scope.ServiceProvider.GetRequiredService<IMessageBus>()
+                .PublishAsync(new InstanceEvent(payload), new PublishOptions { TenantId = "w0" })).Value;
+        }
+
+        // Delivered while no instance is drained yet: it waits, it is not refused.
+        await Task.Delay(TimeSpan.FromMilliseconds(500));
+        host.Recorder.Handled.ShouldNotContain(h => h.MessageId == payload, "nothing is drained before the first snapshot");
+        broker.GetFailedAttempts("tests.instances", message.ToString()).ShouldBe(0, "a delivery before the first snapshot is not counted");
+
+        source!.FirstRead.Set();
+        await starting;
+        await Eventually.HoldsAsync(
+            () => host.Recorder.Handled.Any(h => h.MessageId == payload),
+            "handled once the first snapshot is applied",
+            TimeSpan.FromSeconds(30));
+        broker.GetFailedAttempts("tests.instances", message.ToString()).ShouldBe(0);
+        host.Logs.Entries.ShouldNotContain(e => e.EventId == 1410, "no delivery was refused for want of a first snapshot");
+        await producer.StopAsync();
+    }
+
     private static Task SentAsync(PartitionedHost host, Guid message, string because)
         => Eventually.HoldsAsync(() => host.Recorder.Sent.Any(s => s.MessageId == message), because);
 

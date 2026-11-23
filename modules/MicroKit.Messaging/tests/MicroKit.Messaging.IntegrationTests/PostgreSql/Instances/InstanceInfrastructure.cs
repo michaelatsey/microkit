@@ -265,7 +265,7 @@ public class TestInstanceSource(InstanceCatalog catalog, InstanceMapping mapping
     /// <summary>Gets the store this source serves.</summary>
     protected virtual MessageStoreKey Store => PartitionedHost.Store;
 
-    public IReadOnlyCollection<MessageStoreInstance> GetInstances() => Set.Instances;
+    public virtual IReadOnlyCollection<MessageStoreInstance> GetInstances() => Set.Instances;
 
     public IChangeToken GetChangeToken() => Set.Token;
 
@@ -273,6 +273,28 @@ public class TestInstanceSource(InstanceCatalog catalog, InstanceMapping mapping
     {
         instance = mapping.Map(context) is { } id ? new MessageStoreInstance(id) : null;
         return instance is not null;
+    }
+}
+
+/// <summary>A source whose first snapshot read blocks until the test opens it: a slow first read of a catalog.</summary>
+public sealed class GatedInstanceSource(InstanceCatalog catalog, InstanceMapping mapping) : TestInstanceSource(catalog, mapping)
+{
+    private int _reads;
+
+    /// <summary>Gets the gate the first read waits on.</summary>
+    public ManualResetEventSlim FirstRead { get; } = new();
+
+    /// <summary>Gets a value indicating whether the first read has started.</summary>
+    public bool FirstReadStarted => Volatile.Read(ref _reads) > 0;
+
+    public override IReadOnlyCollection<MessageStoreInstance> GetInstances()
+    {
+        if (Interlocked.Increment(ref _reads) == 1)
+        {
+            FirstRead.Wait(TimeSpan.FromSeconds(30));
+        }
+
+        return base.GetInstances();
     }
 }
 

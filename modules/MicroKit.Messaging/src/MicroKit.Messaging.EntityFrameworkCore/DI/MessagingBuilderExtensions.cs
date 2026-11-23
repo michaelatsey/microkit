@@ -105,7 +105,7 @@ public static class MessagingBuilderExtensions
 
         // A partitioned store's context may only be buildable in an instance's scope: its model is
         // checked there, when its first instance starts (CheckInstanceModel).
-        if (services.GetRequiredService<IServiceProviderIsKeyedService>().IsKeyedService(typeof(IMessageStoreInstanceSource), key))
+        if (IsPartitioned(services, key))
         {
             return [];
         }
@@ -159,4 +159,15 @@ public static class MessagingBuilderExtensions
                 "Call modelBuilder.ApplyMessagingConfiguration() in its OnModelCreating, and add " +
                 "the tables to the host's migrations."];
     }
+
+    /// <summary>
+    /// Whether <paramref name="key"/> is given an instance source (#191), read without requiring
+    /// <see cref="IServiceProviderIsKeyedService"/>: a container that lacks it answers by resolving the
+    /// source, and a single store is checked as before on any container.
+    /// </summary>
+    private static bool IsPartitioned(IServiceProvider services, MessageStoreKey key)
+        => services.GetService<IServiceProviderIsKeyedService>() is { } keyed
+            ? keyed.IsKeyedService(typeof(IMessageStoreInstanceSource), key)
+            : services is IKeyedServiceProvider provider
+              && provider.GetKeyedService(typeof(IMessageStoreInstanceSource), key) is not null;
 }

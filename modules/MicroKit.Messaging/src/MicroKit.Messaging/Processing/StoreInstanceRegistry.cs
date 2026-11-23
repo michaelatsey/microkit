@@ -72,7 +72,8 @@ internal sealed class StoreInstanceRegistry
     /// <param name="context">The delivery.</param>
     /// <returns>The drained instance; <see langword="null"/> when it maps to none this host drains.</returns>
     /// <remarks>
-    /// A source that throws maps nothing: the delivery is not drained, never a failure of the pipeline.
+    /// A source that throws, or answers true with no instance, maps nothing: the delivery is not drained
+    /// (1416), never a failure of the pipeline.
     /// </remarks>
     [System.Diagnostics.CodeAnalysis.SuppressMessage(
         "Design",
@@ -95,11 +96,37 @@ internal sealed class StoreInstanceRegistry
         }
         catch (Exception ex)
         {
-            StoreInstanceLogs.SourceFailed(_logger, ex, store.Value);
+            StoreInstanceLogs.MappingFailed(_logger, ex, store.Value, context.MessageId.Value);
+            return null;
+        }
+
+        // [NotNullWhen(true)] is the source's promise, not the runtime's.
+        if (instance is null)
+        {
+            StoreInstanceLogs.MappingFailed(_logger, null, store.Value, context.MessageId.Value);
             return null;
         }
 
         return Find(new StoreInstanceKey(store, instance.Id));
+    }
+
+    /// <summary>
+    /// Completes once the reconciler of <paramref name="store"/> has applied its first snapshot (or ended):
+    /// a delivery that arrives before waits for it rather than finding no instance drained yet.
+    /// </summary>
+    /// <param name="store">The partitioned store.</param>
+    /// <returns>The task; completed for a store that is not partitioned.</returns>
+    public Task FirstRoundOf(MessageStoreKey store)
+        => _partitions.TryGetValue(store, out var partition) ? partition.FirstRound.Task : Task.CompletedTask;
+
+    /// <summary>Marks the first round of <paramref name="store"/> done; later calls do nothing.</summary>
+    /// <param name="store">The partitioned store.</param>
+    public void FirstRoundDone(MessageStoreKey store)
+    {
+        if (_partitions.TryGetValue(store, out var partition))
+        {
+            partition.FirstRound.TrySetResult();
+        }
     }
 
     /// <summary>A drained instance, by key; null when it is not drained.</summary>
@@ -145,6 +172,8 @@ internal sealed class StoreInstanceRegistry
         private int _state = checks.Length == 0 ? Passed : Pending;
 
         public int State => Volatile.Read(ref _state);
+
+        public TaskCompletionSource FirstRound { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
 
         public bool Refused => State == Failed;
 

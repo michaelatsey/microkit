@@ -92,6 +92,13 @@ internal static partial class StoreInstanceLogs
     public static partial void InstanceStartFailed(ILogger logger, Exception exception, string store, string instance);
 
     [LoggerMessage(
+        EventId = 1416,
+        Level = LogLevel.Warning,
+        Message = "The instance source of store '{Store}' could not map message {MessageId} to an instance: " +
+                  "its TryGetInstance threw or named no instance. The delivery is not drained here (1410).")]
+    public static partial void MappingFailed(ILogger logger, Exception? exception, string store, Guid messageId);
+
+    [LoggerMessage(
         EventId = 1414,
         Level = LogLevel.Error,
         Message = "The {Loop} loop of instance '{Instance}' of store '{Store}' could not prepare its scope: " +

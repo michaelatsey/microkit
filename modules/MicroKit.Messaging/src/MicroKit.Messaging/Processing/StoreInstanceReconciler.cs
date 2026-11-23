@@ -49,6 +49,7 @@ internal sealed class StoreInstanceReconciler
     private readonly Dictionary<MessageStoreInstance, StoreInstanceState> _draining = [];
     private int _rounds;
     private int _completedRounds;
+    private bool _lastTokenStale;
 
     /// <summary>Initializes a new <see cref="StoreInstanceReconciler"/>.</summary>
     /// <param name="store">The partitioned store.</param>
@@ -99,13 +100,39 @@ internal sealed class StoreInstanceReconciler
     /// <returns>A task that completes once every instance's loops have ended.</returns>
     public async Task RunAsync(CancellationToken stoppingToken)
     {
+        try
+        {
+            await ReconcileUntilStoppedAsync(stoppingToken).ConfigureAwait(false);
+        }
+        finally
+        {
+            // Never leaves a delivery waiting for a first round that will not come.
+            _registry.FirstRoundDone(_store);
+        }
+
+        var ending = new List<Task>(_running.Count + _draining.Count);
+        foreach (var state in _running.Values)
+        {
+            ending.Add(state.Drained);
+        }
+
+        foreach (var state in _draining.Values)
+        {
+            ending.Add(state.Drained);
+        }
+
+        await Task.WhenAll(ending).ConfigureAwait(false);
+    }
+
+    private async Task ReconcileUntilStoppedAsync(CancellationToken stoppingToken)
+    {
         while (!stoppingToken.IsCancellationRequested)
         {
             var watched = Watch(out var registration);
             using (registration)
             {
-
                 Reconcile(stoppingToken);
+                _registry.FirstRoundDone(_store);
 
                 try
                 {
@@ -129,19 +156,6 @@ internal sealed class StoreInstanceReconciler
                 }
             }
         }
-
-        var ending = new List<Task>(_running.Count + _draining.Count);
-        foreach (var state in _running.Values)
-        {
-            ending.Add(state.Drained);
-        }
-
-        foreach (var state in _draining.Values)
-        {
-            ending.Add(state.Drained);
-        }
-
-        await Task.WhenAll(ending).ConfigureAwait(false);
     }
 
     /// <summary>
@@ -184,8 +198,24 @@ internal sealed class StoreInstanceReconciler
             registration = token.RegisterChangeCallback(static self => ((StoreInstanceReconciler)self!).Signal(), this);
 
             // A token that changed before the registration — its source cancelled, maybe disposed, in
-            // between — may never call back: the next round takes the new one.
-            if (token.HasChanged)
+            // between — may never call back: the next round takes the new one. A source that hands out a
+            // changed token twice in a row is not replacing it: it is polled, rather than read in a loop.
+            var stale = token.HasChanged;
+            var repeated = stale && _lastTokenStale;
+            _lastTokenStale = stale;
+            if (repeated)
+            {
+                registration.Dispose();
+                registration = null;
+                while (_signal.Reader.TryRead(out _))
+                {
+                    // The registration's own immediate callback: this round reads the snapshot anyway.
+                }
+
+                return false;
+            }
+
+            if (stale)
             {
                 Signal();
             }
@@ -271,13 +301,14 @@ internal sealed class StoreInstanceReconciler
             }
         }
 
-        if (_registry.IsRefused(_store))
-        {
-            return;
-        }
-
         foreach (var instance in wanted)
         {
+            // A start can run the store's check and have it refuse the store: no instance starts after it.
+            if (_registry.IsRefused(_store))
+            {
+                return;
+            }
+
             if (_running.ContainsKey(instance))
             {
                 continue;

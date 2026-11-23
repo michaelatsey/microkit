@@ -96,7 +96,9 @@ internal sealed class StoreInstanceState : IDisposable
 
     /// <summary>
     /// Gets or sets a value indicating whether its source listed it again while its loops still settle:
-    /// its deliveries keep mapping to it until its successor starts.
+    /// its deliveries keep mapping to it until it is released. Between its release and its successor's
+    /// start — the next round, signalled by the release — a delivery maps to no instance (1410) and is
+    /// redelivered.
     /// </summary>
     public bool IsWanted
     {

@@ -42,6 +42,28 @@ public sealed class EfStoreStartupCheckTests
         await host.StopAsync();
     }
 
+    [Fact]
+    public void ASingleStoresCheck_RunsOnAContainerWithoutTheKeyedServiceQuery()
+    {
+        using var connection = new SqliteConnection("Data Source=:memory:");
+        var services = new ServiceCollection();
+        services.AddLogging();
+        services.AddDbContext<TestMessagingDbContext>(o => o.UseSqlite(connection));
+        services.AddMicroKitMessaging(bus =>
+        {
+            bus.ServiceName = "tests.ef-checks";
+            bus.UseEntityFrameworkOutbox<TestMessagingDbContext>();
+        });
+        using var provider = services.BuildServiceProvider();
+        var composition = (MessagingComposition)services
+            .Single(d => d.ServiceType == typeof(MessagingComposition)).ImplementationInstance!;
+        var container = new WithoutKeyedServiceQuery(provider);
+
+        var problems = composition.Stores.SelectMany(s => s.StartupChecks).SelectMany(check => check(container)).ToList();
+
+        problems.ShouldBeEmpty("a single store's check needs no IServiceProviderIsKeyedService (#191)");
+    }
+
     private static IHost Build(Action<IServiceCollection> services, bool bare = false)
     {
         var builder = Host.CreateApplicationBuilder(new HostApplicationBuilderSettings { DisableDefaults = true });
@@ -71,5 +93,17 @@ public sealed class EfStoreStartupCheckTests
     private sealed class BareContext(DbContextOptions<BareContext> options) : DbContext(options)
     {
         public DbSet<BusinessRecord> Records => Set<BusinessRecord>();
+    }
+
+    /// <summary>A container that resolves keyed services but cannot be asked whether one is registered.</summary>
+    private sealed class WithoutKeyedServiceQuery(ServiceProvider inner) : IServiceProvider, IKeyedServiceProvider
+    {
+        public object? GetService(Type serviceType)
+            => serviceType == typeof(IServiceProviderIsKeyedService) ? null : inner.GetService(serviceType);
+
+        public object? GetKeyedService(Type serviceType, object? serviceKey) => inner.GetKeyedService(serviceType, serviceKey);
+
+        public object GetRequiredKeyedService(Type serviceType, object? serviceKey)
+            => inner.GetRequiredKeyedService(serviceType, serviceKey);
     }
 }

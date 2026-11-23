@@ -120,7 +120,7 @@ notification handler), or another source's `LocalConsumer.ConsumerType`.
 | `Ef{Noun}Store<TContext>` | `EfOutboxStore<TContext>`, `EfInboxStore<TContext>` — `internal sealed`, scoped, every store interface resolving to the one instance of the scope |
 | `{Noun}Processor` | `OutboxProcessor`, `InboxProcessor` — one batch; behind internal `IOutboxProcessor` / `IInboxProcessor`, keyed by store |
 | `{Noun}Loop` | `OutboxLoop`, `InboxLoop`, `OutboxRetentionLoop`, `InboxRetentionLoop` — plain classes, one of each per store or per instance of a partitioned store, each with its own back-off |
-| `StoreInstance{Noun}` | `StoreInstanceReconciler` (one per partitioned store), `StoreInstanceRegistry` (the partitioned stores and the instances drained), `StoreInstanceState` (one per instance drained), `StoreInstanceKey`, `StoreInstanceLogs` (1404–1414) — #191 |
+| `StoreInstance{Noun}` | `StoreInstanceReconciler` (one per partitioned store), `StoreInstanceRegistry` (the partitioned stores and the instances drained), `StoreInstanceState` (one per instance drained), `StoreInstanceKey`, `StoreInstanceLogs` (1404–1416) — #191 |
 | `FifoGate` | The gate every instance's batches pass, FIFO by hand-off (#191 D6) |
 | `MessageStoreEngine` | The `BackgroundService` that runs the four loops of every store. Registered by the first `AddMessageStore`, once |
 | `{Noun}Worker` | `InMemoryTransportWorker` (the in-memory consume loop), `LocalQueueWorker` (the in-memory local queue). `BackgroundService` / hosted services, `IServiceScopeFactory` only in the constructor |

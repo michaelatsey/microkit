@@ -443,10 +443,14 @@ that scope at the tenant's database the same way (#190 will do it from the tenan
   the instance `TryGetInstance` maps it to; a retry against the instance whose loop claimed it.
 - **A delivery that maps to no instance drained here** — no tenant, a tenant with no database yet, one
   removed — is a counted failure the transport redelivers, and dead-letters at its limit (1410). It
-  never pauses the endpoint, which would hold every other tenant behind it.
+  never pauses the endpoint, which would hold every other tenant behind it. A delivery that arrives
+  before the store's first snapshot is applied — a transport that starts consuming before the engine —
+  waits for that snapshot instead. A `TryGetInstance` that throws, or answers `true` with no instance,
+  maps nothing (1416).
 - **Added and removed at runtime.** A new snapshot is read on each change of the token; a missed or
   merged signal loses nothing, and a snapshot that throws, or names one instance twice, is logged and
-  ignored. An added instance starts draining (1404). A removed one settles the batches it holds —
+  ignored. A source that hands out an already changed token again and again is polled, at
+  `Outbox.MaxPollingInterval`, rather than read in a loop. An added instance starts draining (1404). A removed one settles the batches it holds —
   never cancels them — then stops claiming (1405); its rows stay where they are, and its state and
   series are released once its loops have ended (1406). Re-added, it drains again.
 - **One gate for every instance's batches.** `StoreInstanceOptions.MaxConcurrentBatches` (section

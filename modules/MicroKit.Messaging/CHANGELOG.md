@@ -24,9 +24,10 @@
   every instance — a single store never enters it; `TagInstances` (off), adding `store.instance` to every
   instrument tagged `store.key`. Off, a partitioned store reports one series per `store.key` and
   `endpoint`, its back-off counters summed over its instances.
-- Events 1404–1414: an instance started, removed, released; its source failed or named an instance twice;
+- Events 1404–1416: an instance started, removed, released; its source failed or named an instance twice;
   its store refused at its check; a delivery mapped to no instance drained here (a counted failure, never a
-  pause); and an instance's loop failures, each with `{Store}` and `{Instance}`.
+  pause); an instance's loop failures, each with `{Store}` and `{Instance}`; an instance that could not
+  start (1415); and a delivery its source could not map (1416).
 
 ## [Unreleased] — an endpoint's or a tenant's outage is observed through metrics (#126)
 

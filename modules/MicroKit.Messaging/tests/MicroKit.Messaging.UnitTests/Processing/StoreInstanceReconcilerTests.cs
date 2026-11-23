@@ -157,7 +157,7 @@ public sealed class StoreInstanceReconcilerTests
         using var harness = new InstanceHarness(configure: s => s.AddKeyedSingleton<IMessageStoreInstanceSource>(
             InstanceHarness.Store, (sp, _) => faulty.Over(sp.GetRequiredService<TestInstanceSource>())));
         var loops = new LoopRecorder();
-        var log = new EventLog();
+        var log = new EventLog<StoreInstanceReconciler>();
         var sut = harness.Reconciler(loops.RunAsync, log);
         harness.Source.Set("a");
         using var stop = new CancellationTokenSource();
@@ -195,7 +195,7 @@ public sealed class StoreInstanceReconcilerTests
     {
         using var harness = new InstanceHarness();
         var loops = new LoopRecorder();
-        var log = new EventLog();
+        var log = new EventLog<StoreInstanceReconciler>();
         var sut = harness.Reconciler(loops.RunAsync, log);
         var key = new StoreInstanceKey(InstanceHarness.Store, "a");
         harness.Inbox.Add(key);   // state nobody released: starting "a" throws
@@ -251,6 +251,86 @@ public sealed class StoreInstanceReconcilerTests
         await Eventually(() => sut.Rounds >= rounds + 3, "it keeps polling");
 
         await stop.CancelAsync();
+        await run.WaitAsync(Timeout);
+    }
+
+    [Fact]
+    public async Task TheFirstRound_IsMarked_ForTheDeliveriesThatWaitForIt()
+    {
+        using var harness = new InstanceHarness();
+        var loops = new LoopRecorder();
+        var sut = harness.Reconciler(loops.RunAsync);
+        harness.Source.Set("a");
+        harness.Registry.FirstRoundOf(InstanceHarness.Store).IsCompleted.ShouldBeFalse("no snapshot is applied yet");
+        using var stop = new CancellationTokenSource();
+        var run = sut.RunAsync(stop.Token);
+
+        await SnapshotApplied(harness, sut, run, "the first snapshot was applied");
+        harness.Registry.FirstRoundOf(InstanceHarness.Store).IsCompleted.ShouldBeTrue("a delivery waiting for it goes on");
+
+        await stop.CancelAsync();
+        await run.WaitAsync(Timeout);
+    }
+
+    [Fact]
+    public async Task ASourceThatKeepsHandingOutAChangedToken_IsPolled_NotReadInALoop()
+    {
+        using var harness = new InstanceHarness(configure: s => s.AddKeyedSingleton<IMessageStoreInstanceSource>(
+            InstanceHarness.Store, (sp, _) => new StaleTokenSource(sp.GetRequiredService<TestInstanceSource>())));
+        var loops = new LoopRecorder();
+        var sut = harness.Reconciler(loops.RunAsync);
+        harness.Source.Set("a");
+        using var stop = new CancellationTokenSource();
+
+        // On a pool thread: a reconciler reading in a loop never yields, and would hold the caller's thread.
+        var run = Task.Run(() => sut.RunAsync(stop.Token));
+        try
+        {
+            await SnapshotApplied(harness, sut, run, "control: the first snapshot was applied");
+
+            var rounds = sut.Rounds;
+            await Task.Delay(TimeSpan.FromMilliseconds(300));
+            (sut.Rounds - rounds).ShouldBeLessThan(
+                50, "polled at MaxPollingInterval (20 ms), not read back to back on a token that never changes again");
+
+            harness.Source.Set("a", "b");
+            await Eventually(() => loops.Starts("b") == 1, "a change is still seen, on the next poll");
+        }
+        finally
+        {
+            // Stopped even when an assertion fails: a reconciler reading in a loop must not outlive the test.
+            await stop.CancelAsync();
+        }
+
+        await run.WaitAsync(Timeout);
+    }
+
+    [Fact]
+    public async Task AStoreRefusedByItsCheckDuringARound_StartsNoFurtherInstance()
+    {
+        using var harness = new InstanceHarness(instanceCheck: _ => ["the model has no OutboxMessage entity"]);
+        var started = new ConcurrentQueue<string>();
+        var sut = harness.Reconciler((state, _) =>
+        {
+            // The first loop of an instance runs the store's check before anything awaits.
+            started.Enqueue(state.Instance.Id);
+            harness.Registry.EnsureChecked(state, harness.Provider);
+            return Task.CompletedTask;
+        });
+        harness.Source.Set("a", "b", "c");
+        using var stop = new CancellationTokenSource();
+        var run = sut.RunAsync(stop.Token);
+        try
+        {
+            await SnapshotApplied(harness, sut, run, "the snapshot was applied");
+            harness.Registry.IsRefused(InstanceHarness.Store).ShouldBeTrue();
+            started.Count.ShouldBe(1, "once the store is refused, no other instance of it starts");
+        }
+        finally
+        {
+            await stop.CancelAsync();
+        }
+
         await run.WaitAsync(Timeout);
     }
 
@@ -345,26 +425,18 @@ public sealed class StoreInstanceReconcilerTests
         ThrowingEnumerator,
     }
 
-    /// <summary>Counts the events written, by id; written on the reconciler's thread, read on the test's.</summary>
-    private sealed class EventLog : ILogger
+    /// <summary>A source that hands out the same, already changed, token on every call.</summary>
+    private sealed class StaleTokenSource(TestInstanceSource inner) : IMessageStoreInstanceSource
     {
-        private readonly ConcurrentDictionary<int, int> _counts = new();
+        private readonly Microsoft.Extensions.Primitives.CancellationChangeToken _changed =
+            new(new CancellationToken(canceled: true));
 
-        public int Count(int eventId) => _counts.GetValueOrDefault(eventId);
+        public IReadOnlyCollection<MessageStoreInstance> GetInstances() => inner.GetInstances();
 
-        public IDisposable? BeginScope<TState>(TState state)
-            where TState : notnull => null;
+        public Microsoft.Extensions.Primitives.IChangeToken GetChangeToken() => _changed;
 
-        // Always enabled: the [LoggerMessage] guard would otherwise make the call vanish.
-        public bool IsEnabled(LogLevel logLevel) => true;
-
-        public void Log<TState>(
-            LogLevel logLevel,
-            EventId eventId,
-            TState state,
-            Exception? exception,
-            Func<TState, Exception?, string> formatter)
-            => _counts.AddOrUpdate(eventId.Id, 1, static (_, n) => n + 1);
+        public bool TryGetInstance(MessageContext context, [System.Diagnostics.CodeAnalysis.NotNullWhen(true)] out MessageStoreInstance? instance)
+            => inner.TryGetInstance(context, out instance);
     }
 
     /// <summary>A source that, once, throws on registration, returns no snapshot, or a snapshot that throws.</summary>

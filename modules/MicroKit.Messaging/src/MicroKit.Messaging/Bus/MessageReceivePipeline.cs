@@ -65,7 +65,8 @@ using MessageCtx = MicroKit.Messaging.Execution.ExecutionContext;
 /// against the instance the store's source maps it to (<see cref="StoreInstanceRegistry.Find(MessageStoreKey, MessageContext)"/>),
 /// a retry against the instance whose loop claimed it. Every scope of the handler is prepared for
 /// that instance — its initializer, then the <see cref="IMessageScopeInitializer"/>s — and its tenant
-/// back-off is the instance's. A delivery that maps to no instance drained here is a counted failure
+/// back-off is the instance's. A delivery that arrives before the store's first snapshot is applied waits
+/// for it (<see cref="StoreInstanceRegistry.FirstRoundOf"/>). A delivery that maps to no instance drained here is a counted failure
 /// (<see cref="DeliveryVerdict.Transient"/>, event 1410): the transport redelivers it and holds nothing
 /// else back, where pausing the endpoint would hold every tenant behind it.
 /// </para>
@@ -193,7 +194,22 @@ internal sealed class MessageReceivePipeline(
             else if (instances is { HasPartitions: true } && instances.IsPartitioned(store))
             {
                 // A partitioned store (#191 D4): the row's own instance for a local row of that store,
-                // else the one its source maps the delivery to — a lookup that never creates state.
+                // else the one its source maps the delivery to — a lookup that never creates state. A
+                // delivery that arrives before the store's first snapshot is applied waits for it, rather
+                // than finding no instance drained yet; after the host's start the wait is a completed task.
+                var firstRound = instances.FirstRoundOf(store);
+                if (!firstRound.IsCompleted)
+                {
+                    try
+                    {
+                        await firstRound.WaitAsync(ct).ConfigureAwait(false);
+                    }
+                    catch (OperationCanceledException ex) when (ct.IsCancellationRequested)
+                    {
+                        return new DeliveryOutcome(DeliveryVerdict.Unsettled, ex);
+                    }
+                }
+
                 var instance = origin is not null && origin.Store == store
                     ? origin
                     : instances.Find(store, prepared.Context);

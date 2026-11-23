@@ -16,10 +16,20 @@ internal sealed class InstanceHarness : IDisposable
 
     private readonly ServiceProvider _provider;
 
-    public InstanceHarness(int permits = 4, bool tagInstances = false, Action<IServiceCollection>? configure = null)
+    public InstanceHarness(
+        int permits = 4,
+        bool tagInstances = false,
+        Action<IServiceCollection>? configure = null,
+        ILogger<StoreInstanceRegistry>? registryLogger = null,
+        Func<IServiceProvider, IEnumerable<string>>? instanceCheck = null)
     {
         Composition = new MessagingComposition();
-        Composition.GetOrAddStore(Store, out _).PartitionCalls = 1;
+        var registration = Composition.GetOrAddStore(Store, out _);
+        registration.PartitionCalls = 1;
+        if (instanceCheck is not null)
+        {
+            registration.InstanceChecks.Add(instanceCheck);
+        }
 
         var services = new ServiceCollection();
         services.AddSingleton(Source);
@@ -31,7 +41,7 @@ internal sealed class InstanceHarness : IDisposable
         _provider = services.BuildServiceProvider();
 
         InstanceOptions = new StoreInstanceOptions { MaxConcurrentBatches = permits, TagInstances = tagInstances };
-        Registry = new StoreInstanceRegistry(Composition, _provider, NullLogger<StoreInstanceRegistry>.Instance);
+        Registry = new StoreInstanceRegistry(Composition, _provider, registryLogger ?? NullLogger<StoreInstanceRegistry>.Instance);
         Gate = new FifoGate(permits);
         Inbox = new InboxTenantBackoff(InboxOptions);
         Metrics = new OutboxMetrics(TimeProvider.System, OutboxOptions, InstanceOptions, Registry);
@@ -211,4 +221,26 @@ internal sealed class RecordingInstanceInitializer(ConcurrentQueue<string> initi
         initialized.Enqueue(instance.Id);
         return ValueTask.CompletedTask;
     }
+}
+
+/// <summary>Counts the events written, by id; written on the engine's threads, read on the test's.</summary>
+internal sealed class EventLog<T> : ILogger<T>
+{
+    private readonly ConcurrentDictionary<int, int> _counts = new();
+
+    public int Count(int eventId) => _counts.GetValueOrDefault(eventId);
+
+    public IDisposable? BeginScope<TState>(TState state)
+        where TState : notnull => null;
+
+    // Always enabled: the [LoggerMessage] guard would otherwise make the call vanish.
+    public bool IsEnabled(LogLevel logLevel) => true;
+
+    public void Log<TState>(
+        LogLevel logLevel,
+        EventId eventId,
+        TState state,
+        Exception? exception,
+        Func<TState, Exception?, string> formatter)
+        => _counts.AddOrUpdate(eventId.Id, 1, static (_, n) => n + 1);
 }
