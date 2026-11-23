@@ -278,7 +278,8 @@ public sealed class StoreInstanceReconcilerTests
         using var harness = new InstanceHarness(configure: s => s.AddKeyedSingleton<IMessageStoreInstanceSource>(
             InstanceHarness.Store, (sp, _) => new StaleTokenSource(sp.GetRequiredService<TestInstanceSource>())));
         var loops = new LoopRecorder();
-        var sut = harness.Reconciler(loops.RunAsync);
+        var clock = new TestClock();
+        var sut = harness.Reconciler(loops.RunAsync, timeProvider: clock);
         harness.Source.Set("a");
         using var stop = new CancellationTokenSource();
 
@@ -287,14 +288,12 @@ public sealed class StoreInstanceReconcilerTests
         try
         {
             await SnapshotApplied(harness, sut, run, "control: the first snapshot was applied");
-
-            var rounds = sut.Rounds;
-            await Task.Delay(TimeSpan.FromMilliseconds(300));
-            (sut.Rounds - rounds).ShouldBeLessThan(
-                200, "read once per PollingInterval (5 ms), not back to back on a token that never changes again");
+            await OneRoundPerPollingInterval(harness, sut, clock, "a token that never changes again");
 
             harness.Source.Set("a", "b");
-            await Eventually(() => loops.Starts("b") == 1, "a change is still seen, on the next poll");
+            await Eventually(() => clock.ArmedTimers == 1, "waiting out its interval");
+            clock.Advance(harness.OutboxOptions.PollingInterval);
+            await Eventually(() => loops.Starts("b") == 1, "a change is still seen, on the next read");
         }
         finally
         {
@@ -356,16 +355,41 @@ public sealed class StoreInstanceReconcilerTests
         using var harness = new InstanceHarness(configure: s => s.AddKeyedSingleton<IMessageStoreInstanceSource>(
             InstanceHarness.Store, (sp, _) => new BurstSource(sp.GetRequiredService<TestInstanceSource>(), changedTokens: int.MaxValue)));
         var loops = new LoopRecorder();
-        var sut = harness.Reconciler(loops.RunAsync);
+        var clock = new TestClock();
+        var sut = harness.Reconciler(loops.RunAsync, timeProvider: clock);
         harness.Source.Set("a");
         using var stop = new CancellationTokenSource();
         var run = Task.Run(() => sut.RunAsync(stop.Token));
         try
         {
             await SnapshotApplied(harness, sut, run, "control: the first snapshot was applied");
-            var rounds = sut.Rounds;
-            await Task.Delay(TimeSpan.FromMilliseconds(300));
-            (sut.Rounds - rounds).ShouldBeLessThan(200, "a new changed token each time is no reason to read in a loop");
+            await OneRoundPerPollingInterval(harness, sut, clock, "a new changed token each time");
+        }
+        finally
+        {
+            await stop.CancelAsync();
+        }
+
+        await run.WaitAsync(Timeout);
+    }
+
+    [Fact]
+    public async Task TheCountOfChangedTokens_Saturates_AndNeverWrapsBackToReadingInALoop()
+    {
+        using var harness = new InstanceHarness(configure: s => s.AddKeyedSingleton<IMessageStoreInstanceSource>(
+            InstanceHarness.Store, (sp, _) => new BurstSource(sp.GetRequiredService<TestInstanceSource>(), changedTokens: int.MaxValue)));
+        var loops = new LoopRecorder();
+        var clock = new TestClock();
+        var sut = harness.Reconciler(loops.RunAsync, timeProvider: clock);
+        sut.ChangedTokensInARow = int.MaxValue - 1;   // a source stuck for ages
+        harness.Source.Set("a");
+        using var stop = new CancellationTokenSource();
+        var run = Task.Run(() => sut.RunAsync(stop.Token));
+        try
+        {
+            await SnapshotApplied(harness, sut, run, "control: the first snapshot was applied");
+            await OneRoundPerPollingInterval(harness, sut, clock, "past int.MaxValue changed tokens");
+            sut.ChangedTokensInARow.ShouldBe(int.MaxValue);
         }
         finally
         {
@@ -400,16 +424,15 @@ public sealed class StoreInstanceReconcilerTests
         using var harness = new InstanceHarness(configure: s => s.AddKeyedSingleton<IMessageStoreInstanceSource>(
             InstanceHarness.Store, (sp, _) => new StaleTokenSource(sp.GetRequiredService<TestInstanceSource>(), new LateToken())));
         var loops = new LoopRecorder();
-        var sut = harness.Reconciler(loops.RunAsync);
+        var clock = new TestClock();
+        var sut = harness.Reconciler(loops.RunAsync, timeProvider: clock);
         harness.Source.Set("a");
         using var stop = new CancellationTokenSource();
         var run = Task.Run(() => sut.RunAsync(stop.Token));
         try
         {
             await SnapshotApplied(harness, sut, run, "control: the first snapshot was applied");
-            var rounds = sut.Rounds;
-            await Task.Delay(TimeSpan.FromMilliseconds(300));
-            (sut.Rounds - rounds).ShouldBeLessThan(200, "a late callback of a repeated token wakes no poll");
+            await OneRoundPerPollingInterval(harness, sut, clock, "a late callback of a repeated token");
         }
         finally
         {
@@ -447,6 +470,31 @@ public sealed class StoreInstanceReconcilerTests
         }
 
         await run.WaitAsync(Timeout);
+    }
+
+    /// <summary>
+    /// Pins the rate of a source handing out changed tokens: with the reconciler waiting on the clock, half
+    /// a polling interval reads nothing, and each full interval reads exactly once — three times over.
+    /// </summary>
+    private static async Task OneRoundPerPollingInterval(
+        InstanceHarness harness, StoreInstanceReconciler sut, TestClock clock, string source)
+    {
+        var interval = harness.OutboxOptions.PollingInterval;
+        var half = interval / 2;
+        for (var i = 0; i < 3; i++)
+        {
+            await Eventually(() => clock.ArmedTimers == 1 && sut.CompletedRounds == sut.Rounds, $"{source}: waiting out its interval");
+            var rounds = sut.Rounds;
+            await Task.Delay(TimeSpan.FromMilliseconds(50));
+            sut.Rounds.ShouldBe(rounds, $"{source}: nothing is read while the clock stands still");
+
+            clock.Advance(half);
+            await Task.Delay(TimeSpan.FromMilliseconds(50));
+            sut.Rounds.ShouldBe(rounds, $"{source}: nothing is read before its interval");
+
+            clock.Advance(interval - half);
+            await Eventually(() => sut.Rounds == rounds + 1, $"{source}: read once its interval has passed");
+        }
     }
 
     /// <summary>

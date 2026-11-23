@@ -96,6 +96,13 @@ internal sealed class StoreInstanceReconciler
     /// </summary>
     internal int CompletedRounds => Volatile.Read(ref _completedRounds);
 
+    /// <summary>Gets or sets the count of changed tokens in a row, for tests: it saturates, never wraps.</summary>
+    internal int ChangedTokensInARow
+    {
+        get => _changedTokensInARow;
+        set => _changedTokensInARow = value;
+    }
+
     /// <summary>Reconciles until the host stops, then waits for every instance's loops to end.</summary>
     /// <param name="stoppingToken">The host's token.</param>
     /// <returns>A task that completes once every instance's loops have ended.</returns>
@@ -213,14 +220,22 @@ internal sealed class StoreInstanceReconciler
             // A token that changed before the registration — its source cancelled, maybe disposed, in
             // between — may never call back: the next round takes the new one, at once. Another changed
             // token straight after, the same or a new one, is a source not replacing it: from then on
-            // each is read one polling interval later, never in a loop. Only a live token resets this.
+            // each is read one polling interval later, never in a loop. Only a live token resets this: a
+            // round with no watchable token (none raising callbacks, or a faulty one) leaves the count as
+            // it was, so a changed token right after such a round is read one polling interval late.
             if (!token.HasChanged)
             {
                 _changedTokensInARow = 0;
                 return true;
             }
 
-            if (++_changedTokensInARow > 1)
+            // Saturated, never wrapped: a wrap would read the source in a loop again.
+            if (_changedTokensInARow < int.MaxValue)
+            {
+                _changedTokensInARow++;
+            }
+
+            if (_changedTokensInARow > 1)
             {
                 registration.Dispose();
                 registration = null;

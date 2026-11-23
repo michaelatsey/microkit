@@ -148,8 +148,9 @@ internal sealed class StoreInstanceRegistry
             return;
         }
 
-        var now = _timeProvider.GetUtcNow();
-        var remaining = partition.WaitDeadline(now + _firstRoundWait) - now;
+        // Monotonic: a step of the wall clock neither stretches nor ends the wait.
+        var started = partition.WaitStarted(_timeProvider.GetTimestamp());
+        var remaining = _firstRoundWait - _timeProvider.GetElapsedTime(started);
         if (remaining <= TimeSpan.Zero)
         {
             return;
@@ -219,15 +220,15 @@ internal sealed class StoreInstanceRegistry
 
         public int State => Volatile.Read(ref _state);
 
-        private long _waitDeadline;
+        private long _waitStarted = long.MinValue;
 
         public TaskCompletionSource FirstRound { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
 
-        /// <summary>The end of the deliveries' wait for a first snapshot, set by the first of them.</summary>
-        public DateTimeOffset WaitDeadline(DateTimeOffset proposed)
+        /// <summary>The timestamp the deliveries' wait for a first snapshot began, set by the first of them.</summary>
+        public long WaitStarted(long timestamp)
         {
-            var set = Interlocked.CompareExchange(ref _waitDeadline, proposed.UtcTicks, 0);
-            return set == 0 ? proposed : new DateTimeOffset(set, TimeSpan.Zero);
+            var set = Interlocked.CompareExchange(ref _waitStarted, timestamp, long.MinValue);
+            return set == long.MinValue ? timestamp : set;
         }
 
         public bool Refused => State == Failed;

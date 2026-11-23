@@ -94,7 +94,8 @@ internal sealed class InstanceHarness : IDisposable
         return state;
     }
 
-    public StoreInstanceReconciler Reconciler(Func<StoreInstanceState, CancellationToken, Task> runLoops, ILogger? logger = null)
+    public StoreInstanceReconciler Reconciler(
+        Func<StoreInstanceState, CancellationToken, Task> runLoops, ILogger? logger = null, TimeProvider? timeProvider = null)
         => new(
             Store,
             Registry,
@@ -104,7 +105,7 @@ internal sealed class InstanceHarness : IDisposable
             InstanceOptions,
             Gate,
             runLoops,
-            TimeProvider.System,
+            timeProvider ?? TimeProvider.System,
             logger ?? NullLogger.Instance);
 
     public void Dispose()
@@ -249,4 +250,54 @@ internal sealed class EventLog<T> : ILogger<T>
         Exception? exception,
         Func<TState, Exception?, string> formatter)
         => _counts.AddOrUpdate(eventId.Id, 1, static (_, n) => n + 1);
+}
+
+/// <summary>
+/// A fake clock whose wall clock can be stepped apart from its timestamps, and which counts the timers
+/// armed on it: a test knows when the code under test waits on it.
+/// </summary>
+internal sealed class TestClock : Microsoft.Extensions.Time.Testing.FakeTimeProvider
+{
+    private int _armed;
+
+    /// <summary>Gets or sets a step of the wall clock alone: <see cref="GetTimestamp"/> does not see it.</summary>
+    public TimeSpan WallStep { get; set; }
+
+    /// <summary>Gets the number of timers created and not yet disposed.</summary>
+    public int ArmedTimers => Volatile.Read(ref _armed);
+
+    public override DateTimeOffset GetUtcNow() => base.GetUtcNow() + WallStep;
+
+    // FakeTimeProvider derives its timestamps from GetUtcNow: the wall step is taken out again.
+    public override long GetTimestamp()
+        => base.GetTimestamp() - (long)(WallStep.Ticks * ((double)TimestampFrequency / TimeSpan.TicksPerSecond));
+
+    public override ITimer CreateTimer(TimerCallback callback, object? state, TimeSpan dueTime, TimeSpan period)
+    {
+        Interlocked.Increment(ref _armed);
+        return new Armed(base.CreateTimer(callback, state, dueTime, period), this);
+    }
+
+    private sealed class Armed(ITimer inner, TestClock owner) : ITimer
+    {
+        private int _disposed;
+
+        public bool Change(TimeSpan dueTime, TimeSpan period) => inner.Change(dueTime, period);
+
+        public void Dispose()
+        {
+            if (Interlocked.Exchange(ref _disposed, 1) == 0)
+            {
+                Interlocked.Decrement(ref owner._armed);
+            }
+
+            inner.Dispose();
+        }
+
+        public ValueTask DisposeAsync()
+        {
+            Dispose();
+            return ValueTask.CompletedTask;
+        }
+    }
 }

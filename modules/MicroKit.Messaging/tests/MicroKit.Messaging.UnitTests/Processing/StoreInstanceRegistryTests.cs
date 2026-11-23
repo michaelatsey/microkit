@@ -69,6 +69,24 @@ public sealed class StoreInstanceRegistryTests
             .ShouldBeTrue("the bound is the store's, not each delivery's: a catalog still down costs every delivery nothing more");
     }
 
+    [Fact]
+    public async Task AWallClockStep_DoesNotMoveTheDeadline()
+    {
+        using var harness = new InstanceHarness();
+        var clock = new TestClock();
+        var registry = new StoreInstanceRegistry(
+            harness.Composition, harness.Provider, NullLogger<StoreInstanceRegistry>.Instance, harness.OutboxOptions, clock);
+        var first = registry.WaitForFirstRoundAsync(InstanceHarness.Store).AsTask();
+
+        clock.WallStep = TimeSpan.FromHours(1);   // an NTP correction forward
+        var second = registry.WaitForFirstRoundAsync(InstanceHarness.Store).AsTask();
+        second.IsCompleted.ShouldBeFalse("a step of the wall clock does not end the wait");
+
+        clock.WallStep = TimeSpan.FromHours(-1);  // and back
+        clock.Advance(harness.OutboxOptions.PollingInterval);
+        await Task.WhenAll(first, second).WaitAsync(TimeSpan.FromSeconds(5));   // nor stretch it
+    }
+
     private static MessageContext Context() => new()
     {
         MessageId = MessageId.New(),
