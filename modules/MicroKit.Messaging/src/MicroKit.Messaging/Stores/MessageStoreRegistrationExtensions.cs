@@ -22,7 +22,9 @@ public static class MessageStoreRegistrationExtensions
     /// With at least one store configured, a publication is enlisted in a store's outbox rather
     /// than sent: the store is chosen per publication from the scope (see
     /// <see cref="PublishOptions.Store"/>). The engine — one outbox loop, one inbox loop and their
-    /// two retention loops per store — is registered once, whatever the number of stores.
+    /// two retention loops per store, or per instance of a partitioned store
+    /// (<see cref="MessageStoreBuilder.PartitionedBy{TSource, TInitializer}"/>) — is registered once,
+    /// whatever the number of stores.
     /// </para>
     /// <para>
     /// The services the engine resolves keyed by <paramref name="key"/> are validated at host

@@ -1,5 +1,34 @@
 # Changelog — MicroKit.Messaging
 
+## [Unreleased] — the engine drains a dynamic set of store instances (#191)
+
+### Added
+
+- **Partitioned stores.** `MessageStoreBuilder.PartitionedBy<TSource, TInitializer>()` — and
+  `EntityFrameworkOutboxBuilder.PartitionedBy<TSource, TInitializer>()` — makes a store partitioned: the
+  engine drains the instances (`MessageStoreInstance`) its source supplies at runtime, a database per
+  tenant or per shard, each with its own four loops and its own back-off. A store configured without it
+  is single and drains as before: same keys, same tags, same logs.
+- **`IMessageStoreInstanceSource`**: `GetInstances()`, `GetChangeToken()` and `TryGetInstance(MessageContext, out
+  MessageStoreInstance?)` — a snapshot, a change token, and a delivery's instance. The engine reconciles
+  from the snapshot on each change; a snapshot that throws or names an instance twice is logged (1407,
+  1408) and ignored.
+- **`IMessageStoreInstanceInitializer`**: prepares every scope the engine opens for an instance — loops,
+  dispatch, deliveries, attempts — before its `DbContext` is built, and before the
+  `IMessageScopeInitializer`s.
+- **`MessageStoreBuilder.AddInstanceCheck`**: a check a partitioned store runs once, in the prepared scope
+  of its first instance. The EF store's model check runs there for a partitioned store; problems are
+  logged at Critical (1409) and no instance of the store drains until a restart.
+- **`StoreInstanceOptions`** (`MessagingOptions.Instances`, section `MicroKit:Messaging:Instances`):
+  `MaxConcurrentBatches` (16), one FIFO gate bounding the outbox and inbox batches in progress across
+  every instance — a single store never enters it; `TagInstances` (off), adding `store.instance` to every
+  instrument tagged `store.key`. Off, a partitioned store reports one series per `store.key` and
+  `endpoint`, its back-off counters summed over its instances.
+- Events 1404–1416: an instance started, removed, released; its source failed or named an instance twice;
+  its store refused at its check; a delivery mapped to no instance drained here (a counted failure, never a
+  pause); an instance's loop failures, each with `{Store}` and `{Instance}`; an instance that could not
+  start (1415); and a delivery its source could not map (1416).
+
 ## [Unreleased] — an endpoint's or a tenant's outage is observed through metrics (#126)
 
 ### Added

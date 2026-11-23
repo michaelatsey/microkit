@@ -2,6 +2,7 @@ namespace MicroKit.Messaging.Local;
 
 using System.Runtime.ExceptionServices;
 using MicroKit.Messaging.Bus;
+using MicroKit.Messaging.Stores;
 
 /// <summary>
 /// Dispatches a local outbox row (<see cref="OutboxMessage.LocalEndpoint"/>): delivers it through the
@@ -21,13 +22,20 @@ using MicroKit.Messaging.Bus;
 /// inbox row could hold retries the row — the consumers already done skip on their rows.
 /// </para>
 /// </remarks>
-internal sealed class LocalOutboxDispatcher(MessageReceivePipeline pipeline) : IOutboxDispatcher
+/// <param name="pipeline">The receive pipeline.</param>
+/// <param name="holder">
+/// The dispatch scope's store holder: for a row of an instance of a partitioned store (#191), its
+/// consumers of that store run against that instance. Null only for a dispatcher built by hand.
+/// </param>
+internal sealed class LocalOutboxDispatcher(MessageReceivePipeline pipeline, DeliveryStoreHolder? holder = null) : IOutboxDispatcher
 {
     /// <inheritdoc />
     public async ValueTask DispatchAsync(OutboxMessage message, CancellationToken ct = default)
     {
         ArgumentNullException.ThrowIfNull(message);
-        var outcome = await pipeline.DeliverLocalAsync(message, consumerType: null, ct).ConfigureAwait(false);
+        var outcome = await pipeline
+            .DeliverLocalAsync(message, consumerType: null, origin: holder?.Instance, ct: ct)
+            .ConfigureAwait(false);
 
         switch (outcome.Verdict)
         {

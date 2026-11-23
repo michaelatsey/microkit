@@ -327,6 +327,159 @@ services.AddMicroKitMessaging(bus =>
 context must be saved by the same unit of work. A notification bound to `BillingDbContext`, raised
 by a command whose unit of work saves `OrdersDbContext`, is never saved — and is reported (4000).
 
+### Partitioned stores — a database per tenant (#191)
+
+A store is what the host configures: one `DbContext` type, its key, its services. A **partitioned**
+store keeps all of that and adds what changes at runtime: its **instances**, the databases the engine
+drains — one per tenant, one per shard. Each instance gets what a store gets: its four loops, its own
+back-off, its own metric state. A database that is down backs off alone, and a store that is single —
+the default — drains exactly as it always has.
+
+A partitioned store is configured with two types. The **source** says which instances exist, and
+signals a change; the **initializer** prepares each scope the engine opens for an instance — before
+its `DbContext` is built — typically by pointing the scope's connection at the instance's database:
+
+<!-- snippet: partitioned-source -->
+```csharp
+// Which tenants have a database, and where. Declare a tenant once its database is migrated:
+// the engine creates no table.
+public sealed class TenantDatabases : IMessageStoreInstanceSource, IDisposable
+{
+    private readonly Lock _lock = new();
+    private readonly Dictionary<string, string> _databases = new(StringComparer.Ordinal);
+    private MessageStoreInstance[] _instances = [];
+    private CancellationTokenSource _changed = new();
+
+    public void Add(string tenant, string connectionString)
+    {
+        CancellationTokenSource changed;
+        lock (_lock)
+        {
+            _databases[tenant] = connectionString;
+            _instances = [.. _databases.Keys.Select(static id => new MessageStoreInstance(id))];
+            (changed, _changed) = (_changed, new CancellationTokenSource());
+        }
+
+        changed.Cancel();   // the engine reads the new snapshot
+        changed.Dispose();
+    }
+
+    public string ConnectionStringOf(string tenant)
+    {
+        lock (_lock)
+        {
+            return _databases[tenant];
+        }
+    }
+
+    public IReadOnlyCollection<MessageStoreInstance> GetInstances()
+    {
+        lock (_lock)
+        {
+            return _instances;
+        }
+    }
+
+    public IChangeToken GetChangeToken()
+    {
+        lock (_lock)
+        {
+            return new CancellationChangeToken(_changed.Token);
+        }
+    }
+
+    public void Dispose() => _changed.Dispose();
+
+    // A delivery's instance: the database of its tenant.
+    public bool TryGetInstance(MessageContext context, [NotNullWhen(true)] out MessageStoreInstance? instance)
+    {
+        instance = context.TenantId is { } tenant ? new MessageStoreInstance(tenant) : null;
+        return instance is not null;
+    }
+}
+
+// The scope's connection, set before its DbContext is built.
+public sealed class TenantConnection
+{
+    public string? ConnectionString { get; set; }
+}
+
+public sealed class TenantDatabaseInitializer(TenantConnection connection, TenantDatabases databases)
+    : IMessageStoreInstanceInitializer
+{
+    public ValueTask InitializeAsync(MessageStoreInstance instance, IServiceProvider services, CancellationToken ct = default)
+    {
+        connection.ConnectionString = databases.ConnectionStringOf(instance.Id);
+        return ValueTask.CompletedTask;
+    }
+}
+```
+
+<!-- snippet: partitioned-composition -->
+```csharp
+services.AddScoped<TenantConnection>();
+services.AddDbContext<AppDbContext>((sp, o) => o.UseNpgsql(
+    sp.GetRequiredService<TenantConnection>().ConnectionString
+    ?? throw new InvalidOperationException("No tenant database in this scope.")));
+
+services.AddMicroKitMessaging(bus =>
+{
+    bus.ServiceName = "shop.orders";
+    bus.UseEntityFrameworkOutbox<AppDbContext>(store => store
+        .PartitionedBy<TenantDatabases, TenantDatabaseInitializer>());
+});
+```
+
+`PartitionedBy` registers the source as a singleton of its own type — the instance the host adds
+tenants to, and the one the initializer receives — unless the host registered one first. What the
+host's own code publishes is enlisted in the context of its scope, as for any store: the host points
+that scope at the tenant's database the same way (#190 will do it from the tenant).
+
+**What the engine does with the instances.**
+
+- **Every scope of an instance is prepared for it** — the loops', each outbox row's dispatch, each
+  delivery's and each attempt's — and, in a message scope, before the `IMessageScopeInitializer`s. A
+  local message is delivered against the instance whose outbox row it is; a transport delivery against
+  the instance `TryGetInstance` maps it to; a retry against the instance whose loop claimed it.
+- **A delivery that maps to no instance drained here** — no tenant, a tenant with no database yet, one
+  removed — is a counted failure the transport redelivers, and dead-letters at its limit (1410). It
+  never pauses the endpoint, which would hold every other tenant behind it. A delivery that arrives
+  before the store's first snapshot is applied — a transport that starts consuming before the engine, a
+  first read of the source that failed — waits for that snapshot instead, until one
+  `Outbox.PollingInterval` (5 s by default) after the store's first such wait began; later deliveries
+  do not wait, and each maps as the drained instances stand. A failed read is retried on
+  `Outbox.MaxPollingInterval`, change or not. A
+  `TryGetInstance` that throws, or answers `true` with no instance, maps nothing (1416).
+- **Added and removed at runtime.** A new snapshot is read on each change of the token; a missed or
+  merged signal loses nothing, and a snapshot that throws, or names one instance twice, is logged and
+  ignored. A source that hands out already changed tokens one after another — the same or new ones — is
+  read once per `Outbox.PollingInterval` until it hands out a live token, never in a loop. An added
+  instance starts draining (1404). A removed one settles the batches it holds —
+  never cancels them — then stops claiming (1405); its rows stay where they are, and its state and
+  series are released once its loops have ended (1406). Re-added, it drains again.
+- **One gate for every instance's batches.** `StoreInstanceOptions.MaxConcurrentBatches` (section
+  `MicroKit:Messaging:Instances`, 16 by default) bounds the outbox and inbox batches in progress — from
+  claim to settlement — across every instance of every partitioned store, and admits them in arrival
+  order, so a tenant with a large backlog cannot starve another. A single store never waits on it. It
+  bounds batches, not connections: a database driver keeps one pool per connection string, and an idle
+  connection stays pooled (Npgsql: `Connection Idle Lifetime`, 300 s), so fifty databases each keeping
+  a few idle connections exceed PostgreSQL's default `max_connections` of 100 whatever this value. Size
+  the pools (`Maximum Pool Size`, `Connection Idle Lifetime`) or put a pooler in front of the server.
+- **Checked at the first instance, not at start.** A tenant's context often cannot be built outside a
+  tenant, so a partitioned store's model check runs once, in the prepared scope of its first instance.
+  A model without the messaging entities is logged at `Critical` (1409): no instance of that store
+  drains until a fix is deployed and the host restarted, and other stores drain. A context that cannot
+  be built for one instance — its initializer or its check throws — backs that instance off alone
+  (1414).
+- **Logs.** An instance's loops log 1411–1414, with `{Store}` and `{Instance}`; every iteration runs in
+  a logging scope carrying both, so the events of its batch name the database.
+
+**Out of scope here, and why.** No table is created and no migration runs: hosts own their
+migrations, and a source declares a database once it is provisioned. With several hosts, every host
+drains every instance — the atomic claim keeps that correct — and one engine instance per store, with
+the lease that would move it between hosts, is #214. A commit does not wake its instance's loop (#215).
+The MicroKit.Tenancy adapter and its source are #189; resolving a tenant's connection is #190.
+
 ### What the inbox guarantees
 
 With a store, each handler runs under its inbox row, keyed (`MessageId`, consumer type). The
@@ -800,6 +953,13 @@ level: the back-off counters count each endpoint and tenant that has not recover
 `store.key` (the store's `MessageStoreKey`) and `endpoint` (`transport` or `local`), never a tenant: a
 tenant's cardinality is unbounded, and events 1011 and 1009 name it.
 
+**A partitioned store's instances** are not tagged by default: with a database per tenant their count is
+the tenant count. `store.key` stays the store's key, and a partitioned store reports one series per
+`store.key` and `endpoint`, its back-off counters summed over its instances — zero while it has none.
+`StoreInstanceOptions.TagInstances` (`MicroKit:Messaging:Instances:TagInstances`) adds `store.instance`
+to every instrument tagged `store.key`; a removed instance's series stop reporting once its loops have
+ended. A single store's series never carry it.
+
 | Instrument | Kind, unit | What it is | Alert |
 |---|---|---|---|
 | `microkit.outbox.messages.settled` | counter, `{message}`, tag `outcome` | The rows a batch settled: `published`, `retry`, `dead_letter`, `deferred`. Counted at least once: a partial settlement (1007) counts its whole batch, whose written rows never come back; a row whose lease was lost is counted under this processor's verdict and again under the verdict of whoever settles it, which may differ — `dead_letter` included. A settlement that wrote nothing, or threw, counts nothing: what it committed is unknown, its rows that come back are counted then, and a commit that landed without the store being able to verify it is not counted. A released row (host stop, configuration fault) is never counted | a `dead_letter` rate above 0 |
@@ -835,15 +995,24 @@ tenant still failing can read 0 for the batch that prunes it and blocks it again
 its own view, and one that recorded the last failure, at the ceiling, and has nothing left to send —
 another instance drained the rows — holds 1 for up to two ceilings plus `MaxPollingInterval` after that
 failure (11 minutes with the defaults). Alert on the raw value held longer than that:
-`microkit_outbox_endpoints_backoff > 0` for 15 minutes with the defaults. An outbox store is reported
-from its first cycle. An inbox store is reported once its back-off state is created, by the first
+`microkit_outbox_endpoints_backoff > 0` for 15 minutes with the defaults. A single store's outbox is
+reported from its first cycle. A single store's inbox is reported once its back-off state is created, by the first
 `InboxTenantBackoff.For` call for it, which a local delivery never makes: its retry loop's first cycle;
 a dependency outage, or the store unreachable, met by one of its transport deliveries; or, while some
 store's inbox is not quiet — a tenant in back-off, a probe pending or a suspicion standing — one of its
 transport deliveries with a tenant that passed the dedup read, or a transport success. So it can read 0
-with no outage of its own. Every known store reports, zeros included, so an alert resolves; a store none
-of these reaches reports nothing (event 1400 covers a processor that never activates). A configuration
-fault needs no metric: it is logged at `Critical` on every cycle (1006, 1402).
+with no outage of its own. A single store none of these reaches reports nothing (event 1400 covers a
+processor that never activates); once reported, it reports zeros included, so an alert resolves. A
+partitioned store whose instances are not tagged is reported from the start, summed over its instances
+and at zero while it has none, whether or not a processor of it activates (1409 reports a store its
+check refused, 1411 and 1414 an instance's loop that cannot activate its processor or prepare its scope,
+1415 an instance that cannot start). With `TagInstances` on, each instance is reported from the start of
+its draining, and a removed instance's series stops being reported once its loops have ended.
+OpenTelemetry .NET 1.15.1 or later in the host exports only the series an observable instrument's
+callback reported in the current collection, so that series goes stale and an alert on it resolves; an
+earlier version keeps exporting its last value, and such an alert does not resolve. A configuration
+fault needs no metric: it is logged at `Critical` on every cycle (1006, 1402; 1413 for an instance's
+loop).
 
 An outage with no endpoint or tenant to hold in back-off shows on no counter: a store's database
 unreachable (the loop backs off, 1401), and an inbox dependency down for a message with no tenant (a
@@ -860,14 +1029,17 @@ Development status.
 **Stable.** The bus and its in-memory transport. The outbox: atomic batch claim with an ownership
 token, buffered outcomes settled in one write, full-jitter retry, dead-lettering, retention. The
 inbox guard on one receive pipeline for transport deliveries, local deliveries and retries. The EF
-Core store, several stores per host, one loop per store. The local endpoint and the MicroKit.MediatR
+Core store, several stores per host, one loop per store; partitioned stores, their instances
+added and removed at runtime, one loop per instance. The local endpoint and the MicroKit.MediatR
 bridge.
 
 **Not shipping yet.** No broker `IMessageTransport`: no broker provider exists yet. Both seams exist and are proven end to end, so a provider supplies a `SendAsync` and
 drives a consume loop into `IEnvelopeReceiver`, and writes no messaging machinery of its own.
 
 **Known defects.**
-- The store set is read once, at start: a store per tenant database is #191.
+- With several hosts, each drains every instance of a partitioned store — correct through the atomic
+  claim, but every host claims; one engine instance per store is #214. A commit does not wake its
+  loop (#215).
 
 **Tested providers.** PostgreSQL (through Testcontainers) and SQLite. The outbox schema no longer
 carries the replay index that excluded SQL Server, but SQL Server is not tested.

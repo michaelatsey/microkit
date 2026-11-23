@@ -11,12 +11,13 @@ public sealed partial class ReadmeSnippetTests
 {
     private const string UnitTestsSnippets = "tests/MicroKit.Messaging.UnitTests/Readme/ReadmeSnippets.cs";
     private const string DurableSnippets = "tests/MicroKit.Messaging.MediatR.IntegrationTests/Readme/ReadmeSnippets.cs";
+    private const string PartitionedSnippets = "tests/MicroKit.Messaging.IntegrationTests/Readme/ReadmeSnippets.cs";
 
     [Fact]
     public void EveryMarkedReadmeBlock_HasARegion_AndEveryRegionIsInTheReadme()
     {
         var blocks = ReadmeBlocks();
-        var regions = Regions(UnitTestsSnippets).Concat(Regions(DurableSnippets)).ToDictionary();
+        var regions = Regions(UnitTestsSnippets).Concat(Regions(DurableSnippets)).Concat(Regions(PartitionedSnippets)).ToDictionary();
 
         blocks.ShouldNotBeEmpty("the README marks its compiled examples");
         blocks.Keys.Order(StringComparer.Ordinal).ShouldBe(
@@ -28,7 +29,7 @@ public sealed partial class ReadmeSnippetTests
     public void EveryMarkedReadmeBlock_EqualsItsRegion()
     {
         var blocks = ReadmeBlocks();
-        var regions = Regions(UnitTestsSnippets).Concat(Regions(DurableSnippets)).ToDictionary();
+        var regions = Regions(UnitTestsSnippets).Concat(Regions(DurableSnippets)).Concat(Regions(PartitionedSnippets)).ToDictionary();
 
         foreach (var (name, code) in blocks)
         {

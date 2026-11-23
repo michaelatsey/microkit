@@ -112,6 +112,15 @@ internal sealed class MessagingOptionsValidator(TimeProvider timeProvider) : IVa
             Retention(failures, $"{p}:RetentionDays", i.RetentionDays, now);
         }
 
+        if (options.Instances is null)
+        {
+            failures.Add($"{Section}:Instances is null. Leave it unset to keep the defaults.");
+        }
+        else
+        {
+            AtLeastOne(failures, $"{Section}:Instances:MaxConcurrentBatches", options.Instances.MaxConcurrentBatches);
+        }
+
         return failures.Count == 0 ? ValidateOptionsResult.Success : ValidateOptionsResult.Fail(failures);
     }
 

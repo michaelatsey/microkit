@@ -12,13 +12,19 @@ namespace MicroKit.Messaging.Processing;
 /// database unreachable, or its retention store failing to activate (event 1400) — is logged and
 /// retried at the next interval; housekeeping never stops the host or another store.
 /// </para>
+/// <para>
+/// An instance's loop (#191) prepares each pass's scope for its instance, passes no gate, logs its
+/// failures inside a logging scope naming the store and the instance, and ends once the instance is
+/// removed.
+/// </para>
 /// </remarks>
 internal sealed class InboxRetentionLoop(
     IServiceScopeFactory scopeFactory,
     MessageStoreKey store,
     InboxProcessorOptions options,
     TimeProvider timeProvider,
-    ILogger<InboxRetentionLoop> logger)
+    ILogger<InboxRetentionLoop> logger,
+    StoreInstanceState? instance = null)
 {
     private const string Loop = "inbox retention";
 
@@ -39,6 +45,27 @@ internal sealed class InboxRetentionLoop(
                 var scope = scopeFactory.CreateAsyncScope();
                 await using (scope.ConfigureAwait(false))
                 {
+                    using var instanceScope = instance is null ? null : logger.BeginScope(instance.LogScope);
+                    if (instance is not null)
+                    {
+                        bool ready;
+                        try
+                        {
+                            ready = await instance.PrepareLoopScopeAsync(scope.ServiceProvider, ct).ConfigureAwait(false);
+                        }
+                        catch (Exception ex) when (!HostStop.Is(ex, ct))
+                        {
+                            GuardedLoop.Log(() => StoreInstanceLogs.PreparationFailed(
+                                logger, ex, Loop, store.Value, instance.Instance.Id, options.RetentionInterval));
+                            return options.RetentionInterval;
+                        }
+
+                        if (!ready)
+                        {
+                            return null;
+                        }
+                    }
+
                     IInboxRetentionStore retention;
                     try
                     {
@@ -46,8 +73,7 @@ internal sealed class InboxRetentionLoop(
                     }
                     catch (Exception ex) when (!HostStop.Is(ex, ct))
                     {
-                        GuardedLoop.Log(() => StoreEngineLogs.ActivationFailed(
-                            logger, ex, Loop, store.Value, nameof(IInboxRetentionStore), options.RetentionInterval));
+                        GuardedLoop.Log(() => ActivationFailed(ex));
                         return options.RetentionInterval;
                     }
 
@@ -59,11 +85,29 @@ internal sealed class InboxRetentionLoop(
             },
             ex =>
             {
-                GuardedLoop.Log(() => InboxProcessorLogs.RetentionFailed(logger, ex, options.RetentionInterval));
+                GuardedLoop.Log(() =>
+                {
+                    using var instanceScope = instance is null ? null : logger.BeginScope(instance.LogScope);
+                    InboxProcessorLogs.RetentionFailed(logger, ex, options.RetentionInterval);
+                });
                 return options.RetentionInterval;
             },
             // The interval runs on real time, as it always has; the cutoff reads the injected clock.
             TimeProvider.System,
-            stoppingToken);
+            stoppingToken,
+            instance?.Stopping ?? default);
+    }
+
+    private void ActivationFailed(Exception ex)
+    {
+        if (instance is null)
+        {
+            StoreEngineLogs.ActivationFailed(logger, ex, Loop, store.Value, nameof(IInboxRetentionStore), options.RetentionInterval);
+        }
+        else
+        {
+            StoreInstanceLogs.ActivationFailed(
+                logger, ex, Loop, store.Value, instance.Instance.Id, nameof(IInboxRetentionStore), options.RetentionInterval);
+        }
     }
 }

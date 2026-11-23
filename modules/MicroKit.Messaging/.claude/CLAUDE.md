@@ -6,7 +6,7 @@ A message bus — publish, consume, retry — with a transactional outbox and an
 **opt-in durability**, and a broker-agnostic transport seam. The bus works with no database; a
 **store** (the outbox and the inbox of one `DbContext`) makes it durable. The user-facing model is
 `README.md`; the decisions are `.claude-context/context/microkit-messaging-architectural-decisions.md`
-(ADR-MSG-020 is the current model, #188).
+(ADR-MSG-020 is the current model, #188; ADR-MSG-021 adds partitioned stores, #191).
 
 ```
 IMessageBus.PublishAsync ──► no store: IMessageTransport (#186)
@@ -103,7 +103,7 @@ MicroKit.Messaging.MediatR           ← MicroKit.Messaging, MicroKit.MediatR, M
 2. **The bus never saves.** With a store, a publication is enlisted in the store's `DbContext` of the
    scope; the caller's `SaveChanges` — or, inside a delivery, the engine's — commits it.
 3. **The store instance and key come from the scope**, never from a type fixed at registration
-   (#191 relies on it). Store resolution follows ADR-MSG-020 §3 exactly.
+   (partitioned stores rely on it, ADR-MSG-021). Store resolution follows ADR-MSG-020 §3 exactly.
 4. **One inbox row per (MessageId, ConsumerType)**, the unique index the sole authority. An existing
    row skips a new delivery; an attempt runs as one operation of the store's execution strategy; an
    unknown commit is verified by reading the row with no tracking; a failure is written on its row in
@@ -111,12 +111,16 @@ MicroKit.Messaging.MediatR           ← MicroKit.Messaging, MicroKit.MediatR, M
 5. **Every terminal write filters on `ClaimToken`**, and `ClaimToken` is an EF concurrency token on
    the inbox. A lost claim writes zero rows and counts no attempt.
 6. **A host stop is never a failure**: claimed rows are released with their attempt count unchanged.
-   Every long-running loop runs under `GuardedLoop`: only a host stop ends it — an
+   Every long-running loop runs under `GuardedLoop`: only a host stop ends it — or, for an
+   instance's loop, its instance's removal, read between batches (ADR-MSG-021) — an
    `ObjectDisposedException` while the host runs, a throwing logger or a configuration fault (1402)
    is a failed cycle with back-off.
 7. **Activation is not registration**: a missing registration fails at start; a registered service
    whose constructor throws is logged as an activation failure (1400), with back-off.
-8. **One scope per handler**, never shared; one loop per store, each with its own back-off.
+8. **One scope per handler**, never shared; one loop per store, or per instance of a partitioned
+   store, each with its own back-off. A partitioned store's instance scopes are prepared by its
+   `IMessageStoreInstanceInitializer` before anything is resolved; its instances' batches pass one FIFO
+   gate, which a single store never enters.
 9. **`TenantId` is nullable and travels on the message**, never read from an HTTP context.
 10. **Causation is derived** (the message being handled), correlation is copied.
 11. Code: `sealed record` for values/options/events, `sealed class` for services; `ValueTask` and
@@ -143,5 +147,6 @@ PostgreSQL suites skip on a machine with no Docker.
 
 ## Known defects and owed work
 
-- The store set is static; a store per tenant database is #191.
+- Several hosts each drain every instance of a partitioned store (correct through the atomic claim);
+  one engine instance per store is #214, waking a loop on commit #215.
 - Versioning and releases: ADR-GLOBAL-002.

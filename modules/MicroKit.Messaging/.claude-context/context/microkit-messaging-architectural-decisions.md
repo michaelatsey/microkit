@@ -2053,7 +2053,7 @@ specialist review's documentation edits, with the same result and no compiled in
 **Status:** Accepted
 **Date:** 2026-11-21
 **Issue:** #188
-**Supersedes:** ADR-MSG-013. **Supersedes (in part):** ADR-MSG-017 (the transaction model), ADR-MSG-018 §4, ADR-MSG-019 §1 and §7. **Amends:** ADR-MSG-016.
+**Supersedes:** ADR-MSG-013. **Supersedes (in part):** ADR-MSG-017 (the transaction model), ADR-MSG-018 §4, ADR-MSG-019 §1 and §7. **Amends:** ADR-MSG-016. **Amended by:** ADR-MSG-021 (§2, §8).
 
 ### Context
 
@@ -2130,3 +2130,91 @@ per-handler inbox, so a replay re-ran every handler, and cascade events were sta
   deduplicate per message and endpoint; this module keys the inbox per handler, so one handler that
   fails is retried alone while the others of the message are done.
 
+---
+
+## ADR-MSG-021: Partitioned Stores — the Engine Drains Store Instances Supplied at Runtime
+
+**Status:** Accepted
+**Date:** 2026-11-22
+**Issue:** #191
+**Amends:** ADR-MSG-020 §2 (the store set) and §8 (one engine loop per store).
+
+### Context
+
+A store (ADR-MSG-020) is the outbox and the inbox of one `DbContext`, fixed when the host starts. A
+database-per-tenant application — or any topology with several databases behind one model, shards
+included — had no outbox drain for its tenant databases: nothing iterated them, added one at runtime,
+isolated their failures or shared work fairly between them. `IMessageStoreSet` had three readers with
+two meanings: what is drained (the engine) and what is configured (store resolution, handler binding,
+start checks, the MediatR bridge). A dynamic set read through it would make a host with a configured
+store look storeless whenever it had no database yet.
+
+### Decision
+
+1. **Store and store instance, kept apart.** A *store* is what a host configures — `AddMessageStore`,
+   its `MessageStoreKey`, its keyed services — static, fixed at start; `IMessageStoreSet` keeps that
+   meaning, and its readers are unchanged. A *store instance* (`MessageStoreInstance`) is a unit of
+   persistence the engine drains: one database of a store. A store is **single** — one instance, the
+   store itself: today's behaviour, keys, tags and log series — or **partitioned**
+   (`MessageStoreBuilder.PartitionedBy<TSource, TInitializer>()`), its instances supplied at runtime.
+   The SPI names no tenant, no `DbContext` and no technology.
+2. **The instance source** (`IMessageStoreInstanceSource`): a snapshot (`GetInstances()`) and a change
+   token (`GetChangeToken()`), the shape of ASP.NET Core's `EndpointDataSource` and of options
+   monitoring. The engine reconciles from the snapshot on each change, so a missed or coalesced signal
+   loses nothing; signals are coalesced in a bounded channel of one that drops a write while one is
+   pending, so the token's callback, which runs in the source's code, never throws. A snapshot that
+   throws or holds one id twice is logged (1407, 1408) and changes nothing.
+3. **The instance scope.** Every scope opened for an instance — the four loops' scopes, the scope each
+   outbox row is dispatched in, a delivery's and each attempt's — names the store and the instance,
+   then runs the store's `IMessageStoreInstanceInitializer`, before any of its services is resolved; in
+   a message scope, before the `IMessageScopeInitializer`s. Loop scopes run the instance initializer
+   only. The processors, the guard and the back-off state of the scope are the instance's.
+4. **One back-off state per instance, deliveries included.** A delivery guarded by a partitioned store
+   is mapped to its instance — a local row's own instance, else the source's `TryGetInstance` — so its
+   back-off decision and the retry loop of the instance that holds its row read one state. The lookup
+   never creates state: only the engine creates and releases an instance's. A delivery that maps to no
+   instance drained here is a counted failure (`DeliveryVerdict.Transient`, 1410), redelivered and
+   dead-lettered at the transport's limit, never a pause: pausing would hold every tenant of the
+   endpoint behind it, the stall #124 removed.
+5. **Lifecycle.** Added: its state is created and its four loops start (1404). Removed: each loop
+   settles the batch it holds — never cancelled — then stops claiming (1405); its state and metric
+   series are released once its loops have ended (1406). Re-added meanwhile, it starts again only then.
+   Host stop is unchanged. A removed instance's rows stay where they are.
+6. **One FIFO gate** (`StoreInstanceOptions.MaxConcurrentBatches`, 16) bounds the outbox and inbox
+   batches in progress, claim to settlement, across every instance of every partitioned store, and
+   admits waiters in arrival order: a released permit is handed to the oldest waiter, never to a
+   newcomer, so an instance with a large backlog cannot starve another. `SemaphoreSlim` documents no
+   waiter order; `ConcurrencyLimiter` does (`QueueProcessingOrder.OldestFirst`) but lives in a package
+   outside the shared framework. A release and a cancellation are arbitrated under the gate's lock by
+   the waiter's presence in the queue. **Single stores never enter the gate.** The gate bounds
+   batches, not connections: a host with a database per tenant sizes its pools or uses a pooler.
+7. **Start checks.** Single stores are checked at start as before. A partitioned store's instance
+   checks (`MessageStoreBuilder.AddInstanceCheck`; the EF model check) run once, in the prepared
+   scope of the first instance to start: problems are the store's — logged Critical (1409), no
+   instance of it drains until a restart, its deliveries get §4's verdict — and a throw is the
+   instance's, which backs off on its own loops while the check stays pending.
+8. **No store initializer.** No table is created, no migration runs: a source declares an instance once
+   its database is provisioned. Hosts own their migrations.
+9. **Metrics.** `store.key` stays the store's key on every instrument, bounded by the configured stores.
+   `StoreInstanceOptions.TagInstances` (off) adds `store.instance` to every instrument tagged
+   `store.key`; off, a partitioned store reports one series per (`store.key`, `endpoint`), its back-off
+   counters summed over its instances and zero while it has none. A single store's series are unchanged.
+
+Instance loops log their own events (1411–1414) with `{Store}` and `{Instance}`; 1400–1402 stay a
+single store's. Each iteration of an instance's loop runs in a logging scope carrying both, so a
+processor's events (1011, 2013, …) name the database that failed.
+
+### Consequences
+
+- `IMessageStoreSet` and its readers are unchanged; ADR-MSG-020 §2's "dynamic in #191" is this ADR,
+  and §8's "one loop per store" reads "per store or per instance".
+- Out of scope, each owned by an issue: one engine instance per store and the lease that would move
+  ownership between hosts (#214) — correctness rests on the atomic claim, as before; waking a loop on
+  commit (#215); the Tenancy adapter and its source (#189); tenant connection resolution (#190).
+- Prior art. Wolverine runs one durability agent per tenant database, assigned by its leader to one
+  node, discovers tenant databases from a master table or a custom source, routes by the envelope's
+  tenant, and creates the message tables itself
+  (<https://wolverinefx.net/guide/durability/postgresql.html>,
+  <https://wolverinefx.net/guide/durability/efcore/multi-tenancy.html>). This module keeps the source
+  and the routing, leaves assignment to #214, documents no table creation, and adds a FIFO bound
+  across databases that Wolverine does not document.

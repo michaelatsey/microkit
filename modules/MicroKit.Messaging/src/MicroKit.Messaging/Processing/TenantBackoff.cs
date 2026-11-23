@@ -27,7 +27,7 @@ namespace MicroKit.Messaging.Processing;
 /// <b>Bounded, and free when idle.</b> An entry leaves on its tenant's success, or once it has been
 /// expired for a whole ceiling (<see cref="Prune"/>), past which the curve starts over anyway. With no
 /// tenant in back-off, every check is one volatile read (<see cref="IsEmpty"/>, <see cref="IsQuiet"/>):
-/// no lock, no lookup, no allocation. Thread-safe: a store's inbox state is shared by its retry loop
+/// no lock, no lookup, no allocation. Thread-safe: a store's (or an instance's, #191) inbox state is shared by its retry loop
 /// and the transports' delivery threads.
 /// </para>
 /// </remarks>
@@ -35,7 +35,7 @@ internal sealed class TenantBackoff
 {
     private readonly TimeSpan _initial;
     private readonly TimeSpan _ceiling;
-    private readonly StrongBox<int>? _loud;
+    private StrongBox<int>? _loud;
     private readonly Lock _lock = new();
     private readonly Dictionary<string, Slot> _slots = new(StringComparer.Ordinal);
     private int _count;
@@ -48,7 +48,8 @@ internal sealed class TenantBackoff
     /// <param name="ceiling">The largest delay.</param>
     /// <param name="loud">
     /// Counts the instances of a group that are not quiet, so the group answers "nothing to do" with one
-    /// read whatever its size — the inbox's, one instance per store. Null for a standalone instance.
+    /// read whatever its size — the inbox's, one per single store and one per instance of a partitioned store
+    /// (#191), which leaves it through <see cref="Detach"/>. Null for a standalone instance.
     /// </param>
     public TenantBackoff(TimeSpan initial, TimeSpan ceiling, StrongBox<int>? loud = null)
     {
@@ -326,6 +327,23 @@ internal sealed class TenantBackoff
             }
 
             Refresh();
+        }
+    }
+
+    /// <summary>
+    /// Leaves the group this instance counted in (#191, an instance released): a loud instance stops
+    /// holding the group's count above zero, and no later change of this instance reaches it.
+    /// </summary>
+    public void Detach()
+    {
+        lock (_lock)
+        {
+            if (_loud is not null && !_quiet)
+            {
+                Interlocked.Decrement(ref _loud.Value);
+            }
+
+            _loud = null;
         }
     }
 

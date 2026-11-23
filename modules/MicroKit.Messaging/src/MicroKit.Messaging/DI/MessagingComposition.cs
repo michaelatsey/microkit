@@ -218,7 +218,10 @@ internal sealed class MessagingComposition
         return exception;
     }
 
-    /// <summary>One configured store: its key, the assemblies bound to it and its start checks.</summary>
+    /// <summary>
+    /// One configured store: its key, the assemblies bound to it, its start checks and, for a partitioned
+    /// store (#191), its instance checks.
+    /// </summary>
     /// <param name="Key">The store key.</param>
     internal sealed record StoreRegistration(MessageStoreKey Key)
     {
@@ -227,6 +230,18 @@ internal sealed class MessagingComposition
 
         /// <summary>Gets the checks run at host start, each returning the problems it found.</summary>
         public List<Func<IServiceProvider, IEnumerable<string>>> StartupChecks { get; } = [];
+
+        /// <summary>
+        /// Gets the checks a partitioned store runs once, in the prepared scope of its first instance;
+        /// never run for a single store.
+        /// </summary>
+        public List<Func<IServiceProvider, IEnumerable<string>>> InstanceChecks { get; } = [];
+
+        /// <summary>Gets a value indicating whether the store's instances come from a source (#191).</summary>
+        public bool IsPartitioned => PartitionCalls > 0;
+
+        /// <summary>Gets or sets how many times the store was given a source; more than one fails the start.</summary>
+        public int PartitionCalls { get; set; }
     }
 
     /// <summary>What a handler scan could not load from one assembly.</summary>

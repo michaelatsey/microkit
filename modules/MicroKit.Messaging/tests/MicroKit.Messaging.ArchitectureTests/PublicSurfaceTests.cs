@@ -133,6 +133,8 @@ public sealed class PublicSurfaceTests
             "EnvelopeReceiveResult", "ReceiveDisposition", "IMessageSerializer",
             // The seam a store provider calls to add a store to the engine (#188).
             "IMessageStoreSet", "MessageStoreBuilder", "MessageStoreRegistrationExtensions",
+            // A partitioned store's instances (#191): the instance, its source and its scope's initializer.
+            "MessageStoreInstance", "IMessageStoreInstanceSource", "IMessageStoreInstanceInitializer",
             // The local endpoint (#188 D7, D8): what an integration package sends local messages
             // through, the consumers it supplies, and its registration path.
             "ILocalMessageSender", "ILocalConsumerSource", "LocalConsumer", "MessagingIntegrationExtensions",
@@ -194,7 +196,7 @@ public sealed class PublicSurfaceTests
             "builder went public again");
 
         VisibleTypeNamesIn("MicroKit.Messaging.Options", CoreAssembly).ShouldBe(
-            ["InboxProcessorOptions", "MessagingOptions", "OutboxProcessorOptions"]);
+            ["InboxProcessorOptions", "MessagingOptions", "OutboxProcessorOptions", "StoreInstanceOptions"]);
     }
 
     /// <summary>The two optional integration packages, pinned in full.</summary>

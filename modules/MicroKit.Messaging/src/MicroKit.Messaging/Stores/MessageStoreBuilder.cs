@@ -1,4 +1,6 @@
+using System.Diagnostics.CodeAnalysis;
 using System.Reflection;
+using Microsoft.Extensions.DependencyInjection.Extensions;
 
 namespace MicroKit.Messaging.Spi;
 
@@ -17,6 +19,13 @@ namespace MicroKit.Messaging.Spi;
 /// <para>
 /// A second registration of one key reaches the same store: its bindings and checks add to the
 /// first one's, so a provider registers its services with <c>TryAdd</c>.
+/// </para>
+/// <para>
+/// <b>Single or partitioned (#191).</b> A store is single by default: it is its one instance, drained
+/// as configured. <see cref="PartitionedBy{TSource, TInitializer}"/> makes it partitioned: the engine
+/// drains the instances its source supplies at runtime — one database per tenant, one per shard —
+/// each in scopes the initializer prepares for it. The store itself, its key and its keyed services
+/// stay what the host configured.
 /// </para>
 /// </remarks>
 public sealed class MessageStoreBuilder
@@ -64,6 +73,62 @@ public sealed class MessageStoreBuilder
     {
         ArgumentNullException.ThrowIfNull(check);
         _registration.StartupChecks.Add(check);
+        return this;
+    }
+
+    /// <summary>
+    /// Adds a check a partitioned store runs once, in the prepared scope of its first instance to start,
+    /// instead of at host start: a check that builds the store's <c>DbContext</c>, which only an
+    /// instance's scope can build. A single store never runs it — its start checks cover it.
+    /// </summary>
+    /// <param name="check">
+    /// The check. It receives the instance scope's provider, prepared by the store's
+    /// <see cref="IMessageStoreInstanceInitializer"/>. Each string it returns is a problem of the store:
+    /// logged at Critical, and no instance of it is drained until a restart. An exception is the
+    /// instance's: that instance backs off, and the check runs again at the next attempt.
+    /// </param>
+    /// <returns>The same builder, for chaining.</returns>
+    public MessageStoreBuilder AddInstanceCheck(Func<IServiceProvider, IEnumerable<string>> check)
+    {
+        ArgumentNullException.ThrowIfNull(check);
+        _registration.InstanceChecks.Add(check);
+        return this;
+    }
+
+    /// <summary>
+    /// Makes this store partitioned (#191): the engine drains the instances <typeparamref name="TSource"/>
+    /// supplies, each in scopes <typeparamref name="TInitializer"/> prepares for it.
+    /// </summary>
+    /// <typeparam name="TSource">
+    /// The instance source: a singleton of its own type — the instance a host adds instances to, and
+    /// that an initializer may take — registered unless the host registered one first, and resolved by
+    /// the engine through a registration keyed by <see cref="Key"/>. Give each partitioned store a source
+    /// type of its own.
+    /// </typeparam>
+    /// <typeparam name="TInitializer">The instance-scope initializer, registered scoped, keyed by <see cref="Key"/>.</typeparam>
+    /// <returns>The same builder, for chaining.</returns>
+    /// <remarks>
+    /// <para>
+    /// One source per store: a second call fails the host start. The store's key, its keyed services,
+    /// its handler bindings and the resolution of its publications are unchanged; what changes is what
+    /// the engine drains. Each instance has its own loops, its own back-off, and its own place in the
+    /// gate bounded by <see cref="Options.StoreInstanceOptions.MaxConcurrentBatches"/>.
+    /// </para>
+    /// <para>
+    /// No table is created and no migration runs: a source declares an instance once its database is
+    /// provisioned.
+    /// </para>
+    /// </remarks>
+    public MessageStoreBuilder PartitionedBy<
+        [DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.PublicConstructors)] TSource,
+        [DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.PublicConstructors)] TInitializer>()
+        where TSource : class, IMessageStoreInstanceSource
+        where TInitializer : class, IMessageStoreInstanceInitializer
+    {
+        _registration.PartitionCalls++;
+        Services.TryAddSingleton<TSource>();
+        Services.TryAddKeyedSingleton<IMessageStoreInstanceSource>(Key, static (sp, _) => sp.GetRequiredService<TSource>());
+        Services.TryAddKeyedScoped<IMessageStoreInstanceInitializer, TInitializer>(Key);
         return this;
     }
 }

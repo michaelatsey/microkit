@@ -41,7 +41,11 @@ Send side
 
 Store engine (one hosted service, registered with the first store)
   MessageStoreEngine : BackgroundService              when — reads IMessageStoreSet once
-    per store (where):
+    per partitioned store: StoreInstanceReconciler     instances from its source, reconciled on change;
+                                                       the four loops below per instance, every scope
+                                                       prepared by its instance initializer, their
+                                                       batches through one FifoGate (#191)
+    per single store (where):
       OutboxLoop ─► IOutboxProcessor (keyed by store) ─► IOutboxDispatcher (keyed by row endpoint)
                                                            ├─ TransportOutboxDispatcher → IMessageTransport
                                                            └─ LocalOutboxDispatcher ──┐
@@ -60,7 +64,7 @@ Receive side                                                          MessageRec
 | Role | Type | Rule |
 |---|---|---|
 | **When** — lifecycle, cadence, cancellation | `MessageStoreEngine` and its four loops per store | Only `IServiceScopeFactory` (and singletons) in the constructor. Each loop owns its back-off and creates a scope per cycle, so a store whose database is down backs off alone. |
-| **Where** — which stores | `IMessageStoreSet` | Core names the static set only through the interface (`Core_DependsOnTheStaticStoreSet_OnlyThroughIMessageStoreSet`), so a dynamic set (#191) plugs in without editing the engine. |
+| **Where** — which stores | `IMessageStoreSet`; for a partitioned store, its `IMessageStoreInstanceSource` | The configured stores, static: Core names the static set only through the interface (`Core_DependsOnTheStaticStoreSet_OnlyThroughIMessageStoreSet`). A partitioned store's instances — its databases — come from its source and are reconciled at runtime by `StoreInstanceReconciler`; they never appear in `IMessageStoreSet`, whose readers keep its meaning (ADR-MSG-021). |
 | **What** — one batch | `OutboxProcessor`, `InboxProcessor` (internal, keyed by store, built over the store's keyed services) | Topology-agnostic. The batch store comes from the loop's scope; every row runs in a scope of its own. |
 | **Deliver** | `IOutboxDispatcher` (internal; transport and local), `MessageReceivePipeline` | Dispatch routes on `OutboxMessage.Endpoint`, never on a payload's CLR type. Every handler — transport, local, retry — goes through the one pipeline. |
 | **Guard** | `IInboxGuardStore` | Resolved from each attempt's own scope, so it shares the handler's `DbContext`. |
@@ -118,6 +122,10 @@ How the context reaches a service:
   message scopes.
 - `DeliveryStoreHolder` (the delivery's store) is written by the engine on the scope it received,
   **never** by the factory, because a host may replace the factory.
+- **`IMessageStoreInstanceInitializer`** (#191) prepares every scope opened for an instance of a
+  partitioned store — the loops', each row's dispatch, each delivery's and attempt's — right after its
+  store and instance are written on `DeliveryStoreHolder`, and before the `IMessageScopeInitializer`s.
+  Loop scopes run it alone.
 - **`IMessageScopeInitializer`** is the per-message hook for anything that configures the scope —
   a tenant's connection string, say. Initializers run after the context is written and **before an
   attempt's transaction begins**, because the store's `DbContext` is built from that scope.
@@ -178,8 +186,9 @@ the tenant-aware implementation, W3C `traceparent` hydration, shard and region c
 When / where / what are separate roles (see *Decomposition*). The processor is topology-agnostic
 and shared by every store. Within a store the claim is **cross-tenant**: the batch store is resolved
 from the loop's scope, never from a per-message scope, `TenantId` travels on the row, and each row's
-scope is contextualised from it. The roles' types are internal; a dynamic, per-tenant-database store
-set is #191 and plugs in through `IMessageStoreSet`.
+scope is contextualised from it. The roles' types are internal; a database per tenant is a
+partitioned store (#191, ADR-MSG-021): its instances come from its source, and each gets these roles'
+loops; `IMessageStoreSet` keeps listing the configured stores.
 
 ### ADR-MSG-003 — inbox delivery guarantee
 

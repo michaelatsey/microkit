@@ -39,7 +39,10 @@ public static class MessagingBuilderExtensions
     /// <para>
     /// <b>Checked at host start:</b> <typeparamref name="TContext"/> is registered, and its model
     /// carries the messaging entities. The model check builds one instance of the context, in a
-    /// scope of its own.
+    /// scope of its own. For a partitioned store
+    /// (<see cref="EntityFrameworkOutboxBuilder.PartitionedBy{TSource, TInitializer}"/>, #191), whose
+    /// context may only be buildable for an instance, the model check runs instead when its first
+    /// instance starts, in that instance's prepared scope.
     /// </para>
     /// <para>
     /// Built on the public store SPI only (<see cref="MessageStoreRegistrationExtensions.AddMessageStore"/>);
@@ -63,6 +66,7 @@ public static class MessagingBuilderExtensions
             if (first)
             {
                 store.AddStartupCheck(CheckStore<TContext>);
+                store.AddInstanceCheck(CheckInstanceModel<TContext>);
             }
 
             // One store instance per scope over the scope's TContext; every contract resolves to it.
@@ -99,6 +103,13 @@ public static class MessagingBuilderExtensions
                 $"context — services.AddDbContext<{typeof(TContext).Name}>(...) — before the host starts."];
         }
 
+        // A partitioned store's context may only be buildable in an instance's scope: its model is
+        // checked there, when its first instance starts (CheckInstanceModel).
+        if (IsPartitioned(services, key))
+        {
+            return [];
+        }
+
         IModel model;
         try
         {
@@ -115,6 +126,20 @@ public static class MessagingBuilderExtensions
                 "scope of its own, with no tenant or request."];
         }
 
+        return MissingEntities<TContext>(model);
+    }
+
+    /// <summary>
+    /// A partitioned store's model check (#191), in the prepared scope of its first instance. A context
+    /// that cannot be built there throws: that instance's failure, retried; problems are the store's.
+    /// </summary>
+    private static IEnumerable<string> CheckInstanceModel<TContext>(IServiceProvider services)
+        where TContext : DbContext
+        => MissingEntities<TContext>(services.GetRequiredService<TContext>().Model);
+
+    private static IEnumerable<string> MissingEntities<TContext>(IModel model)
+        where TContext : DbContext
+    {
         var missing = new List<string>(2);
         if (model.FindEntityType(typeof(OutboxMessage)) is null)
         {
@@ -129,8 +154,20 @@ public static class MessagingBuilderExtensions
         return missing.Count == 0
             ? []
             : [
-                $"Store '{key}': the model of '{name}' has no {string.Join(" or ", missing)} entity. " +
+                $"Store '{EntityFrameworkOutbox.KeyOf<TContext>()}': the model of '{typeof(TContext).FullName}' " +
+                $"has no {string.Join(" or ", missing)} entity. " +
                 "Call modelBuilder.ApplyMessagingConfiguration() in its OnModelCreating, and add " +
                 "the tables to the host's migrations."];
     }
+
+    /// <summary>
+    /// Whether <paramref name="key"/> is given an instance source (#191), read without requiring
+    /// <see cref="IServiceProviderIsKeyedService"/>: a container that lacks it answers by resolving the
+    /// source, and a single store is checked as before on any container.
+    /// </summary>
+    private static bool IsPartitioned(IServiceProvider services, MessageStoreKey key)
+        => services.GetService<IServiceProviderIsKeyedService>() is { } keyed
+            ? keyed.IsKeyedService(typeof(IMessageStoreInstanceSource), key)
+            : services is IKeyedServiceProvider provider
+              && provider.GetKeyedService(typeof(IMessageStoreInstanceSource), key) is not null;
 }

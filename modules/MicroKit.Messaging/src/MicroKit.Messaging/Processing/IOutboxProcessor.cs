@@ -10,9 +10,9 @@ namespace MicroKit.Messaging.Processing;
 /// <b>Internal since #185.</b> It was public so a per-tenant coordinator in a separate
 /// <c>MicroKit.Messaging.Multitenancy</c> package could reuse this engine (ADR-MSG-002, whose
 /// <i>Public surface (v1)</i> section is now superseded). That served the database-per-tenant
-/// topology, which tenant fairness (#124) does not cover; the requirement is tracked by #191 as a
-/// generic multi-store engine <b>inside</b> Core, so no external package needs this seam.
-/// Widening it again is additive if that changes.
+/// topology, which tenant fairness (#124) does not cover; #191 met it inside Core instead — a
+/// partitioned store, whose instances each get this engine's loops — so no external package needs
+/// this seam. Widening it again is additive if that changes.
 /// </para>
 /// <para>
 /// <b>Breaking change (ADR-MSG-015).</b> Previously returned <see cref="Task"/>. The batch now

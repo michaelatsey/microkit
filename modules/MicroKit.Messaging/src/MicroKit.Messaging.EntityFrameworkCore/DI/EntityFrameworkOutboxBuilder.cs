@@ -1,3 +1,5 @@
+using System.Diagnostics.CodeAnalysis;
+
 namespace MicroKit.Messaging.EntityFrameworkCore;
 
 /// <summary>
@@ -24,6 +26,29 @@ public sealed class EntityFrameworkOutboxBuilder
     public EntityFrameworkOutboxBuilder ForAssemblyContaining<TMarker>()
     {
         _store.BindAssembly(typeof(TMarker).Assembly);
+        return this;
+    }
+
+    /// <summary>
+    /// Makes this store partitioned (#191): the engine drains the databases <typeparamref name="TSource"/>
+    /// supplies at runtime — one per tenant, one per shard — each in scopes
+    /// <typeparamref name="TInitializer"/> prepares, typically by pointing the scope's connection at the
+    /// instance's database before the context is built.
+    /// </summary>
+    /// <typeparam name="TSource">The instance source, a keyed singleton.</typeparam>
+    /// <typeparam name="TInitializer">The instance-scope initializer, keyed and scoped.</typeparam>
+    /// <returns>The same builder, for chaining.</returns>
+    /// <remarks>
+    /// The context's model is checked when the first instance starts, in its prepared scope, rather
+    /// than at host start. No table is created: a source declares a database once it is migrated.
+    /// </remarks>
+    public EntityFrameworkOutboxBuilder PartitionedBy<
+        [DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.PublicConstructors)] TSource,
+        [DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.PublicConstructors)] TInitializer>()
+        where TSource : class, IMessageStoreInstanceSource
+        where TInitializer : class, IMessageStoreInstanceInitializer
+    {
+        _store.PartitionedBy<TSource, TInitializer>();
         return this;
     }
 }

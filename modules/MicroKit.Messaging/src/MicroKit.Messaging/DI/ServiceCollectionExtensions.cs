@@ -151,6 +151,15 @@ public static class ServiceCollectionExtensions
         services.TryAddSingleton(sp => new MessageStoreResolver(composition, sp.GetRequiredService<IMessageStoreSet>()));
         services.TryAddScoped<DeliveryStoreHolder>();
 
+        // The partitioned stores and the instances the engine drains now (#191): what a delivery
+        // guarded by a partitioned store is mapped to. Empty, and one read, on a host with none.
+        services.TryAddSingleton(sp => new StoreInstanceRegistry(
+            composition,
+            sp,
+            sp.GetRequiredService<ILogger<StoreInstanceRegistry>>(),
+            sp.GetRequiredService<OutboxProcessorOptions>(),
+            sp.GetRequiredService<TimeProvider>()));
+
         // The serializer default. It belongs HERE and not on an optional builder method, because
         // the types that require it — the bus, the receive pipeline and OutboxMessageFactory — are
         // registered by this method unconditionally. TryAdd, so a host registering its own

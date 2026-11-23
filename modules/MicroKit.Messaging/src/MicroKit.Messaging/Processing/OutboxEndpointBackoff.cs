@@ -8,7 +8,8 @@ namespace MicroKit.Messaging.Processing;
 /// </summary>
 /// <remarks>
 /// <para>
-/// One instance per store, a singleton keyed by the store, shared by the store's scoped
+/// One instance per single store, a singleton keyed by the store — and one per instance of a
+/// partitioned store, held by the engine for as long as it drains it (#191) — shared by the scoped
 /// <see cref="OutboxProcessor"/> of every cycle: the processor is rebuilt each cycle, the back-off
 /// outlives it. The delay starts at the polling interval, doubles on each failed attempt, is capped at
 /// <see cref="OutboxProcessorOptions.TransportUnavailableBackoff"/>, and is cleared by the first row

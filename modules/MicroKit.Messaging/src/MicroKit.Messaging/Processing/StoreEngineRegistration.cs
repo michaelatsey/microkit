@@ -31,6 +31,10 @@ internal static class StoreEngineRegistration
         services.TryAddSingleton<InboxMetrics>();
         services.TryAddSingleton<OutboxMetrics>();
 
+        // The gate every batch of every partitioned store's instance passes (#191 D6): FIFO, bounded by
+        // the options. A single store's loops never enter it.
+        services.TryAddSingleton(static sp => new FifoGate(sp.GetRequiredService<StoreInstanceOptions>().MaxConcurrentBatches));
+
         // Both dispatchers of a store's outbox come with the first store: a local row (#188 D7) is
         // delivered through the receive pipeline whatever the transport, and a transport row goes to
         // whatever IMessageTransport the host registers — the in-memory one or a provider's, which
@@ -65,29 +69,40 @@ internal static class StoreEngineRegistration
 
         // The processors are keyed by store and built over that store's keyed services, resolved
         // from the loop's scope: the store's instance — its DbContext included — comes from the
-        // scope, never from a type fixed here.
-        services.AddKeyedScoped<IOutboxProcessor>(store, static (sp, key) => new OutboxProcessor(
-            sp.GetRequiredKeyedService<IOutboxProcessorStore>(key),
-            sp.GetRequiredService<IExecutionScopeFactory>(),
-            sp.GetRequiredService<OutboxProcessorOptions>(),
-            sp.GetRequiredService<TimeProvider>(),
-            sp.GetRequiredService<Random>(),
-            sp.GetRequiredService<ILogger<OutboxProcessor>>(),
-            (MessageStoreKey)key!,
-            sp.GetRequiredKeyedService<OutboxEndpointBackoff>(key),
-            sp.GetRequiredService<OutboxMetrics>()));
+        // scope, never from a type fixed here. In a scope the engine prepared for an instance of a
+        // partitioned store (#191), the back-off state is that instance's, named on the scope.
+        services.AddKeyedScoped<IOutboxProcessor>(store, static (sp, key) =>
+        {
+            var instance = sp.GetService<Stores.DeliveryStoreHolder>()?.Instance;
+            return new OutboxProcessor(
+                sp.GetRequiredKeyedService<IOutboxProcessorStore>(key),
+                sp.GetRequiredService<IExecutionScopeFactory>(),
+                sp.GetRequiredService<OutboxProcessorOptions>(),
+                sp.GetRequiredService<TimeProvider>(),
+                sp.GetRequiredService<Random>(),
+                sp.GetRequiredService<ILogger<OutboxProcessor>>(),
+                (MessageStoreKey)key!,
+                instance?.OutboxBackoff ?? sp.GetRequiredKeyedService<OutboxEndpointBackoff>(key),
+                sp.GetRequiredService<OutboxMetrics>(),
+                instance);
+        });
 
-        services.AddKeyedScoped<IInboxProcessor>(store, static (sp, key) => new InboxProcessor(
-            sp.GetRequiredKeyedService<IInboxProcessorStore>(key),
-            sp.GetRequiredService<Registry.MessageHandlerRegistry>(),
-            sp.GetRequiredService<Registry.LocalConsumerRegistry>(),
-            sp.GetRequiredService<Publishing.IntegrationEventRegistry>(),
-            sp.GetRequiredService<IMessageSerializer>(),
-            sp.GetRequiredService<Bus.MessageReceivePipeline>(),
-            sp.GetRequiredService<InboxProcessorOptions>(),
-            sp.GetRequiredService<InboxRetryPolicy>(),
-            sp.GetRequiredService<ILogger<InboxProcessor>>(),
-            (MessageStoreKey)key!,
-            sp.GetRequiredService<InboxTenantBackoff>().For((MessageStoreKey)key!)));
+        services.AddKeyedScoped<IInboxProcessor>(store, static (sp, key) =>
+        {
+            var instance = sp.GetService<Stores.DeliveryStoreHolder>()?.Instance;
+            return new InboxProcessor(
+                sp.GetRequiredKeyedService<IInboxProcessorStore>(key),
+                sp.GetRequiredService<Registry.MessageHandlerRegistry>(),
+                sp.GetRequiredService<Registry.LocalConsumerRegistry>(),
+                sp.GetRequiredService<Publishing.IntegrationEventRegistry>(),
+                sp.GetRequiredService<IMessageSerializer>(),
+                sp.GetRequiredService<Bus.MessageReceivePipeline>(),
+                sp.GetRequiredService<InboxProcessorOptions>(),
+                sp.GetRequiredService<InboxRetryPolicy>(),
+                sp.GetRequiredService<ILogger<InboxProcessor>>(),
+                (MessageStoreKey)key!,
+                instance?.InboxTenants ?? sp.GetRequiredService<InboxTenantBackoff>().For((MessageStoreKey)key!),
+                instance);
+        });
     }
 }

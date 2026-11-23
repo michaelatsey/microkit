@@ -45,7 +45,7 @@ internal, or does not exist. Adding a public type means editing that list on pur
 | `PermanentMessageException`, `InboxDependencyUnavailableException` | Thrown by a handler: dead-letter now, or pause and redeliver without counting an attempt |
 | `IntegrationEventConfigurationException`, `IntegrationEventPublishException` | Composition fault (start or publication), refused publication |
 | Core: `MessagingBuilder`, `ServiceCollectionExtensions`, `MessagingDiagnostics`, `InMemoryBroker` | Composition, the meter names (`InboxMeterName`, `OutboxMeterName`), the in-memory broker a host may supply |
-| `MicroKit.Messaging.Options` | `MessagingOptions` (section `MicroKit:Messaging`), `OutboxProcessorOptions`, `InboxProcessorOptions` |
+| `MicroKit.Messaging.Options` | `MessagingOptions` (section `MicroKit:Messaging`), `OutboxProcessorOptions`, `InboxProcessorOptions`, `StoreInstanceOptions` (`Instances`: `MaxConcurrentBatches`, `TagInstances`) |
 
 ## SPI (`MicroKit.Messaging.Spi`) — for store, transport and integration-package authors
 
@@ -57,8 +57,11 @@ internal, or does not exist. Adding a public type means editing that list on pur
 | `IMessageSerializer` | `ContentType`; `Serialize(object message, Type type)` → `ReadOnlyMemory<byte>`; `Deserialize(ReadOnlyMemory<byte> body, Type type)` → `object?`. It serializes the message, never an envelope. The default is internal (`SystemTextJsonMessageSerializer`, `application/json`); only JSON is received, and the outbox refuses a non-JSON serializer |
 | `IEnvelopeReceiver` | `ReceiveAsync(MessageEnvelope, ct)` → `EnvelopeReceiveResult`. Core implements it, a provider's consume loop calls it |
 | `EnvelopeReceiveResult` / `ReceiveDisposition` | `Disposition`, `Reason`, `Error`. `Acknowledge`, `DeadLetter`, `Redeliver`, `PauseAndRedeliver`, `Unsettled`. `Unsettled` is never an acknowledgement |
-| `IMessageStoreSet` | `GetStores()` — the stores the engine drains. Static, read at start |
-| `MessageStoreBuilder` | `Key`, `Services`, `BindAssembly(Assembly)`, `AddStartupCheck(...)` |
+| `IMessageStoreSet` | `GetStores()` — the configured stores. Static, read at start |
+| `MessageStoreBuilder` | `Key`, `Services`, `BindAssembly(Assembly)`, `AddStartupCheck(...)`, `AddInstanceCheck(...)`, `PartitionedBy<TSource, TInitializer>()` |
+| `MessageStoreInstance` | `sealed record MessageStoreInstance(string Id)`, never blank, in Core. One database of a partitioned store (#191) |
+| `IMessageStoreInstanceSource` | `GetInstances()`, `GetChangeToken()`, `TryGetInstance(MessageContext, out MessageStoreInstance?)` — a partitioned store's instances and a delivery's instance |
+| `IMessageStoreInstanceInitializer` | `InitializeAsync(MessageStoreInstance, IServiceProvider, ct)` — prepares an instance's scope before anything is resolved |
 | `MessageStoreRegistrationExtensions` | `AddMessageStore(this MessagingBuilder, MessageStoreKey, Action<MessageStoreBuilder>)` — how any store provider adds a store; the first call registers the engine and both outbox dispatchers |
 | `IOutboxWriter` | `AddAsync`, `AddBatchAsync`. Enlists rows in the scope's unit of work; never saves |
 | `IOutboxProcessorStore` | `ClaimBatchAsync(batchSize, lockDuration, OutboxEndpoints excluded, IReadOnlyList<string> excludedTransportTenants, IReadOnlyList<string> excludedLocalTenants, ct)` → `OutboxClaim`, one signature, no default: the rows of an endpoint in back-off, and each endpoint's rows of the tenants in back-off on it, must be left out — never a row with no tenant; `ApplyOutcomesAsync(claimToken, outcomes, ct)` → rows written, every `OutboxOutcomeKind` settled |
@@ -116,7 +119,9 @@ notification handler), or another source's `LocalConsumer.ConsumerType`.
 |---|---|
 | `Ef{Noun}Store<TContext>` | `EfOutboxStore<TContext>`, `EfInboxStore<TContext>` — `internal sealed`, scoped, every store interface resolving to the one instance of the scope |
 | `{Noun}Processor` | `OutboxProcessor`, `InboxProcessor` — one batch; behind internal `IOutboxProcessor` / `IInboxProcessor`, keyed by store |
-| `{Noun}Loop` | `OutboxLoop`, `InboxLoop`, `OutboxRetentionLoop`, `InboxRetentionLoop` — plain classes, one of each per store, each with its own back-off |
+| `{Noun}Loop` | `OutboxLoop`, `InboxLoop`, `OutboxRetentionLoop`, `InboxRetentionLoop` — plain classes, one of each per store or per instance of a partitioned store, each with its own back-off |
+| `StoreInstance{Noun}` | `StoreInstanceReconciler` (one per partitioned store), `StoreInstanceRegistry` (the partitioned stores and the instances drained), `StoreInstanceState` (one per instance drained), `StoreInstanceKey`, `StoreInstanceLogs` (1404–1416) — #191 |
+| `FifoGate` | The gate every instance's batches pass, FIFO by hand-off (#191 D6) |
 | `MessageStoreEngine` | The `BackgroundService` that runs the four loops of every store. Registered by the first `AddMessageStore`, once |
 | `{Noun}Worker` | `InMemoryTransportWorker` (the in-memory consume loop), `LocalQueueWorker` (the in-memory local queue). `BackgroundService` / hosted services, `IServiceScopeFactory` only in the constructor |
 | `{Noun}Dispatcher` | `TransportOutboxDispatcher`, `LocalOutboxDispatcher` — internal `IOutboxDispatcher`, keyed `OutboxDispatchers.Transport` / `OutboxDispatchers.Local`, both registered with the first store, chosen by `OutboxDispatchers.KeyOf(row)` from `OutboxMessage.Endpoint`, never from the payload's type. `TransportOutboxDispatcher` takes no serializer: the payload travels opaque. `MessageDispatcher` and `InProcessIntegrationDispatcher` must not come back (architecture tests) |
