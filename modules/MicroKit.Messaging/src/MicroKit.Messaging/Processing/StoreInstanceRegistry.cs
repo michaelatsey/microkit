@@ -28,17 +28,29 @@ internal sealed class StoreInstanceRegistry
     private readonly ConcurrentDictionary<StoreInstanceKey, StoreInstanceState> _drained = new();
     private readonly IServiceProvider _services;
     private readonly ILogger<StoreInstanceRegistry> _logger;
+    private readonly TimeSpan _firstRoundWait;
+    private readonly TimeProvider _timeProvider;
 
     /// <summary>Initializes the registry over the composition's partitioned stores.</summary>
     /// <param name="composition">The composition.</param>
     /// <param name="services">The root provider, which holds each store's keyed source.</param>
     /// <param name="logger">Logger.</param>
+    /// <param name="outboxOptions">
+    /// Its <see cref="OutboxProcessorOptions.PollingInterval"/> bounds a delivery's wait for a first snapshot.
+    /// </param>
+    /// <param name="timeProvider">The clock of that wait.</param>
     public StoreInstanceRegistry(
-        MessagingComposition composition, IServiceProvider services, ILogger<StoreInstanceRegistry> logger)
+        MessagingComposition composition,
+        IServiceProvider services,
+        ILogger<StoreInstanceRegistry> logger,
+        OutboxProcessorOptions? outboxOptions = null,
+        TimeProvider? timeProvider = null)
     {
         ArgumentNullException.ThrowIfNull(composition);
         _services = services;
         _logger = logger;
+        _firstRoundWait = (outboxOptions ?? new OutboxProcessorOptions()).PollingInterval;
+        _timeProvider = timeProvider ?? TimeProvider.System;
         _partitions = composition.Stores
             .Where(static s => s.IsPartitioned)
             .ToFrozenDictionary(static s => s.Key, static s => new Partition(s.Key, [.. s.InstanceChecks]));
@@ -111,13 +123,39 @@ internal sealed class StoreInstanceRegistry
     }
 
     /// <summary>
-    /// Completes once the reconciler of <paramref name="store"/> has applied its first snapshot (or ended):
-    /// a delivery that arrives before waits for it rather than finding no instance drained yet.
+    /// Completes once the reconciler of <paramref name="store"/> has applied its first snapshot (or ended);
+    /// <see cref="WaitForFirstRoundAsync"/> is the delivery's bounded wait on it.
     /// </summary>
     /// <param name="store">The partitioned store.</param>
     /// <returns>The task; completed for a store that is not partitioned.</returns>
     public Task FirstRoundOf(MessageStoreKey store)
         => _partitions.TryGetValue(store, out var partition) ? partition.FirstRound.Task : Task.CompletedTask;
+
+    /// <summary>
+    /// Waits for the first snapshot of <paramref name="store"/> to be applied — at most one
+    /// <see cref="OutboxProcessorOptions.PollingInterval"/>: a reconciler that cannot read its source, or
+    /// never runs, holds no delivery longer, which then maps as the registry stands (1410 if to nothing).
+    /// </summary>
+    /// <param name="store">The partitioned store.</param>
+    /// <param name="ct">The delivery's token.</param>
+    /// <returns>A task that completes once the snapshot is applied or the bound has passed.</returns>
+    /// <remarks>Once the snapshot is applied, a completed task, with no allocation.</remarks>
+    public async ValueTask WaitForFirstRoundAsync(MessageStoreKey store, CancellationToken ct = default)
+    {
+        if (!_partitions.TryGetValue(store, out var partition) || partition.FirstRound.Task.IsCompleted)
+        {
+            return;
+        }
+
+        try
+        {
+            await partition.FirstRound.Task.WaitAsync(_firstRoundWait, _timeProvider, ct).ConfigureAwait(false);
+        }
+        catch (TimeoutException)
+        {
+            // Bounded: the delivery maps as the registry stands.
+        }
+    }
 
     /// <summary>Marks the first round of <paramref name="store"/> done; later calls do nothing.</summary>
     /// <param name="store">The partitioned store.</param>

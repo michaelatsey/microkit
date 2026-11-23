@@ -21,8 +21,14 @@ internal sealed class InstanceHarness : IDisposable
         bool tagInstances = false,
         Action<IServiceCollection>? configure = null,
         ILogger<StoreInstanceRegistry>? registryLogger = null,
-        Func<IServiceProvider, IEnumerable<string>>? instanceCheck = null)
+        Func<IServiceProvider, IEnumerable<string>>? instanceCheck = null,
+        TimeSpan? maxPollingInterval = null)
     {
+        if (maxPollingInterval is { } interval)
+        {
+            OutboxOptions.MaxPollingInterval = interval;
+        }
+
         Composition = new MessagingComposition();
         var registration = Composition.GetOrAddStore(Store, out _);
         registration.PartitionCalls = 1;

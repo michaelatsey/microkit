@@ -66,7 +66,7 @@ using MessageCtx = MicroKit.Messaging.Execution.ExecutionContext;
 /// a retry against the instance whose loop claimed it. Every scope of the handler is prepared for
 /// that instance — its initializer, then the <see cref="IMessageScopeInitializer"/>s — and its tenant
 /// back-off is the instance's. A delivery that arrives before the store's first snapshot is applied waits
-/// for it (<see cref="StoreInstanceRegistry.FirstRoundOf"/>). A delivery that maps to no instance drained here is a counted failure
+/// for it, at most one polling interval (<see cref="StoreInstanceRegistry.WaitForFirstRoundAsync"/>). A delivery that maps to no instance drained here is a counted failure
 /// (<see cref="DeliveryVerdict.Transient"/>, event 1410): the transport redelivers it and holds nothing
 /// else back, where pausing the endpoint would hold every tenant behind it.
 /// </para>
@@ -196,18 +196,15 @@ internal sealed class MessageReceivePipeline(
                 // A partitioned store (#191 D4): the row's own instance for a local row of that store,
                 // else the one its source maps the delivery to — a lookup that never creates state. A
                 // delivery that arrives before the store's first snapshot is applied waits for it, rather
-                // than finding no instance drained yet; after the host's start the wait is a completed task.
-                var firstRound = instances.FirstRoundOf(store);
-                if (!firstRound.IsCompleted)
+                // than finding no instance drained yet — at most one polling interval; once the snapshot
+                // is applied, the wait is a completed task.
+                try
                 {
-                    try
-                    {
-                        await firstRound.WaitAsync(ct).ConfigureAwait(false);
-                    }
-                    catch (OperationCanceledException ex) when (ct.IsCancellationRequested)
-                    {
-                        return new DeliveryOutcome(DeliveryVerdict.Unsettled, ex);
-                    }
+                    await instances.WaitForFirstRoundAsync(store, ct).ConfigureAwait(false);
+                }
+                catch (OperationCanceledException ex) when (ct.IsCancellationRequested)
+                {
+                    return new DeliveryOutcome(DeliveryVerdict.Unsettled, ex);
                 }
 
                 var instance = origin is not null && origin.Store == store

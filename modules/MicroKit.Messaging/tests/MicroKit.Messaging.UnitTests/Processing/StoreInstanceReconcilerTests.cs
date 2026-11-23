@@ -306,13 +306,83 @@ public sealed class StoreInstanceReconcilerTests
     }
 
     [Fact]
+    public async Task ARoundWhoseReadFailed_DoesNotMarkTheFirstRound()
+    {
+        using var harness = new InstanceHarness();
+        var loops = new LoopRecorder();
+        var sut = harness.Reconciler(loops.RunAsync);
+        harness.Source.ThrowOnRead = new InvalidOperationException("The tenant catalog is still starting.");
+        harness.Source.Set("a");
+        using var stop = new CancellationTokenSource();
+        var run = sut.RunAsync(stop.Token);
+
+        await RoundDone(sut, run, () => harness.Source.ThrowOnRead is null, "the failing first read");
+        harness.Registry.FirstRoundOf(InstanceHarness.Store).IsCompleted.ShouldBeFalse("no snapshot was applied: deliveries keep waiting");
+
+        harness.Source.Set("a");
+        await SnapshotApplied(harness, sut, run, "the next snapshot was applied");
+        harness.Registry.FirstRoundOf(InstanceHarness.Store).IsCompleted.ShouldBeTrue();
+
+        await stop.CancelAsync();
+        await run.WaitAsync(Timeout);
+    }
+
+    [Fact]
+    public async Task FreshTokensThatAlreadyChanged_AreReadAtOnce_AndTheNextChangeIsSeenWithoutAPoll()
+    {
+        // A poll interval far beyond the wait: a change seen in time was seen through its token.
+        using var harness = new InstanceHarness(
+            maxPollingInterval: TimeSpan.FromMinutes(5),
+            configure: s => s.AddKeyedSingleton<IMessageStoreInstanceSource>(
+                InstanceHarness.Store, (sp, _) => new BurstSource(sp.GetRequiredService<TestInstanceSource>(), changedTokens: 3)));
+        var loops = new LoopRecorder();
+        var sut = harness.Reconciler(loops.RunAsync);
+        harness.Source.Set("a");
+        using var stop = new CancellationTokenSource();
+        var run = sut.RunAsync(stop.Token);
+        await Eventually(() => sut.Rounds >= 4, "a burst of three changed tokens, each read at once");
+
+        harness.Source.Set("a", "b");
+        await Eventually(() => loops.Starts("b") == 1, "the next change is seen through the source's live token");
+
+        await stop.CancelAsync();
+        await run.WaitAsync(Timeout);
+    }
+
+    [Fact]
+    public async Task ARepeatedChangedTokenThatCallsBackLate_IsPolledOnTheDelayAlone()
+    {
+        using var harness = new InstanceHarness(configure: s => s.AddKeyedSingleton<IMessageStoreInstanceSource>(
+            InstanceHarness.Store, (sp, _) => new StaleTokenSource(sp.GetRequiredService<TestInstanceSource>(), new LateToken())));
+        var loops = new LoopRecorder();
+        var sut = harness.Reconciler(loops.RunAsync);
+        harness.Source.Set("a");
+        using var stop = new CancellationTokenSource();
+        var run = Task.Run(() => sut.RunAsync(stop.Token));
+        try
+        {
+            await SnapshotApplied(harness, sut, run, "control: the first snapshot was applied");
+            var rounds = sut.Rounds;
+            await Task.Delay(TimeSpan.FromMilliseconds(300));
+            (sut.Rounds - rounds).ShouldBeLessThan(50, "a late callback of a repeated token wakes no poll");
+        }
+        finally
+        {
+            await stop.CancelAsync();
+        }
+
+        await run.WaitAsync(Timeout);
+    }
+
+    [Fact]
     public async Task AStoreRefusedByItsCheckDuringARound_StartsNoFurtherInstance()
     {
         using var harness = new InstanceHarness(instanceCheck: _ => ["the model has no OutboxMessage entity"]);
         var started = new ConcurrentQueue<string>();
         var sut = harness.Reconciler((state, _) =>
         {
-            // The first loop of an instance runs the store's check before anything awaits.
+            // An instance initializer that completes synchronously — one setting a connection string — lets
+            // the first loop run the store's check before anything awaits, inside the round's start.
             started.Enqueue(state.Instance.Id);
             harness.Registry.EnsureChecked(state, harness.Provider);
             return Task.CompletedTask;
@@ -426,14 +496,45 @@ public sealed class StoreInstanceReconcilerTests
     }
 
     /// <summary>A source that hands out the same, already changed, token on every call.</summary>
-    private sealed class StaleTokenSource(TestInstanceSource inner) : IMessageStoreInstanceSource
+    private sealed class StaleTokenSource(TestInstanceSource inner, Microsoft.Extensions.Primitives.IChangeToken? token = null)
+        : IMessageStoreInstanceSource
     {
-        private readonly Microsoft.Extensions.Primitives.CancellationChangeToken _changed =
-            new(new CancellationToken(canceled: true));
+        private readonly Microsoft.Extensions.Primitives.IChangeToken _changed =
+            token ?? new Microsoft.Extensions.Primitives.CancellationChangeToken(new CancellationToken(canceled: true));
 
         public IReadOnlyCollection<MessageStoreInstance> GetInstances() => inner.GetInstances();
 
         public Microsoft.Extensions.Primitives.IChangeToken GetChangeToken() => _changed;
+
+        public bool TryGetInstance(MessageContext context, [System.Diagnostics.CodeAnalysis.NotNullWhen(true)] out MessageStoreInstance? instance)
+            => inner.TryGetInstance(context, out instance);
+    }
+
+    /// <summary>A changed token whose callback arrives later, on the thread pool.</summary>
+    private sealed class LateToken : Microsoft.Extensions.Primitives.IChangeToken
+    {
+        public bool HasChanged => true;
+
+        public bool ActiveChangeCallbacks => true;
+
+        public IDisposable RegisterChangeCallback(Action<object?> callback, object? state)
+        {
+            ThreadPool.QueueUserWorkItem(_ => callback(state));
+            return new CancellationTokenRegistration();
+        }
+    }
+
+    /// <summary>A source whose first tokens are fresh but already changed — a burst — then its live ones.</summary>
+    private sealed class BurstSource(TestInstanceSource inner, int changedTokens) : IMessageStoreInstanceSource
+    {
+        private int _handedOut;
+
+        public IReadOnlyCollection<MessageStoreInstance> GetInstances() => inner.GetInstances();
+
+        public Microsoft.Extensions.Primitives.IChangeToken GetChangeToken()
+            => Interlocked.Increment(ref _handedOut) <= changedTokens
+                ? new Microsoft.Extensions.Primitives.CancellationChangeToken(new CancellationToken(canceled: true))
+                : inner.GetChangeToken();
 
         public bool TryGetInstance(MessageContext context, [System.Diagnostics.CodeAnalysis.NotNullWhen(true)] out MessageStoreInstance? instance)
             => inner.TryGetInstance(context, out instance);

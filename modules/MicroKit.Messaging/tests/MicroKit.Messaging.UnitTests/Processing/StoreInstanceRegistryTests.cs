@@ -1,4 +1,6 @@
 using System.Diagnostics.CodeAnalysis;
+using Microsoft.Extensions.Logging.Abstractions;
+using Microsoft.Extensions.Time.Testing;
 using Microsoft.Extensions.Primitives;
 
 namespace MicroKit.Messaging.UnitTests.Processing;
@@ -35,6 +37,21 @@ public sealed class StoreInstanceRegistryTests
         harness.Registry.Find(InstanceHarness.Store, Context()).ShouldBeNull();
         log.Count(MappingFailed).ShouldBe(1, "a failed mapping is one delivery's, not the snapshot's");
         log.Count(SourceFailed).ShouldBe(0);
+    }
+
+    [Fact]
+    public async Task ADeliverysWaitForAFirstSnapshot_IsBoundedByOnePollingInterval()
+    {
+        using var harness = new InstanceHarness();
+        var time = new FakeTimeProvider();
+        var registry = new StoreInstanceRegistry(
+            harness.Composition, harness.Provider, NullLogger<StoreInstanceRegistry>.Instance, harness.OutboxOptions, time);
+
+        var wait = registry.WaitForFirstRoundAsync(InstanceHarness.Store).AsTask();
+        wait.IsCompleted.ShouldBeFalse("no reconciler has applied a snapshot");
+
+        time.Advance(harness.OutboxOptions.PollingInterval);
+        await wait.WaitAsync(TimeSpan.FromSeconds(5));   // a reconciler that never runs holds no delivery longer
     }
 
     private static MessageContext Context() => new()

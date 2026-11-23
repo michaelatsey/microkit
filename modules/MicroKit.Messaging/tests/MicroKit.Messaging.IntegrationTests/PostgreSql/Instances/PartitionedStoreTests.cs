@@ -326,6 +326,12 @@ public sealed class PartitionedStoreTests(InstanceServerFixture server, ITestOut
         GatedInstanceSource? source = null;
         await using var host = PartitionedHost.Build(
             scopedTransport: false,
+            // The wait for a first snapshot is bounded by one polling interval: longer than the gate below.
+            options: o =>
+            {
+                o.Outbox.PollingInterval = TimeSpan.FromSeconds(10);
+                o.Outbox.MaxPollingInterval = TimeSpan.FromSeconds(10);
+            },
             services: s =>
             {
                 s.AddSingleton<TestInstanceSource>(sp => source = new GatedInstanceSource(

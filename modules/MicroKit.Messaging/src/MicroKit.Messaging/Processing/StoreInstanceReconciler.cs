@@ -49,7 +49,8 @@ internal sealed class StoreInstanceReconciler
     private readonly Dictionary<MessageStoreInstance, StoreInstanceState> _draining = [];
     private int _rounds;
     private int _completedRounds;
-    private bool _lastTokenStale;
+    private IChangeToken? _lastStaleToken;
+    private bool _pollQuietly;
 
     /// <summary>Initializes a new <see cref="StoreInstanceReconciler"/>.</summary>
     /// <param name="store">The partitioned store.</param>
@@ -131,14 +132,23 @@ internal sealed class StoreInstanceReconciler
             var watched = Watch(out var registration);
             using (registration)
             {
-                Reconcile(stoppingToken);
-                _registry.FirstRoundDone(_store);
+                // A round that applied no snapshot — its read failed — leaves deliveries waiting (bounded).
+                if (Reconcile(stoppingToken))
+                {
+                    _registry.FirstRoundDone(_store);
+                }
 
                 try
                 {
                     if (watched)
                     {
                         await _signal.Reader.WaitToReadAsync(stoppingToken).ConfigureAwait(false);
+                    }
+                    else if (_pollQuietly)
+                    {
+                        // A source repeating a changed token: its callbacks, however late, wake nothing.
+                        _pollQuietly = false;
+                        await Task.Delay(_outboxOptions.MaxPollingInterval, _timeProvider, stoppingToken).ConfigureAwait(false);
                     }
                     else
                     {
@@ -192,57 +202,58 @@ internal sealed class StoreInstanceReconciler
             var token = _registry.SourceOf(_store).GetChangeToken();
             if (token is not { ActiveChangeCallbacks: true })
             {
+                _lastStaleToken = null;
                 return false;
             }
 
             registration = token.RegisterChangeCallback(static self => ((StoreInstanceReconciler)self!).Signal(), this);
 
             // A token that changed before the registration — its source cancelled, maybe disposed, in
-            // between — may never call back: the next round takes the new one. A source that hands out a
-            // changed token twice in a row is not replacing it: it is polled, rather than read in a loop.
-            var stale = token.HasChanged;
-            var repeated = stale && _lastTokenStale;
-            _lastTokenStale = stale;
-            if (repeated)
+            // between — may never call back: the next round takes the new one. A source that hands out the
+            // same changed token again is not replacing it: it is polled on the delay alone, rather than
+            // read in a loop. A fresh token that already changed is a burst of changes, read at once.
+            if (!token.HasChanged)
+            {
+                _lastStaleToken = null;
+                return true;
+            }
+
+            if (ReferenceEquals(token, _lastStaleToken))
             {
                 registration.Dispose();
                 registration = null;
-                while (_signal.Reader.TryRead(out _))
-                {
-                    // The registration's own immediate callback: this round reads the snapshot anyway.
-                }
-
+                _pollQuietly = true;
                 return false;
             }
 
-            if (stale)
-            {
-                Signal();
-            }
-
+            _lastStaleToken = token;
+            Signal();
             return true;
         }
         catch (Exception ex)
         {
             registration?.Dispose();
             registration = null;
+            _lastStaleToken = null;
             GuardedLoop.Log(() => StoreInstanceLogs.SourceFailed(_logger, ex, _store.Value));
             return false;
         }
     }
 
-    private void Reconcile(CancellationToken stoppingToken)
+    /// <returns>Whether the round applied a snapshot: false when its read failed or named an instance twice.</returns>
+    private bool Reconcile(CancellationToken stoppingToken)
     {
         Interlocked.Increment(ref _rounds);
-        Apply(stoppingToken);
+        var applied = Apply(stoppingToken);
         Interlocked.Increment(ref _completedRounds);
+        return applied;
     }
 
     [System.Diagnostics.CodeAnalysis.SuppressMessage(
         "Design",
         "CA1031:Do not catch general exception types",
         Justification = "A source's or an instance's fault is logged; the reconciler keeps running.")]
-    private void Apply(CancellationToken stoppingToken)
+    private bool Apply(CancellationToken stoppingToken)
     {
         Forget(_draining);
         Forget(_running);
@@ -261,14 +272,14 @@ internal sealed class StoreInstanceReconciler
                 if (!wanted.Add(instance))
                 {
                     GuardedLoop.Log(() => StoreInstanceLogs.DuplicateInstance(_logger, _store.Value, instance.Id));
-                    return;
+                    return false;
                 }
             }
         }
         catch (Exception ex)
         {
             GuardedLoop.Log(() => StoreInstanceLogs.SourceFailed(_logger, ex, _store.Value));
-            return;
+            return false;
         }
 
         // A settling instance listed again, then removed again, maps no new delivery any more.
@@ -303,10 +314,11 @@ internal sealed class StoreInstanceReconciler
 
         foreach (var instance in wanted)
         {
-            // A start can run the store's check and have it refuse the store: no instance starts after it.
+            // A start can run the store's check and have it refuse the store — an instance initializer that
+            // completes synchronously runs it before anything awaits: no instance starts after it.
             if (_registry.IsRefused(_store))
             {
-                return;
+                return true;
             }
 
             if (_running.ContainsKey(instance))
@@ -337,6 +349,8 @@ internal sealed class StoreInstanceReconciler
                 GuardedLoop.Log(() => StoreInstanceLogs.InstanceStartFailed(_logger, ex, _store.Value, instance.Id));
             }
         }
+
+        return true;
     }
 
     private void Start(MessageStoreInstance instance, CancellationToken stoppingToken)
