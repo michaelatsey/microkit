@@ -157,8 +157,8 @@ public static class ServiceCollectionExtensions
             composition,
             sp,
             sp.GetRequiredService<ILogger<StoreInstanceRegistry>>(),
-            sp.GetService<OutboxProcessorOptions>(),
-            sp.GetService<TimeProvider>()));
+            sp.GetRequiredService<OutboxProcessorOptions>(),
+            sp.GetRequiredService<TimeProvider>()));
 
         // The serializer default. It belongs HERE and not on an optional builder method, because
         // the types that require it — the bus, the receive pipeline and OutboxMessageFactory — are

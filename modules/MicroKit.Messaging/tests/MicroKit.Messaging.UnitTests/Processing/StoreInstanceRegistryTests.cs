@@ -54,6 +54,21 @@ public sealed class StoreInstanceRegistryTests
         await wait.WaitAsync(TimeSpan.FromSeconds(5));   // a reconciler that never runs holds no delivery longer
     }
 
+    [Fact]
+    public async Task OnceTheBoundHasPassed_LaterDeliveriesDoNotWait()
+    {
+        using var harness = new InstanceHarness();
+        var time = new FakeTimeProvider();
+        var registry = new StoreInstanceRegistry(
+            harness.Composition, harness.Provider, NullLogger<StoreInstanceRegistry>.Instance, harness.OutboxOptions, time);
+        var first = registry.WaitForFirstRoundAsync(InstanceHarness.Store).AsTask();
+        time.Advance(harness.OutboxOptions.PollingInterval);
+        await first.WaitAsync(TimeSpan.FromSeconds(5));
+
+        registry.WaitForFirstRoundAsync(InstanceHarness.Store).IsCompleted
+            .ShouldBeTrue("the bound is the store's, not each delivery's: a catalog still down costs every delivery nothing more");
+    }
+
     private static MessageContext Context() => new()
     {
         MessageId = MessageId.New(),

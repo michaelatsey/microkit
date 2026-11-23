@@ -132,9 +132,10 @@ internal sealed class StoreInstanceRegistry
         => _partitions.TryGetValue(store, out var partition) ? partition.FirstRound.Task : Task.CompletedTask;
 
     /// <summary>
-    /// Waits for the first snapshot of <paramref name="store"/> to be applied — at most one
-    /// <see cref="OutboxProcessorOptions.PollingInterval"/>: a reconciler that cannot read its source, or
-    /// never runs, holds no delivery longer, which then maps as the registry stands (1410 if to nothing).
+    /// Waits for the first snapshot of <paramref name="store"/> to be applied — until one
+    /// <see cref="OutboxProcessorOptions.PollingInterval"/> after the store's first wait began, for every
+    /// delivery together: a reconciler that cannot read its source, or never runs, holds no delivery
+    /// longer, and later ones not at all; each then maps as the registry stands (1410 if to nothing).
     /// </summary>
     /// <param name="store">The partitioned store.</param>
     /// <param name="ct">The delivery's token.</param>
@@ -147,9 +148,16 @@ internal sealed class StoreInstanceRegistry
             return;
         }
 
+        var now = _timeProvider.GetUtcNow();
+        var remaining = partition.WaitDeadline(now + _firstRoundWait) - now;
+        if (remaining <= TimeSpan.Zero)
+        {
+            return;
+        }
+
         try
         {
-            await partition.FirstRound.Task.WaitAsync(_firstRoundWait, _timeProvider, ct).ConfigureAwait(false);
+            await partition.FirstRound.Task.WaitAsync(remaining, _timeProvider, ct).ConfigureAwait(false);
         }
         catch (TimeoutException)
         {
@@ -211,7 +219,16 @@ internal sealed class StoreInstanceRegistry
 
         public int State => Volatile.Read(ref _state);
 
+        private long _waitDeadline;
+
         public TaskCompletionSource FirstRound { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        /// <summary>The end of the deliveries' wait for a first snapshot, set by the first of them.</summary>
+        public DateTimeOffset WaitDeadline(DateTimeOffset proposed)
+        {
+            var set = Interlocked.CompareExchange(ref _waitDeadline, proposed.UtcTicks, 0);
+            return set == 0 ? proposed : new DateTimeOffset(set, TimeSpan.Zero);
+        }
 
         public bool Refused => State == Failed;
 

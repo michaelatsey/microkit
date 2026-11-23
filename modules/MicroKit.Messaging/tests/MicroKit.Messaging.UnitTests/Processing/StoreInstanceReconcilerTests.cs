@@ -291,7 +291,7 @@ public sealed class StoreInstanceReconcilerTests
             var rounds = sut.Rounds;
             await Task.Delay(TimeSpan.FromMilliseconds(300));
             (sut.Rounds - rounds).ShouldBeLessThan(
-                50, "polled at MaxPollingInterval (20 ms), not read back to back on a token that never changes again");
+                200, "read once per PollingInterval (5 ms), not back to back on a token that never changes again");
 
             harness.Source.Set("a", "b");
             await Eventually(() => loops.Starts("b") == 1, "a change is still seen, on the next poll");
@@ -328,7 +328,7 @@ public sealed class StoreInstanceReconcilerTests
     }
 
     [Fact]
-    public async Task FreshTokensThatAlreadyChanged_AreReadAtOnce_AndTheNextChangeIsSeenWithoutAPoll()
+    public async Task ABurstOfChangedTokens_IsReadWithinAPollingIntervalEach_AndTheNextChangeIsSeenWithoutAPoll()
     {
         // A poll interval far beyond the wait: a change seen in time was seen through its token.
         using var harness = new InstanceHarness(
@@ -340,10 +340,55 @@ public sealed class StoreInstanceReconcilerTests
         harness.Source.Set("a");
         using var stop = new CancellationTokenSource();
         var run = sut.RunAsync(stop.Token);
-        await Eventually(() => sut.Rounds >= 4, "a burst of three changed tokens, each read at once");
+        await Eventually(() => sut.Rounds >= 4, "a burst of three changed tokens, each read within a polling interval");
 
         harness.Source.Set("a", "b");
         await Eventually(() => loops.Starts("b") == 1, "the next change is seen through the source's live token");
+
+        await stop.CancelAsync();
+        await run.WaitAsync(Timeout);
+    }
+
+    [Fact]
+    public async Task AFreshChangedTokenOnEveryCall_IsReadOncePerPollingInterval_NotInALoop()
+    {
+        // new CancellationChangeToken(cts.Token) over a source whose cts is cancelled and never replaced.
+        using var harness = new InstanceHarness(configure: s => s.AddKeyedSingleton<IMessageStoreInstanceSource>(
+            InstanceHarness.Store, (sp, _) => new BurstSource(sp.GetRequiredService<TestInstanceSource>(), changedTokens: int.MaxValue)));
+        var loops = new LoopRecorder();
+        var sut = harness.Reconciler(loops.RunAsync);
+        harness.Source.Set("a");
+        using var stop = new CancellationTokenSource();
+        var run = Task.Run(() => sut.RunAsync(stop.Token));
+        try
+        {
+            await SnapshotApplied(harness, sut, run, "control: the first snapshot was applied");
+            var rounds = sut.Rounds;
+            await Task.Delay(TimeSpan.FromMilliseconds(300));
+            (sut.Rounds - rounds).ShouldBeLessThan(200, "a new changed token each time is no reason to read in a loop");
+        }
+        finally
+        {
+            await stop.CancelAsync();
+        }
+
+        await run.WaitAsync(Timeout);
+    }
+
+    [Fact]
+    public async Task AFailedRead_IsRetriedOnThePollInterval_WithoutAChange()
+    {
+        using var harness = new InstanceHarness();
+        var loops = new LoopRecorder();
+        var sut = harness.Reconciler(loops.RunAsync);
+        harness.Source.ThrowOnRead = new InvalidOperationException("A transient fault on the catalog.");
+        harness.Source.Set("a");
+        using var stop = new CancellationTokenSource();
+        var run = sut.RunAsync(stop.Token);
+
+        // The source's token is live and never changes again: only the poll reads it once more.
+        await Eventually(() => loops.Starts("a") == 1, "the failed read is retried on MaxPollingInterval (20 ms)");
+        harness.Registry.FirstRoundOf(InstanceHarness.Store).IsCompleted.ShouldBeTrue();
 
         await stop.CancelAsync();
         await run.WaitAsync(Timeout);
@@ -364,7 +409,7 @@ public sealed class StoreInstanceReconcilerTests
             await SnapshotApplied(harness, sut, run, "control: the first snapshot was applied");
             var rounds = sut.Rounds;
             await Task.Delay(TimeSpan.FromMilliseconds(300));
-            (sut.Rounds - rounds).ShouldBeLessThan(50, "a late callback of a repeated token wakes no poll");
+            (sut.Rounds - rounds).ShouldBeLessThan(200, "a late callback of a repeated token wakes no poll");
         }
         finally
         {

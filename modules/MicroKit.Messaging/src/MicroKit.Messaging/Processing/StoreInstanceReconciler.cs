@@ -49,7 +49,7 @@ internal sealed class StoreInstanceReconciler
     private readonly Dictionary<MessageStoreInstance, StoreInstanceState> _draining = [];
     private int _rounds;
     private int _completedRounds;
-    private IChangeToken? _lastStaleToken;
+    private int _changedTokensInARow;
     private bool _pollQuietly;
 
     /// <summary>Initializes a new <see cref="StoreInstanceReconciler"/>.</summary>
@@ -132,23 +132,26 @@ internal sealed class StoreInstanceReconciler
             var watched = Watch(out var registration);
             using (registration)
             {
-                // A round that applied no snapshot — its read failed — leaves deliveries waiting (bounded).
-                if (Reconcile(stoppingToken))
+                // A round that applied no snapshot — its read failed — leaves deliveries waiting (bounded),
+                // and is retried on the poll interval, not only on the source's next change.
+                var applied = Reconcile(stoppingToken);
+                if (applied)
                 {
                     _registry.FirstRoundDone(_store);
                 }
 
                 try
                 {
-                    if (watched)
+                    if (_pollQuietly)
+                    {
+                        // Changed tokens in a row: one polling interval, deaf to their callbacks however
+                        // late they come, then the source's token is taken again.
+                        _pollQuietly = false;
+                        await Task.Delay(_outboxOptions.PollingInterval, _timeProvider, stoppingToken).ConfigureAwait(false);
+                    }
+                    else if (watched && applied)
                     {
                         await _signal.Reader.WaitToReadAsync(stoppingToken).ConfigureAwait(false);
-                    }
-                    else if (_pollQuietly)
-                    {
-                        // A source repeating a changed token: its callbacks, however late, wake nothing.
-                        _pollQuietly = false;
-                        await Task.Delay(_outboxOptions.MaxPollingInterval, _timeProvider, stoppingToken).ConfigureAwait(false);
                     }
                     else
                     {
@@ -202,23 +205,22 @@ internal sealed class StoreInstanceReconciler
             var token = _registry.SourceOf(_store).GetChangeToken();
             if (token is not { ActiveChangeCallbacks: true })
             {
-                _lastStaleToken = null;
                 return false;
             }
 
             registration = token.RegisterChangeCallback(static self => ((StoreInstanceReconciler)self!).Signal(), this);
 
             // A token that changed before the registration — its source cancelled, maybe disposed, in
-            // between — may never call back: the next round takes the new one. A source that hands out the
-            // same changed token again is not replacing it: it is polled on the delay alone, rather than
-            // read in a loop. A fresh token that already changed is a burst of changes, read at once.
+            // between — may never call back: the next round takes the new one, at once. Another changed
+            // token straight after, the same or a new one, is a source not replacing it: from then on
+            // each is read one polling interval later, never in a loop. Only a live token resets this.
             if (!token.HasChanged)
             {
-                _lastStaleToken = null;
+                _changedTokensInARow = 0;
                 return true;
             }
 
-            if (ReferenceEquals(token, _lastStaleToken))
+            if (++_changedTokensInARow > 1)
             {
                 registration.Dispose();
                 registration = null;
@@ -226,7 +228,6 @@ internal sealed class StoreInstanceReconciler
                 return false;
             }
 
-            _lastStaleToken = token;
             Signal();
             return true;
         }
@@ -234,7 +235,6 @@ internal sealed class StoreInstanceReconciler
         {
             registration?.Dispose();
             registration = null;
-            _lastStaleToken = null;
             GuardedLoop.Log(() => StoreInstanceLogs.SourceFailed(_logger, ex, _store.Value));
             return false;
         }
