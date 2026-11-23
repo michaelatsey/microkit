@@ -24,8 +24,9 @@ public static class MessagingBuilderExtensions
     /// adds the message to the scope's <typeparamref name="TContext"/> and saves nothing. The
     /// caller's <c>SaveChanges</c> — whatever owns it — commits the message with the business data;
     /// there is no open-transaction precondition. A message still unsaved when its scope ends is
-    /// reported at <c>Error</c> (event 4000); one discarded with the change tracker, at <c>Debug</c>
-    /// (event 4001).
+    /// reported at <c>Error</c> (event 4000); one detached from the change tracker, at <c>Debug</c>
+    /// (event 4001) — discarded with its work, or saved and then cleared, in which case it is published at
+    /// the next poll if its save committed.
     /// </para>
     /// <para>
     /// <b>Repeatable, one store per <typeparamref name="TContext"/>.</b> A second call for the same

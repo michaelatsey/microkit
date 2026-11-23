@@ -16,7 +16,8 @@ namespace MicroKit.Messaging.Processing;
 /// <b>What is woken.</b> In a scope the engine prepared for an instance of this store, that instance;
 /// otherwise this store's loop if it is single. Nothing for a partitioned store from a host scope or
 /// from another store's delivery scope, or for an unknown key: their rows wait for the next poll. An
-/// instance's wake after its removal is written into a channel nothing reads, and creates no state.
+/// instance's wake after its removal is written into a channel nothing reads, and creates no state; a
+/// successor re-added under the same id meanwhile is not woken, and its rows wait for its next poll.
 /// The source's <c>TryGetInstance</c> is never called: it maps a delivery, which a publication is not.
 /// </para>
 /// </remarks>
