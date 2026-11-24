@@ -285,3 +285,12 @@ public sealed class SecondGuardHandler(GuardProbe probe, TestMessagingDbContext 
 
     protected override string Name => HandlerName;
 }
+
+/// <summary>A third consumer of <see cref="GuardEvent"/>, for the tests that need three (#210 V16).</summary>
+public sealed class ThirdGuardHandler(GuardProbe probe, TestMessagingDbContext context, IMessageBus bus)
+    : GuardHandlerBase(probe, context, bus)
+{
+    public const string HandlerName = "third";
+
+    protected override string Name => HandlerName;
+}

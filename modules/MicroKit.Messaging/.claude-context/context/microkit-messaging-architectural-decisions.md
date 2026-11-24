@@ -2343,7 +2343,8 @@ nothing tells a tenant's database from the consumer's own dependency.
      — verified on generated sequences.
    - **A consumer verdict is no store evidence.** A verdict that puts C in consumer-wide back-off is
      explained by C: it sets no store probe, and withdraws the pending one if C's own earlier failure set
-     it (the engine records which consumer set it); another consumer's stands. Otherwise one unrelated
+     it (the engine records which consumer and tenant set it) and that tenant failed for C alone; another
+     consumer's stands. Otherwise one unrelated
      failure of another consumer for a new tenant, before any success, would pause the whole store.
    - **Held.** A verdict while the pair or its consumer is in back-off changes nothing.
 3. **The claim key.** `IInboxProcessorStore.ClaimBatchAsync` takes `InboxClaimExclusions` — the consumers
@@ -2358,10 +2359,12 @@ nothing tells a tenant's database from the consumer's own dependency.
    complex types maps only to a JSON column (EF Core, *Complex types*); and `unnest` would be PostgreSQL SQL
    in the provider-neutral package.
 5. **Retry order.** A batch tries the rows of pairs with no entry first, in claim order, then the others by
-   their pair's delay. From its first dependency verdict on, the rows not yet attempted are tried
-   round-robin across consumers, each consumer's rows in that order, the consumer that met the verdict last
-   in each round; computed once, at that verdict, so a batch with no failure keeps claim order and pays
-   nothing for it, and with one consumer the order is unchanged. Without it, a consumer's held backlog —
+   their pair's delay. From each consumer's first dependency verdict in the batch on, the rows not yet
+   attempted are tried round-robin across consumers, each consumer's rows in that order; each round tries
+   first the consumers with no verdict in the batch and no consumer-wide back-off on record, then those
+   with one on record, then those that met a verdict in the batch, in that order. Computed at most once
+   per consumer per batch, so a batch with no failure keeps claim order and pays nothing for it, and with
+   one consumer the order is unchanged. When no consumer succeeds in between, the store probe still trips. Without it, a consumer's held backlog —
    the oldest rows once its consumer-wide back-off ends — heads the claim, and two of its rows failing back
    to back, before any success, fail the store probe: the batch is abandoned before the other consumers'
    rows, batch after batch, with no transport traffic to bring a success in between.

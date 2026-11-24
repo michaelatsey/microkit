@@ -34,8 +34,9 @@ namespace MicroKit.Messaging.Processing;
 /// (<see cref="OutageScope.Shared"/>, <see cref="MarkSuspected"/>) clears every consumer's pending probe — C's
 /// second failure holds it for every tenant only when it is not the store probe failing: another consumer
 /// succeeded since, or its tenant already failed for another consumer. A verdict that holds C for every
-/// tenant is explained by C: it sets no store probe, and withdraws the one C's own failures set, so a single
-/// later failure of another consumer, for a new tenant, does not pause the store. With one consumer it never
+/// tenant is explained by C: it sets no store probe, and withdraws the one C's own failure set — unless that
+/// tenant failed for another consumer too — so a single later failure of another consumer, for a new tenant,
+/// does not pause the store. With one consumer it never
 /// occurs, and this state answers exactly as <see cref="TenantBackoff"/> does.
 /// </para>
 /// <para>
@@ -64,9 +65,11 @@ internal sealed class InboxBackoff
     private bool _quiet = true;
     private bool _probePending;
 
-    // The consumer whose verdict set the pending store probe: a verdict it later explains by its own
-    // consumer-wide back-off is no evidence against the store (#210 D2 as amended).
+    // The consumer and the tenant whose verdict set the pending store probe: a verdict the consumer later
+    // explains by its own consumer-wide back-off is no evidence against the store, unless that tenant failed
+    // for another consumer too (#210 D2 as amended).
     private string? _probeOwner;
+    private string? _probeTenant;
     private bool _suspected;
 
     /// <summary>Initializes a new <see cref="InboxBackoff"/>.</summary>
@@ -289,6 +292,7 @@ internal sealed class InboxBackoff
             {
                 _probePending = true;
                 _probeOwner = consumer;
+                _probeTenant = tenant;
                 scope = OutageScope.Tenant;
             }
 
@@ -316,11 +320,15 @@ internal sealed class InboxBackoff
                     scope = OutageScope.Consumer;
 
                     // C's own dependency explains its failures: they are no store-probe evidence. The probe this
-                    // verdict set, or the one C's first failure set, is withdrawn — another consumer's stands.
-                    if (_probePending && string.Equals(_probeOwner, consumer, StringComparison.Ordinal))
+                    // verdict set, or the one C's first failure set, is withdrawn — unless its tenant failed for
+                    // another consumer too, which C does not explain; another consumer's probe stands.
+                    if (_probePending
+                        && string.Equals(_probeOwner, consumer, StringComparison.Ordinal)
+                        && FailedForItAlone(_probeTenant!, consumer))
                     {
                         _probePending = false;
                         _probeOwner = null;
+                        _probeTenant = null;
                     }
                 }
                 else
@@ -386,6 +394,7 @@ internal sealed class InboxBackoff
 
             _probePending = false;
             _probeOwner = null;
+            _probeTenant = null;
             _suspected = false;
             Refresh();
         }
@@ -545,6 +554,44 @@ internal sealed class InboxBackoff
         return held;
     }
 
+    /// <summary>
+    /// Whether <paramref name="consumer"/> has a consumer-wide back-off on record — in force, or ended and not yet
+    /// pruned: its rows were held for every tenant, and its backlog may head the claim (#210 D4 as amended).
+    /// </summary>
+    /// <param name="consumer">The consumer key.</param>
+    /// <returns><see langword="true"/> while a consumer-wide back-off of it is on record.</returns>
+    public bool WasHeldConsumerWide(string consumer)
+    {
+        if (IsEmpty)
+        {
+            return false;
+        }
+
+        lock (_lock)
+        {
+            return _consumers.TryGetValue(consumer, out var state) && state.Backoff is not null;
+        }
+    }
+
+    /// <summary>Whether <paramref name="tenant"/>'s entries are <paramref name="consumer"/>'s only. Called under the lock.</summary>
+    private bool FailedForItAlone(string tenant, string consumer)
+    {
+        if (!_tenants.TryGetValue(tenant, out var pairs))
+        {
+            return true;
+        }
+
+        foreach (var other in pairs.Keys)
+        {
+            if (!string.Equals(other, consumer, StringComparison.Ordinal))
+            {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
     /// <summary>The consumer's own back-off is in force. Called under the lock.</summary>
     private bool ConsumerInForce(string consumer, DateTimeOffset now)
         => _consumers.TryGetValue(consumer, out var state) && state.Backoff is { } backoff && now < backoff.Until;
@@ -566,6 +613,7 @@ internal sealed class InboxBackoff
     {
         _probePending = false;
         _probeOwner = null;
+        _probeTenant = null;
         _suspected = true;
         foreach (var state in _consumers.Values)
         {
@@ -581,6 +629,7 @@ internal sealed class InboxBackoff
             // Nobody left to have failed first: a later failure is a first one again.
             _probePending = false;
             _probeOwner = null;
+            _probeTenant = null;
         }
 
         foreach (var (consumer, state) in _consumers)

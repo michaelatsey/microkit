@@ -819,14 +819,16 @@ named by its inbox key (`MessageConsumerKey`), so a handler of two message types
   failed for it changes its own back-off only, so two tenants that never recover hold the handler at most
   once: once they are known to it, they cannot hold it again. A failure that holds a handler for every
   tenant is explained by that handler, and is no evidence against the store: it does not leave the probe
-  pending, and withdraws the probe its own first failure left, so one later failure of another handler,
-  for a new tenant, does not pause anything.
+  pending, and withdraws the probe its own first failure left — unless that tenant failed for another
+  handler too — so one later failure of another handler, for a new tenant, does not pause anything.
 - **Retries.** The rows a back-off holds wait to the end of it with their attempt count unchanged, left
   out of the retry claim meanwhile, and the rest of the store is retried; the rows of a handler and
-  tenant not known to fail go first. From a batch's first dependency failure on, the rows not yet tried
-  alternate between handlers, the failing one last: a handler's own backlog heading the claim — its
-  rows held while it waited for every tenant — cannot fail the probe before another handler's row is
-  tried, and its second failure holds it alone. The batch is abandoned with the store-wide back-off, as
+  tenant not known to fail go first. From each handler's first dependency failure in a batch on, the
+  rows not yet tried alternate between handlers — first those with no failure in the batch and none
+  held for every tenant before, then those held before, then those that failed in the batch: a
+  handler's own backlog heading the claim — its rows held while it waited for every tenant — cannot fail
+  the probe before another handler's row is tried, and when that row succeeds, the failing handler's
+  second failure holds it alone. The batch is abandoned with the store-wide back-off, as
   before, only when the probe fails, for a row with no tenant, or when the store itself is unreachable.
 - **New deliveries.** The handler's row is written `Failed`, no attempt counted, due at the end of the
   back-off, and the delivery is acknowledged once that row has committed: the store's retry loop owns

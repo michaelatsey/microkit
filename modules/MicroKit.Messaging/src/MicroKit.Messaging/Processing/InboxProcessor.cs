@@ -36,11 +36,11 @@ namespace MicroKit.Messaging.Processing;
 /// <para>
 /// <b>Ordering.</b> Rows are retried in claim order — except while a pair or a consumer is in back-off:
 /// the rows whose (consumer, tenant) pair has no back-off entry are then retried first, in claim order,
-/// then the others, those whose pair failed least first (<see cref="InboxBackoff"/>). From the batch's
-/// first dependency verdict on, the rows not yet attempted are tried round-robin across consumers, each
-/// consumer's rows in that order, the consumer that met the verdict last (#210): a held consumer's backlog
-/// heading the claim cannot trip the store probe before another consumer's row is tried. No order is
-/// promised.
+/// then the others, those whose pair failed least first (<see cref="InboxBackoff"/>). From a consumer's
+/// first dependency verdict in the batch on, the rows not yet attempted are tried round-robin across
+/// consumers, each consumer's rows in that order, the consumers not known to fail first in each round (#210):
+/// a held consumer's backlog heading the claim cannot trip the store probe before a row of a consumer not
+/// known to fail is tried. No order is promised.
 /// </para>
 /// </remarks>
 /// <param name="store">
@@ -121,8 +121,9 @@ internal sealed class InboxProcessor(
         var order = AttemptOrder(messages);
         var position = 0;
 
-        // Set at the batch's first dependency verdict, when the rest of the batch is interleaved (#210 D4).
-        var interleaved = false;
+        // The consumers that met a dependency verdict in this batch, in that order: at each one's first, the
+        // rest of the batch is interleaved again (#210 D4 as amended). Null while none has.
+        List<string>? failedConsumers = null;
 
         // The rows a back-off deferred in this batch, unattempted or attempted with no attempt counted:
         // reported with the released ones, and by 2013 per (consumer, tenant) once settled; the consumers
@@ -237,13 +238,13 @@ internal sealed class InboxProcessor(
                             (consumersHeld ??= []).Add((message.ConsumerType, tenantUntil));
                         }
 
-                        if (!interleaved)
+                        if (!Contains(failedConsumers, message.ConsumerType))
                         {
-                            // From the first dependency verdict on, a row of another consumer comes before
-                            // this consumer's next one: a success in between tells its own dependency from the
+                            // From a consumer's first dependency verdict on, a row of a consumer not known to fail
+                            // comes before its next one: a success in between tells its own dependency from the
                             // store's. A batch with no verdict keeps its order and allocates nothing for it.
-                            order = Interleave(messages, order, position + 1, message.ConsumerType);
-                            interleaved = true;
+                            (failedConsumers ??= []).Add(message.ConsumerType);
+                            order = Interleave(messages, order, position + 1, failedConsumers, _backoff);
                         }
 
                         continue;
@@ -355,39 +356,36 @@ internal sealed class InboxProcessor(
     }
 
     /// <summary>
-    /// The attempt order from <paramref name="from"/> on, once a row of <paramref name="failed"/> met the batch's
-    /// first dependency verdict (#210 D4 as amended): the rows not yet attempted, round-robin across consumers,
-    /// each consumer's rows in the order they had, <paramref name="failed"/> last in each round.
+    /// The attempt order from <paramref name="from"/> on, at a consumer's first dependency verdict in the batch
+    /// (#210 D4 as amended): the rows not yet attempted, round-robin across consumers, each consumer's rows in the
+    /// order they had. Each round tries first the consumers that met no verdict in this batch and have no
+    /// consumer-wide back-off on record, then those with one on record — their held backlog may head the claim —
+    /// then the consumers that met a verdict in this batch, in that order.
     /// </summary>
     /// <param name="messages">The claimed rows.</param>
     /// <param name="order">The current attempt order; <see langword="null"/> for claim order.</param>
     /// <param name="from">The first position not yet attempted.</param>
-    /// <param name="failed">The consumer whose row met the verdict.</param>
-    /// <returns>The attempt order, the positions before <paramref name="from"/> as they were.</returns>
+    /// <param name="failed">The consumers that met a verdict in this batch, in that order.</param>
+    /// <param name="backoff">The store's inbox back-off, which knows the consumers held consumer-wide.</param>
+    /// <returns>The attempt order, the positions before <paramref name="from"/> as they were; <paramref name="order"/>
+    /// itself when one consumer or none is left, which nothing allocates for.</returns>
     /// <remarks>
-    /// Without it, a consumer's held backlog — the oldest rows once its back-off ends — heads the batch, and two
-    /// of its rows failing back to back, before any success, are the store probe failing: the batch is abandoned
-    /// before the other consumers' rows, batch after batch. Interleaved, the next attempt is another consumer's,
-    /// whose success clears the probe, and the second failure holds that consumer alone. With one consumer the
-    /// order is unchanged. Once per batch: an array and a list per consumer.
+    /// Without it, a consumer's held backlog — the oldest rows once its consumer-wide back-off ends — heads the
+    /// batch, and two rows of consumers that fail, back to back before any success, are the store probe failing:
+    /// the batch is abandoned before the healthy consumers' rows, batch after batch. Interleaved, a consumer not
+    /// known to fail is tried in between, its success clears the probe, and each failing consumer's second
+    /// failure holds it alone. When none succeeds, the probe still trips, as before. With one consumer the order
+    /// is unchanged. At most once per consumer per batch: an array and a list per consumer.
     /// </remarks>
-    private static int[] Interleave(IReadOnlyList<InboxMessage> messages, int[]? order, int from, string failed)
+    private static int[]? Interleave(
+        IReadOnlyList<InboxMessage> messages, int[]? order, int from, List<string> failed, InboxBackoff backoff)
     {
-        var result = order;
-        if (result is null)
-        {
-            result = new int[messages.Count];
-            for (var i = 0; i < result.Length; i++)
-            {
-                result[i] = i;
-            }
-        }
-
         // Each consumer's rows not yet attempted, in their order, the consumers by first appearance.
-        var groups = new List<(string Consumer, List<int> Rows)>();
-        for (var i = from; i < result.Length; i++)
+        var groups = new List<(int Rank, int First, string Consumer, List<int> Rows)>();
+        for (var i = from; i < messages.Count; i++)
         {
-            var consumer = messages[result[i]].ConsumerType;
+            var index = order is null ? i : order[i];
+            var consumer = messages[index].ConsumerType;
             var group = -1;
             for (var g = 0; g < groups.Count; g++)
             {
@@ -400,26 +398,35 @@ internal sealed class InboxProcessor(
 
             if (group < 0)
             {
-                groups.Add((consumer, []));
+                groups.Add((0, groups.Count, consumer, []));
                 group = groups.Count - 1;
             }
 
-            groups[group].Rows.Add(result[i]);
+            groups[group].Rows.Add(index);
         }
 
         if (groups.Count <= 1)
         {
-            return result;
+            return order;
         }
 
-        // The consumer that met the verdict goes last in each round.
-        var start = 0;
         for (var g = 0; g < groups.Count; g++)
         {
-            if (string.Equals(groups[g].Consumer, failed, StringComparison.Ordinal))
+            var (_, first, consumer, rows) = groups[g];
+            var failedAt = failed.IndexOf(consumer);
+            var rank = failedAt >= 0 ? 2 + failedAt : backoff.WasHeldConsumerWide(consumer) ? 1 : 0;
+            groups[g] = (rank, first, consumer, rows);
+        }
+
+        groups.Sort(static (a, b) => a.Rank != b.Rank ? a.Rank.CompareTo(b.Rank) : a.First.CompareTo(b.First));
+
+        var result = order;
+        if (result is null)
+        {
+            result = new int[messages.Count];
+            for (var i = 0; i < result.Length; i++)
             {
-                start = (g + 1) % groups.Count;
-                break;
+                result[i] = i;
             }
         }
 
@@ -427,9 +434,8 @@ internal sealed class InboxProcessor(
         var next = from;
         while (next < result.Length)
         {
-            for (var k = 0; k < groups.Count; k++)
+            for (var g = 0; g < groups.Count; g++)
             {
-                var g = (start + k) % groups.Count;
                 if (taken[g] < groups[g].Rows.Count)
                 {
                     result[next++] = groups[g].Rows[taken[g]++];
@@ -438,6 +444,25 @@ internal sealed class InboxProcessor(
         }
 
         return result;
+    }
+
+    /// <summary>Whether <paramref name="consumers"/> holds <paramref name="consumer"/>; a few consumers at most.</summary>
+    private static bool Contains(List<string>? consumers, string consumer)
+    {
+        if (consumers is null)
+        {
+            return false;
+        }
+
+        foreach (var known in consumers)
+        {
+            if (string.Equals(known, consumer, StringComparison.Ordinal))
+            {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     /// <summary>Adds a row to its (consumer, tenant) tally for event 2013; the latest end of back-off wins.</summary>

@@ -153,6 +153,24 @@ public sealed class InboxBackoffTests
     }
 
     /// <summary>
+    /// D2 as amended (targeted review): X's consumer-wide verdict does not withdraw the store probe its own
+    /// failure set when that tenant failed for another consumer too — X does not explain that failure.
+    /// </summary>
+    [Fact]
+    public void AConsumerVerdict_KeepsTheStoreProbe_WhenItsTenantFailedForAnotherConsumerToo()
+    {
+        var backoff = New();
+        backoff.OnDown(Y, "B", Now, out _);
+        backoff.Succeeded(Y, "Z");
+        backoff.OnDown(X, "A", Now, out _).ShouldBe(OutageScope.Tenant, "X sets the store probe, for A");
+        backoff.OnDown(Y, "A", Now, out _).ShouldBe(OutageScope.Tenant, "A failed for Y too");
+
+        backoff.OnDown(X, "B", Now, out _).ShouldBe(OutageScope.Consumer);
+
+        backoff.OnDown(Y, "C", Now, out _).ShouldBe(OutageScope.Shared, "A's failure is not X's alone: the probe stands");
+    }
+
+    /// <summary>
     /// V5: X fails only for A and B, Y succeeding in between. Once the back-offs end, X fails again for A and B —
     /// known to X, so its probe is not touched — and X is not held for C, whose success clears X.
     /// </summary>

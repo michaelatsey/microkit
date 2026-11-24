@@ -23,6 +23,7 @@ public sealed class ConsumerBackoffInboxTests(PostgreSqlFixture fixture)
     private static readonly TimeSpan Polling = TimeSpan.FromMilliseconds(50);
     private const string X = FirstGuardHandler.HandlerName;
     private const string Y = SecondGuardHandler.HandlerName;
+    private const string W = ThirdGuardHandler.HandlerName;
     private const string NoTenant = "-";
     private static readonly string KeyOfX = MessageConsumerKey.Of(typeof(FirstGuardHandler));
     private static readonly string KeyOfY = MessageConsumerKey.Of(typeof(SecondGuardHandler));
@@ -215,6 +216,54 @@ public sealed class ConsumerBackoffInboxTests(PostgreSqlFixture fixture)
     }
 
     /// <summary>
+    /// V16 with two held backlogs (targeted review of #210): X's and W's backlogs, both held consumer-wide
+    /// before, head the claim, Y's healthy rows follow. Each round tries Y first — a consumer not known to fail
+    /// — so its success comes between any two failures; the batch is not abandoned, X and W are each held alone,
+    /// and Y's rows are processed in the same batch.
+    /// </summary>
+    [DockerRequiredFact]
+    public async Task V16_TwoHeldConsumersBacklogsHeadingTheClaim_DoNotAbandonTheBatch_AndTheHealthyConsumersRowsAreProcessed()
+    {
+        await using var rig = await Rig.CreateAsync(fixture, third: true);
+        foreach (var tenant in new[] { "A", "B", "C", "D" })
+        {
+            rig.Down(X, tenant);
+            rig.Down(W, tenant);
+        }
+
+        // X and W held consumer-wide once, by a delivery each pair of tenants: their back-offs are on record.
+        await rig.ReceiveAsync("A");
+        await rig.ReceiveAsync("B");
+        rig.Host.Logs.Entries.Count(e => e.EventId == 2015).ShouldBe(2, "control: X and W were held consumer-wide");
+        rig.TakeCalls();
+        rig.Clock.Advance(Polling * 2);
+
+        foreach (var tenant in new[] { "T1", "T2" })
+        {
+            rig.Down(X, tenant);
+            await rig.SeedFailedAsync<FirstGuardHandler>(tenant);
+        }
+
+        foreach (var tenant in new[] { "T7", "T8" })
+        {
+            rig.Down(W, tenant);
+            await rig.SeedFailedAsync<ThirdGuardHandler>(tenant);
+        }
+
+        for (var i = 0; i < 3; i++)
+        {
+            await rig.SeedFailedAsync<SecondGuardHandler>("T9");
+        }
+
+        (await rig.Host.RetryOnceAsync()).AbortReason.ShouldBe(InboxBatchAbortReason.None, "neither held consumer trips the store");
+
+        var calls = rig.TakeCalls();
+        calls.Count(c => c == $"{Y}:T9").ShouldBe(3, string.Join(", ", calls));
+        (await rig.Host.InboxAsync()).Where(r => r.TenantId == "T9").ShouldAllBe(r => r.Status == InboxMessageStatus.Processed);
+        rig.Host.Logs.Entries.Count(e => e.EventId == 2015).ShouldBe(4, "X and W each held again, alone");
+    }
+
+    /// <summary>
     /// V17 (#210 D2 as amended): X enters consumer-wide back-off, then Y fails once for a new tenant with no success
     /// in between: X's verdict set no store probe, so nothing pauses and the batch goes on.
     /// </summary>
@@ -303,7 +352,7 @@ public sealed class ConsumerBackoffInboxTests(PostgreSqlFixture fixture)
         {
             Host = host;
             Clock = clock;
-            foreach (var handler in new[] { X, Y })
+            foreach (var handler in new[] { X, Y, W })
             {
                 Host.Probe.Scripts[handler] = call =>
                 {
@@ -323,11 +372,21 @@ public sealed class ConsumerBackoffInboxTests(PostgreSqlFixture fixture)
 
         public bool EverythingDown { get; set; }
 
-        public static async Task<Rig> CreateAsync(PostgreSqlFixture fixture)
+        public static async Task<Rig> CreateAsync(PostgreSqlFixture fixture, bool third = false)
         {
             var db = await StoreDatabase.CreateAsync<TestMessagingDbContext>(fixture.ConnectionString, o => new(o));
             var clock = new FakeTimeProvider(Now);
-            var host = GuardHost.Create(db, bus => bus.AddHandler<FirstGuardHandler>().AddHandler<SecondGuardHandler>(), clock: clock);
+            var host = GuardHost.Create(
+                db,
+                bus =>
+                {
+                    bus.AddHandler<FirstGuardHandler>().AddHandler<SecondGuardHandler>();
+                    if (third)
+                    {
+                        bus.AddHandler<ThirdGuardHandler>();
+                    }
+                },
+                clock: clock);
             return new Rig(host, clock);
         }
 

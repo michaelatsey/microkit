@@ -228,7 +228,7 @@ planner property no code mutation turns red, so keep the local backlog larger th
 back-off per (consumer, tenant) (#210) is pinned by `InboxBackoffTests`, `InboxBackoffEquivalenceTests`
 (with one consumer it answers as `TenantBackoff` on generated sequences, the seed in the message) and
 `InboxBackoffQuietTests` (unit), and on PostgreSQL by `ConsumerBackoffInboxTests` (two consumers of one
-message: V1, V3–V5, V7, V8) and `ConsumerTenantClaimTests` (the pair key matched exactly).
+message, and three for V16's second case: V1, V3–V5, V7, V8, V16, V17) and `ConsumerTenantClaimTests` (the pair key matched exactly).
 
 ### InboxProcessor and the inbox retry policy (`UnitTests/Processing`)
 ```

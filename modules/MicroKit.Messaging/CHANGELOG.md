@@ -35,9 +35,11 @@
   and a consumer's failure no longer holds the tenant's other consumers. A consumer that fails for a second
   tenant new to it, with no success of its own since, waits for every tenant without pausing the
   transport, when that failure is not the store probe failing: another consumer succeeded since, or the tenant already failed for another consumer; only its own success clears it. That
-  verdict is no evidence against the store: it leaves no store probe pending. From a retry batch's first
-  dependency verdict on, the rows not yet attempted alternate between consumers, so a consumer's held
-  backlog heading the claim no longer abandons the batch before the other consumers' rows. Two tenants down before any success still pause the transport
+  verdict is no evidence against the store: it withdraws the store probe its own earlier failure set,
+  unless that tenant failed for another consumer too; another consumer's probe stands. From each
+  consumer's first dependency verdict in a retry batch on, the rows not yet attempted alternate between
+  consumers, those not known to fail first, so a consumer's held backlog heading the claim no longer
+  abandons the batch before the other consumers' rows when one of them succeeds in between. Two tenants down before any success still pause the transport
   and abandon the retry batch, as before.
 - `microkit.inbox.tenants.backoff` counts a tenant while at least one of its (consumer, tenant) pairs has
   not recovered; its name, unit and tags are unchanged.
