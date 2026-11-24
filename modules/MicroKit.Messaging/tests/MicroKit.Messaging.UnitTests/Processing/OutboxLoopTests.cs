@@ -81,15 +81,24 @@ public sealed class OutboxLoopTests
         calls.ShouldBeGreaterThan(1, "the loop survived the failed cycle");
     }
 
+    /// <summary>
+    /// Waits for the call, never a fixed window (#213): CI run 45364049251 failed the fixed-window
+    /// version. The start token is <see cref="CancellationToken.None"/> because the token handed to
+    /// <c>BackgroundService.StartAsync</c> is linked to the loop's stopping token, so a timed one
+    /// ends the loop.
+    /// </summary>
     [Fact]
     public async Task RunAsync_CallsTheStoresProcessor()
     {
+        var calls = 0;
         var coordinator = Substitute.For<IOutboxProcessor>();
+        coordinator
+            .When(c => c.ProcessBatchAsync(Arg.Any<int>(), Arg.Any<CancellationToken>()))
+            .Do(_ => Interlocked.Increment(ref calls));
         var sut = BuildWorker(coordinator, out _);
 
-        using var cts = new CancellationTokenSource(TimeSpan.FromMilliseconds(150));
-        await sut.StartAsync(cts.Token);
-        await Task.Delay(200);
+        await sut.StartAsync(CancellationToken.None);
+        await UntilAsync(() => Volatile.Read(ref calls) >= 1);
         await sut.StopAsync(default);
 
         await coordinator.Received().ProcessBatchAsync(Arg.Any<int>(), Arg.Any<CancellationToken>());
@@ -134,9 +143,9 @@ public sealed class OutboxLoopTests
 
         var sut = BuildWorker(coordinator, out _);
 
-        using var cts = new CancellationTokenSource(TimeSpan.FromMilliseconds(150));
-        await sut.StartAsync(cts.Token);
-        await Task.Delay(300);
+        // A counted condition, and no timed start token: see RunAsync_CallsTheStoresProcessor (#213).
+        await sut.StartAsync(CancellationToken.None);
+        await UntilAsync(() => Volatile.Read(ref callCount) > 1);
         await sut.StopAsync(default);
 
         // Worker must have continued after the exception (called the processor more than once)
@@ -353,6 +362,19 @@ public sealed class OutboxLoopTests
         MaxPollingInterval = TimeSpan.FromMinutes(1),
         TransportUnavailableBackoff = TimeSpan.FromMinutes(5),
     };
+
+    /// <summary>
+    /// Returns once <paramref name="condition"/> holds, or after 10 s on a monotonic clock, so the
+    /// caller's own assertion reports a miss.
+    /// </summary>
+    private static async Task UntilAsync(Func<bool> condition)
+    {
+        var elapsed = System.Diagnostics.Stopwatch.StartNew();
+        while (!condition() && elapsed.Elapsed < TimeSpan.FromSeconds(10))
+        {
+            await Task.Delay(10);
+        }
+    }
 
     private static OutboxLoopHarness BuildWorker(
         IOutboxProcessor coordinator,
