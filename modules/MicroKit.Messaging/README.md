@@ -293,9 +293,31 @@ With a store, `PublishAsync` adds the outbox row to the store's `DbContext` **of
 the business data it announces, or neither; inside a delivery, the engine's save does.
 
 - **A row still unsaved when its scope ends is lost, and reported:** event 4000 at `Error` names the
-  message, its contract and its store. A row discarded with the change tracker (`DiscardChanges`,
-  `ChangeTracker.Clear()`) is reported at `Debug` (4001): the caller chose to drop it. So is a row
-  enlisted by a delivery's attempt that rolls back: it goes with the work it announced.
+  message, its contract and its store. A row detached from the change tracker (`DiscardChanges`,
+  `ChangeTracker.Clear()`) is reported at `Debug` (4001). Its fate is its transaction's: dropped before
+  its save, or saved in a transaction that then rolled back, it is gone with the work it announced;
+  saved in a transaction that committed, then cleared, it is published at the next poll. A row enlisted
+  by a delivery's attempt that rolls back is reported at `Debug` (4001) too, and goes with that work.
+- **A commit wakes the store's outbox loop (#215).** When the scope ends with a row saved — and, inside
+  a delivery, its attempt committed — the store signals its outbox loop, so the first publication or
+  local delivery after a quiet period leaves at once rather than at the next poll, up to
+  `Outbox.MaxPollingInterval` later. A wake cuts only the wait after an empty or a partial batch, and
+  starts a claim no sooner than `Outbox.PollingInterval` after the previous claim began, to the
+  timer's precision: during a broker outage, commits cost no more claims than the loop's own cadence.
+  It never cuts a back-off. The loop still polls, so a wake that is missed or comes too early delays a
+  row to the next poll and never loses it:
+  - a transaction owned outside the scope — `UseTransaction` with a transaction committed after the
+    scope, or an ambient `TransactionScope` completed after it — is signalled too early, and its row
+    waits for the next poll;
+  - a row saved and then rolled back by the context's own transaction costs one empty claim;
+  - a row saved and then detached in the same scope (`ChangeTracker.Clear()` after `SaveChanges`) reads
+    as discarded when the scope ends, and waits for the next poll;
+  - a delivery whose commit landed but reported a fault — verified afterwards by reading its inbox row —
+    is not woken: its scope ended before the verification;
+  - a commit in a scope prepared for an instance that was since removed and re-added does not wake the
+    re-added instance;
+  - a publication from a host scope to a partitioned store is not woken (#189), nor is another host
+    (#214).
 - With no store configured, `PublishAsync` sends to the transport at once (#186). With stores
   configured there is never a direct send.
 
@@ -477,7 +499,8 @@ that scope at the tenant's database the same way (#190 will do it from the tenan
 **Out of scope here, and why.** No table is created and no migration runs: hosts own their
 migrations, and a source declares a database once it is provisioned. With several hosts, every host
 drains every instance — the atomic claim keeps that correct — and one engine instance per store, with
-the lease that would move it between hosts, is #214. A commit does not wake its instance's loop (#215).
+the lease that would move it between hosts, is #214. A commit in a scope the engine prepared for an
+instance wakes that instance's loop (#215); one from a host scope waits for its next poll (#189).
 The MicroKit.Tenancy adapter and its source are #189; resolving a tenant's connection is #190.
 
 ### What the inbox guarantees
@@ -1038,8 +1061,8 @@ drives a consume loop into `IEnvelopeReceiver`, and writes no messaging machiner
 
 **Known defects.**
 - With several hosts, each drains every instance of a partitioned store — correct through the atomic
-  claim, but every host claims; one engine instance per store is #214. A commit does not wake its
-  loop (#215).
+  claim, but every host claims; one engine instance per store is #214. A commit wakes its store's loop
+  on its own host only (#214), and a host scope's commit to a partitioned store is not woken (#189).
 
 **Tested providers.** PostgreSQL (through Testcontainers) and SQLite. The outbox schema no longer
 carries the replay index that excluded SQL Server, but SQL Server is not tested.

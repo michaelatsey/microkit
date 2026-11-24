@@ -4,8 +4,8 @@ namespace MicroKit.Messaging.Processing;
 
 /// <summary>
 /// What the engine holds for one instance of a partitioned store while it drains it (#191): its own
-/// back-off state, outbox and inbox, the signal that stops its loops, and how a scope is prepared for
-/// it.
+/// back-off state, outbox and inbox, the signal that stops its loops, the wake of its outbox loop
+/// (#215), and how a scope is prepared for it.
 /// </summary>
 /// <remarks>
 /// <para>
@@ -72,6 +72,9 @@ internal sealed class StoreInstanceState : IDisposable
 
     /// <summary>Gets its inbox's tenant back-off.</summary>
     public TenantBackoff InboxTenants { get; }
+
+    /// <summary>Gets the wake of its outbox loop: a commit in a scope prepared for it signals it (#215).</summary>
+    public LoopWake OutboxWake { get; } = new();
 
     /// <summary>Gets the gate its outbox and inbox batches pass.</summary>
     public FifoGate Gate { get; }

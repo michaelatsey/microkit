@@ -148,5 +148,6 @@ PostgreSQL suites skip on a machine with no Docker.
 ## Known defects and owed work
 
 - Several hosts each drain every instance of a partitioned store (correct through the atomic claim);
-  one engine instance per store is #214, waking a loop on commit #215.
+  one engine instance per store is #214. A commit wakes its store's outbox loop on its own host only
+  (#215, ADR-MSG-022); a host scope's commit to a partitioned store waits for the next poll (#189).
 - Versioning and releases: ADR-GLOBAL-002.

@@ -86,7 +86,10 @@ public ValueTask AddAsync(OutboxMessage message, CancellationToken ct = default)
 
 // EfOutboxStore.Dispose — an enlisted row is never lost silently.
 //   still Added    → event 4000 (Error): the scope was never saved
-//   Detached       → event 4001 (Debug): discarded with the change tracker
+//   still Added, the scope's guarded attempt rolling back
+//                  → event 4001 (Debug): goes with the attempt's work
+//   Detached       → event 4001 (Debug): discarded with the change tracker, or saved then cleared
+//                    (published at the next poll if its save committed)
 ```
 
 ```csharp

@@ -67,6 +67,14 @@ internal static class StoreEngineRegistration
             return backoff;
         });
 
+        // A commit wakes its store's outbox loop (#215). The wakes of the single stores are built once,
+        // and read without resolving anything: a store provider reports its commit while its scope is
+        // disposed. The signal is scoped: it reads the scope's holder — which instance, if any, the
+        // scope serves — when it is called.
+        services.TryAddSingleton(static sp => new OutboxWakes(
+            sp.GetRequiredService<IMessageStoreSet>(), sp.GetRequiredService<StoreInstanceRegistry>()));
+        services.TryAddScoped<IOutboxCommitSignal, OutboxCommitSignal>();
+
         // The processors are keyed by store and built over that store's keyed services, resolved
         // from the loop's scope: the store's instance — its DbContext included — comes from the
         // scope, never from a type fixed here. In a scope the engine prepared for an instance of a

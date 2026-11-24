@@ -46,12 +46,17 @@ internal sealed class EfOutboxStore<TContext>(
     TContext context,
     TimeProvider timeProvider,
     ILogger<EfOutboxStore<TContext>>? logger = null,
-    EfInboxAttempt<TContext>? attempt = null)
+    EfInboxAttempt<TContext>? attempt = null,
+    IServiceProvider? services = null)
     : IOutboxWriter, IOutboxProcessorStore, IOutboxAdminStore, IOutboxRetentionStore, IDisposable, IAsyncDisposable
     where TContext : DbContext
 {
     private readonly ILogger _logger = logger ?? NullLogger<EfOutboxStore<TContext>>.Instance;
     private List<OutboxMessage>? _enlisted;
+
+    // Resolved at the first enlistment, never in Dispose: a scope being disposed resolves nothing.
+    // A scope that enlists nothing — every claim, settlement and retention scope — never resolves it.
+    private IOutboxCommitSignal? _committed;
 
     // ---------- IOutboxWriter ----------
     // Stages the row; the caller's UoW (SaveChanges) commits it atomically with domain
@@ -62,7 +67,7 @@ internal sealed class EfOutboxStore<TContext>(
     {
         ArgumentNullException.ThrowIfNull(message);
         context.Set<OutboxMessage>().Add(message);
-        (_enlisted ??= []).Add(message);
+        Enlisted().Add(message);
         return ValueTask.CompletedTask;
     }
 
@@ -71,24 +76,49 @@ internal sealed class EfOutboxStore<TContext>(
     {
         ArgumentNullException.ThrowIfNull(messages);
         context.Set<OutboxMessage>().AddRange(messages);
-        (_enlisted ??= []).AddRange(messages);
+        Enlisted().AddRange(messages);
         return ValueTask.CompletedTask;
+    }
+
+    private List<OutboxMessage> Enlisted()
+    {
+        if (_enlisted is null)
+        {
+            // GetService: a host that registers no signal loses latency, never a message.
+            _committed = services?.GetService<IOutboxCommitSignal>();
+            _enlisted = [];
+        }
+
+        return _enlisted;
     }
 
     // ---------- end of scope: an enlisted row is never lost silently ----------
 
     /// <summary>
-    /// Reports every row this scope enlisted and never saved. Runs when the scope is disposed:
+    /// Reports every row this scope enlisted that does not end the scope saved, then wakes the store's
+    /// outbox loop if one does (#215). Runs when the scope is disposed:
     /// the store depends on the context, so the container disposes it first, while the context is
     /// still usable.
     /// </summary>
     /// <remarks>
     /// A row still <c>Added</c> is a publication whose unit of work was never saved — lost with the
-    /// scope, so an <c>Error</c>. A row <c>Detached</c> was discarded on purpose with the change
+    /// scope, so an <c>Error</c>. A row <c>Detached</c> was either discarded on purpose with the change
     /// tracker — a rolled-back attempt, <c>DiscardChanges</c> — together with the business data it
-    /// announced, so a <c>Debug</c>; so is a row still <c>Added</c> when this scope's guarded inbox
+    /// announced, or saved and then cleared from the tracker, and published at the next poll if its save
+    /// committed: a <c>Debug</c> either way; so is a row still <c>Added</c> when this scope's guarded inbox
     /// attempt never committed (<see cref="EfInboxAttempt{TContext}"/>): it rolls back with that work. A row saved and then rolled back by its transaction is neither:
     /// the business data rolled back with it.
+    /// <para>
+    /// <b>Then the store's outbox loop is woken (#215)</b>, once, if a row is <c>Unchanged</c> — saved —
+    /// and this scope's guarded attempt did not stay uncommitted: the container disposes in reverse
+    /// order of creation, and the store takes its context through its constructor, so a transaction the
+    /// context owns is committed by now, or about to roll back with the context. A transaction owned
+    /// outside the scope may commit later: its wake comes too early, and its row waits for the next poll.
+    /// No wake when the context is already disposed. The state is read here, not at the save: a row saved
+    /// and then detached by a clear of the tracker reads as discarded, and a guarded attempt whose commit
+    /// landed with an unknown outcome reads as uncommitted — its scope ends before the verification reads
+    /// the row. Neither is woken; both wait for the next poll.
+    /// </para>
     /// </remarks>
     public void Dispose()
     {
@@ -105,6 +135,7 @@ internal sealed class EfOutboxStore<TContext>(
         // work it announced — not lost. Any other open transaction (a host's own, through
         // UseTransaction) proves nothing: an Added row there was never saved, and is lost.
         var rollingBack = attempt is { Uncommitted: true };
+        var saved = false;
 
         foreach (var row in enlisted)
         {
@@ -127,6 +158,15 @@ internal sealed class EfOutboxStore<TContext>(
             {
                 EfOutboxLogs.DiscardedEnlistment(_logger, row.Id.Value, row.ContractName ?? row.EventType, store);
             }
+            else if (state is EntityState.Unchanged)
+            {
+                saved = true;
+            }
+        }
+
+        if (saved && !rollingBack)
+        {
+            _committed?.Committed(EntityFrameworkOutbox.KeyOf<TContext>());
         }
     }
 

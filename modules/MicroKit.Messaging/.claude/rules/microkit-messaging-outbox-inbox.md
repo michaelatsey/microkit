@@ -85,8 +85,9 @@ business data; inside a delivery, the engine's commit does.
   `IntegrationEventPublishException`: a publication never succeeds silently.
 - When the scope is disposed, `EfOutboxStore.Dispose` reports every row it enlisted: still `Added`
   → event **4000** (`Error`) — lost, the unit of work was never saved; `Detached` → event **4001**
-  (`Debug`) — discarded with the change tracker, with the work it announced; so is a row still
-  `Added` when the scope's guarded inbox attempt never committed (`EfInboxAttempt<TContext>`, scoped,
+  (`Debug`) — discarded with the change tracker, with the work it announced, or saved and then
+  cleared, and published at the next poll if its save committed (no wake, #215). A row still
+  `Added` when the scope's guarded inbox attempt never committed is a 4001 too, and goes with that work (`EfInboxAttempt<TContext>`, scoped,
   marked by the inbox store; the inbox store also clears the tracker of such an attempt). Any other
   open transaction — a host's own, through `UseTransaction` — leaves an `Added` row lost (4000). A row saved and then rolled
   back is neither: its business data rolled back with it. Both EF stores implement `IDisposable`

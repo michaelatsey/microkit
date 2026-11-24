@@ -1,5 +1,24 @@
 # Changelog — MicroKit.Messaging
 
+## [Unreleased] — a commit wakes its store's outbox loop (#215)
+
+### Added
+
+- **`IOutboxCommitSignal`** (store SPI): a store provider reports that rows of a store were committed in
+  its scope, and the engine wakes the outbox loop that drains them — the store's, or the instance's of a
+  partitioned store. The EF store calls it when a scope that saved a row ends, its guarded attempt, if
+  any, committed. The first publication or local delivery after a quiet period no longer waits up to
+  `Outbox.MaxPollingInterval`.
+- A wake cuts only the wait after an empty or a partial batch, and starts a claim no sooner than
+  `Outbox.PollingInterval` after the previous claim began, to the timer's precision; it never cuts a
+  back-off. No new log, metric or option.
+
+### Changed
+
+- Event 4001 (`Debug`) names both cases a detached row covers: discarded with the work it announced, or
+  saved and then cleared from the change tracker — published at the next poll if its save committed,
+  and not woken.
+
 ## [Unreleased] — the engine drains a dynamic set of store instances (#191)
 
 ### Added

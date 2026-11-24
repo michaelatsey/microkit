@@ -259,12 +259,16 @@ internal sealed class EventLog<T> : ILogger<T>
 internal sealed class TestClock : Microsoft.Extensions.Time.Testing.FakeTimeProvider
 {
     private int _armed;
+    private int _created;
 
     /// <summary>Gets or sets a step of the wall clock alone: <see cref="GetTimestamp"/> does not see it.</summary>
     public TimeSpan WallStep { get; set; }
 
     /// <summary>Gets the number of timers created and not yet disposed.</summary>
     public int ArmedTimers => Volatile.Read(ref _armed);
+
+    /// <summary>Gets the number of timers created so far, disposed or not: each wait the code under test began.</summary>
+    public int CreatedTimers => Volatile.Read(ref _created);
 
     public override DateTimeOffset GetUtcNow() => base.GetUtcNow() + WallStep;
 
@@ -275,6 +279,7 @@ internal sealed class TestClock : Microsoft.Extensions.Time.Testing.FakeTimeProv
     public override ITimer CreateTimer(TimerCallback callback, object? state, TimeSpan dueTime, TimeSpan period)
     {
         Interlocked.Increment(ref _armed);
+        Interlocked.Increment(ref _created);
         return new Armed(base.CreateTimer(callback, state, dueTime, period), this);
     }
 

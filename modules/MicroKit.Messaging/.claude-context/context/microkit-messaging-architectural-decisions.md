@@ -2210,7 +2210,8 @@ processor's events (1011, 2013, …) name the database that failed.
   and §8's "one loop per store" reads "per store or per instance".
 - Out of scope, each owned by an issue: one engine instance per store and the lease that would move
   ownership between hosts (#214) — correctness rests on the atomic claim, as before; waking a loop on
-  commit (#215); the Tenancy adapter and its source (#189); tenant connection resolution (#190).
+  commit (#215 — amended by ADR-MSG-022); the Tenancy adapter and its source (#189); tenant connection
+  resolution (#190).
 - Prior art. Wolverine runs one durability agent per tenant database, assigned by its leader to one
   node, discovers tenant databases from a master table or a custom source, routes by the envelope's
   tenant, and creates the message tables itself
@@ -2218,3 +2219,78 @@ processor's events (1011, 2013, …) name the database that failed.
   <https://wolverinefx.net/guide/durability/efcore/multi-tenancy.html>). This module keeps the source
   and the routing, leaves assignment to #214, documents no table creation, and adds a FIFO bound
   across databases that Wolverine does not document.
+
+---
+
+## ADR-MSG-022: A Commit Wakes Its Store's Outbox Loop
+
+**Status:** Accepted
+**Date:** 2026-11-24
+**Issue:** #215
+**Amends:** ADR-MSG-021 (its out-of-scope "waking a loop on commit").
+
+### Context
+
+An idle outbox loop grows its delay toward `MaxPollingInterval`, 1 minute by default, and nothing told
+it a row was committed: after a quiet period, a store's first publication — and its first local
+delivery, a row of the same loop (ADR-MSG-020 §6) — waited up to that long. Lowering the ceiling trades
+that latency for a round trip per store, or per instance, per interval.
+
+### Decision
+
+1. **When.** A store provider reports a commit at the end of the publication's scope. The EF store does
+   it in `Dispose`, after its unsaved-row report, once, when a row it enlisted is `Unchanged` and the
+   scope's guarded inbox attempt did not stay uncommitted; never when the context was already disposed.
+   The container disposes in reverse order of creation and the store takes its context through its
+   constructor, so a transaction the context owns is committed by then, or about to roll back with the
+   context. No EF interceptor: `SavedChanges` runs before an explicit transaction commits, so its
+   signal would precede the row's visibility and be lost.
+2. **Contract.** `IOutboxCommitSignal.Committed(MessageStoreKey)`, in the store SPI, implemented by the
+   engine and registered with the first store, scoped. A provider resolves it at its first enlistment —
+   a disposing scope resolves nothing — and calls it once its rows are visible. It never throws and never
+   blocks; a scope that enlisted nothing resolves nothing for it.
+3. **What is woken.** A single store's outbox loop; for a partitioned store, the instance the scope's
+   `DeliveryStoreHolder` names for that store. Nothing otherwise — a partitioned store from a host scope
+   or from another store's delivery scope, an unknown key, a removed instance — and no call to the
+   instance source, which maps a delivery, not a publication.
+4. **Signal.** One per outbox loop, held with the state that outlives cycles: a frozen map built once for
+   the single stores, the instance's state for an instance. A bounded channel of one, `DropWrite`,
+   asynchronous continuations, written with `TryWrite`, never completed: commits coalesce, and the loop
+   never resumes on the committing thread.
+5. **Drained before the claim.** The loop drains the signal right before each claim, after the gate, never
+   after the batch: a commit landing during a batch leaves its signal pending, and the next wait ends at
+   the floor.
+6. **What a wake cuts.** Only the delay after an empty or a partial batch. Never the hand-over guard, a
+   cancelled batch, a preparation, activation or configuration fault's back-off, or a failed cycle's;
+   endpoint and tenant back-offs are untouched, the claim still excluding them (#124). An empty claim
+   after a wake grows the delay from where it was. Loops given no wake — inbox, retention, the in-memory
+   transport, the local queue — wait as before.
+7. **Floor.** A wake starts a claim no sooner than `PollingInterval` after the previous claim began, to
+   the timer's precision, read on the loop's clock. During a transport outage commits keep arriving, and
+   each empty claim reads the down endpoint's backlog (#124's measured bound): with the floor, the cost is
+   at most the partial-batch cadence the loop already has. After a quiet period the previous claim is
+   long past, and the wake is immediate.
+8. **No log, metric or option.** A wake is not an event worth a line per scope.
+
+### Consequences
+
+- Limits, documented, not handled: a transaction owned outside the scope (`UseTransaction` with a
+  transaction committed after the scope, or an ambient `TransactionScope` completed after it) is
+  signalled too early, and its row waits for the next poll; a row saved and then rolled back by the
+  context's transaction costs one empty claim; the EF store reads each row's state when the scope ends,
+  so a row saved and then detached by a clear of the tracker, and a guarded attempt whose commit landed
+  with an unknown outcome (its scope ends before the verification), are not woken; a commit in a scope
+  prepared for an instance since removed and re-added does not wake its successor; a publication from a
+  host scope to a partitioned store is not woken (#189); another host is not woken (#214, or a broker
+  transport, #134).
+- A wake only saves latency: the loop still polls, so a missed or early wake delays a row to the next
+  poll, never loses it.
+- Prior art. MassTransit's `EntityFrameworkScopedBusContext.Dispose` calls
+  `IBusOutboxNotification.Delivered()` when its outbox state entry is `Unchanged` (MassTransit `d9f61f7`,
+  `EntityFrameworkScopedBusContext.cs:51-57, 96-99`); its notification is dropped when no wait is
+  pending (`BusOutboxNotification.cs:20-48`), where this signal stays pending. CAP (`a4f8cd3`) and
+  Wolverine (`6aff3e0`) send from memory after a commit made through their own API; this module
+  publishes by enlistment and never commits the host's work (#188), so that model does not apply.
+  Disposal order: Microsoft Learn, "Dependency injection scope disposal aggregates exceptions" (reverse
+  capture order); a disposing scope refuses to resolve (dotnet/runtime `2ba107f`,
+  `ServiceProviderEngineScope.cs:49-53, 283-298`).
