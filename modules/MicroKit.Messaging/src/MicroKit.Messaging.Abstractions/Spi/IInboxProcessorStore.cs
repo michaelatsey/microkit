@@ -32,10 +32,11 @@ public interface IInboxProcessorStore
     /// </summary>
     /// <param name="batchSize">Maximum number of rows to claim.</param>
     /// <param name="leaseDuration">How long the lease is held.</param>
-    /// <param name="excludedTenants">
-    /// The tenants in back-off on this store's inbox (#124), whose rows must not be claimed: they are
-    /// neither claimed nor rewritten while the tenant's dependency is down, and the other tenants' rows
-    /// behind them are reached. Empty leaves no tenant out.
+    /// <param name="excluded">
+    /// What this store's inbox has in back-off (#124, #210), whose rows must not be claimed: the consumers
+    /// in consumer-wide back-off, and the (consumer, tenant) pairs in back-off. Their rows are neither
+    /// claimed nor rewritten while the dependency is down, and the rows behind them are reached.
+    /// <see cref="InboxClaimExclusions.None"/> leaves nothing out.
     /// </param>
     /// <param name="ct">Cancellation token.</param>
     /// <returns>The rows actually won, and the token proving ownership.</returns>
@@ -47,18 +48,26 @@ public interface IInboxProcessorStore
     /// count returned must never exceed <paramref name="batchSize"/>.
     /// </para>
     /// <para>
-    /// <b>The tenant filter is part of the contract.</b> A store that ignores it claims and re-defers a
-    /// blocked tenant's whole backlog, a batch at a time, every time its back-off ends — all of a store
-    /// whose rows carry one tenant. A row with no tenant (<see cref="InboxMessage.TenantId"/>
-    /// <see langword="null"/>) is never left out, whatever the provider's null semantics: a plain
-    /// <c>NOT IN</c> over a nullable column leaves it out.
+    /// <b>The filter is part of the contract.</b> A store that ignores it claims and re-defers a held
+    /// backlog, a batch at a time, every time its back-off ends: a pair's rows, or every row with a tenant
+    /// of a consumer in consumer-wide back-off — all of a store whose rows carry one tenant. A row with no
+    /// tenant (<see cref="InboxMessage.TenantId"/> <see langword="null"/>) is never left out, by either list,
+    /// whatever the provider's null semantics: a plain <c>NOT IN</c> over a nullable column leaves it out.
+    /// The rows of a pair are those of its <see cref="InboxMessage.ConsumerType"/> and its
+    /// <see cref="InboxMessage.TenantId"/>; a store may match them on the two joined by U+001F, which no
+    /// consumer key contains (<see cref="InboxClaimExclusions"/>).
     /// </para>
     /// <para>
-    /// <b>The bound.</b> Each claim reads, and never writes, a held tenant's claimable rows: no claim index
-    /// orders them by tenant, so the cost of every claim, for every other tenant, grows with that backlog,
-    /// not with <paramref name="batchSize"/> — a slower store, not a stalled one.
-    /// <see cref="IInboxAdminStore.DeadLetterPendingAsync"/> is the exit for a tenant that will not
-    /// recover.
+    /// <b>The bound.</b> Each claim reads, and never writes, the claimable rows of a held pair or
+    /// consumer: no claim index orders them by consumer or tenant, so the cost of every claim, for every
+    /// other pair, grows with that backlog, not with <paramref name="batchSize"/> — a slower store, not a
+    /// stalled one. Matching a pair costs the EF store the reads a tenant cost before #210 — the same plan,
+    /// the same buffers, the same rows read past — plus the key comparison per row read: about 40% more
+    /// execution time with 20,000 held rows on PostgreSQL in its measurement, once per batch and only while
+    /// something is held. <see cref="IInboxAdminStore.DeadLetterPendingAsync"/> is the exit for a tenant
+    /// that will not recover; it parks every consumer's rows of the tenant. No call parks one consumer: a
+    /// consumer whose own dependency will not recover is removed from the composition, and the retry loop then
+    /// dead-letters its rows on sight, as rows of an unknown consumer.
     /// </para>
     /// <para>
     /// <b>Clock.</b> The expiry is computed from the application clock via
@@ -69,7 +78,7 @@ public interface IInboxProcessorStore
     /// </para>
     /// </remarks>
     ValueTask<InboxClaim> ClaimBatchAsync(
-        int batchSize, TimeSpan leaseDuration, IReadOnlyList<string> excludedTenants, CancellationToken ct = default);
+        int batchSize, TimeSpan leaseDuration, InboxClaimExclusions excluded, CancellationToken ct = default);
 
     /// <summary>
     /// Persists the dispositions the handler transaction did not already settle, in one call at

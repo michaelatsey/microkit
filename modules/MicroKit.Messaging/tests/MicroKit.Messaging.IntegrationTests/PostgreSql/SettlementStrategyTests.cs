@@ -129,7 +129,7 @@ public sealed class SettlementStrategyTests(PostgreSqlFixture fixture)
         var faults = new CommitFaultInjector();
         await using var context = RetryingContext(db, faults);
         var store = new EfInboxStore<TestMessagingDbContext>(context, new FakeTimeProvider(Now));
-        var claim = await store.ClaimBatchAsync(10, TimeSpan.FromMinutes(5), []);
+        var claim = await store.ClaimBatchAsync(10, TimeSpan.FromMinutes(5), InboxClaimExclusions.None);
         claim.Messages.Count.ShouldBe(2);
 
         faults.Arm(CommitFaultPoint.AfterCommit);
@@ -149,7 +149,7 @@ public sealed class SettlementStrategyTests(PostgreSqlFixture fixture)
         var faults = new CommitFaultInjector();
         await using var context = RetryingContext(db, faults);
         var store = new EfInboxStore<TestMessagingDbContext>(context, new FakeTimeProvider(Now));
-        var claim = await store.ClaimBatchAsync(10, TimeSpan.FromMinutes(5), []);
+        var claim = await store.ClaimBatchAsync(10, TimeSpan.FromMinutes(5), InboxClaimExclusions.None);
 
         faults.Arm(CommitFaultPoint.BeforeCommit, times: 10);
         await Should.ThrowAsync<InjectedCommitFaultException>(

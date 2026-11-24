@@ -119,8 +119,21 @@ internal sealed class InboxBackoff
     /// <param name="until">When the back-off ends — the later of the two in force — when one is.</param>
     /// <returns><see langword="true"/> while a back-off is in force. One volatile read while nothing is in back-off.</returns>
     public bool IsBlocked(string consumer, string tenant, DateTimeOffset now, out DateTimeOffset until)
+        => IsBlocked(consumer, tenant, now, out until, out _);
+
+    /// <inheritdoc cref="IsBlocked(string, string, DateTimeOffset, out DateTimeOffset)"/>
+    /// <param name="consumer">The consumer key: the row's <c>ConsumerType</c>.</param>
+    /// <param name="tenant">The tenant.</param>
+    /// <param name="now">The current time.</param>
+    /// <param name="until">When the back-off ends — the later of the two in force — when one is.</param>
+    /// <param name="pairInForce">
+    /// Whether the pair's own back-off is in force: <see langword="false"/> for work held by its consumer's
+    /// consumer-wide back-off alone, which event 2013 does not report for its tenant.
+    /// </param>
+    public bool IsBlocked(string consumer, string tenant, DateTimeOffset now, out DateTimeOffset until, out bool pairInForce)
     {
         until = default;
+        pairInForce = false;
         if (IsEmpty)
         {
             return false;
@@ -128,7 +141,7 @@ internal sealed class InboxBackoff
 
         lock (_lock)
         {
-            return InForce(consumer, tenant, now, out until);
+            return InForce(consumer, tenant, now, out until, out pairInForce);
         }
     }
 
@@ -225,7 +238,7 @@ internal sealed class InboxBackoff
         {
             // (a) Held: the verdict carries no news — the curves do not grow once per attempt in flight, and
             // neither probe is touched.
-            if (InForce(consumer, tenant, now, out until))
+            if (InForce(consumer, tenant, now, out until, out _))
             {
                 return OutageScope.Held;
             }
@@ -490,14 +503,16 @@ internal sealed class InboxBackoff
     }
 
     /// <summary>The pair's back-off or its consumer's is in force. Called under the lock.</summary>
-    private bool InForce(string consumer, string tenant, DateTimeOffset now, out DateTimeOffset until)
+    private bool InForce(string consumer, string tenant, DateTimeOffset now, out DateTimeOffset until, out bool pairInForce)
     {
         until = default;
         var held = false;
+        pairInForce = false;
         if (_tenants.TryGetValue(tenant, out var pairs) && pairs.TryGetValue(consumer, out var pair) && now < pair.Until)
         {
             until = pair.Until;
             held = true;
+            pairInForce = true;
         }
 
         if (_consumers.TryGetValue(consumer, out var state) && state.Backoff is { } backoff && now < backoff.Until)

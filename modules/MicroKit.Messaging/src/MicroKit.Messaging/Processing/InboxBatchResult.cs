@@ -15,8 +15,8 @@ namespace MicroKit.Messaging.Processing;
 /// <param name="DeadLettered">Rows permanently rejected or past the retry ceiling.</param>
 /// <param name="Released">
 /// Rows returned with no attempt counted: claimed but never attempted, returned to the queue untouched,
-/// or held by their tenant's back-off — due again at its end, the row whose failure began it included
-/// (#124).
+/// or held by the back-off of their (consumer, tenant) pair or of their consumer — due again at its end,
+/// the row whose failure began it included (#124, #210).
 /// </param>
 /// <param name="LeasesLost">
 /// Rows skipped because the lease had expired and another processor owned them. A persistently

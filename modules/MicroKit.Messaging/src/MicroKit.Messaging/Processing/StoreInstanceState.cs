@@ -31,7 +31,7 @@ internal sealed class StoreInstanceState : IDisposable
     /// <param name="store">The store.</param>
     /// <param name="instance">The instance.</param>
     /// <param name="outboxBackoff">Its outbox's endpoint back-off.</param>
-    /// <param name="inboxTenants">Its inbox's tenant back-off.</param>
+    /// <param name="inboxBackoff">Its inbox's back-off: its pairs and consumers in back-off (#210).</param>
     /// <param name="gate">The gate its outbox and inbox batches pass.</param>
     /// <param name="registry">Runs its store's check.</param>
     /// <param name="tagInstances">Whether its instruments carry <c>store.instance</c>.</param>
@@ -40,7 +40,7 @@ internal sealed class StoreInstanceState : IDisposable
         MessageStoreKey store,
         MessageStoreInstance instance,
         OutboxEndpointBackoff outboxBackoff,
-        TenantBackoff inboxTenants,
+        InboxBackoff inboxBackoff,
         FifoGate gate,
         StoreInstanceRegistry registry,
         bool tagInstances,
@@ -50,7 +50,7 @@ internal sealed class StoreInstanceState : IDisposable
         Instance = instance;
         Key = new StoreInstanceKey(store, instance.Id);
         OutboxBackoff = outboxBackoff;
-        InboxTenants = inboxTenants;
+        InboxBackoff = inboxBackoff;
         Gate = gate;
         Registry = registry;
         InstanceTag = tagInstances ? instance.Id : null;
@@ -70,8 +70,8 @@ internal sealed class StoreInstanceState : IDisposable
     /// <summary>Gets its outbox's endpoint back-off.</summary>
     public OutboxEndpointBackoff OutboxBackoff { get; }
 
-    /// <summary>Gets its inbox's tenant back-off.</summary>
-    public TenantBackoff InboxTenants { get; }
+    /// <summary>Gets its inbox's back-off: its pairs and consumers in back-off (#210).</summary>
+    public InboxBackoff InboxBackoff { get; }
 
     /// <summary>Gets the wake of its outbox loop: a commit in a scope prepared for it signals it (#215).</summary>
     public LoopWake OutboxWake { get; } = new();

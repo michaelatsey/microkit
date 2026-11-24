@@ -3,8 +3,10 @@ using System.Runtime.CompilerServices;
 namespace MicroKit.Messaging.Processing;
 
 /// <summary>
-/// The tenants in back-off on one shared resource — an outbox endpoint of a store, or a store's
-/// inbox (#124) — with the half-open probe that tells a tenant's failure from the resource's.
+/// The tenants in back-off on one shared resource — an outbox endpoint of a store (#124) — with the
+/// half-open probe that tells a tenant's failure from the resource's. The inbox holds its back-off per
+/// (consumer, tenant) pair instead (<see cref="InboxBackoff"/>, #210), and answers as this class does
+/// when a store has one consumer.
 /// </summary>
 /// <remarks>
 /// <para>
@@ -17,7 +19,7 @@ namespace MicroKit.Messaging.Processing;
 /// <b>The probe</b> (the half-open state of a circuit breaker). Once a tenant is blocked, the next
 /// down verdict from a tenant that has no entry is the probe failing: the cause is shared, so that
 /// tenant is blocked too and <see cref="OutageScope.Shared"/> tells the caller to back the whole
-/// resource off — the endpoint, the store's inbox retries, the transport's deliveries. A success in
+/// resource off — the endpoint, for every tenant. A success in
 /// between clears the probe. A tenant whose own back-off just ended and fails again re-blocks only
 /// itself, unless the resource is <i>suspected</i> — it backed off and no success has cleared it
 /// since — where it counts as a probe like any other: an outage costs at most two attempts per batch,
@@ -27,8 +29,7 @@ namespace MicroKit.Messaging.Processing;
 /// <b>Bounded, and free when idle.</b> An entry leaves on its tenant's success, or once it has been
 /// expired for a whole ceiling (<see cref="Prune"/>), past which the curve starts over anyway. With no
 /// tenant in back-off, every check is one volatile read (<see cref="IsEmpty"/>, <see cref="IsQuiet"/>):
-/// no lock, no lookup, no allocation. Thread-safe: a store's (or an instance's, #191) inbox state is shared by its retry loop
-/// and the transports' delivery threads.
+/// no lock, no lookup, no allocation. Thread-safe.
 /// </para>
 /// </remarks>
 internal sealed class TenantBackoff
@@ -48,8 +49,9 @@ internal sealed class TenantBackoff
     /// <param name="ceiling">The largest delay.</param>
     /// <param name="loud">
     /// Counts the instances of a group that are not quiet, so the group answers "nothing to do" with one
-    /// read whatever its size — the inbox's, one per single store and one per instance of a partitioned store
-    /// (#191), which leaves it through <see cref="Detach"/>. Null for a standalone instance.
+    /// read whatever its size; an instance leaves it through <see cref="Detach"/>. Null for a standalone
+    /// instance, as an outbox endpoint's is. The inbox's back-off equivalence tests use it as their oracle
+    /// (#210 V2).
     /// </param>
     public TenantBackoff(TimeSpan initial, TimeSpan ceiling, StrongBox<int>? loud = null)
     {

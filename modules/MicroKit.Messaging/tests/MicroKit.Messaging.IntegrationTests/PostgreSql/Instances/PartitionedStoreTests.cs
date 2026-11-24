@@ -239,7 +239,7 @@ public sealed class PartitionedStoreTests(InstanceServerFixture server, ITestOut
         await delivery.WaitAsync(TimeSpan.FromSeconds(30));
 
         var key = new StoreInstanceKey(Store, "i0");
-        host.Services.GetRequiredService<InboxTenantBackoff>().Stores.ShouldNotContain(e => e.Key == key, "the delivery path never creates an instance's state");
+        host.Services.GetRequiredService<InboxBackoffGroup>().Stores.ShouldNotContain(e => e.Key == key, "the delivery path never creates an instance's state");
         using var recorder = new InstanceMeterRecorder(
             host.Services.GetRequiredService<InboxMetrics>().Meter,
             host.Services.GetRequiredService<OutboxMetrics>().Meter);
@@ -387,7 +387,7 @@ public sealed class PartitionedStoreTests(InstanceServerFixture server, ITestOut
     private static Task ReleasedAsync(PartitionedHost host, string id)
     {
         var key = new StoreInstanceKey(Store, id);
-        var inbox = host.Services.GetRequiredService<InboxTenantBackoff>();
+        var inbox = host.Services.GetRequiredService<InboxBackoffGroup>();
         return Eventually.HoldsAsync(() => !inbox.Stores.Any(e => e.Key == key), $"instance {id}'s loops have ended and its state was released");
     }
 }

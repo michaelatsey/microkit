@@ -6,7 +6,9 @@ namespace MicroKit.Messaging.IntegrationTests.PostgreSql;
 /// The claim's tenant filters (#124 A7), on PostgreSQL, under both null semantics a host's context may
 /// choose: a row with no tenant is never left out — <c>UseRelationalNulls()</c> turns a plain
 /// <c>NOT IN</c> over the nullable column into a filter that leaves it out — and each endpoint's list
-/// leaves out only that endpoint's rows of the listed tenants.
+/// leaves out only that endpoint's rows of the listed tenants. The inbox's lists are a (consumer, tenant)
+/// pair's and a consumer's (#210): a consumer left out for every tenant still has its rows with no tenant
+/// claimed.
 /// </summary>
 [Collection(PostgreSqlSuite.Name)]
 public sealed class TenantClaimFilterTests(PostgreSqlFixture fixture)
@@ -23,12 +25,20 @@ public sealed class TenantClaimFilterTests(PostgreSqlFixture fixture)
         => OutboxAsync(relationalNulls: true);
 
     [DockerRequiredFact]
-    public Task Inbox_TheTenantList_LeavesOutThoseTenantsRows_NeverARowWithNoTenant()
-        => InboxAsync(relationalNulls: false);
+    public Task Inbox_AnExcludedPair_LeavesOutThatPairsRows_NeverARowWithNoTenant()
+        => InboxAsync(relationalNulls: false, consumerWide: false, expected: ["-", "B"]);
 
     [DockerRequiredFact]
     public Task Inbox_UnderRelationalNulls_ARowWithNoTenant_IsStillNeverLeftOut()
-        => InboxAsync(relationalNulls: true);
+        => InboxAsync(relationalNulls: true, consumerWide: false, expected: ["-", "B"]);
+
+    [DockerRequiredFact]
+    public Task Inbox_AnExcludedConsumer_LeavesOutItsRowsWithATenant_NeverItsRowWithNoTenant()
+        => InboxAsync(relationalNulls: false, consumerWide: true, expected: ["-"]);
+
+    [DockerRequiredFact]
+    public Task Inbox_AnExcludedConsumer_UnderRelationalNulls_StillClaimsItsRowWithNoTenant()
+        => InboxAsync(relationalNulls: true, consumerWide: true, expected: ["-"]);
 
     private async Task OutboxAsync(bool relationalNulls)
     {
@@ -82,7 +92,7 @@ public sealed class TenantClaimFilterTests(PostgreSqlFixture fixture)
             ["local:-", "local:A"], "with the transport left out, B's local row too");
     }
 
-    private async Task InboxAsync(bool relationalNulls)
+    private async Task InboxAsync(bool relationalNulls, bool consumerWide, string[] expected)
     {
         await using var db = await StoreDatabase.CreateAsync<TestMessagingDbContext>(fixture.ConnectionString, o => new(o));
         var order = 0;
@@ -107,9 +117,13 @@ public sealed class TenantClaimFilterTests(PostgreSqlFixture fixture)
 
         await using var context = NewContext(db, relationalNulls);
         var store = new EfInboxStore<TestMessagingDbContext>(context, new FakeTimeProvider(Now));
-        var claim = await store.ClaimBatchAsync(100, Lease, ["A"]);
+        const string consumer = "Tests.FilterHandler, Tests";
+        var excluded = consumerWide
+            ? new InboxClaimExclusions([consumer], [])
+            : new InboxClaimExclusions([], [(consumer, "A")]);
+        var claim = await store.ClaimBatchAsync(100, Lease, excluded);
 
-        claim.Messages.Select(m => m.TenantId ?? "-").Order(StringComparer.Ordinal).ShouldBe(["-", "B"]);
+        claim.Messages.Select(m => m.TenantId ?? "-").Order(StringComparer.Ordinal).ShouldBe(expected);
     }
 
     private static TestMessagingDbContext NewContext(StoreDatabase db, bool relationalNulls)

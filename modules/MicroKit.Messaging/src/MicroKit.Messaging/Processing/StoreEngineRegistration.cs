@@ -109,7 +109,7 @@ internal static class StoreEngineRegistration
                 sp.GetRequiredService<InboxRetryPolicy>(),
                 sp.GetRequiredService<ILogger<InboxProcessor>>(),
                 (MessageStoreKey)key!,
-                instance?.InboxTenants ?? sp.GetRequiredService<InboxTenantBackoff>().For((MessageStoreKey)key!),
+                instance?.InboxBackoff ?? sp.GetRequiredService<InboxBackoffGroup>().For((MessageStoreKey)key!),
                 instance);
         });
     }

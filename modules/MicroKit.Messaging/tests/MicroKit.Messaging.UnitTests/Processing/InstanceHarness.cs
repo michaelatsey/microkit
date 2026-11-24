@@ -49,7 +49,7 @@ internal sealed class InstanceHarness : IDisposable
         InstanceOptions = new StoreInstanceOptions { MaxConcurrentBatches = permits, TagInstances = tagInstances };
         Registry = new StoreInstanceRegistry(Composition, _provider, registryLogger ?? NullLogger<StoreInstanceRegistry>.Instance);
         Gate = new FifoGate(permits);
-        Inbox = new InboxTenantBackoff(InboxOptions);
+        Inbox = new InboxBackoffGroup(InboxOptions);
         Metrics = new OutboxMetrics(TimeProvider.System, OutboxOptions, InstanceOptions, Registry);
     }
 
@@ -78,7 +78,7 @@ internal sealed class InstanceHarness : IDisposable
 
     public FifoGate Gate { get; }
 
-    public InboxTenantBackoff Inbox { get; }
+    public InboxBackoffGroup Inbox { get; }
 
     public OutboxMetrics Metrics { get; }
 

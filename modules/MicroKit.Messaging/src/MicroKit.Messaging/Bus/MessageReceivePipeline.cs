@@ -64,7 +64,7 @@ using MessageCtx = MicroKit.Messaging.Execution.ExecutionContext;
 /// instances: a local delivery against the instance whose outbox row it is, a transport delivery
 /// against the instance the store's source maps it to (<see cref="StoreInstanceRegistry.Find(MessageStoreKey, MessageContext)"/>),
 /// a retry against the instance whose loop claimed it. Every scope of the handler is prepared for
-/// that instance — its initializer, then the <see cref="IMessageScopeInitializer"/>s — and its tenant
+/// that instance — its initializer, then the <see cref="IMessageScopeInitializer"/>s — and its inbox
 /// back-off is the instance's. A delivery that arrives before the store's first snapshot is applied waits
 /// for it, at most one polling interval (<see cref="StoreInstanceRegistry.WaitForFirstRoundAsync"/>). A delivery that maps to no instance drained here is a counted failure
 /// (<see cref="DeliveryVerdict.Transient"/>, event 1410): the transport redelivers it and holds nothing
@@ -80,7 +80,7 @@ internal sealed class MessageReceivePipeline(
     MessageStoreResolver stores,
     InboxRetryPolicy retryPolicy,
     InboxMetrics metrics,
-    InboxTenantBackoff tenantBackoff,
+    InboxBackoffGroup backoffs,
     ILogger<MessageReceivePipeline> logger,
     StoreInstanceRegistry? instances = null)
 {
@@ -590,20 +590,22 @@ internal sealed class MessageReceivePipeline(
                     return DeliveryOutcome.Success;
                 }
 
-                // A tenant in back-off on this store's inbox (#124): its handler's dependency is down, so
-                // the delivery is not attempted. Its row is written Failed, unattempted, due at the end of
+                // Its consumer in back-off for its tenant, or for every tenant, on this store's inbox (#124,
+                // #210): its handler's dependency is down, so the delivery is not attempted. Its row is written Failed, unattempted, due at the end of
                 // the back-off, and the delivery acknowledged once that row is committed: the store's
                 // retry loop owns it from there. A local delivery is the outbox's (D1), never deferred here.
                 if (!attempt.Local
                     && context.TenantId is { } blockedTenant
-                    && !tenantBackoff.IsQuiet
-                    && TenantsOf(attempt).IsBlocked(blockedTenant, retryPolicy.Clock.GetUtcNow(), out var blockedUntil))
+                    && !backoffs.IsQuiet
+                    && BackoffOf(attempt).IsBlocked(entry.ConsumerType, blockedTenant, retryPolicy.Clock.GetUtcNow(), out var blockedUntil))
                 {
                     InboxProcessorLogs.DeliveryDeferred(
                         logger, key.MessageId.Value, entry.HandlerType.FullName!, blockedTenant, store.Value, blockedUntil);
                     var notAttempted = new InboxDependencyUnavailableException(
-                        $"Not attempted: tenant '{blockedTenant}' is in back-off in store '{store}' until {blockedUntil:O}.");
-                    return await WriteDeferredAsync(attempt, rows, notAttempted, blockedUntil, enteredBackOff: null, ct).ConfigureAwait(false);
+                        $"Not attempted: consumer '{entry.ConsumerType}' is in back-off for tenant '{blockedTenant}', or for " +
+                        $"every tenant, in store '{store}' until {blockedUntil:O}.");
+                    return await WriteDeferredAsync(
+                        attempt, rows, notAttempted, blockedUntil, InboxBackoff.OutageScope.Held, ct).ConfigureAwait(false);
                 }
 
                 try
@@ -696,22 +698,23 @@ internal sealed class MessageReceivePipeline(
             logger, ex, attempt.Entry.HandlerType.FullName!, attempt.Key.MessageId.Value, attempt.Store.Value);
         if (!attempt.Local)
         {
-            TenantsOf(attempt).MarkSuspected();
+            BackoffOf(attempt).MarkSuspected();
         }
 
         return new DeliveryOutcome(DeliveryVerdict.DependencyUnavailable, ex, ex.Message);
     }
 
     /// <summary>
-    /// A guarded handler of a transport delivery succeeded: its tenant leaves the back-off of the
-    /// store's inbox, and the probe and the suspicion clear (#124). One read while nothing is in
+    /// A guarded handler of a transport delivery succeeded: its (consumer, tenant) pair leaves the back-off
+    /// of the store's inbox, its consumer's probe and consumer-wide back-off clear, and so do the store probe
+    /// and the suspicion (#124, #210). Another consumer's back-off is left. One read while nothing is in
     /// back-off.
     /// </summary>
     private void Succeeded(GuardedAttempt attempt)
     {
-        if (!attempt.Local && !tenantBackoff.IsQuiet)
+        if (!attempt.Local && !backoffs.IsQuiet)
         {
-            TenantsOf(attempt).Succeeded(attempt.Context.TenantId);
+            BackoffOf(attempt).Succeeded(attempt.Entry.ConsumerType, attempt.Context.TenantId);
         }
     }
 
@@ -732,7 +735,7 @@ internal sealed class MessageReceivePipeline(
     /// <summary>
     /// Reads the row after a fault of unknown outcome: committed means <c>Processed</c>. A store that
     /// reports itself unreachable here is marked on the attempt, so its outage is never taken for the
-    /// handler's dependency — one tenant's (#124).
+    /// handler's dependency — one pair's or one consumer's (#124, #210).
     /// </summary>
     private static async ValueTask<bool> VerifyAsync(IInboxGuardStore guard, GuardedAttempt attempt, CancellationToken ct)
     {
@@ -865,13 +868,13 @@ internal sealed class MessageReceivePipeline(
     }
 
     /// <summary>
-    /// A new delivery's handler met its dependency down (#124 D6). With a tenant, the tenant is put in
-    /// back-off on the store's inbox and the row is written <c>Failed</c>, unattempted and uncounted,
-    /// due at the end of the back-off: the store's retry loop owns it, and the transport keeps
-    /// delivering the other tenants. Otherwise no row: the transport pauses and redelivers, nothing
+    /// A new delivery's handler met its dependency down (#124 D6, #210 D3). With a tenant, its (consumer,
+    /// tenant) pair is put in back-off on the store's inbox — and its consumer, for every tenant, when its
+    /// consumer probe failed — and the row is written <c>Failed</c>, unattempted and uncounted, due at the end
+    /// of the back-off: the store's retry loop owns it, and the transport keeps delivering the other pairs. Otherwise no row: the transport pauses and redelivers, nothing
     /// counted, as before — for a row with no tenant, the store itself unreachable, a local delivery
     /// (the outbox defers it, D1), and the probe failing (a second tenant down before any success). The
-    /// failed probe's tenant is in back-off too, so its redeliveries are written to wait like any held
+    /// failed probe's pair is in back-off too, so its redeliveries are written to wait like any held
     /// tenant's: during an outage shared by every tenant, the held tenants' deliveries move into the
     /// inbox table instead of waiting in the broker — the documented cost of never holding one tenant
     /// behind another (README, <i>One tenant down</i>).
@@ -885,22 +888,22 @@ internal sealed class MessageReceivePipeline(
             return paused;
         }
 
-        var tenants = TenantsOf(attempt);
+        var backoff = BackoffOf(attempt);
         if (attempt.GuardUnreachable || attempt.Context.TenantId is not { } tenant)
         {
-            tenants.MarkSuspected();
+            backoff.MarkSuspected();
             return paused;
         }
 
-        var scope = tenants.OnDown(tenant, retryPolicy.Clock.GetUtcNow(), out var until);
-        if (scope is TenantBackoff.OutageScope.Shared)
+        var scope = backoff.OnDown(attempt.Entry.ConsumerType, tenant, retryPolicy.Clock.GetUtcNow(), out var until);
+        if (scope is InboxBackoff.OutageScope.Shared)
         {
             return paused;
         }
 
-        // Held: a delivery in flight when another put the tenant in back-off — it did not enter it (2014).
-        var entered = scope is TenantBackoff.OutageScope.Tenant ? tenant : null;
-        return await WriteDeferredAsync(attempt, rows, failure, until, entered, ct).ConfigureAwait(false);
+        // Tenant reports 2013, Consumer 2015 and 2013, once the row has committed. Held: a delivery in flight when
+        // another put its pair or its consumer in back-off — it entered nothing, and reports nothing.
+        return await WriteDeferredAsync(attempt, rows, failure, until, scope, ct).ConfigureAwait(false);
     }
 
     /// <summary>
@@ -912,9 +915,12 @@ internal sealed class MessageReceivePipeline(
     /// <param name="rows">Builds its row.</param>
     /// <param name="failure">What its row records.</param>
     /// <param name="until">When its row is due.</param>
-    /// <param name="enteredBackOff">
-    /// The tenant this delivery put in back-off, reported (2013) once the row has committed; null for a
-    /// delivery of a tenant already in back-off (2014 reports it).
+    /// <param name="entered">
+    /// What this delivery put in back-off, reported once the row has committed: its pair
+    /// (<see cref="InboxBackoff.OutageScope.Tenant"/>, 2013) or its consumer and its pair
+    /// (<see cref="InboxBackoff.OutageScope.Consumer"/>, 2015 and 2013); <see cref="InboxBackoff.OutageScope.Held"/> for a
+    /// delivery whose pair or consumer was already in back-off, which reports nothing here (2014 reports one
+    /// not attempted).
     /// </param>
     /// <param name="ct">The host's token.</param>
     private async ValueTask<DeliveryOutcome> WriteDeferredAsync(
@@ -922,7 +928,7 @@ internal sealed class MessageReceivePipeline(
         RowFactory rows,
         Exception failure,
         DateTimeOffset until,
-        string? enteredBackOff,
+        InboxBackoff.OutageScope entered,
         CancellationToken ct)
     {
         var handlerType = attempt.Entry.HandlerType.FullName!;
@@ -960,9 +966,16 @@ internal sealed class MessageReceivePipeline(
             return new DeliveryOutcome(DeliveryVerdict.DependencyUnavailable, failure, failure.Message);
         }
 
-        if (enteredBackOff is not null)
+        // A Consumer verdict put the pair in back-off too: both are reported, in the retry loop's order.
+        if (entered is InboxBackoff.OutageScope.Consumer)
         {
-            InboxProcessorLogs.TenantDeferred(logger, attempt.Store.Value, enteredBackOff, 1, until);
+            InboxProcessorLogs.ConsumerInBackoff(logger, attempt.Store.Value, attempt.Entry.ConsumerType, until);
+        }
+
+        if (entered is InboxBackoff.OutageScope.Tenant or InboxBackoff.OutageScope.Consumer)
+        {
+            InboxProcessorLogs.TenantDeferred(
+                logger, attempt.Store.Value, attempt.Entry.ConsumerType, attempt.Context.TenantId!, 1, until);
         }
 
         metrics.RecordAdded(attempt.Entry.ConsumerType);
@@ -1075,11 +1088,11 @@ internal sealed class MessageReceivePipeline(
     }
 
     /// <summary>
-    /// The inbox tenant back-off of an attempt's store: its instance's for a partitioned store (#191),
-    /// never created here; a single store's, created on first use, as before.
+    /// The inbox back-off of an attempt's store: its instance's for a partitioned store (#191), never created
+    /// here; a single store's, created on first use, as before.
     /// </summary>
-    private TenantBackoff TenantsOf(GuardedAttempt attempt)
-        => attempt.Instance?.InboxTenants ?? tenantBackoff.For(attempt.Store);
+    private InboxBackoff BackoffOf(GuardedAttempt attempt)
+        => attempt.Instance?.InboxBackoff ?? backoffs.For(attempt.Store);
 
     private static IInboxGuardStore? ResolveGuard(IServiceProvider services, MessageStoreKey store)
         => services.GetKeyedService<IInboxGuardStore>(store);
@@ -1270,7 +1283,7 @@ internal readonly record struct RetryOutcome(
     /// <summary>
     /// Gets a value indicating whether a <see cref="DeliveryVerdict.DependencyUnavailable"/> came from the
     /// store itself — its guard reporting its database unreachable — rather than from the handler's
-    /// dependency: the store's outage, never one tenant's (#124).
+    /// dependency: the store's outage, never one pair's or one consumer's (#124, #210).
     /// </summary>
     public bool StoreUnreachable { get; init; }
 }

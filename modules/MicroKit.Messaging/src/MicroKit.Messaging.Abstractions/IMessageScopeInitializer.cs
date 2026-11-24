@@ -15,7 +15,7 @@ namespace MicroKit.Messaging;
 /// scope. Keep their own constructor dependencies free of the services they prepare. An exception
 /// is classified like a handler's: <see cref="PermanentMessageException"/> dead-letters,
 /// <see cref="InboxDependencyUnavailableException"/> pauses the endpoint — or, with a store, backs the
-/// message's tenant off (#124) — anything else redelivers.
+/// handler off for the message's tenant (#124, #210) — anything else redelivers.
 /// </para>
 /// </remarks>
 public interface IMessageScopeInitializer

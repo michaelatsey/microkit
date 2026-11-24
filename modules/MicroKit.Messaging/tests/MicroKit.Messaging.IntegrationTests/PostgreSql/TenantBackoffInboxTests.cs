@@ -82,7 +82,7 @@ public sealed class TenantBackoffInboxTests(PostgreSqlFixture fixture)
                 break;
             }
 
-            allKnownAt ??= tenants.All(t => rig.Tenants.TryGetDelay(t, out _)) ? batch : null;
+            allKnownAt ??= tenants.All(t => rig.Tenants.TryGetDelay(Rig.Consumer, t, out _)) ? batch : null;
             rig.Clock.Advance(Polling);     // the loop's store-wide back-off starts at the polling interval
         }
 
@@ -184,7 +184,7 @@ public sealed class TenantBackoffInboxTests(PostgreSqlFixture fixture)
         rows.Count.ShouldBe(InFlight);
         rows.ShouldAllBe(r => r.Status == InboxMessageStatus.Failed && r.RetryCount == 0 && r.NextRetryAtUtc == Now + Polling,
             "one back-off, at the base delay, for every delivery in flight");
-        rig.Tenants.TryGetDelay("A", out var delay).ShouldBeTrue();
+        rig.Tenants.TryGetDelay(Rig.Consumer, "A", out var delay).ShouldBeTrue();
         delay.ShouldBe(Polling, "one failure of the curve, not one per delivery");
         rig.Host.Logs.Entries.Count(e => e.EventId == 2013).ShouldBe(1, "A entered back-off once");
     }
@@ -289,7 +289,7 @@ public sealed class TenantBackoffInboxTests(PostgreSqlFixture fixture)
 
         (await rig.Host.RetryOnceAsync()).Claimed.ShouldBe(10, "control: the first claim reaches A's rows");
         rig.TakeCalls().ShouldBe(["A"], "A's first retry fails; the rest of that batch waits unattempted");
-        rig.Tenants.IsBlocked("A", Now, out var until).ShouldBeTrue();
+        rig.Tenants.IsBlocked(Rig.Consumer, "A", Now, out var until).ShouldBeTrue();
 
         var ceiling = rig.Host.Provider.GetRequiredService<InboxProcessorOptions>().DependencyUnavailableBackoff;
         var expected = Polling;
@@ -309,7 +309,7 @@ public sealed class TenantBackoffInboxTests(PostgreSqlFixture fixture)
             (await rig.Host.RetryOnceAsync()).Claimed.ShouldBeGreaterThan(0, $"period {period}: A is claimed again once its back-off ends");
             rig.TakeCalls().ShouldBe(["A"], $"period {period}: at most one attempt per back-off period");
             expected = expected * 2 > ceiling ? ceiling : expected * 2;
-            rig.Tenants.IsBlocked("A", until, out var next).ShouldBeTrue();
+            rig.Tenants.IsBlocked(Rig.Consumer, "A", until, out var next).ShouldBeTrue();
             next.ShouldBe(until + expected, $"period {period}: A's own back-off grows");
             until = next;
         }
@@ -327,7 +327,7 @@ public sealed class TenantBackoffInboxTests(PostgreSqlFixture fixture)
         await rig.SeedFailedAsync("A");
         await rig.Host.RetryOnceAsync();
         rig.TakeCalls().ShouldBe(["A"]);
-        rig.Tenants.IsBlocked("A", Now, out _).ShouldBeTrue("control: A is excluded");
+        rig.Tenants.IsBlocked(Rig.Consumer, "A", Now, out _).ShouldBeTrue("control: A is excluded");
         var aBefore = Snapshot((await rig.Host.InboxAsync()).Where(r => r.TenantId == "A"));
 
         await rig.SeedFailedAsync("B");
@@ -379,7 +379,10 @@ public sealed class TenantBackoffInboxTests(PostgreSqlFixture fixture)
 
         public bool EveryTenantDown { get; set; }
 
-        public TenantBackoff Tenants => Host.Provider.GetRequiredService<InboxTenantBackoff>().For(GuardHost.Store);
+        /// <summary>Gets the consumer key of the rig's one handler: the pairs' consumer (#210).</summary>
+        public static string Consumer { get; } = MessageConsumerKey.Of(typeof(FirstGuardHandler));
+
+        public InboxBackoff Tenants => Host.Provider.GetRequiredService<InboxBackoffGroup>().For(GuardHost.Store);
 
         public static async Task<Rig> CreateAsync(PostgreSqlFixture fixture, InMemoryBroker? broker = null)
         {

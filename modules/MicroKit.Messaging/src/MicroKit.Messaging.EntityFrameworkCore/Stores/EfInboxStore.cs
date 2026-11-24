@@ -52,6 +52,13 @@ internal sealed class EfInboxStore<TContext>(
     : IInboxGuardStore, IInboxProcessorStore, IInboxAdminStore, IInboxRetentionStore, IDisposable, IAsyncDisposable
     where TContext : DbContext
 {
+    /// <summary>
+    /// The separator of a pair's claim key, <c>ConsumerType + U+001F + TenantId</c> (#210): the character
+    /// <c>MessageConsumerKey.Of</c> and <c>LocalConsumer</c> refuse in a consumer key, which this assembly cannot
+    /// reference. A test pins the two to the same character.
+    /// </summary>
+    internal const string PairSeparator = "\u001F";
+
     // Logical key -> surrogate key, built from the rows this batch claimed. Scoped lifetime, so
     // it lives exactly as long as the claim it describes.
     private readonly Dictionary<InboxMessageKey, Guid> _rowIdsByKey = [];
@@ -422,9 +429,9 @@ internal sealed class EfInboxStore<TContext>(
 
     /// <inheritdoc/>
     public async ValueTask<InboxClaim> ClaimBatchAsync(
-        int batchSize, TimeSpan leaseDuration, IReadOnlyList<string> excludedTenants, CancellationToken ct = default)
+        int batchSize, TimeSpan leaseDuration, InboxClaimExclusions excluded, CancellationToken ct = default)
     {
-        ArgumentNullException.ThrowIfNull(excludedTenants);
+        ArgumentNullException.ThrowIfNull(excluded);
         var now = timeProvider.GetUtcNow();
         var lockExpiry = now.Add(leaseDuration);
         var token = Guid.NewGuid();
@@ -441,24 +448,31 @@ internal sealed class EfInboxStore<TContext>(
         //    row-limiting operators translate there varies by EF Core version and provider, and
         //    the claim path is the wrong place to rely on an unverified capability.
         //
-        //    The tenants in back-off are left out here only (#124), as one array parameter
-        //    (EF.Parameter), so the SQL text does not change with their number; an empty list adds no
-        //    predicate. A row with no tenant is never left out: the TenantId == null arm is spelled out
-        //    because under UseRelationalNulls(), a context option the host owns, NOT (TenantId =
-        //    ANY(@p)) is null for it, and the row would never be claimed again. The stamp below matches
-        //    the candidates by RowId.
+        //    The consumers and the (consumer, tenant) pairs in back-off are left out here only (#124,
+        //    #210), each list as one array parameter (EF.Parameter), so the SQL text does not change with
+        //    their number — one text for any exclusion, an empty array allowed — and nothing excluded adds
+        //    no predicate. EF Core 10 translates a parameter collection of primitive values only, so a pair
+        //    is matched on one value, ConsumerType + U+001F + TenantId, compared with the same expression
+        //    on the columns: exact, because no consumer key contains U+001F (MessageConsumerKey.Of,
+        //    LocalConsumer), so the first separator sits at the consumer key's length. A row with no tenant
+        //    is never left out: the TenantId == null arm is spelled out because under UseRelationalNulls(),
+        //    a context option the host owns, the NOT arms are null for it, and the row would never be
+        //    claimed again. The stamp below matches the candidates by RowId.
         //
-        //    The bound: each claim reads, and never writes, a held tenant's claimable rows — the filter
-        //    is residual, as in EfOutboxStore.ExcludingTenants — so the cost of every claim grows with
-        //    that backlog, not with batchSize. DeadLetterPendingAsync is the exit for a tenant that will
+        //    The bound: each claim reads, and never writes, the claimable rows of a held pair or consumer —
+        //    the filter is residual, as in EfOutboxStore.ExcludingTenants — so the cost of every claim grows
+        //    with that backlog, not with batchSize. DeadLetterPendingAsync is the exit for a tenant that will
         //    not recover.
         var processable = context.Set<InboxMessage>()
             .AsNoTracking()
             .Where(Processable(now));
-        if (excludedTenants.Count > 0)
+        if (!excluded.IsEmpty)
         {
-            var tenants = excludedTenants as string[] ?? [.. excludedTenants];
-            processable = processable.Where(m => m.TenantId == null || !EF.Parameter(tenants).Contains(m.TenantId));
+            var consumers = excluded.ConsumerTypes as string[] ?? [.. excluded.ConsumerTypes];
+            var keys = PairKeys(excluded.Pairs);
+            processable = processable.Where(m => m.TenantId == null
+                || (!EF.Parameter(consumers).Contains(m.ConsumerType)
+                    && !EF.Parameter(keys).Contains(m.ConsumerType + PairSeparator + m.TenantId)));
         }
 
         var candidateRowIds = await processable
@@ -719,6 +733,21 @@ internal sealed class EfInboxStore<TContext>(
     /// surrogate pair: half of one is not valid text, and a strict encoder (Npgsql's) rejects the write.
     /// </summary>
     private static int CutBefore(string text, int max) => char.IsHighSurrogate(text[max - 1]) ? max - 1 : max;
+
+    /// <summary>
+    /// Each excluded pair as the one value the claim compares: its consumer key, U+001F, its tenant id (#210).
+    /// One array per claim that excludes anything; none for a claim that does not.
+    /// </summary>
+    private static string[] PairKeys(IReadOnlyList<(string ConsumerType, string TenantId)> pairs)
+    {
+        var keys = new string[pairs.Count];
+        for (var i = 0; i < keys.Length; i++)
+        {
+            keys[i] = pairs[i].ConsumerType + PairSeparator + pairs[i].TenantId;
+        }
+
+        return keys;
+    }
 
     /// <summary>
     /// A row is retryable when its last attempt failed (or it was received by an earlier version and

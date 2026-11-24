@@ -44,33 +44,35 @@ public sealed class InboxProcessorTests
         var sut = Build(store, out _, out _, options);
         await sut.ProcessBatchAsync(batchSize: 7, CancellationToken.None);
 
-        await store.Received(1).ClaimBatchAsync(7, TimeSpan.FromSeconds(97), Arg.Any<IReadOnlyList<string>>(), Arg.Any<CancellationToken>());
+        await store.Received(1).ClaimBatchAsync(7, TimeSpan.FromSeconds(97), Arg.Any<InboxClaimExclusions>(), Arg.Any<CancellationToken>());
     }
 
     /// <summary>
-    /// A tenant in back-off on the store's inbox is left out of the claim (#124 A7); with no tenant in
-    /// back-off the list is empty.
+    /// A (consumer, tenant) pair in back-off on the store's inbox is left out of the claim (#124 A7, #210
+    /// D4); with nothing in back-off the claim is passed the shared <see cref="InboxClaimExclusions.None"/>
+    /// (V13).
     /// </summary>
     [Fact]
-    public async Task ProcessBatch_LeavesATenantInBackOffOutOfTheClaim()
+    public async Task ProcessBatch_LeavesAPairInBackOffOutOfTheClaim_AndAQuietStorePassesNone()
     {
-        var lists = new List<IReadOnlyList<string>>();
+        var lists = new List<InboxClaimExclusions>();
         var store = StoreReturning(InboxClaim.Empty);
-        store.ClaimBatchAsync(Arg.Any<int>(), Arg.Any<TimeSpan>(), Arg.Any<IReadOnlyList<string>>(), Arg.Any<CancellationToken>())
+        store.ClaimBatchAsync(Arg.Any<int>(), Arg.Any<TimeSpan>(), Arg.Any<InboxClaimExclusions>(), Arg.Any<CancellationToken>())
             .Returns(ci =>
             {
-                lists.Add(ci.ArgAt<IReadOnlyList<string>>(2));
+                lists.Add(ci.ArgAt<InboxClaimExclusions>(2));
                 return ValueTask.FromResult(InboxClaim.Empty);
             });
         var sut = Build(store, out _, out var harness);
 
         await sut.ProcessBatchAsync(batchSize: 10, CancellationToken.None);
-        harness.TenantBackoff.For(GuardHarness.Store).OnDown("tenant-b", harness.Clock.GetUtcNow(), out _);
+        harness.Backoffs.For(GuardHarness.Store).OnDown(ConsumerType, "tenant-b", harness.Clock.GetUtcNow(), out _);
         await sut.ProcessBatchAsync(batchSize: 10, CancellationToken.None);
 
         lists.Count.ShouldBe(2);
-        lists[0].ShouldBeEmpty("control: nobody in back-off");
-        lists[1].ShouldBe(["tenant-b"]);
+        lists[0].ShouldBeSameAs(InboxClaimExclusions.None, "nothing in back-off: the shared value, no allocation");
+        lists[1].Pairs.ShouldBe([(ConsumerType, "tenant-b")]);
+        lists[1].ConsumerTypes.ShouldBeEmpty();
     }
 
     // ── Success: the row is written Processed in the handler's transaction ───────────────────
@@ -356,7 +358,7 @@ public sealed class InboxProcessorTests
 
         row.TenantId.ShouldNotBeNull("control: the row has a tenant to blame");
         result.AbortReason.ShouldBe(InboxBatchAbortReason.DependencyUnavailable);
-        harness.TenantBackoff.For(GuardHarness.Store).IsEmpty.ShouldBeTrue("no tenant is blamed for the store's outage");
+        harness.Backoffs.For(GuardHarness.Store).IsEmpty.ShouldBeTrue("no tenant is blamed for the store's outage");
     }
 
     /// <summary>A dependency of the row's tenant (#124 D5): that row waits, nothing counted, and the batch goes on.</summary>
@@ -405,7 +407,7 @@ public sealed class InboxProcessorTests
             harness.Database.Add(row);
         }
 
-        var tenants = harness.TenantBackoff.For(GuardHarness.Store);
+        var tenants = harness.Backoffs.For(GuardHarness.Store);
         DateTimeOffset blockedUntil = default;
         probe.ThrowWhen = context =>
         {
@@ -415,7 +417,7 @@ public sealed class InboxProcessorTests
             }
 
             // A delivery of A on a transport thread failed first and put A in back-off.
-            tenants.OnDown("A", harness.Clock.GetUtcNow(), out blockedUntil);
+            tenants.OnDown(ConsumerType, "A", harness.Clock.GetUtcNow(), out blockedUntil);
             return new InboxDependencyUnavailableException("A's partner is down");
         };
 
@@ -427,7 +429,7 @@ public sealed class InboxProcessorTests
         outcome.Kind.ShouldBe(InboxOutcomeKind.Retry);
         outcome.RetryCount.ShouldBe(2, "unchanged");
         outcome.NextRetryAtUtc.ShouldBe(blockedUntil, "the back-off the delivery began");
-        tenants.TryGetDelay("A", out var delay).ShouldBeTrue();
+        tenants.TryGetDelay(ConsumerType, "A", out var delay).ShouldBeTrue();
         delay.ShouldBe(DefaultOptions.PollingInterval, "one failure of the curve");
     }
 
@@ -668,7 +670,7 @@ public sealed class InboxProcessorTests
     private static IInboxProcessorStore StoreReturning(InboxClaim claim)
     {
         var store = Substitute.For<IInboxProcessorStore>();
-        store.ClaimBatchAsync(Arg.Any<int>(), Arg.Any<TimeSpan>(), Arg.Any<IReadOnlyList<string>>(), Arg.Any<CancellationToken>())
+        store.ClaimBatchAsync(Arg.Any<int>(), Arg.Any<TimeSpan>(), Arg.Any<InboxClaimExclusions>(), Arg.Any<CancellationToken>())
             .Returns(ValueTask.FromResult(claim));
         store.ApplyOutcomesAsync(
                 Arg.Any<Guid>(), Arg.Any<IReadOnlyList<InboxOutcome>>(), Arg.Any<CancellationToken>())
@@ -729,7 +731,7 @@ public sealed class InboxProcessorTests
             harness.Policy,
             NullLogger<InboxProcessor>.Instance,
             GuardHarness.Store,
-            harness.TenantBackoff.For(GuardHarness.Store));
+            harness.Backoffs.For(GuardHarness.Store));
     }
 
     private static IMessageSerializer RoundTripSerializer()

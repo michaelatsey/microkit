@@ -25,7 +25,7 @@ internal sealed class MessageStoreEngine(
     TimeProvider timeProvider,
     ILoggerFactory loggerFactory,
     StoreInstanceRegistry? instances = null,
-    InboxTenantBackoff? inboxBackoff = null,
+    InboxBackoffGroup? inboxBackoff = null,
     OutboxMetrics? outboxMetrics = null,
     StoreInstanceOptions? instanceOptions = null,
     FifoGate? gate = null,
@@ -56,7 +56,7 @@ internal sealed class MessageStoreEngine(
                 loops.Add(new StoreInstanceReconciler(
                     store,
                     instances,
-                    inboxBackoff ?? throw Missing(nameof(InboxTenantBackoff)),
+                    inboxBackoff ?? throw Missing(nameof(InboxBackoffGroup)),
                     outboxMetrics ?? throw Missing(nameof(OutboxMetrics)),
                     outboxOptions,
                     instanceOptions ?? throw Missing(nameof(StoreInstanceOptions)),

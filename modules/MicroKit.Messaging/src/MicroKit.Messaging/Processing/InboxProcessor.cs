@@ -24,18 +24,20 @@ namespace MicroKit.Messaging.Processing;
 /// </para>
 /// <para>
 /// <b>Failure classification.</b> A failure known to be permanent dead-letters on sight; a
-/// dependency outage on a row with a tenant puts that tenant in back-off — its rows of the batch wait
-/// to the end of it with no attempt counted, and the batch goes on (#124) — and only the probe failing
-/// (a second tenant down before any success), a row with no tenant, or the store itself unreachable
-/// abandon the batch and release the remainder with no attempt counted; a lost claim writes nothing; a
+/// dependency outage on a row with a tenant puts its (consumer, tenant) pair in back-off — and its
+/// consumer, for every tenant, when its consumer probe failed — the rows it holds wait to the end of it
+/// with no attempt counted, and the batch goes on (#124, #210); only the store probe failing (a second
+/// tenant down before any success), a row with no tenant, or the store itself unreachable abandon the
+/// batch and release the remainder with no attempt counted; a lost claim writes nothing; a
 /// host stop releases the remainder with no attempt counted; everything else is transient, retried with
 /// full-jitter back-off until <see cref="InboxProcessorOptions.MaxRetries"/>. Failures are settled in
 /// one call at the end of the batch, each conditioned on the claim.
 /// </para>
 /// <para>
-/// <b>Ordering.</b> Rows are retried in claim order — except while a tenant is in back-off: the rows
-/// of tenants with no back-off entry are then retried first, then the others, those that failed least
-/// first (<see cref="TenantBackoff"/>). No order is promised.
+/// <b>Ordering.</b> Rows are retried in claim order — except while a pair or a consumer is in back-off:
+/// the rows whose (consumer, tenant) pair has no back-off entry are then retried first, in claim order,
+/// then the others, those whose pair failed least first (<see cref="InboxBackoff"/>). No order is
+/// promised.
 /// </para>
 /// </remarks>
 /// <param name="store">
@@ -53,8 +55,8 @@ namespace MicroKit.Messaging.Processing;
 /// <param name="policy">Attempts and back-off.</param>
 /// <param name="logger">Logger.</param>
 /// <param name="storeKey">The store this processor drains.</param>
-/// <param name="tenantBackoff">
-/// The store's inbox tenant back-off, shared with the deliveries guarded by the store (#124). Null only
+/// <param name="backoff">
+/// The store's inbox back-off, shared with the deliveries guarded by the store (#124, #210). Null only
 /// for a processor built by hand, which then gets one of its own.
 /// </param>
 /// <param name="instance">
@@ -72,26 +74,26 @@ internal sealed class InboxProcessor(
     InboxRetryPolicy policy,
     ILogger<InboxProcessor> logger,
     MessageStoreKey storeKey,
-    TenantBackoff? tenantBackoff = null,
+    InboxBackoff? backoff = null,
     StoreInstanceState? instance = null)
     : IInboxProcessor
 {
-    private readonly TenantBackoff _tenants = tenantBackoff
-        ?? new TenantBackoff(options.PollingInterval, options.DependencyUnavailableBackoff);
+    private readonly InboxBackoff _backoff = backoff
+        ?? new InboxBackoff(options.PollingInterval, options.DependencyUnavailableBackoff);
 
     /// <inheritdoc />
     public async ValueTask<InboxBatchResult> ProcessBatchAsync(
         int batchSize,
         CancellationToken cancellationToken = default)
     {
-        // A tenant in back-off is left out of the claim (#124 A7): its rows are neither claimed nor
-        // rewritten while its dependency is down, and the other tenants' rows behind them are reached.
-        // The shared empty array while no tenant is in back-off.
+        // The pairs and the consumers in back-off are left out of the claim (#124 A7, #210 D4): their rows
+        // are neither claimed nor rewritten while their dependency is down, and the rows behind them are
+        // reached. The shared InboxClaimExclusions.None while nothing is in back-off.
         var start = policy.Clock.GetUtcNow();
-        _tenants.Prune(start);
+        _backoff.Prune(start);
 
         var claim = await store
-            .ClaimBatchAsync(batchSize, options.LeaseDuration, _tenants.BlockedAt(start), cancellationToken)
+            .ClaimBatchAsync(batchSize, options.LeaseDuration, _backoff.ExclusionsAt(start), cancellationToken)
             .ConfigureAwait(false);
 
         if (claim.Count == 0)
@@ -111,15 +113,17 @@ internal sealed class InboxProcessor(
         var processed = 0;
         var leasesLost = 0;
 
-        // While a tenant is in back-off, the rows of tenants with no entry are retried first (#124 P1);
-        // null — the happy path — is claim order, and allocates nothing.
+        // While a pair or a consumer is in back-off, the rows whose pair has no entry are retried first
+        // (#124 P1); null — the happy path — is claim order, and allocates nothing.
         var order = AttemptOrder(messages);
         var position = 0;
 
-        // The rows a tenant's back-off deferred in this batch, unattempted or attempted with no attempt
-        // counted: reported with the released ones, and by 2013 per tenant once settled.
+        // The rows a back-off deferred in this batch, unattempted or attempted with no attempt counted:
+        // reported with the released ones, and by 2013 per (consumer, tenant) once settled; the consumers
+        // this batch put in consumer-wide back-off, by 2015.
         var tenantDeferred = 0;
-        List<(string Tenant, int Count, DateTimeOffset Until)>? tenantsDeferred = null;
+        List<(string Consumer, string Tenant, int Count, DateTimeOffset Until)>? tenantsDeferred = null;
+        List<(string Consumer, DateTimeOffset Until)>? consumersHeld = null;
 
         for (; position < messages.Count; position++)
         {
@@ -133,16 +137,22 @@ internal sealed class InboxProcessor(
             var message = order is null ? messages[position] : messages[order[position]];
             var key = new InboxMessageKey(message.MessageId, message.ConsumerType);
 
-            // A row of a tenant in back-off (#124 D5): due again at the end of the tenant's back-off,
-            // its attempt count and its error left as they are — the rest of the batch in which the
-            // tenant was blocked, or a row a delivery blocked since the claim (A7).
+            // A row whose pair or consumer is in back-off (#124 D5, #210 D4): due again at the end of the
+            // back-off, its attempt count and its error left as they are — the rest of the batch in which
+            // it was blocked, or a row a delivery blocked since the claim (A7).
             if (message.TenantId is { } blocked
-                && !_tenants.IsEmpty
-                && _tenants.IsBlocked(blocked, policy.Clock.GetUtcNow(), out var blockedUntil))
+                && !_backoff.IsEmpty
+                && _backoff.IsBlocked(message.ConsumerType, blocked, policy.Clock.GetUtcNow(), out var blockedUntil, out var pairHeld))
             {
                 deferred.Add(InboxOutcome.Retry(key, message.RetryCount, blockedUntil, message.ErrorMessage));
                 tenantDeferred++;
-                Tally(ref tenantsDeferred, blocked, blockedUntil);
+                if (pairHeld)
+                {
+                    // 2013 names the tenant: only for a pair that failed. A row its consumer's back-off holds
+                    // alone is a tenant that never failed for it, which 2015 reports with the consumer.
+                    Tally(ref tenantsDeferred, message.ConsumerType, blocked, blockedUntil);
+                }
+
                 continue;
             }
 
@@ -192,7 +202,7 @@ internal sealed class InboxProcessor(
             {
                 case RetryResult.Processed:
                     processed++;
-                    _tenants.Succeeded(message.TenantId);
+                    _backoff.Succeeded(message.ConsumerType, message.TenantId);
                     continue;
 
                 case RetryResult.LeaseLost:
@@ -205,23 +215,29 @@ internal sealed class InboxProcessor(
 
             if (outcome.Verdict is DeliveryVerdict.DependencyUnavailable)
             {
-                if (!outcome.StoreUnreachable
-                    && message.TenantId is { } tenant
-                    && _tenants.OnDown(tenant, policy.Clock.GetUtcNow(), out var tenantUntil)
-                        is not TenantBackoff.OutageScope.Shared)
+                if (!outcome.StoreUnreachable && message.TenantId is { } tenant)
                 {
-                    // That tenant's dependency (#124 D5): the row waits to the end of its back-off with
-                    // no attempt counted, and the batch goes on.
-                    deferred.Add(InboxOutcome.Retry(
-                        key, message.RetryCount, tenantUntil, policy.Truncate(outcome.Error?.Message)));
-                    tenantDeferred++;
-                    Tally(ref tenantsDeferred, tenant, tenantUntil);
-                    continue;
+                    var scope = _backoff.OnDown(message.ConsumerType, tenant, policy.Clock.GetUtcNow(), out var tenantUntil);
+                    if (scope is not InboxBackoff.OutageScope.Shared)
+                    {
+                        // The pair's dependency, or its consumer's (#124 D5, #210 D4): the row waits to the
+                        // end of the back-off with no attempt counted, and the batch goes on.
+                        deferred.Add(InboxOutcome.Retry(
+                            key, message.RetryCount, tenantUntil, policy.Truncate(outcome.Error?.Message)));
+                        tenantDeferred++;
+                        Tally(ref tenantsDeferred, message.ConsumerType, tenant, tenantUntil);
+                        if (scope is InboxBackoff.OutageScope.Consumer)
+                        {
+                            (consumersHeld ??= []).Add((message.ConsumerType, tenantUntil));
+                        }
+
+                        continue;
+                    }
                 }
 
-                // The store unreachable, a row with no tenant, or the probe failing (its tenant is in
+                // The store unreachable, a row with no tenant, or the store probe failing (its pair is in
                 // back-off now too): the cause is shared, and the batch is abandoned as before #124.
-                _tenants.MarkSuspected();
+                _backoff.MarkSuspected();
                 abortReason = InboxBatchAbortReason.DependencyUnavailable;
                 InboxProcessorLogs.DependencyUnavailable(logger, outcome.Error!, messages.Count - position);
                 break;
@@ -257,11 +273,19 @@ internal sealed class InboxProcessor(
         // exception, because it blocks its row for the whole LeaseDuration.
         var settled = await SettleAsync(claim.Token, deferred).ConfigureAwait(false);
 
+        if (settled && consumersHeld is not null)
+        {
+            foreach (var (consumer, until) in consumersHeld)
+            {
+                InboxProcessorLogs.ConsumerInBackoff(logger, storeKey.Value, consumer, until);
+            }
+        }
+
         if (settled && tenantsDeferred is not null)
         {
-            foreach (var (tenant, count, until) in tenantsDeferred)
+            foreach (var (consumer, tenant, count, until) in tenantsDeferred)
             {
-                InboxProcessorLogs.TenantDeferred(logger, storeKey.Value, tenant, count, until);
+                InboxProcessorLogs.TenantDeferred(logger, storeKey.Value, consumer, tenant, count, until);
             }
         }
 
@@ -278,14 +302,14 @@ internal sealed class InboxProcessor(
     /// claim order (#124 P1).
     /// </summary>
     /// <remarks>
-    /// With no tenant in back-off, claim order, and nothing is allocated. Otherwise the rows whose tenant
-    /// has no entry come first, in claim order — the probe is a tenant not known to fail — then the rows
-    /// of tenants with one, the smallest current delay first, claim order on ties. One array and one list
+    /// With nothing in back-off, claim order, and nothing is allocated. Otherwise the rows whose (consumer,
+    /// tenant) pair has no entry come first, in claim order — a probe is a pair not known to fail — then the
+    /// rows of pairs with one, the smallest current delay first, claim order on ties. One array and one list
     /// per batch, never per row.
     /// </remarks>
     private int[]? AttemptOrder(IReadOnlyList<InboxMessage> messages)
     {
-        if (_tenants.IsEmpty)
+        if (_backoff.IsEmpty)
         {
             return null;
         }
@@ -295,7 +319,7 @@ internal sealed class InboxProcessor(
         var next = 0;
         for (var i = 0; i < messages.Count; i++)
         {
-            if (messages[i].TenantId is { } tenant && _tenants.TryGetDelay(tenant, out var delay))
+            if (messages[i].TenantId is { } tenant && _backoff.TryGetDelay(messages[i].ConsumerType, tenant, out var delay))
             {
                 known.Add((delay.Ticks, i));
             }
@@ -315,22 +339,26 @@ internal sealed class InboxProcessor(
         return order;
     }
 
-    /// <summary>Adds a row to its tenant's tally for event 2013; the latest end of back-off wins.</summary>
+    /// <summary>Adds a row to its (consumer, tenant) tally for event 2013; the latest end of back-off wins.</summary>
     private static void Tally(
-        ref List<(string Tenant, int Count, DateTimeOffset Until)>? tallies, string tenant, DateTimeOffset until)
+        ref List<(string Consumer, string Tenant, int Count, DateTimeOffset Until)>? tallies,
+        string consumer,
+        string tenant,
+        DateTimeOffset until)
     {
         tallies ??= [];
         for (var i = 0; i < tallies.Count; i++)
         {
-            var (name, count, latest) = tallies[i];
-            if (string.Equals(name, tenant, StringComparison.Ordinal))
+            var (byConsumer, byTenant, count, latest) = tallies[i];
+            if (string.Equals(byConsumer, consumer, StringComparison.Ordinal)
+                && string.Equals(byTenant, tenant, StringComparison.Ordinal))
             {
-                tallies[i] = (name, count + 1, until > latest ? until : latest);
+                tallies[i] = (byConsumer, byTenant, count + 1, until > latest ? until : latest);
                 return;
             }
         }
 
-        tallies.Add((tenant, 1, until));
+        tallies.Add((consumer, tenant, 1, until));
     }
 
     /// <summary>Reads the row back and runs it through the pipeline's guarded retry.</summary>
@@ -505,7 +533,7 @@ internal sealed class InboxProcessor(
         int tenantDeferred,
         InboxBatchAbortReason abortReason)
     {
-        // A tenant's deferral is settled as a Retry with its attempt count unchanged: no attempt was
+        // A back-off's deferral is settled as a Retry with its attempt count unchanged: no attempt was
         // counted, so it is reported with the released rows.
         var retried = -tenantDeferred;
         var deadLettered = 0;

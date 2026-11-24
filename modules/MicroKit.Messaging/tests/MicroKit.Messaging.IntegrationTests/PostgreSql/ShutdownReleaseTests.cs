@@ -153,9 +153,9 @@ public sealed class ShutdownReleaseTests(PostgreSqlFixture fixture)
             bus.AddHandler<TenantBlockingHandler>();
         });
 
-        host.Services.GetRequiredService<InboxTenantBackoff>()
+        host.Services.GetRequiredService<InboxBackoffGroup>()
             .For(EntityFrameworkOutbox.KeyOf<TestMessagingDbContext>())
-            .OnDown("A", DateTimeOffset.UtcNow.AddMinutes(-1), out _);
+            .OnDown(MessageConsumerKey.Of(typeof(TenantBlockingHandler)), "A", DateTimeOffset.UtcNow.AddMinutes(-1), out _);
 
         var a1 = InboxRow("A", -3, retryCount: 2);
         var a2 = InboxRow("A", -2, retryCount: 2);

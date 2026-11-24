@@ -2,8 +2,8 @@ namespace MicroKit.Messaging.Processing;
 
 /// <summary>
 /// The one curve of every outage back-off the engine keeps — an outbox endpoint's, a tenant's on an
-/// endpoint, a tenant's on a store's inbox (#188, #124) — so the endpoint and the tenant curves cannot
-/// drift apart.
+/// endpoint, a (consumer, tenant) pair's and a consumer's on a store's inbox (#188, #124, #210) — so those
+/// curves cannot drift apart.
 /// </summary>
 internal static class BackoffCurve
 {

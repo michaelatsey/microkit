@@ -199,9 +199,10 @@ public static class ServiceCollectionExtensions
         // needs is created per handler through IExecutionScopeFactory.
         services.TryAddSingleton<MessageReceivePipeline>();
 
-        // The tenants in back-off on each store's inbox (#124), shared by the pipeline's deliveries and
-        // the stores' retry loops. Empty, and never consulted past one read, on a host with no store.
-        services.TryAddSingleton(static sp => new InboxTenantBackoff(sp.GetRequiredService<InboxProcessorOptions>()));
+        // The inbox back-off of each store — its (consumer, tenant) pairs and consumers in back-off (#124,
+        // #210) — shared by the pipeline's deliveries and the stores' retry loops. Empty, and never consulted
+        // past one read, on a host with no store.
+        services.TryAddSingleton(static sp => new InboxBackoffGroup(sp.GetRequiredService<InboxProcessorOptions>()));
 
         // The local endpoint (#188 D7): the consumers the integration packages supply, the sender
         // they enlist or queue through, and — for a host with no store — the in-memory queue. Its
