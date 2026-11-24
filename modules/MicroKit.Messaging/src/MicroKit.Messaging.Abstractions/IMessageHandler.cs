@@ -64,8 +64,8 @@ public interface IMessageHandler<in T>
     /// A dependency every message relies on is unreachable, so handling the next one is certain to
     /// fail too. No attempt is counted. With a store and a message with a tenant, this handler is put in
     /// back-off for that tenant and its message waits in the store, the other handlers and tenants handled
-    /// meanwhile (#124, #210) — for every tenant once it fails for a second one while another handler
-    /// succeeded in between; otherwise — or once a second tenant fails before any success — the endpoint
+    /// meanwhile (#124, #210) — for every tenant once it fails for a second one, and not as the store's probe
+    /// failing: another handler succeeded since, or that tenant already failed for another handler; otherwise — or once a second tenant fails before any success — the endpoint
     /// pauses for a back-off and the message is redelivered, and the inbox retry loop abandons its batch. Throw this for a downstream
     /// service that is down, a refused connection or rejected authentication — never for one
     /// message failing while the dependency is healthy.

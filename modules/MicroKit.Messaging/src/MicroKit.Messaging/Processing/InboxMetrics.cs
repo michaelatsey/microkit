@@ -65,7 +65,8 @@ namespace MicroKit.Messaging.Processing;
 /// <b>The consumers not recovered</b> — <c>microkit.inbox.consumers.backoff</c>, unit <c>{consumer}</c>, the
 /// same tags, the same reporting per store and per instance, zero included once reported (#210) — count the
 /// consumers in consumer-wide back-off by the same rule and bound: from the verdict that put a consumer in it
-/// until the consumer's success, or a ceiling plus <c>MaxPollingInterval</c> past its end. It exists because
+/// until the consumer's success, or a ceiling plus <c>MaxPollingInterval</c> past its end; it also drops out
+/// when its back-off is pruned, a ceiling after its end, by the next retry batch. It exists because
 /// the tenants counter cannot see such an outage: while a consumer is held for every tenant, its rows are
 /// left out of the claim and its deliveries written unattempted, so its pairs age out with no attempt and the
 /// tenants counter drops to 0 while the consumer is still down. Neither counter carries a consumer or a

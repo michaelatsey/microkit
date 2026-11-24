@@ -217,12 +217,18 @@ tenant. The tenant back-off is pinned by `TenantBackoffTests` (unit) and, on Pos
 `TenantBackoffOutboxTests` (V1–V3, V1b, a known tenant recovering while the endpoint is suspected,
 V11–V12: a one-tenant store's claims leave it out and write nothing until its back-off ends),
 `TenantBackoffInboxTests` (retries, new deliveries, the in-memory transport not paused, V11–V12),
-`TenantClaimFilterTests` (each endpoint's list; never a row with no tenant, under
-`UseRelationalNulls()` too), `TenantExclusionPlanTests` (one array parameter, one SQL text, nothing for
-an empty list; no write, the published history not walked, no more read than the deferred backlog
-cost before A7; with the local endpoint also excluded, the local backlog's heap not walked — a
+`TenantClaimFilterTests` (each endpoint's list, the inbox's pairs and consumers; never a row with no
+tenant, under `UseRelationalNulls()` too), `TenantExclusionPlanTests` (the outbox: one array parameter
+per list, one SQL text, nothing for an empty list; the inbox: two array parameters for any exclusion,
+either possibly empty, one SQL text, main's text for none; no write, the published history not walked, no more read than
+the deferred backlog cost before A7; the inbox's pair claim reading no more than main's tenant claim,
+D11 of #210, its medians in the test's comment; with the local endpoint also excluded, the local backlog's heap not walked — a
 planner property no code mutation turns red, so keep the local backlog larger than the held tenant's),
-`AdminDeadLetterPendingTests` and `ShutdownReleaseTests.AHostStoppedDuringTheSecondPassOf…`.
+`AdminDeadLetterPendingTests` and `ShutdownReleaseTests.AHostStoppedDuringTheSecondPassOf…`. The inbox's
+back-off per (consumer, tenant) (#210) is pinned by `InboxBackoffTests`, `InboxBackoffEquivalenceTests`
+(with one consumer it answers as `TenantBackoff` on generated sequences, the seed in the message) and
+`InboxBackoffQuietTests` (unit), and on PostgreSQL by `ConsumerBackoffInboxTests` (two consumers of one
+message: V1, V3–V5, V7, V8) and `ConsumerTenantClaimTests` (the pair key matched exactly).
 
 ### InboxProcessor and the inbox retry policy (`UnitTests/Processing`)
 ```
@@ -391,9 +397,9 @@ EndpointBindingTests.APublicationBeforeHostStart_ReachesTheHostsOwnHandlerOnceIt
 ## Architecture tests (`MicroKit.Messaging.ArchitectureTests`)
 
 - `StoreContractTests.IOutboxProcessorStore_HasOneClaim_TakingTheEndpointAndTenantFilters_WithNoDefaultImplementation`,
-  `…IInboxProcessorStore_HasOneClaim_TakingTheTenantFilter_WithNoDefaultImplementation` — a default
-  that ignored a filter would let a store provider bring back local-row starvation, or the
-  re-deferral of a held tenant's backlog (#124).
+  `…IInboxProcessorStore_HasOneClaim_TakingTheConsumerAndPairExclusions_WithNoDefaultImplementation` — a
+  default that ignored a filter would let a store provider bring back local-row starvation, or the
+  re-deferral of a held tenant's, pair's or consumer's backlog (#124, #210).
 - `PublicSurfaceTests` — the full exported surface of all four assemblies, both directions (an
   unexpected type fails, a listed type that no longer exists fails). Uses
   `Assembly.GetExportedTypes()`, not NetArchTest, which breaks under coverlet instrumentation.

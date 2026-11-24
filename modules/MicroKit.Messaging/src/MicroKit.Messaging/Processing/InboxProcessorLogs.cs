@@ -126,8 +126,8 @@ internal static partial class InboxProcessorLogs
 
     /// <remarks>
     /// A consumer entered consumer-wide back-off on a store's inbox (#210): its dependency failed for a second
-    /// tenant new to it while another consumer succeeded in between. Once per entry: the deliveries and
-    /// retries it then holds report nothing here (2014, 2013). Nothing pauses: the transport goes on.
+    /// tenant new to it, and not as the store probe failing. At most once per entry, once the row or the batch
+    /// that caused it is written: the deliveries and retries it then holds report nothing here (2014, 2013). Nothing pauses: the transport goes on.
     /// </remarks>
     [LoggerMessage(EventId = 2015, Level = LogLevel.Warning,
         Message = "Consumer {ConsumerType} is in back-off in store {Store}'s inbox until {Until:O}: its rows and " +

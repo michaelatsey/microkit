@@ -35,7 +35,7 @@ public static partial class MessageConsumerKey
     /// <exception cref="ArgumentException">
     /// The type has no assembly-qualified name, or its key contains U+001F (unit separator): the inbox
     /// claim joins a consumer key and a tenant id with that character (#210), so such a key could match
-    /// another pair. No C# identifier contains it. A bus handler whose key does fails when it is
+    /// another pair. No C# type name contains it: a key gets one only from an assembly name. A bus handler whose key does fails when it is
     /// registered; a consumer whose key a source computes — the MediatR glue's notification handlers —
     /// fails when the source is read, at host start.
     /// </exception>

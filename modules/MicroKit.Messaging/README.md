@@ -797,30 +797,68 @@ holds that tenant, not the endpoint:
   for a tenant that will not recover.
 
 The inbox follows the same rule, on its own curve (`Inbox.PollingInterval` doubling to
-`Inbox.DependencyUnavailableBackoff`), for an `InboxDependencyUnavailableException` a handler throws:
+`Inbox.DependencyUnavailableBackoff`), for an `InboxDependencyUnavailableException` a handler throws —
+with one difference: what waits is a **handler for a tenant** (#210). A handler class is one consumer,
+named by its inbox key (`MessageConsumerKey`), so a handler of two message types has one back-off.
 
-- **Retries.** A held tenant's rows wait to the end of its back-off with their attempt count
-  unchanged, left out of the retry claim meanwhile, and the store's other tenants are retried. The batch is abandoned with the store-wide
-  back-off, as before, only when the probe fails, for a row with no tenant, or when the store itself
-  is unreachable.
-- **New deliveries.** The delivery's row is written `Failed`, no attempt counted, due at the end of
-  the tenant's back-off, and the delivery is acknowledged once that row has committed: the store's
-  retry loop owns it, and the transport keeps delivering the other tenants. Later deliveries of the
-  held tenant are written the same way without running the handler, and so is a delivery already
-  running when its tenant entered back-off: it waits for the same back-off, which it neither extends
-  nor turns into a shared outage. Event 2013 (`Warning`) fires when
-  a tenant enters back-off and once per retry batch and tenant; each deferred delivery logs 2014
-  (`Debug`), since they arrive at the broker's rate.
-- **What that costs.** During a shared outage with tenants, a held tenant's deliveries move into the
-  inbox table instead of waiting in the broker — CAP persists every received message the same way.
-  The transport still pauses and redelivers (`PauseAndRedeliver`) when the store is unreachable, for a
-  delivery with no tenant, and when the probe fails.
+- **A handler's outage for a tenant holds that handler for that tenant.** The other handlers of the same
+  message and tenant go on, and so do the handler's other tenants. Only a success of the handler for the
+  tenant clears it: another handler's success for the same tenant leaves it, so its back-off grows while
+  its dependency stays down.
+- **The probe still decides the store-wide back-off.** A failure for a tenant that already failed, for
+  any handler, is that tenant's own cause, unless the store is suspected; a second tenant down before
+  any success is the probe failing, as on the outbox: the transport pauses and redelivers, the retry
+  batch is abandoned. A success of any handler clears it.
+- **A handler whose own dependency is down waits for every tenant**, and nothing pauses. When it fails
+  for a second tenant new to it, with no success of its own since the first, and that failure is not the
+  probe failing — another handler succeeded since, or the tenant already failed for another handler —
+  its rows and its new deliveries with a tenant wait to the end of a handler-wide back-off, on the same
+  curve, growing from its previous one; the other handlers go on. Event 2015 (`Warning`) says so, at most
+  once per entry: not when the row of the delivery that caused it cannot be written, nor when the retry
+  batch that caused it cannot be settled. Only a success of that handler clears it. A tenant that already
+  failed for it changes its own back-off only, so two tenants that never recover hold the handler at most
+  once: once they are known to it, they cannot hold it again.
+- **Retries.** The rows a back-off holds wait to the end of it with their attempt count unchanged, left
+  out of the retry claim meanwhile, and the rest of the store is retried; the rows of a handler and
+  tenant not known to fail go first. The batch is abandoned with the store-wide back-off, as before,
+  only when the probe fails, for a row with no tenant, or when the store itself is unreachable.
+- **New deliveries.** The handler's row is written `Failed`, no attempt counted, due at the end of the
+  back-off, and the delivery is acknowledged once that row has committed: the store's retry loop owns
+  it, and the transport keeps delivering. Later deliveries a back-off holds are written the same way
+  without running that handler — the message's other handlers run — and so is a delivery already
+  running when its back-off began: it waits for the same back-off, which it neither extends nor turns
+  into a shared outage. Event 2013 (`Warning`) fires when a handler enters back-off for a tenant and once
+  per retry batch, handler and tenant; each deferred delivery logs 2014 (`Debug`), since they arrive at
+  the broker's rate.
+- **What that costs.** During a shared outage with tenants, the held deliveries move into the inbox
+  table instead of waiting in the broker — CAP persists every received message the same way. The
+  transport still pauses and redelivers (`PauseAndRedeliver`) when the store is unreachable, for a
+  delivery with no tenant, and when the probe fails. When a tenant's database is down, each handler of
+  the tenant makes one attempt before it waits: a handler cannot say that the cause is its tenant's.
+  These attempts are not counted. "At most two attempts per batch" holds between two successes: while
+  another handler keeps succeeding, a handler-wide outage costs at most two attempts on tenants new to
+  that handler per handler-wide back-off, plus each tenant known to fail on its own curve.
+- **The claim.** It leaves out each held handler and tenant, and each held handler's rows with a tenant,
+  never a row with no tenant. The EF store matches a handler and tenant on `ConsumerType + U+001F +
+  TenantId` — one array parameter for those keys, one for the handlers — which is exact because no
+  consumer key contains U+001F: `MessageConsumerKey.Of` and `LocalConsumer` refuse one, so a handler
+  whose key would contain it fails at registration. A row written by hand with such a `ConsumerType`
+  names no handler, and the retry loop dead-letters it on sight; it can only be left out of the claim
+  while a handler and tenant whose joined key equals its own are held. Handlers and tenants are compared
+  by the columns' collation, as tenant ids are above. **The bound** is the outbox's: each claim reads,
+  and never writes, the claimable rows held. Leaving one handler and tenant out reads what leaving that
+  tenant out read before #210 — the same plan, buffers and rows read past — plus the key comparison per
+  row read: about 40% more execution time with 20,000 held rows on PostgreSQL in our measurement, paid
+  once per batch and only while something is held. With 100 held at once the planner took a bitmap scan
+  of the processable index and read 13% more buffers.
 - A local consumer's dependency down for one tenant holds that tenant's local rows on the local
   endpoint, by the outbox's rule above; no inbox row is written for them.
 
 **A tenant that never recovers** — a de-provisioned one — holds only itself: it is tried once per its
 back-off and never dead-lettered on its own, because an automatic cap would dead-letter a long but
-legitimate outage. To park it, dead-letter its waiting messages, in the outbox and in the inbox; to
+legitimate outage. Parking a tenant parks every handler's messages of it: no call parks one handler. A
+handler whose own dependency will not recover is removed from the composition, and the retry loop then
+dead-letters its rows on sight, as rows of an unknown consumer. To park a tenant, dead-letter its waiting messages, in the outbox and in the inbox; to
 bring them back once it is healthy, requeue them:
 
 <!-- snippet: tenant-admin-exit -->
@@ -990,39 +1028,43 @@ ended. A single store's series never carry it.
 | `microkit.outbox.endpoints.backoff` | up-down counter, `{endpoint}` | 1 while the endpoint has not recovered, else 0 | `microkit_outbox_endpoints_backoff > 0` for 15 min (below) |
 | `microkit.outbox.tenants.backoff` | up-down counter, `{tenant}` | The tenants on the endpoint that have not recovered | `> 0` for 15 min (below) |
 
-**`MessagingDiagnostics.InboxMeterName`** (`MicroKit.Messaging.Inbox`). No tenant tag either: event 2013
-names the tenant.
+**`MessagingDiagnostics.InboxMeterName`** (`MicroKit.Messaging.Inbox`). No tenant or consumer tag on the
+back-off counters either: events 2013 and 2015 name them.
 
 | Instrument | Kind, unit | What it is | Alert |
 |---|---|---|---|
 | `microkit.inbox.messages.added` | counter, `{message}`, tag `consumer.type` | A new delivery whose handler wrote its inbox row, `Processed` or `Failed` | — |
 | `microkit.inbox.messages.deduplicated` | counter, `{message}`, tag `consumer.type` | A redelivery the inbox absorbed. Normal: watch the rate, not the value | a sustained climb in the rate |
 | `microkit.inbox.envelopes.unconsumed` | counter, `{message}`, tag `contract.name` | An envelope no handler consumes (above) | a sustained non-zero value |
-| `microkit.inbox.tenants.backoff` | up-down counter, `{tenant}`, tag `store.key` | The tenants on the store's inbox that have not recovered | `> 0` for 15 min (below) |
+| `microkit.inbox.tenants.backoff` | up-down counter, `{tenant}`, tag `store.key` | The tenants on the store's inbox that have not recovered: a tenant counts while one of its handlers has not recovered for it | `> 0` for 15 min (below) |
+| `microkit.inbox.consumers.backoff` | up-down counter, `{consumer}`, tag `store.key` | The handlers in handler-wide back-off on the store's inbox that have not recovered (#210) | `> 0` for 15 min (below) |
 
 The back-off counters are observable up-down counters: their values add up across stores and endpoints,
 and Prometheus shows them as gauges. They read the engine's memory, never the database. Each counts an
-endpoint or a tenant 1 from a down verdict until a success, or until a ceiling plus `MaxPollingInterval`
+endpoint, a tenant or a handler 1 from a down verdict until a success, or until a ceiling plus `MaxPollingInterval`
 after its back-off ended with no new attempt — for the outbox, `TransportUnavailableBackoff` +
 `OutboxProcessorOptions.MaxPollingInterval`; for the inbox, `DependencyUnavailableBackoff` +
 `InboxProcessorOptions.MaxPollingInterval` (6 minutes with the defaults). A back-off that has ended is
 half-open, not recovered: the next attempt comes within `MaxPollingInterval` plus a batch's own time, so
 an endpoint or a tenant still failing is blocked again before that bound, and the counter never drops to
-0 during an outage; one with nothing left to send drops out after it. The inbox has one exception: a
+0 during an outage it can see; one with nothing left to send drops out after it. The tenants counter cannot
+see a handler held for every tenant (below). The inbox has one exception: a
 transport delivery that leaves its tenant in back-off with no row — the tenant fails the probe, its
 deferred row cannot be written, the store is unreachable while writing it, or the host stops while
 writing it — is next attempted by the transport's redelivery, not the retry loop, and a provider pausing
-longer than the bound reads 0 before it. A tenant also drops out when its entry is pruned, a ceiling
-after its back-off ended, by the next batch of its store: with `MaxPollingInterval` above the ceiling, a
-tenant still failing can read 0 for the batch that prunes it and blocks it again. Each process reports
+longer than the bound reads 0 before it. A tenant, or a handler held for every tenant, also drops out
+when its entry is pruned, a ceiling after its back-off ended, by the next batch of its store: before the
+bound, and with `MaxPollingInterval` above the ceiling, a tenant or a handler still failing can read 0
+for the batch that prunes it and blocks it again. Each process reports
 its own view, and one that recorded the last failure, at the ceiling, and has nothing left to send —
 another instance drained the rows — holds 1 for up to two ceilings plus `MaxPollingInterval` after that
 failure (11 minutes with the defaults). Alert on the raw value held longer than that:
 `microkit_outbox_endpoints_backoff > 0` for 15 minutes with the defaults. A single store's outbox is
-reported from its first cycle. A single store's inbox is reported once its back-off state is created, by the first
-`InboxTenantBackoff.For` call for it, which a local delivery never makes: its retry loop's first cycle;
+reported from its first cycle. A single store's inbox is reported once its back-off state is created, which a local delivery never
+does: by its retry loop's first cycle;
 a dependency outage, or the store unreachable, met by one of its transport deliveries; or, while some
-store's inbox is not quiet — a tenant in back-off, a probe pending or a suspicion standing — one of its
+store's inbox is not quiet — a handler in back-off, for a tenant or for every tenant, a probe pending or
+a suspicion standing — one of its
 transport deliveries with a tenant that passed the dedup read, or a transport success. So it can read 0
 with no outage of its own. A single store none of these reaches reports nothing (event 1400 covers a
 processor that never activates); once reported, it reports zeros included, so an alert resolves. A
@@ -1036,6 +1078,11 @@ callback reported in the current collection, so that series goes stale and an al
 earlier version keeps exporting its last value, and such an alert does not resolve. A configuration
 fault needs no metric: it is logged at `Critical` on every cycle (1006, 1402; 1413 for an instance's
 loop).
+
+The two inbox counters read the same back-off from two sides. A handler held for one tenant counts its
+tenant; a handler held for every tenant counts itself, on `microkit.inbox.consumers.backoff`: while it is,
+its rows are left out of the claim and its deliveries written unattempted, so its tenants' back-offs age
+out with no attempt and the tenants counter drops to 0 while the handler is still down. Alert on both.
 
 An outage with no endpoint or tenant to hold in back-off shows on no counter: a store's database
 unreachable (the loop backs off, 1401), and an inbox dependency down for a message with no tenant (a

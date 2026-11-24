@@ -28,12 +28,12 @@ namespace MicroKit.Messaging.Processing;
 /// (<see cref="OutageScope.Consumer"/>), on the inbox curve, growing from its previous consumer back-off;
 /// otherwise C's probe is pending. While C is in it, its work with a tenant waits, and the other consumers
 /// go on. A verdict for a tenant that already has an entry for C changes that entry only, so two tenants
-/// that never recover cannot hold C for the others. Only a success of C clears C's probe and C's back-off;
+/// that never recover hold C at most once: known to C, they cannot hold it again. Only a success of C clears C's probe and C's back-off;
 /// C's pending probe also clears once C has no entry left. A store-wide verdict wins: a verdict that is
 /// <see cref="OutageScope.Shared"/> sets no consumer back-off, and entering the store-wide back-off
-/// (<see cref="OutageScope.Shared"/>, <see cref="MarkSuspected"/>) clears every consumer's pending probe — a
-/// consumer back-off takes another consumer's success between C's two failures. With one consumer it never
-/// occurs, and this state answers exactly as <see cref="TenantBackoff"/> does.
+/// (<see cref="OutageScope.Shared"/>, <see cref="MarkSuspected"/>) clears every consumer's pending probe — C's
+/// second failure holds it for every tenant only when it is not the store probe failing: another consumer
+/// succeeded since, or its tenant already failed for another consumer. With one consumer it never occurs, and this state answers exactly as <see cref="TenantBackoff"/> does.
 /// </para>
 /// <para>
 /// <b>Bounded, and free when idle.</b> A pair leaves on its success, a consumer back-off on its consumer's,
@@ -289,7 +289,7 @@ internal sealed class InboxBackoff
             {
                 if (state.ProbeTenant is { } probe && !string.Equals(probe, tenant, StringComparison.Ordinal))
                 {
-                    // A second tenant down for this consumer while another consumer succeeded in between: its own
+                    // A second tenant new to this consumer, and not the store probe failing: its own
                     // dependency. It waits for every tenant, growing from its previous consumer back-off.
                     var consumerDelay = BackoffCurve.Next(
                         state.Backoff?.Until, state.Backoff?.Delay ?? default, now, _initial, _ceiling);

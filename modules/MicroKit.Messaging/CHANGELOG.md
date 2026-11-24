@@ -1,5 +1,50 @@
 # Changelog — MicroKit.Messaging
 
+## [Unreleased] — the inbox back-off is held per consumer and tenant (#210)
+
+### Breaking
+
+- **`IInboxProcessorStore.ClaimBatchAsync(int batchSize, TimeSpan leaseDuration, InboxClaimExclusions excluded,
+  CancellationToken ct = default)`** (store SPI) replaces the overload taking `IReadOnlyList<string>
+  excludedTenants`. One signature, no default implementation. A store provider leaves out the rows of the
+  consumers in `excluded.ConsumerTypes` that have a tenant, and the rows of each (consumer, tenant) pair in
+  `excluded.Pairs`; never a row with no tenant. `InboxClaimExclusions.None`, shared, leaves nothing out. A
+  provider may match a pair on `ConsumerType + U+001F + TenantId`, as the EF store does.
+- **`MessageConsumerKey.Of`** throws `ArgumentException` for a key containing U+001F (unit separator), and
+  the **`LocalConsumer`** constructor refuses such a `ConsumerType`: a handler whose key contains it fails
+  at registration, a consumer source's when it is read. No C# type name contains U+001F: a key gets one
+  only from an assembly name or a consumer source's own name.
+  `MessageConsumerKey.FromAssemblyQualifiedName` is unchanged.
+
+### Added
+
+- **`InboxClaimExclusions`** (store SPI): what an inbox claim leaves out, the consumers in consumer-wide
+  back-off and the (consumer, tenant) pairs in back-off.
+- **`microkit.inbox.consumers.backoff`**, an up-down counter (`{consumer}`, tag `store.key`, and
+  `store.instance` as for the tenants counter): the consumers in consumer-wide back-off not recovered, by
+  the tenants counter's rule. A consumer held for every tenant leaves its pairs to age out with no attempt,
+  so the tenants counter alone reads 0 while it is still down.
+- Event **2015** (`Warning`): a consumer entered consumer-wide back-off in a store's inbox, with the store,
+  the consumer and the end of the back-off; at most once per entry — not when the deferred row of the
+  delivery that caused it cannot be written, nor when the retry batch that caused it cannot be settled.
+
+### Changed
+
+- The inbox back-off is held per (store or instance, consumer, tenant): a success of a consumer for a
+  tenant clears that pair only, so another consumer's success no longer cuts a consumer's back-off short,
+  and a consumer's failure no longer holds the tenant's other consumers. A consumer that fails for a second
+  tenant new to it, with no success of its own since, waits for every tenant without pausing the
+  transport, when that failure is not the store probe failing: another consumer succeeded since, or the tenant already failed for another consumer; only its own success clears it. Two tenants down before any success still pause the transport
+  and abandon the retry batch, as before.
+- `microkit.inbox.tenants.backoff` counts a tenant while at least one of its (consumer, tenant) pairs has
+  not recovered; its name, unit and tags are unchanged.
+- Event 2013 names the consumer, and is reported per (consumer, tenant). Event 2014 keeps its id, level and
+  parameters; its text says the delivery's consumer is in back-off for that tenant, or for every tenant.
+- The EF inbox claim leaving one pair out reads what the tenant claim leaving that tenant out read — the
+  same plan and buffers — plus a key comparison per row read: about 40% more execution time with 20,000
+  held rows on PostgreSQL, paid once per batch while something is held. With 100 pairs held the planner
+  took a bitmap scan and read 13% more buffers. With nothing excluded its SQL is unchanged.
+
 ## [Unreleased] — a commit wakes its store's outbox loop (#215)
 
 ### Added
