@@ -172,7 +172,8 @@ internal sealed class MessagingComposition
     /// </summary>
     /// <param name="handlerType">The handler type.</param>
     /// <param name="messageType">The message type, from a closed <c>IMessageHandler&lt;T&gt;</c>.</param>
-    public void AddHandler(Type handlerType, Type messageType)
+    /// <param name="consumerKey">The handler's consumer key (<see cref="MessageConsumerKey.Of"/>).</param>
+    public void AddHandler(Type handlerType, Type messageType, string consumerKey)
     {
         Read(messageType);
         var pair = new HandledType(handlerType, messageType);
@@ -182,7 +183,7 @@ internal sealed class MessagingComposition
         }
 
         _handled.Add(pair);
-        Handlers.Register(messageType, MessageConsumerKey.Of(handlerType), handlerType);
+        Handlers.Register(messageType, consumerKey, handlerType);
     }
 
     private void Read(Type messageType)
