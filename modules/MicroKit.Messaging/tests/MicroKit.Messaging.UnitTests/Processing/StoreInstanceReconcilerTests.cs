@@ -55,7 +55,9 @@ public sealed class StoreInstanceReconcilerTests
     [Fact]
     public async Task AThrowingOrDuplicatedSnapshot_IsIgnored_AndTheInstancesDrainedKeepDraining()
     {
-        using var harness = new InstanceHarness();
+        var reads = new FailingReads(through: 0);
+        using var harness = new InstanceHarness(configure: s => s.AddKeyedSingleton<IMessageStoreInstanceSource>(
+            InstanceHarness.Store, (sp, _) => reads.Over(sp.GetRequiredService<TestInstanceSource>())));
         var loops = new LoopRecorder();
         var sut = harness.Reconciler(loops.RunAsync);
         harness.Source.Set("a", "b");
@@ -63,9 +65,11 @@ public sealed class StoreInstanceReconcilerTests
         var run = sut.RunAsync(stop.Token);
         await Eventually(() => loops.Running.Count == 2, "control: both instances drained");
 
-        harness.Source.ThrowOnRead = new InvalidOperationException("The tenant catalog is down.");
+        // The next snapshot throws on every read until another is set: the round after the throwing one, a
+        // poll interval later, would otherwise read "a" and remove "b" before the assertion.
+        reads.FailThrough(harness.Source.Version + 1);
         harness.Source.Set("a");
-        await RoundDone(sut, run, () => harness.Source.ThrowOnRead is null, "the throwing snapshot was read");
+        await RoundDone(sut, run, () => reads.Failed >= 1, "the throwing snapshot was read");
         loops.Running.Keys.Order(StringComparer.Ordinal).ToArray().ShouldBe(AandB, "a snapshot that throws changes nothing");
 
         harness.Source.Replace([new("a"), new("a")]);
@@ -307,17 +311,21 @@ public sealed class StoreInstanceReconcilerTests
     [Fact]
     public async Task ARoundWhoseReadFailed_DoesNotMarkTheFirstRound()
     {
-        using var harness = new InstanceHarness();
+        // Every snapshot throws on every read until the assertion: the round after the failing one, a poll
+        // interval later, would otherwise apply "a" and mark the first round before it.
+        var reads = new FailingReads(through: int.MaxValue);
+        using var harness = new InstanceHarness(configure: s => s.AddKeyedSingleton<IMessageStoreInstanceSource>(
+            InstanceHarness.Store, (sp, _) => reads.Over(sp.GetRequiredService<TestInstanceSource>())));
         var loops = new LoopRecorder();
         var sut = harness.Reconciler(loops.RunAsync);
-        harness.Source.ThrowOnRead = new InvalidOperationException("The tenant catalog is still starting.");
         harness.Source.Set("a");
         using var stop = new CancellationTokenSource();
         var run = sut.RunAsync(stop.Token);
 
-        await RoundDone(sut, run, () => harness.Source.ThrowOnRead is null, "the failing first read");
+        await RoundDone(sut, run, () => reads.Failed >= 1, "the failing first read");
         harness.Registry.FirstRoundOf(InstanceHarness.Store).IsCompleted.ShouldBeFalse("no snapshot was applied: deliveries keep waiting");
 
+        reads.FailThrough(harness.Source.Version);
         harness.Source.Set("a");
         await SnapshotApplied(harness, sut, run, "the next snapshot was applied");
         harness.Registry.FirstRoundOf(InstanceHarness.Store).IsCompleted.ShouldBeTrue();
@@ -631,6 +639,46 @@ public sealed class StoreInstanceReconcilerTests
 
         public bool TryGetInstance(MessageContext context, [System.Diagnostics.CodeAnalysis.NotNullWhen(true)] out MessageStoreInstance? instance)
             => inner.TryGetInstance(context, out instance);
+    }
+
+    /// <summary>
+    /// A source whose reads throw, every time, while the snapshot set is one up to a version: a failed read is
+    /// retried a poll interval later, and that round must not read a good snapshot before the test has looked.
+    /// The next snapshot set past that version is read, by the round its change wakes.
+    /// </summary>
+    /// <param name="through">The last version whose reads throw: 0 for none set by a test, <see cref="int.MaxValue"/> for all.</param>
+    private sealed class FailingReads(int through)
+    {
+        // Written by the test thread and read on the reconciler's.
+        private int _through = through;
+        private int _failed;
+
+        /// <summary>Makes the reads of every snapshot up to <paramref name="version"/> throw, and those of a later one succeed.</summary>
+        public void FailThrough(int version) => Volatile.Write(ref _through, version);
+
+        /// <summary>Gets how many reads have thrown; counted before the throw, inside the round.</summary>
+        public int Failed => Volatile.Read(ref _failed);
+
+        public IMessageStoreInstanceSource Over(TestInstanceSource inner) => new Wrapper(this, inner);
+
+        private sealed class Wrapper(FailingReads owner, TestInstanceSource inner) : IMessageStoreInstanceSource
+        {
+            public IReadOnlyCollection<MessageStoreInstance> GetInstances()
+            {
+                if (inner.Version <= Volatile.Read(ref owner._through))
+                {
+                    Interlocked.Increment(ref owner._failed);
+                    throw new InvalidOperationException("The tenant catalog cannot be read.");
+                }
+
+                return inner.GetInstances();
+            }
+
+            public Microsoft.Extensions.Primitives.IChangeToken GetChangeToken() => inner.GetChangeToken();
+
+            public bool TryGetInstance(MessageContext context, [System.Diagnostics.CodeAnalysis.NotNullWhen(true)] out MessageStoreInstance? instance)
+                => inner.TryGetInstance(context, out instance);
+        }
     }
 
     /// <summary>A source that, once, throws on registration, returns no snapshot, or a snapshot that throws.</summary>

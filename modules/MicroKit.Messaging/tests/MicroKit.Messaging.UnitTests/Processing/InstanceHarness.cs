@@ -127,7 +127,11 @@ internal sealed class TestInstanceSource : IMessageStoreInstanceSource, IDisposa
 
     private Exception? _throwOnRead;
 
-    /// <summary>Gets or sets an exception the next snapshot throws.</summary>
+    /// <summary>
+    /// Gets or sets an exception the next read throws, once: the round after it, a poll interval later, reads
+    /// the snapshot. A test that asserts what a failed round left must hold the fault until it has looked
+    /// (<c>StoreInstanceReconcilerTests.FailingReads</c>).
+    /// </summary>
     public Exception? ThrowOnRead
     {
         get
