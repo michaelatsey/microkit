@@ -84,7 +84,7 @@ internal sealed class EfOutboxStore<TContext>(
     {
         if (_enlisted is null)
         {
-            // GetService: a missing signal costs latency, never a message — it must not fail a publication.
+            // GetService: a host that registers no signal loses latency, never a message.
             _committed = services?.GetService<IOutboxCommitSignal>();
             _enlisted = [];
         }
