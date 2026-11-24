@@ -36,11 +36,16 @@ namespace MicroKit.Messaging.Processing;
 /// <para>
 /// <b>Ordering.</b> Rows are retried in claim order — except while a pair or a consumer is in back-off:
 /// the rows whose (consumer, tenant) pair has no back-off entry are then retried first, in claim order,
-/// then the others, those whose pair failed least first (<see cref="InboxBackoff"/>). From a consumer's
-/// first dependency verdict in the batch on, the rows not yet attempted are tried round-robin across
-/// consumers, each consumer's rows in that order, the consumers not known to fail first in each round (#210):
-/// a held consumer's backlog heading the claim cannot trip the store probe before a row of a consumer not
-/// known to fail is tried. No order is promised.
+/// then the others, those whose pair failed least first (<see cref="InboxBackoff"/>). At each consumer's
+/// first dependency verdict in the batch that holds its pair or itself — at most once per consumer; a verdict
+/// that abandons the batch reorders nothing — the rows not yet attempted are ordered again, round-robin
+/// across consumers, each consumer's rows keeping their order, so the order of pairs above then holds within
+/// each consumer's rows only. Each round tries first the consumers with no such verdict in the batch and no
+/// consumer-wide back-off on record (in force, or ended and neither pruned nor cleared by a success), then
+/// those with one on record, then those that met such a verdict in the batch, in the order they met it
+/// (#210): while another consumer has rows left in the batch, a held consumer's backlog heading the claim
+/// cannot trip the store probe before one of them is tried. With one consumer left, or none, the order is
+/// unchanged. No order is promised.
 /// </para>
 /// </remarks>
 /// <param name="store">
@@ -240,9 +245,10 @@ internal sealed class InboxProcessor(
 
                         if (!Contains(failedConsumers, message.ConsumerType))
                         {
-                            // From a consumer's first dependency verdict on, a row of a consumer not known to fail
-                            // comes before its next one: a success in between tells its own dependency from the
-                            // store's. A batch with no verdict keeps its order and allocates nothing for it.
+                            // At a consumer's first verdict that holds it, the rows left are ordered again: a row of
+                            // a consumer not known to fail comes before its next one, and a success in between tells
+                            // its own dependency from the store's. A batch with no such verdict keeps its order and
+                            // allocates nothing for it.
                             (failedConsumers ??= []).Add(message.ConsumerType);
                             order = Interleave(messages, order, position + 1, failedConsumers, _backoff);
                         }

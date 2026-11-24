@@ -2359,12 +2359,14 @@ nothing tells a tenant's database from the consumer's own dependency.
    complex types maps only to a JSON column (EF Core, *Complex types*); and `unnest` would be PostgreSQL SQL
    in the provider-neutral package.
 5. **Retry order.** A batch tries the rows of pairs with no entry first, in claim order, then the others by
-   their pair's delay. From each consumer's first dependency verdict in the batch on, the rows not yet
-   attempted are tried round-robin across consumers, each consumer's rows in that order; each round tries
-   first the consumers with no verdict in the batch and no consumer-wide back-off on record, then those
-   with one on record, then those that met a verdict in the batch, in that order. Computed at most once
-   per consumer per batch, so a batch with no failure keeps claim order and pays nothing for it, and with
-   one consumer the order is unchanged. When no consumer succeeds in between, the store probe still trips. Without it, a consumer's held backlog —
+   their pair's delay. At each consumer's first dependency verdict in the batch that holds its pair or
+   itself (a verdict that abandons the batch reorders nothing), the rows not yet attempted are ordered
+   again, round-robin across consumers, each consumer's rows keeping their order — the order of pairs then
+   holds within each consumer's rows only; each round tries first the consumers with no such verdict in the
+   batch and no consumer-wide back-off on record (in force, or ended and neither pruned nor cleared by a
+   success), then those with one on record, then those that met such a verdict in the batch, in the order
+   they met it. Computed at most once per consumer per batch, so a batch with no failure keeps claim order
+   and pays nothing for it, and with one consumer left, or none, the order is unchanged. When no consumer succeeds in between, the store probe still trips. Without it, a consumer's held backlog —
    the oldest rows once its consumer-wide back-off ends — heads the claim, and two of its rows failing back
    to back, before any success, fail the store probe: the batch is abandoned before the other consumers'
    rows, batch after batch, with no transport traffic to bring a success in between.
