@@ -817,11 +817,17 @@ named by its inbox key (`MessageConsumerKey`), so a handler of two message types
   once per entry: not when the row of the delivery that caused it cannot be written, nor when the retry
   batch that caused it cannot be settled. Only a success of that handler clears it. A tenant that already
   failed for it changes its own back-off only, so two tenants that never recover hold the handler at most
-  once: once they are known to it, they cannot hold it again.
+  once: once they are known to it, they cannot hold it again. A failure that holds a handler for every
+  tenant is explained by that handler, and is no evidence against the store: it does not leave the probe
+  pending, and withdraws the probe its own first failure left, so one later failure of another handler,
+  for a new tenant, does not pause anything.
 - **Retries.** The rows a back-off holds wait to the end of it with their attempt count unchanged, left
   out of the retry claim meanwhile, and the rest of the store is retried; the rows of a handler and
-  tenant not known to fail go first. The batch is abandoned with the store-wide back-off, as before,
-  only when the probe fails, for a row with no tenant, or when the store itself is unreachable.
+  tenant not known to fail go first. From a batch's first dependency failure on, the rows not yet tried
+  alternate between handlers, the failing one last: a handler's own backlog heading the claim — its
+  rows held while it waited for every tenant — cannot fail the probe before another handler's row is
+  tried, and its second failure holds it alone. The batch is abandoned with the store-wide back-off, as
+  before, only when the probe fails, for a row with no tenant, or when the store itself is unreachable.
 - **New deliveries.** The handler's row is written `Failed`, no attempt counted, due at the end of the
   back-off, and the delivery is acknowledged once that row has committed: the store's retry loop owns
   it, and the transport keeps delivering. Later deliveries a back-off holds are written the same way

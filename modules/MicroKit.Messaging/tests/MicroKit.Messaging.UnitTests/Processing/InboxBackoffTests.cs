@@ -112,6 +112,47 @@ public sealed class InboxBackoffTests
     }
 
     /// <summary>
+    /// V17 (#210 D2 as amended): a verdict that holds X for every tenant is explained by X, and sets no store
+    /// probe: one later failure of another consumer, for a new tenant, before any success, is that tenant's own,
+    /// not the store probe failing.
+    /// </summary>
+    [Fact]
+    public void AConsumerVerdict_SetsNoStoreProbe_SoAnotherConsumersFirstFailureDoesNotPauseTheStore()
+    {
+        var backoff = New();
+        backoff.OnDown(X, "A", Now, out _);
+        backoff.Succeeded(Y, "Z");
+        backoff.OnDown(X, "B", Now, out _).ShouldBe(OutageScope.Consumer);
+
+        backoff.OnDown(Y, "C", Now, out _).ShouldBe(OutageScope.Tenant, "X's failures are X's: no probe pending");
+        backoff.OnDown(Y, "D", Now, out _).ShouldBe(OutageScope.Shared, "control: a second tenant down still trips it");
+    }
+
+    /// <summary>
+    /// D2 as amended: the store probe X's own first failure set is withdrawn when X's second failure — for a
+    /// tenant that already failed for another consumer, with no success since — holds X for every tenant.
+    /// </summary>
+    [Fact]
+    public void AConsumerVerdict_WithdrawsTheStoreProbeItsOwnFirstFailureSet_NotAnotherConsumers()
+    {
+        var backoff = New();
+        backoff.OnDown(Y, "B", Now, out _);
+        backoff.Succeeded(Y, "Z");
+        backoff.OnDown(X, "A", Now, out _).ShouldBe(OutageScope.Tenant, "X's first failure sets the store probe");
+
+        backoff.OnDown(X, "B", Now, out _).ShouldBe(OutageScope.Consumer, "B already failed, for Y: no store probe failing");
+
+        backoff.OnDown(Y, "C", Now, out _).ShouldBe(OutageScope.Tenant, "the probe X set is withdrawn");
+
+        var control = New();
+        control.OnDown(X, "A", Now, out _);
+        control.Succeeded(Y, "Z");
+        control.OnDown(Y, "C", Now, out _).ShouldBe(OutageScope.Tenant, "Y sets the probe");
+        control.OnDown(X, "C", Now, out _).ShouldBe(OutageScope.Consumer, "C already failed, for Y");
+        control.OnDown(Y, "D", Now, out _).ShouldBe(OutageScope.Shared, "control: another consumer's probe stands");
+    }
+
+    /// <summary>
     /// V5: X fails only for A and B, Y succeeding in between. Once the back-offs end, X fails again for A and B —
     /// known to X, so its probe is not touched — and X is not held for C, whose success clears X.
     /// </summary>

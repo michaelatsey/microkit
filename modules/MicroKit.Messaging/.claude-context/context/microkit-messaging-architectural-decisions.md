@@ -2341,6 +2341,10 @@ nothing tells a tenant's database from the consumer's own dependency.
      it is not the store probe failing — another consumer succeeded since, or its tenant already failed for
      another consumer. With one consumer it never occurs, and the state answers exactly as `TenantBackoff`
      — verified on generated sequences.
+   - **A consumer verdict is no store evidence.** A verdict that puts C in consumer-wide back-off is
+     explained by C: it sets no store probe, and withdraws the pending one if C's own earlier failure set
+     it (the engine records which consumer set it); another consumer's stands. Otherwise one unrelated
+     failure of another consumer for a new tenant, before any success, would pause the whole store.
    - **Held.** A verdict while the pair or its consumer is in back-off changes nothing.
 3. **The claim key.** `IInboxProcessorStore.ClaimBatchAsync` takes `InboxClaimExclusions` — the consumers
    and the (consumer, tenant) pairs in back-off — in place of the excluded tenants: one signature, no
@@ -2353,7 +2357,15 @@ nothing tells a tenant's database from the consumer's own dependency.
    (`RelationalQueryableMethodTranslatingExpressionVisitor.TranslatePrimitiveCollection`); a collection of
    complex types maps only to a JSON column (EF Core, *Complex types*); and `unnest` would be PostgreSQL SQL
    in the provider-neutral package.
-5. **Observability.** `microkit.inbox.tenants.backoff` keeps its name, unit and meaning: a tenant counts
+5. **Retry order.** A batch tries the rows of pairs with no entry first, in claim order, then the others by
+   their pair's delay. From its first dependency verdict on, the rows not yet attempted are tried
+   round-robin across consumers, each consumer's rows in that order, the consumer that met the verdict last
+   in each round; computed once, at that verdict, so a batch with no failure keeps claim order and pays
+   nothing for it, and with one consumer the order is unchanged. Without it, a consumer's held backlog —
+   the oldest rows once its consumer-wide back-off ends — heads the claim, and two of its rows failing back
+   to back, before any success, fail the store probe: the batch is abandoned before the other consumers'
+   rows, batch after batch, with no transport traffic to bring a success in between.
+6. **Observability.** `microkit.inbox.tenants.backoff` keeps its name, unit and meaning: a tenant counts
    while at least one of its pairs is unrecovered. `microkit.inbox.consumers.backoff` (`{consumer}`, the
    same tags and rule) counts the consumers in consumer-wide back-off: during one, a consumer's pairs age
    out with no attempt, and the tenants counter alone would read 0 while the consumer is still down. Event

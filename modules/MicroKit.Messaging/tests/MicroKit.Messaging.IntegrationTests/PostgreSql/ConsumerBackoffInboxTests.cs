@@ -182,6 +182,63 @@ public sealed class ConsumerBackoffInboxTests(PostgreSqlFixture fixture)
         rig.Host.Logs.Entries.Count(e => e.EventId == 2015).ShouldBe(1);
     }
 
+    /// <summary>
+    /// V16 (#210 D4 as amended): retries only, no transport traffic. X's backlog for tenants new to the store
+    /// probe heads the claim and Y's healthy rows follow. From X's first failure on, the batch alternates
+    /// consumers: Y's success comes before X's second failure, which holds X for every tenant; the batch is not
+    /// abandoned, and Y's rows are processed in it.
+    /// </summary>
+    [DockerRequiredFact]
+    public async Task V16_AHeldConsumersBacklogHeadingTheClaim_DoesNotAbandonTheBatch_AndTheOtherConsumersRowsAreProcessed()
+    {
+        await using var rig = await Rig.CreateAsync(fixture);
+        string[] tenants = ["T1", "T2", "T3", "T4", "T5"];
+        foreach (var tenant in tenants)
+        {
+            rig.Down(X, tenant);
+            await rig.SeedFailedAsync<FirstGuardHandler>(tenant);
+        }
+
+        for (var i = 0; i < 3; i++)
+        {
+            await rig.SeedFailedAsync<SecondGuardHandler>("T9");
+        }
+
+        (await rig.Host.RetryOnceAsync()).AbortReason.ShouldBe(InboxBatchAbortReason.None, "X's own: the batch goes on");
+
+        rig.TakeCalls().ShouldBe(
+            [$"{X}:T1", $"{Y}:T9", $"{X}:T2", $"{Y}:T9", $"{Y}:T9"],
+            "a row of Y between X's failures; X's later rows wait unattempted");
+        (await rig.RowsOfAsync(KeyOfY)).ShouldAllBe(r => r.Status == InboxMessageStatus.Processed, "Y's rows, in the same batch");
+        (await rig.RowsOfAsync(KeyOfX)).ShouldAllBe(r => r.Status == InboxMessageStatus.Failed && r.RetryCount == 1);
+        rig.Host.Logs.Entries.Count(e => e.EventId == 2015).ShouldBe(1, "X entered its consumer-wide back-off");
+    }
+
+    /// <summary>
+    /// V17 (#210 D2 as amended): X enters consumer-wide back-off, then Y fails once for a new tenant with no success
+    /// in between: X's verdict set no store probe, so nothing pauses and the batch goes on.
+    /// </summary>
+    [DockerRequiredFact]
+    public async Task V17_AfterXIsHeldConsumerWide_OneFailureOfYForANewTenant_PausesNothing()
+    {
+        await using var rig = await Rig.CreateAsync(fixture);
+        rig.Down(X, "A");
+        rig.Down(X, "B");
+        rig.Down(Y, "D");
+        await rig.SeedFailedAsync<FirstGuardHandler>("A");
+        await rig.SeedFailedAsync<SecondGuardHandler>("T9");
+        await rig.SeedFailedAsync<FirstGuardHandler>("B");
+        var d = await rig.SeedFailedAsync<SecondGuardHandler>("D");
+
+        (await rig.Host.RetryOnceAsync()).AbortReason.ShouldBe(InboxBatchAbortReason.None, "Y's first failure for D is D's own");
+
+        rig.TakeCalls().ShouldBe([$"{X}:A", $"{Y}:T9", $"{X}:B", $"{Y}:D"]);
+        rig.Host.Logs.Entries.Count(e => e.EventId == 2015).ShouldBe(1, "control: X was held consumer-wide");
+        var row = (await rig.Host.InboxAsync()).Single(r => r.RowId == d.RowId);
+        row.Status.ShouldBe(InboxMessageStatus.Failed);
+        row.NextRetryAtUtc.ShouldBe(Now + Polling, "Y's pair for D waits; nothing was abandoned");
+    }
+
     /// <summary>V7: no success anywhere — two tenants down for any consumers — pause and abandon, as before #210.</summary>
     [DockerRequiredFact]
     public async Task V7_NoSuccessAnywhere_ASecondTenantDown_PausesTheTransport_AndARetryBatchIsAbandoned()

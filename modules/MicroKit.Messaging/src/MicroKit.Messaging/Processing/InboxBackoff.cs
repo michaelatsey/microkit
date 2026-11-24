@@ -33,7 +33,10 @@ namespace MicroKit.Messaging.Processing;
 /// <see cref="OutageScope.Shared"/> sets no consumer back-off, and entering the store-wide back-off
 /// (<see cref="OutageScope.Shared"/>, <see cref="MarkSuspected"/>) clears every consumer's pending probe — C's
 /// second failure holds it for every tenant only when it is not the store probe failing: another consumer
-/// succeeded since, or its tenant already failed for another consumer. With one consumer it never occurs, and this state answers exactly as <see cref="TenantBackoff"/> does.
+/// succeeded since, or its tenant already failed for another consumer. A verdict that holds C for every
+/// tenant is explained by C: it sets no store probe, and withdraws the one C's own failures set, so a single
+/// later failure of another consumer, for a new tenant, does not pause the store. With one consumer it never
+/// occurs, and this state answers exactly as <see cref="TenantBackoff"/> does.
 /// </para>
 /// <para>
 /// <b>Bounded, and free when idle.</b> A pair leaves on its success, a consumer back-off on its consumer's,
@@ -60,6 +63,10 @@ internal sealed class InboxBackoff
     private int _holds;
     private bool _quiet = true;
     private bool _probePending;
+
+    // The consumer whose verdict set the pending store probe: a verdict it later explains by its own
+    // consumer-wide back-off is no evidence against the store (#210 D2 as amended).
+    private string? _probeOwner;
     private bool _suspected;
 
     /// <summary>Initializes a new <see cref="InboxBackoff"/>.</summary>
@@ -281,6 +288,7 @@ internal sealed class InboxBackoff
             else
             {
                 _probePending = true;
+                _probeOwner = consumer;
                 scope = OutageScope.Tenant;
             }
 
@@ -306,6 +314,14 @@ internal sealed class InboxBackoff
                     }
 
                     scope = OutageScope.Consumer;
+
+                    // C's own dependency explains its failures: they are no store-probe evidence. The probe this
+                    // verdict set, or the one C's first failure set, is withdrawn — another consumer's stands.
+                    if (_probePending && string.Equals(_probeOwner, consumer, StringComparison.Ordinal))
+                    {
+                        _probePending = false;
+                        _probeOwner = null;
+                    }
                 }
                 else
                 {
@@ -369,6 +385,7 @@ internal sealed class InboxBackoff
             }
 
             _probePending = false;
+            _probeOwner = null;
             _suspected = false;
             Refresh();
         }
@@ -548,6 +565,7 @@ internal sealed class InboxBackoff
     private void EnterSuspicion()
     {
         _probePending = false;
+        _probeOwner = null;
         _suspected = true;
         foreach (var state in _consumers.Values)
         {
@@ -562,6 +580,7 @@ internal sealed class InboxBackoff
         {
             // Nobody left to have failed first: a later failure is a first one again.
             _probePending = false;
+            _probeOwner = null;
         }
 
         foreach (var (consumer, state) in _consumers)
