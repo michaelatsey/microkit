@@ -23,7 +23,7 @@ public sealed class InboxClaimExclusionsTests
     }
 
     [Fact]
-    public void ANullOrEmptyConsumerOrTenant_IsRefused()
+    public void ANullOrEmptyConsumer_OrANullTenant_IsRefused()
     {
         Should.Throw<ArgumentException>(() => new InboxClaimExclusions([null!], [])).ParamName.ShouldBe("consumerTypes");
         Should.Throw<ArgumentException>(() => new InboxClaimExclusions([string.Empty], [])).ParamName.ShouldBe("consumerTypes");
@@ -33,4 +33,12 @@ public sealed class InboxClaimExclusionsTests
         Should.Throw<ArgumentNullException>(() => new InboxClaimExclusions([], null!));
         new InboxClaimExclusions(["X"], [("Y", "A")]).IsEmpty.ShouldBeFalse("control: valid entries are accepted");
     }
+
+    /// <summary>
+    /// An empty tenant id is a tenant (PR #219 review): a delivery's <c>tenantid</c> header is copied as is, and
+    /// a pair holding "" must not make every claim of the store throw.
+    /// </summary>
+    [Fact]
+    public void APairWithAnEmptyTenantId_IsAccepted()
+        => new InboxClaimExclusions([], [("X", string.Empty)]).Pairs.ShouldBe([("X", string.Empty)]);
 }

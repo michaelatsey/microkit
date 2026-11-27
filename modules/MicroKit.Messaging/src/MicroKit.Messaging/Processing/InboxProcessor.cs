@@ -229,7 +229,8 @@ internal sealed class InboxProcessor(
             {
                 if (!outcome.StoreUnreachable && message.TenantId is { } tenant)
                 {
-                    var scope = _backoff.OnDown(message.ConsumerType, tenant, policy.Clock.GetUtcNow(), out var tenantUntil);
+                    var scope = _backoff.OnDown(
+                        message.ConsumerType, tenant, policy.Clock.GetUtcNow(), out var tenantUntil, out var pairInForce);
                     if (scope is not InboxBackoff.OutageScope.Shared)
                     {
                         // The pair's dependency, or its consumer's (#124 D5, #210 D4): the row waits to the
@@ -237,7 +238,13 @@ internal sealed class InboxProcessor(
                         deferred.Add(InboxOutcome.Retry(
                             key, message.RetryCount, tenantUntil, policy.Truncate(outcome.Error?.Message)));
                         tenantDeferred++;
-                        Tally(ref tenantsDeferred, message.ConsumerType, tenant, tenantUntil);
+                        if (scope is not InboxBackoff.OutageScope.Held || pairInForce)
+                        {
+                            // 2013 names a pair in back-off: not a tenant only its consumer's back-off holds —
+                            // begun meanwhile by a delivery, which 2015 reports where it began.
+                            Tally(ref tenantsDeferred, message.ConsumerType, tenant, tenantUntil);
+                        }
+
                         if (scope is InboxBackoff.OutageScope.Consumer)
                         {
                             (consumersHeld ??= []).Add((message.ConsumerType, tenantUntil));

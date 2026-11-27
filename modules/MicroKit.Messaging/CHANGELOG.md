@@ -8,8 +8,9 @@
   CancellationToken ct = default)`** (store SPI) replaces the overload taking `IReadOnlyList<string>
   excludedTenants`. One signature, no default implementation. A store provider leaves out the rows of the
   consumers in `excluded.ConsumerTypes` that have a tenant, and the rows of each (consumer, tenant) pair in
-  `excluded.Pairs`; never a row with no tenant. `InboxClaimExclusions.None`, shared, leaves nothing out. A
-  provider may match a pair on `ConsumerType + U+001F + TenantId`, as the EF store does.
+  `excluded.Pairs`; never a row with no tenant. An empty tenant id is a tenant. `InboxClaimExclusions.None`,
+  shared, leaves nothing out. A provider may match a pair on `ConsumerType + U+001F + TenantId`, as the EF
+  store does, under a collation that compares U+001F as a character.
 - **`MessageConsumerKey.Of`** throws `ArgumentException` for a key containing U+001F (unit separator), and
   the **`LocalConsumer`** constructor refuses such a `ConsumerType`: a handler whose key contains it fails
   at registration, a consumer source's when it is read. No C# type name contains U+001F: a key gets one
@@ -36,7 +37,9 @@
   tenant new to it, with no success of its own since, waits for every tenant without pausing the
   transport, when that failure is not the store probe failing: another consumer succeeded since, or the tenant already failed for another consumer; only its own success clears it. That
   verdict is no evidence against the store: it withdraws the store probe its own earlier failure set,
-  unless that tenant failed for another consumer too; another consumer's probe stands. At each
+  unless that tenant failed for another consumer too; another consumer's probe stands. Until its success,
+  neither is any failure of a consumer held for every tenant before, so its backlog filling a retry batch
+  on its own holds it again instead of abandoning the batch. At each
   consumer's first dependency verdict in a retry batch that holds it, the rows not yet attempted are
   ordered again, alternating between consumers, those not known to fail first, so a consumer's held backlog heading the claim no longer
   abandons the batch before the other consumers' rows when one of them succeeds in between. Two tenants down before any success still pause the transport

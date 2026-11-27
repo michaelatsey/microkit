@@ -14,13 +14,17 @@ namespace MicroKit.Messaging.Spi;
 /// either list. A consumer in <see cref="ConsumerTypes"/> leaves out each of its rows that has a tenant; a
 /// pair in <see cref="Pairs"/> leaves out that consumer's rows of that tenant only. Both compare
 /// <see cref="InboxMessage.ConsumerType"/> and <see cref="InboxMessage.TenantId"/> as the store compares its
-/// columns: under a case-insensitive collation, case-insensitively.
+/// columns: under a case-insensitive collation, case-insensitively. An empty tenant id is a tenant, left out
+/// by its pair like any other.
 /// </para>
 /// <para>
 /// A store may match a pair on one value, the consumer key and the tenant id joined by U+001F (unit
 /// separator), as the EF store does. That match is exact because no consumer key contains U+001F:
 /// <see cref="MessageConsumerKey.Of"/> and <see cref="LocalConsumer"/> refuse one, so the first separator of
-/// the joined value is at the consumer key's length. A row written by hand with a <c>ConsumerType</c>
+/// the joined value is at the consumer key's length — under a collation that compares U+001F as a character. One
+/// that ignores control characters may join two pairs into one value: while one is held, the other's rows are
+/// left out with it, delayed until its back-off ends, never lost; such a store compares the joined value under
+/// a binary collation, or matches the two columns apart. A row written by hand with a <c>ConsumerType</c>
 /// containing U+001F names no registered consumer — the retry loop dead-letters it on sight — and can only
 /// be left out of the claim while a pair whose joined value equals its own is held.
 /// </para>
@@ -31,7 +35,10 @@ public sealed class InboxClaimExclusions
     /// <param name="consumerTypes">The consumers in consumer-wide back-off, each an <see cref="InboxMessage.ConsumerType"/>.</param>
     /// <param name="pairs">The (consumer, tenant) pairs in back-off.</param>
     /// <exception cref="ArgumentNullException">A list is <see langword="null"/>.</exception>
-    /// <exception cref="ArgumentException">A consumer type or a tenant id is <see langword="null"/> or empty.</exception>
+    /// <exception cref="ArgumentException">
+    /// A consumer type is <see langword="null"/> or empty, or a pair's tenant id is <see langword="null"/>. An empty
+    /// tenant id is a tenant: a delivery's <c>tenantid</c> header is taken as it comes.
+    /// </exception>
     /// <remarks>The lists are kept as given: a caller that changes one afterwards changes what is left out.</remarks>
     public InboxClaimExclusions(
         IReadOnlyList<string> consumerTypes, IReadOnlyList<(string ConsumerType, string TenantId)> pairs)
@@ -48,10 +55,10 @@ public sealed class InboxClaimExclusions
 
         for (var i = 0; i < pairs.Count; i++)
         {
-            if (string.IsNullOrEmpty(pairs[i].ConsumerType) || string.IsNullOrEmpty(pairs[i].TenantId))
+            if (string.IsNullOrEmpty(pairs[i].ConsumerType) || pairs[i].TenantId is null)
             {
                 throw new ArgumentException(
-                    $"Pair {i} has a null or empty consumer type or tenant id: a row with no tenant is never left out.",
+                    $"Pair {i} has a null or empty consumer type, or a null tenant id: a row with no tenant is never left out.",
                     nameof(pairs));
             }
         }

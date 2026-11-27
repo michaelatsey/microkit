@@ -45,6 +45,20 @@ public sealed class ConsumerTenantClaimTests(PostgreSqlFixture fixture)
             .ShouldBe([$"{X}|A", $"{X}|A{Separator}B"]);
     }
 
+    /// <summary>
+    /// An empty tenant id is a tenant (PR #219 review): a pair holding it leaves out that consumer's rows with an
+    /// empty tenant id only — never its rows with no tenant, nor another consumer's.
+    /// </summary>
+    [DockerRequiredFact]
+    public async Task APairWithAnEmptyTenantId_LeavesOutThatPairOnly_NeverARowWithNoTenant()
+    {
+        await using var db = await StoreDatabase.CreateAsync<TestMessagingDbContext>(fixture.ConnectionString, o => new(o));
+        await SeedAsync(db, (X, string.Empty), (X, null!), (Y, string.Empty), (X, "A"));
+
+        (await ClaimAsync(db, new InboxClaimExclusions([], [(X, string.Empty)])))
+            .ShouldBe([$"{X}|<null>", $"{X}|A", $"{Y}|"]);
+    }
+
     /// <remarks>
     /// Joined with no separator, ("K", "AB") and ("KA", "B") are both <c>KAB</c>. With it they differ, since a
     /// key's first separator sits at its consumer's length. The variant that would collide with it —
@@ -107,7 +121,7 @@ public sealed class ConsumerTenantClaimTests(PostgreSqlFixture fixture)
                 .ShouldBe(claim.Count);
         }
 
-        return [.. claim.Messages.Select(m => $"{m.ConsumerType}|{m.TenantId}").Order(StringComparer.Ordinal)];
+        return [.. claim.Messages.Select(m => $"{m.ConsumerType}|{m.TenantId ?? "<null>"}").Order(StringComparer.Ordinal)];
     }
 
     /// <summary>What a claim or a settlement writes on a pair's rows, as one comparable string.</summary>

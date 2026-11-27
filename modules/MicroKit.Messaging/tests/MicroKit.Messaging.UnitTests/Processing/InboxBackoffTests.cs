@@ -171,6 +171,38 @@ public sealed class InboxBackoffTests
     }
 
     /// <summary>
+    /// V16 with a held backlog filling the batch (PR #219 review): once X was held for every tenant, its own
+    /// dependency explains its failures until its success — they neither set the store probe nor trip a pending
+    /// one — so X's backlog, alone in a batch, is held again by its consumer probe and never fails the store probe.
+    /// </summary>
+    [Fact]
+    public void AConsumerHeldConsumerWideBefore_NeitherSetsNorTripsTheStoreProbe_UntilItsSuccess()
+    {
+        var backoff = New();
+        backoff.OnDown(X, "A", Now, out _);
+        backoff.Succeeded(Y, "Z");
+        backoff.OnDown(X, "B", Now, out _).ShouldBe(OutageScope.Consumer, "control: X held for every tenant");
+        var later = Now + (Initial * 2);
+        backoff.IsBlocked(X, "C", later, out _).ShouldBeFalse("control: X's back-off ended, its record stays");
+
+        backoff.OnDown(X, "C", later, out _).ShouldBe(OutageScope.Tenant, "X's own: no store probe set");
+        backoff.OnDown(X, "D", later, out _).ShouldBe(OutageScope.Consumer, "X's probe from C holds it again; the store is not tripped");
+
+        backoff.OnDown(Y, "E", later, out _).ShouldBe(OutageScope.Tenant, "no store probe pending: E is Y's own");
+        var again = later + Ceiling;
+        backoff.OnDown(X, "F", again, out _).ShouldBe(OutageScope.Tenant, "X's failure does not trip Y's probe");
+        backoff.OnDown(Y, "G", again, out _).ShouldBe(OutageScope.Shared, "control: Y's probe stands");
+
+        var cleared = New();
+        cleared.OnDown(X, "A", Now, out _);
+        cleared.Succeeded(Y, "Z");
+        cleared.OnDown(X, "B", Now, out _).ShouldBe(OutageScope.Consumer);
+        cleared.Succeeded(X, "H");
+        cleared.OnDown(X, "C", later, out _).ShouldBe(OutageScope.Tenant, "after X's success its failures are evidence again");
+        cleared.OnDown(X, "D", later, out _).ShouldBe(OutageScope.Shared, "control: X's first failure set the store probe");
+    }
+
+    /// <summary>
     /// V5: X fails only for A and B, Y succeeding in between. Once the back-offs end, X fails again for A and B —
     /// known to X, so its probe is not touched — and X is not held for C, whose success clears X.
     /// </summary>

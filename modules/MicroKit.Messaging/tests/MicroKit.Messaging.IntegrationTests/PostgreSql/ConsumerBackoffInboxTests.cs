@@ -21,6 +21,9 @@ public sealed class ConsumerBackoffInboxTests(PostgreSqlFixture fixture)
 {
     private static readonly DateTimeOffset Now = new(2026, 11, 24, 12, 0, 0, TimeSpan.Zero);
     private static readonly TimeSpan Polling = TimeSpan.FromMilliseconds(50);
+
+    /// <summary>The batch size of <see cref="GuardHost.RetryOnceAsync"/>.</summary>
+    private const int BatchSize = 10;
     private const string X = FirstGuardHandler.HandlerName;
     private const string Y = SecondGuardHandler.HandlerName;
     private const string W = ThirdGuardHandler.HandlerName;
@@ -261,6 +264,46 @@ public sealed class ConsumerBackoffInboxTests(PostgreSqlFixture fixture)
         calls.Count(c => c == $"{Y}:T9").ShouldBe(3, string.Join(", ", calls));
         (await rig.Host.InboxAsync()).Where(r => r.TenantId == "T9").ShouldAllBe(r => r.Status == InboxMessageStatus.Processed);
         rig.Host.Logs.Entries.Count(e => e.EventId == 2015).ShouldBe(4, "X and W each held again, alone");
+    }
+
+    /// <summary>
+    /// V16 with X's held backlog filling the batch (PR #219 review): X was held for every tenant; once its back-off
+    /// ends, its backlog for tenants new to it fills a whole claim, with no other consumer's row to try in between.
+    /// X's own dependency explains its failures: its first sets no store probe, its second holds it again for
+    /// every tenant, its later rows wait unattempted, and the batch is not abandoned. The next claim leaves X out,
+    /// and Y's rows are processed.
+    /// </summary>
+    [DockerRequiredFact]
+    public async Task V16_AHeldConsumersBacklogFillingTheBatch_DoesNotAbandonIt_AndTheNextBatchProcessesTheOtherConsumersRows()
+    {
+        await using var rig = await Rig.CreateAsync(fixture);
+        rig.Down(X, "A");
+        rig.Down(X, "B");
+        await rig.ReceiveAsync("A");
+        await rig.ReceiveAsync("B");
+        rig.Host.Logs.Entries.Count(e => e.EventId == 2015).ShouldBe(1, "control: X was held for every tenant");
+        rig.TakeCalls();
+        rig.Clock.Advance(Polling * 2);
+
+        var backlog = Enumerable.Range(1, BatchSize).Select(i => $"T{i}").ToArray();
+        foreach (var tenant in backlog)
+        {
+            rig.Down(X, tenant);
+            await rig.SeedFailedAsync<FirstGuardHandler>(tenant);
+        }
+
+        for (var i = 0; i < 3; i++)
+        {
+            await rig.SeedFailedAsync<SecondGuardHandler>("Y1");
+        }
+
+        (await rig.Host.RetryOnceAsync()).AbortReason.ShouldBe(InboxBatchAbortReason.None, "X's own: the batch goes on");
+        rig.TakeCalls().ShouldBe([$"{X}:T1", $"{X}:T2"], "X's first two rows; the others wait unattempted");
+        rig.Host.Logs.Entries.Count(e => e.EventId == 2015).ShouldBe(2, "X held again for every tenant");
+
+        (await rig.Host.RetryOnceAsync()).AbortReason.ShouldBe(InboxBatchAbortReason.None);
+        rig.TakeCalls().ShouldBe([$"{Y}:Y1", $"{Y}:Y1", $"{Y}:Y1"], "X left out: Y's rows are claimed");
+        (await rig.RowsOfAsync(KeyOfY)).ShouldAllBe(r => r.Status == InboxMessageStatus.Processed);
     }
 
     /// <summary>

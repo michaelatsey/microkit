@@ -36,8 +36,14 @@ namespace MicroKit.Messaging.Processing;
 /// succeeded since, or its tenant already failed for another consumer. A verdict that holds C for every
 /// tenant is explained by C: it sets no store probe, and withdraws the one C's own failure set — unless that
 /// tenant failed for another consumer too — so a single later failure of another consumer, for a new tenant,
-/// does not pause the store. With one consumer it never
-/// occurs, and this state answers exactly as <see cref="TenantBackoff"/> does.
+/// does not pause the store. So is every failure of C while its consumer-wide back-off is on record — in force,
+/// or ended and neither pruned nor cleared by C's success: it neither sets the store probe nor trips a pending
+/// one, and C's probe alone decides whether C is held again, so C's backlog filling a retry batch on its own
+/// cannot fail the store probe. With one consumer none of this occurs, and this state answers exactly as
+/// <see cref="TenantBackoff"/> does. The limit that remains is <see cref="TenantBackoff"/>'s: a batch holding
+/// only one consumer's rows, before that consumer has any consumer-wide back-off on record, still reads two of
+/// its failures, for two tenants with no success between, as the store probe failing. Nothing in the verdict
+/// tells that from a store-wide outage.
 /// </para>
 /// <para>
 /// <b>Bounded, and free when idle.</b> A pair leaves on its success, a consumer back-off on its consumer's,
@@ -243,15 +249,29 @@ internal sealed class InboxBackoff
     /// consumer was already in back-off: nothing changed. Otherwise <see cref="OutageScope.Tenant"/>.
     /// </returns>
     public OutageScope OnDown(string consumer, string tenant, DateTimeOffset now, out DateTimeOffset until)
+        => OnDown(consumer, tenant, now, out until, out _);
+
+    /// <inheritdoc cref="OnDown(string, string, DateTimeOffset, out DateTimeOffset)"/>
+    /// <param name="consumer">The consumer key: the row's <c>ConsumerType</c>.</param>
+    /// <param name="tenant">The tenant of the work that met the verdict.</param>
+    /// <param name="now">The time of the failure.</param>
+    /// <param name="until">When the work waits until.</param>
+    /// <param name="pairHeld">
+    /// On <see cref="OutageScope.Held"/>, whether the pair's own back-off was in force — rather than only its
+    /// consumer's; <see langword="false"/> otherwise.
+    /// </param>
+    public OutageScope OnDown(string consumer, string tenant, DateTimeOffset now, out DateTimeOffset until, out bool pairHeld)
     {
         lock (_lock)
         {
             // (a) Held: the verdict carries no news — the curves do not grow once per attempt in flight, and
             // neither probe is touched.
-            if (InForce(consumer, tenant, now, out until, out _))
+            if (InForce(consumer, tenant, now, out until, out pairHeld))
             {
                 return OutageScope.Held;
             }
+
+            pairHeld = false;
 
             // (b) The pair, on the curve from its previous entry.
             var tenantKnown = _tenants.TryGetValue(tenant, out var pairs);
@@ -279,6 +299,13 @@ internal sealed class InboxBackoff
             if (tenantKnown && !_suspected)
             {
                 // The tenant already failed, for some consumer, and nothing proved the store down: its cause.
+                scope = OutageScope.Tenant;
+            }
+            else if (state.Backoff is not null)
+            {
+                // The consumer was held for every tenant, and has not succeeded since: its own dependency explains
+                // its failures, which are no store-probe evidence — they neither set the probe nor trip it. Its
+                // probe, below, decides whether it is held again.
                 scope = OutageScope.Tenant;
             }
             else if (_probePending)
