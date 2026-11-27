@@ -16,11 +16,18 @@ namespace MicroKit.Messaging.Processing;
 /// consumer for the tenant clears that pair only: another consumer's success for the same tenant leaves it.
 /// </para>
 /// <para>
-/// <b>The store probe decides the store-wide back-off</b>, as #124's did. A verdict for a tenant that has an
-/// entry, for any consumer, is that tenant's own cause while the store is not <i>suspected</i>. Otherwise a
-/// second tenant down before any success is the probe failing (<see cref="OutageScope.Shared"/>): the
-/// caller backs the whole store off — the transport pauses, the retry batch is abandoned — and the store is
-/// suspected until a success. Otherwise the probe is pending. A success of any consumer clears it.
+/// <b>The store probe decides the store-wide back-off</b>, on its evidence since the last reset — any success,
+/// a <see cref="OutageScope.Shared"/> verdict, <see cref="MarkSuspected"/>, no entry left (#210 A25). The
+/// counted tenants: a down verdict counts its tenant when that tenant had no entry for any consumer before it,
+/// or while the store is <i>suspected</i> — one per verdict, as #124's probe counts verdicts. The failed
+/// consumers: every consumer with a down verdict since the reset, with the tenants it failed for. Two tenants
+/// counted are the probe failing (<see cref="OutageScope.Shared"/>): the caller backs the whole store off — the
+/// transport pauses, the retry batch is abandoned — the store is suspected until a success, every consumer's
+/// pending probe clears, and no consumer back-off is set. Unless the only failed consumer is C, and C has a
+/// consumer-wide back-off on record — in force, or ended and neither pruned nor cleared by C's success: C's own
+/// dependency, and C is held again (<see cref="OutageScope.Consumer"/>). A Consumer verdict withdraws C from the
+/// evidence: the tenants only C failed for leave the counted tenants, and C leaves the failed consumers. With one
+/// consumer nothing is ever on record, and this is #124's probe.
 /// </para>
 /// <para>
 /// <b>The consumer probe never pauses anything.</b> A verdict of consumer C for a tenant that had no entry
@@ -33,22 +40,16 @@ namespace MicroKit.Messaging.Processing;
 /// <see cref="OutageScope.Shared"/> sets no consumer back-off, and entering the store-wide back-off
 /// (<see cref="OutageScope.Shared"/>, <see cref="MarkSuspected"/>) clears every consumer's pending probe — C's
 /// second failure holds it for every tenant only when it is not the store probe failing: another consumer
-/// succeeded since, or its tenant already failed for another consumer. A verdict that holds C for every
-/// tenant is explained by C: it sets no store probe, and withdraws the one C's own failure set — unless that
-/// tenant failed for another consumer too — so a single later failure of another consumer, for a new tenant,
-/// does not pause the store. While C's consumer-wide back-off is on record — in force, or ended and neither
-/// pruned nor cleared by C's success — a store probe C set is never failed by C itself, only by another
-/// consumer's failure, on record or not: the evidence of a store-wide outage is different consumers failing
-/// with no success between. C's probe alone decides whether C is held again, so C's backlog filling a retry
-/// batch on its own cannot fail the store probe. While the store is suspected, none of this applies: main's
-/// rules do. With one consumer none of this occurs, and this state answers exactly as
-/// <see cref="TenantBackoff"/> does. Two limits remain. A batch holding only one consumer's rows, before that
-/// consumer has any consumer-wide back-off on record, still reads two of its failures, for two tenants with no
-/// success between, as the store probe failing, as <see cref="TenantBackoff"/> does: nothing in the verdict
-/// tells that from a store-wide outage. And two failures in a row of one consumer on record are read as that
-/// consumer's own, even in a store-wide outage — X, X then W, W holds X and W each for every tenant and pauses
-/// nothing; the retry order, which tries another consumer after each consumer's first failure, makes that
-/// sequence rare.
+/// succeeded since, or its tenant already failed for another consumer. So a single later failure of another
+/// consumer, for a new tenant, does not pause the store: the withdrawal took C's tenants out of the count. With
+/// one consumer none of this occurs, and this state answers exactly as <see cref="TenantBackoff"/> does. Two
+/// limits remain. A batch holding only one consumer's rows, before that consumer has any consumer-wide back-off
+/// on record, still reads two of its failures, for two tenants with no success between, as the store probe
+/// failing, as <see cref="TenantBackoff"/> does: nothing in the verdict tells that from a store-wide outage. And
+/// two failures in a row of one consumer on record, with no other consumer failing between, are read as that
+/// consumer's own, even in a store-wide outage: X, X then W, W holds X and W each for every tenant and pauses
+/// nothing. That is the sequence when each retry claim is filled by one held consumer's backlog in turn, and on
+/// the delivery path when one consumer's deliveries fail in a row.
 /// </para>
 /// <para>
 /// <b>Bounded, and free when idle.</b> A pair leaves on its success, a consumer back-off on its consumer's,
@@ -74,13 +75,11 @@ internal sealed class InboxBackoff
     private int _consumerBackoffs;
     private int _holds;
     private bool _quiet = true;
-    private bool _probePending;
-
-    // The consumer and the tenant whose verdict set the pending store probe: a verdict the consumer later
-    // explains by its own consumer-wide back-off is no evidence against the store, unless that tenant failed
-    // for another consumer too, and a consumer on record never fails the probe it set (#210 D2 as amended).
-    private string? _probeOwner;
-    private string? _probeTenant;
+    // The store probe's evidence since its last reset — a success, a Shared verdict, MarkSuspected, no entry
+    // left (#210 A25): the counted tenants, one per verdict that counted, as the probe of #124 counts verdicts,
+    // and every consumer with a down verdict, with the tenants it failed for.
+    private readonly List<string> _counted = [];
+    private readonly Dictionary<string, HashSet<string>> _failed = new(StringComparer.Ordinal);
     private bool _suspected;
 
     /// <summary>Initializes a new <see cref="InboxBackoff"/>.</summary>
@@ -299,77 +298,59 @@ internal sealed class InboxBackoff
 
             until = slot.Until;
 
-            // (c) The store probe.
+            // (c) The store probe's evidence (#210 A25). A tenant counts when it had no entry for any consumer
+            // before this verdict, or while the store is suspected; the consumer joins the failed consumers.
+            if (!tenantKnown || _suspected)
+            {
+                _counted.Add(tenant);
+            }
+
+            if (!_failed.TryGetValue(consumer, out var failedFor))
+            {
+                failedFor = new HashSet<string>(StringComparer.Ordinal);
+                _failed[consumer] = failedFor;
+            }
+
+            failedFor.Add(tenant);
+
             OutageScope scope;
-            if (tenantKnown && !_suspected)
+            if (_counted.Count >= 2)
             {
-                // The tenant already failed, for some consumer, and nothing proved the store down: its cause.
-                scope = OutageScope.Tenant;
-            }
-            else if (_probePending
-                && !_suspected
-                && state.Backoff is not null
-                && string.Equals(_probeOwner, consumer, StringComparison.Ordinal))
-            {
-                // The consumer was held for every tenant, has not succeeded since, and set this probe itself: its
-                // own dependency explains a second failure — the evidence of a shared cause is another consumer's
-                // failure. Its probe, below, decides whether it is held again.
-                scope = OutageScope.Tenant;
-            }
-            else if (_probePending)
-            {
-                // A second tenant down before any success: the cause is shared. The failed probe's pair is in
-                // back-off too, or two tenants that never recover would trip the store for ever.
-                EnterSuspicion();
-                scope = OutageScope.Shared;
-            }
-            else
-            {
-                _probePending = true;
-                _probeOwner = consumer;
-                _probeTenant = tenant;
-                scope = OutageScope.Tenant;
-            }
-
-            // (d) The consumer probe: only for a tenant new to the consumer, and never over a shared verdict.
-            if (scope is not OutageScope.Shared && !pairKnown)
-            {
-                if (state.ProbeTenant is { } probe && !string.Equals(probe, tenant, StringComparison.Ordinal))
+                if (_failed.Count == 1 && state.Backoff is not null)
                 {
-                    // A second tenant new to this consumer, and not the store probe failing: its own
-                    // dependency. It waits for every tenant, growing from its previous consumer back-off.
-                    var consumerDelay = BackoffCurve.Next(
-                        state.Backoff?.Until, state.Backoff?.Delay ?? default, now, _initial, _ceiling);
-                    if (state.Backoff is null)
-                    {
-                        _consumerBackoffs++;
-                    }
-
-                    state.Backoff = new Slot(now + consumerDelay, consumerDelay);
-                    state.ProbeTenant = null;
-                    if (state.Backoff.Value.Until > until)
-                    {
-                        until = state.Backoff.Value.Until;
-                    }
-
-                    scope = OutageScope.Consumer;
-
-                    // C's own dependency explains its failures: they are no store-probe evidence. The probe this
-                    // verdict set, or the one C's first failure set, is withdrawn — unless its tenant failed for
-                    // another consumer too, which C does not explain; another consumer's probe stands.
-                    if (_probePending
-                        && string.Equals(_probeOwner, consumer, StringComparison.Ordinal)
-                        && FailedForItAlone(_probeTenant!, consumer))
-                    {
-                        _probePending = false;
-                        _probeOwner = null;
-                        _probeTenant = null;
-                    }
+                    // Only this consumer failed since the reset, and it was held for every tenant and has not
+                    // succeeded since: its own dependency, not the store's. It is held again, on its curve.
+                    scope = HoldConsumer(state, now, ref until);
                 }
                 else
                 {
+                    // Two tenants counted before any success: the cause is shared. The pairs that failed stay in
+                    // back-off too, or two tenants that never recover would trip the store for ever.
+                    EnterSuspicion();
+                    scope = OutageScope.Shared;
+                }
+            }
+            else if (!pairKnown && state.ProbeTenant is { } probe && !string.Equals(probe, tenant, StringComparison.Ordinal))
+            {
+                // (d) The consumer probe: a second tenant new to this consumer, and not the store probe failing —
+                // its own dependency. It waits for every tenant, growing from its previous consumer back-off.
+                scope = HoldConsumer(state, now, ref until);
+            }
+            else
+            {
+                if (!pairKnown)
+                {
                     state.ProbeTenant = tenant;
                 }
+
+                scope = OutageScope.Tenant;
+            }
+
+            if (scope is OutageScope.Consumer)
+            {
+                // The consumer's own dependency explains its failures: it leaves the evidence, and so do the
+                // tenants only it failed for.
+                Withdraw(consumer);
             }
 
             Refresh();
@@ -427,9 +408,7 @@ internal sealed class InboxBackoff
                 }
             }
 
-            _probePending = false;
-            _probeOwner = null;
-            _probeTenant = null;
+            ClearEvidence();
             _suspected = false;
             Refresh();
         }
@@ -608,23 +587,66 @@ internal sealed class InboxBackoff
         }
     }
 
-    /// <summary>Whether <paramref name="tenant"/>'s entries are <paramref name="consumer"/>'s only. Called under the lock.</summary>
-    private bool FailedForItAlone(string tenant, string consumer)
+    /// <summary>Puts the consumer in consumer-wide back-off, on its curve. Called under the lock.</summary>
+    private OutageScope HoldConsumer(ConsumerState state, DateTimeOffset now, ref DateTimeOffset until)
     {
-        if (!_tenants.TryGetValue(tenant, out var pairs))
+        var delay = BackoffCurve.Next(state.Backoff?.Until, state.Backoff?.Delay ?? default, now, _initial, _ceiling);
+        if (state.Backoff is null)
         {
-            return true;
+            _consumerBackoffs++;
         }
 
-        foreach (var other in pairs.Keys)
+        state.Backoff = new Slot(now + delay, delay);
+        state.ProbeTenant = null;
+        if (state.Backoff.Value.Until > until)
         {
-            if (!string.Equals(other, consumer, StringComparison.Ordinal))
+            until = state.Backoff.Value.Until;
+        }
+
+        return OutageScope.Consumer;
+    }
+
+    /// <summary>
+    /// Takes <paramref name="consumer"/> out of the store probe's evidence, with the tenants only it failed for.
+    /// Called under the lock.
+    /// </summary>
+    private void Withdraw(string consumer)
+    {
+        if (!_failed.Remove(consumer, out var failedFor))
+        {
+            return;
+        }
+
+        foreach (var tenant in failedFor)
+        {
+            var another = false;
+            foreach (var other in _failed.Values)
             {
-                return false;
+                if (other.Contains(tenant))
+                {
+                    another = true;
+                    break;
+                }
+            }
+
+            if (!another)
+            {
+                for (var i = _counted.Count - 1; i >= 0; i--)
+                {
+                    if (string.Equals(_counted[i], tenant, StringComparison.Ordinal))
+                    {
+                        _counted.RemoveAt(i);
+                    }
+                }
             }
         }
+    }
 
-        return true;
+    /// <summary>Resets the store probe's evidence. Called under the lock.</summary>
+    private void ClearEvidence()
+    {
+        _counted.Clear();
+        _failed.Clear();
     }
 
     /// <summary>The consumer's own back-off is in force. Called under the lock.</summary>
@@ -646,9 +668,7 @@ internal sealed class InboxBackoff
     /// <summary>The store-wide back-off: the store suspected, and every probe cleared. Called under the lock.</summary>
     private void EnterSuspicion()
     {
-        _probePending = false;
-        _probeOwner = null;
-        _probeTenant = null;
+        ClearEvidence();
         _suspected = true;
         foreach (var state in _consumers.Values)
         {
@@ -662,9 +682,7 @@ internal sealed class InboxBackoff
         if (_pairs == 0)
         {
             // Nobody left to have failed first: a later failure is a first one again.
-            _probePending = false;
-            _probeOwner = null;
-            _probeTenant = null;
+            ClearEvidence();
         }
 
         foreach (var (consumer, state) in _consumers)
@@ -682,7 +700,7 @@ internal sealed class InboxBackoff
 
         Volatile.Write(ref _holds, _pairs + _consumerBackoffs);
 
-        var quiet = _pairs == 0 && _consumers.Count == 0 && !_probePending && !_suspected;
+        var quiet = _pairs == 0 && _consumers.Count == 0 && _counted.Count == 0 && _failed.Count == 0 && !_suspected;
         if (quiet == _quiet)
         {
             return;

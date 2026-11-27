@@ -370,11 +370,11 @@ drain.
      committed. A later delivery a back-off holds runs `FindAsync`, then writes the same row **without
      running that handler** (2014, `Debug`). **No row** — the transport pauses and redelivers, nothing
      counted — for a delivery with no tenant, a local delivery (the outbox defers it, D1), the store
-     unreachable, the store probe failing (a second tenant down before any success; a probe set by a consumer held for
-     every tenant and still on record — not cleared by its success nor pruned — is failed only by another consumer's
-     failure, unless the store is suspected), or a deferred row
+     unreachable, the store probe failing (two tenants counted before any success — unless the only consumer that
+     failed is still on record from an earlier consumer back-off, not cleared by its success nor pruned: then it is
+     held again, #210 A25), or a deferred row
      that cannot be written. A success of a consumer for a tenant clears that pair, that consumer's
-     probe and back-off, and the store probe — never another consumer's back-off.
+     probe and back-off, and the store probe's evidence — never another consumer's back-off.
    - A row already there → another delivery owns it (2208): success.
    - The `Failed` row cannot be written (2204): transient — the transport redelivers, counted.
    - **The store reports itself unreachable** — `FindAsync` or `TryInsertFailedAsync` throws

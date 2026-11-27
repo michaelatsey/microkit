@@ -36,13 +36,13 @@
   and a consumer's failure no longer holds the tenant's other consumers. A consumer that fails for a second
   tenant new to it, with no success of its own since, waits for every tenant without pausing the
   transport, when that failure is not the store probe failing: another consumer succeeded since, or the tenant already failed for another consumer; only its own success clears it. That
-  verdict is no evidence against the store: it withdraws the store probe its own earlier failure set,
-  unless that tenant failed for another consumer too; another consumer's probe stands. While a consumer
-  held for every tenant before is on record — until its success, or until its back-off has been over for
-  a whole ceiling — the store probe it set is failed only by another consumer's failure, never by its own,
-  so its backlog filling a retry batch on its own holds it again instead of abandoning the batch; two
-  consumers failing with no success between still back the store off, and while the store is suspected
-  the rules are #124's. Two failures in a row of one consumer on record are read as its own. At each
+  verdict is no evidence against the store: the tenants only it failed for leave the store probe's count.
+  The store probe trips on two tenants counted since the last success, unless the only consumer that
+  failed was held for every tenant before and is still on record — until its success, or until its
+  back-off has been over for a whole ceiling: it is then held again, so its backlog filling a retry batch
+  on its own, the store suspected or not, no longer abandons the batch; two consumers failing for two
+  tenants with no success between still back the store off. Two failures in a row of one consumer on
+  record, with no other consumer failing between, are read as its own. At each
   consumer's first dependency verdict in a retry batch that holds it, the rows not yet attempted are
   ordered again, alternating between consumers, those not known to fail first, so a consumer's held backlog heading the claim no longer
   abandons the batch before the other consumers' rows when one of them succeeds in between. Two tenants down before any success still pause the transport

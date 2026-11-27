@@ -269,9 +269,9 @@ public sealed class ConsumerBackoffInboxTests(PostgreSqlFixture fixture)
     /// <summary>
     /// V16 with X's held backlog filling the batch (PR #219 review): X was held for every tenant; once its back-off
     /// ends, its backlog for tenants new to it fills a whole claim, with no other consumer's row to try in between.
-    /// X is on record (A22): its first failure sets the store probe, which X itself never fails; its second holds
-    /// it again for every tenant and withdraws that probe, its later rows wait unattempted, and the batch is not
-    /// abandoned. The next claim leaves X out, and Y's rows are processed.
+    /// X is on record and the only consumer that failed (A25): its second failure, two tenants counted, holds it
+    /// again for every tenant and withdraws it from the evidence; its later rows wait unattempted, and the batch is
+    /// not abandoned. The next claim leaves X out, and Y's rows are processed.
     /// </summary>
     [DockerRequiredFact]
     public async Task V16_AHeldConsumersBacklogFillingTheBatch_DoesNotAbandonIt_AndTheNextBatchProcessesTheOtherConsumersRows()
@@ -307,10 +307,10 @@ public sealed class ConsumerBackoffInboxTests(PostgreSqlFixture fixture)
     }
 
     /// <summary>
-    /// V7 with two consumers on record (A22, targeted review of 9ba69dc): X and W were each held for every tenant,
-    /// and their back-offs have ended. A shared dependency goes down: X's row fails for a new tenant and sets the
-    /// store probe, W's row — tried next, a consumer on record before one that just failed — fails it, with no
-    /// success between. A store-wide outage: the batch is abandoned and no consumer is held for it.
+    /// V7 with two consumers on record (targeted review of 9ba69dc; A25): X and W were each held for every tenant,
+    /// and their back-offs have ended. A shared dependency goes down: X's row fails for a new tenant, W's row —
+    /// tried next, a consumer on record before one that just failed — fails for another, with no success between:
+    /// two tenants counted, two consumers. A store-wide outage: the batch is abandoned and no consumer is held for it.
     /// </summary>
     [DockerRequiredFact]
     public async Task V7_TwoConsumersOnRecord_DownForNewTenantsWithNoSuccessBetween_AbandonTheBatch()
@@ -336,6 +336,76 @@ public sealed class ConsumerBackoffInboxTests(PostgreSqlFixture fixture)
         (await rig.Host.RetryOnceAsync()).AbortReason.ShouldBe(InboxBatchAbortReason.DependencyUnavailable, "two consumers down, no success: shared");
         rig.TakeCalls().ShouldBe([$"{X}:T1", $"{W}:T2"]);
         rig.Host.Logs.Entries.Count(e => e.EventId == 2015).ShouldBe(2, "a store-wide outage holds no consumer");
+    }
+
+    /// <summary>
+    /// V7 with the fan-out (targeted review of 62ca48a, A25): X and W, both on record, handle the same messages,
+    /// and a shared dependency goes down. X's row for T1 fails, W's row for T1 — tried next — fails, then X's for
+    /// T2: two tenants counted, and X is not the only consumer that failed. A store-wide outage: the batch is
+    /// abandoned and no consumer is held for it.
+    /// </summary>
+    [DockerRequiredFact]
+    public async Task V7_TwoConsumersOnRecord_FailingForTheSameTenants_AbandonTheBatch()
+    {
+        await using var rig = await Rig.CreateAsync(fixture, third: true);
+        foreach (var tenant in new[] { "A", "B" })
+        {
+            rig.Down(X, tenant);
+            rig.Down(W, tenant);
+        }
+
+        await rig.ReceiveAsync("A");
+        await rig.ReceiveAsync("B");
+        rig.Host.Logs.Entries.Count(e => e.EventId == 2015).ShouldBe(2, "control: X and W were held consumer-wide");
+        rig.TakeCalls();
+        rig.Clock.Advance(Polling * 2);
+
+        foreach (var tenant in new[] { "T1", "T2" })
+        {
+            rig.Down(X, tenant);
+            rig.Down(W, tenant);
+            await rig.SeedFailedAsync<FirstGuardHandler>(tenant);
+            await rig.SeedFailedAsync<ThirdGuardHandler>(tenant);
+        }
+
+        (await rig.Host.RetryOnceAsync()).AbortReason.ShouldBe(InboxBatchAbortReason.DependencyUnavailable, "two consumers down, no success: shared");
+        rig.TakeCalls().ShouldBe([$"{X}:T1", $"{W}:T1", $"{X}:T2"]);
+        rig.Host.Logs.Entries.Count(e => e.EventId == 2015).ShouldBe(2, "a store-wide outage holds no consumer");
+    }
+
+    /// <summary>
+    /// V16 with the store suspected (targeted review of 62ca48a, finding 2; A25): X was held for every tenant, a
+    /// verdict with no tenant then backed the whole store off, and no success has followed. X's backlog, due once
+    /// its back-off ends, fills a whole claim. Only X failed, and X is on record: its second failure holds it again
+    /// instead of failing the store probe, and the batch is not abandoned.
+    /// </summary>
+    [DockerRequiredFact]
+    public async Task V16_WhileTheStoreIsSuspected_AHeldConsumersBacklogFillingTheBatch_DoesNotAbandonIt()
+    {
+        await using var rig = await Rig.CreateAsync(fixture);
+        rig.Down(X, "A");
+        rig.Down(X, "B");
+        await rig.ReceiveAsync("A");
+        await rig.ReceiveAsync("B");
+        rig.Host.Logs.Entries.Count(e => e.EventId == 2015).ShouldBe(1, "control: X was held for every tenant");
+
+        rig.Down(X, NoTenant);
+        rig.Down(Y, NoTenant);
+        (await rig.ReceiveAsync(null)).Disposition.ShouldBe(
+            ReceiveDisposition.PauseAndRedeliver, "control: a verdict with no tenant backs the store off");
+        rig.TakeCalls();
+        rig.Clock.Advance(Polling * 2);
+
+        var backlog = Enumerable.Range(1, BatchSize).Select(i => $"T{i}").ToArray();
+        foreach (var tenant in backlog)
+        {
+            rig.Down(X, tenant);
+            await rig.SeedFailedAsync<FirstGuardHandler>(tenant);
+        }
+
+        (await rig.Host.RetryOnceAsync()).AbortReason.ShouldBe(InboxBatchAbortReason.None, "X's own: the batch goes on");
+        rig.TakeCalls().ShouldBe([$"{X}:T1", $"{X}:T2"], "X's first two rows; the others wait unattempted");
+        rig.Host.Logs.Entries.Count(e => e.EventId == 2015).ShouldBe(2, "X held again for every tenant");
     }
 
     /// <summary>

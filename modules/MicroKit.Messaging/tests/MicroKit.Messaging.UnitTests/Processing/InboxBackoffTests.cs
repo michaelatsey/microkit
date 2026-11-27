@@ -172,13 +172,13 @@ public sealed class InboxBackoffTests
     }
 
     /// <summary>
-    /// V7 with consumers on record (A22, targeted review of 9ba69dc): X and W were each held for every tenant,
-    /// and neither has succeeded since. X's failure for a new tenant sets the store probe; W's failure for
-    /// another fails it — different consumers down with no success between are a store-wide outage. So does a
-    /// consumer with no record.
+    /// V7 with consumers on record (A25): two tenants counted, failed for by two consumers, with no success between,
+    /// are the store-wide evidence — whatever the consumers' records. X and W were each held for every tenant:
+    /// X fails for T1, W for T2 — Shared. So does a consumer with no record, and an on-record consumer failing a
+    /// new tenant after another consumer set the evidence.
     /// </summary>
     [Fact]
-    public void AStoreProbeSetByAConsumerOnRecord_IsFailedByAnotherConsumersFailure()
+    public void TwoCountedTenants_OfTwoConsumers_AreShared_WhateverTheirRecords()
     {
         var later = Now + (Initial * 2);
         var backoff = New();
@@ -187,55 +187,82 @@ public sealed class InboxBackoffTests
         backoff.IsBlocked(X, "T1", later, out _).ShouldBeFalse("control: X's back-off ended, its record stays");
         backoff.IsBlocked(W, "T2", later, out _).ShouldBeFalse("control: W's too");
 
-        backoff.OnDown(X, "T1", later, out _).ShouldBe(OutageScope.Tenant, "the first tenant down: X sets the store probe");
-        backoff.OnDown(W, "T2", later, out _).ShouldBe(OutageScope.Shared, "another consumer on record, no success: shared");
+        backoff.OnDown(X, "T1", later, out _).ShouldBe(OutageScope.Tenant, "one tenant counted");
+        backoff.OnDown(W, "T2", later, out _).ShouldBe(OutageScope.Shared, "two counted, two consumers on record: shared");
 
         var none = New();
         HoldOnce(none, X, "A", "B");
         none.OnDown(X, "T1", later, out _).ShouldBe(OutageScope.Tenant);
-        none.OnDown(Y, "T5", later, out _).ShouldBe(OutageScope.Shared, "a consumer with no record fails it too");
+        none.OnDown(Y, "T5", later, out _).ShouldBe(OutageScope.Shared, "a consumer with no record, after X");
+
+        var first = New();
+        HoldOnce(first, X, "A", "B");
+        first.OnDown(Y, "T5", later, out _).ShouldBe(OutageScope.Tenant, "Y counts T5");
+        first.OnDown(X, "T1", later, out _).ShouldBe(OutageScope.Shared, "an on-record consumer after Y");
     }
 
     /// <summary>
-    /// V16 with a held backlog filling the batch (PR #219 review, A22): a store probe set by a consumer on record
-    /// is never failed by that consumer itself. X's backlog alone in a batch is held again by X's own probe, and
-    /// withdraws the store probe it set. The limit: X, X then W, W — each consumer's two failures in a row — are
-    /// read as each consumer's own, and nothing is shared.
+    /// The fan-out (targeted review of 62ca48a, A25): X and W, both on record, handle the same messages. X fails
+    /// for T1, W for T1 — known, not counted again, but W joins the failed consumers — then X for T2: two tenants
+    /// counted, X not the only consumer that failed: Shared.
     /// </summary>
     [Fact]
-    public void AConsumerOnRecord_NeverFailsTheStoreProbeItSet_UntilItsSuccess()
+    public void TwoConsumersOnRecord_FailingForTheSameTenants_AreShared()
     {
         var later = Now + (Initial * 2);
         var backoff = New();
         HoldOnce(backoff, X, "A", "B");
         HoldOnce(backoff, W, "P", "Q");
 
-        backoff.OnDown(X, "T1", later, out _).ShouldBe(OutageScope.Tenant, "X sets the store probe");
-        backoff.OnDown(X, "T2", later, out _).ShouldBe(OutageScope.Consumer, "X's own probe holds it again; X does not fail its store probe");
-        backoff.OnDown(W, "T3", later, out _).ShouldBe(OutageScope.Tenant, "X's store probe was withdrawn: W sets its own");
+        backoff.OnDown(X, "T1", later, out _).ShouldBe(OutageScope.Tenant, "T1 counted");
+        backoff.OnDown(W, "T1", later, out _).ShouldBe(OutageScope.Tenant, "T1 known: not counted again; W failed too");
+        backoff.OnDown(X, "T2", later, out _).ShouldBe(OutageScope.Shared, "two counted, and X is not the only consumer that failed");
+    }
+
+    /// <summary>
+    /// V16 with a held backlog filling the batch (A25): only X failed since the last success, and X is on record —
+    /// held for every tenant, not cleared since. Two tenants counted are X's own: X is held again on its curve,
+    /// and leaves the evidence. The limit: X, X then W, W — each consumer's two failures in a row — hold each
+    /// consumer, and nothing is shared. With no record, the same two failures are Shared, as on main.
+    /// </summary>
+    [Fact]
+    public void AConsumerOnRecord_AloneInTheEvidence_IsHeldAgain_AndWithdrawn()
+    {
+        var later = Now + (Initial * 2);
+        var backoff = New();
+        HoldOnce(backoff, X, "A", "B");
+        HoldOnce(backoff, W, "P", "Q");
+
+        backoff.OnDown(X, "T1", later, out _).ShouldBe(OutageScope.Tenant);
+        backoff.OnDown(X, "T2", later, out var xUntil).ShouldBe(OutageScope.Consumer, "only X failed, and X is on record");
+        (xUntil - later).ShouldBe(Initial * 2, "held again on X's curve");
+        backoff.OnDown(W, "T3", later, out _).ShouldBe(OutageScope.Tenant, "X withdrawn: T3 is the only tenant counted");
         backoff.OnDown(W, "T4", later, out _).ShouldBe(OutageScope.Consumer, "the limit: two in a row of one consumer are its own");
 
         var cleared = New();
         HoldOnce(cleared, X, "A", "B");
         cleared.Succeeded(X, "H");
         cleared.OnDown(X, "C", later, out _).ShouldBe(OutageScope.Tenant, "after X's success, X has no record");
-        cleared.OnDown(X, "D", later, out _).ShouldBe(OutageScope.Shared, "control: X fails its own store probe, as on main");
+        cleared.OnDown(X, "D", later, out _).ShouldBe(OutageScope.Shared, "control: two counted, no record: shared, as on main");
     }
 
     /// <summary>
-    /// A22: while the store's inbox is suspected — it backed off for every tenant, and no success has cleared it —
-    /// main's rules apply: a consumer on record fails the store probe it set.
+    /// Finding 2 of the targeted review of 62ca48a (A25): while the store is suspected every tenant counts, and the
+    /// exemption holds too: X on record, alone in the evidence, is held again instead of failing the store probe,
+    /// so its backlog filling a batch does not abandon it.
     /// </summary>
     [Fact]
-    public void WhileTheStoreIsSuspected_AConsumerOnRecord_FailsTheStoreProbeItSet_AsOnMain()
+    public void WhileTheStoreIsSuspected_AConsumerOnRecord_AloneInTheEvidence_IsHeldAgain()
     {
         var later = Now + (Initial * 2);
         var backoff = New();
         HoldOnce(backoff, X, "A", "B");
         backoff.MarkSuspected();
 
-        backoff.OnDown(X, "T1", later, out _).ShouldBe(OutageScope.Tenant, "the first tenant down since the suspicion");
-        backoff.OnDown(X, "T2", later, out _).ShouldBe(OutageScope.Shared, "suspected: main's rules, whatever X's record");
+        backoff.OnDown(X, "T1", later, out _).ShouldBe(OutageScope.Tenant, "the first tenant counted since the suspicion");
+        backoff.OnDown(X, "T2", later, out _).ShouldBe(OutageScope.Consumer, "only X, on record: held again");
+        backoff.OnDown(Y, "T3", later, out _).ShouldBe(OutageScope.Tenant, "X withdrawn: one tenant counted");
+        backoff.OnDown(Y, "T4", later, out _).ShouldBe(OutageScope.Shared, "control: Y has no record");
     }
 
     /// <summary>

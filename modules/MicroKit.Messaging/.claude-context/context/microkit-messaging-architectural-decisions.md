@@ -2323,11 +2323,21 @@ nothing tells a tenant's database from the consumer's own dependency.
    consumer → (until, delay), and per consumer its pending probe and its consumer-wide back-off — under one
    lock; `TenantBackoff` stays the outbox's, unchanged.
 2. **Two probes, each deciding one thing.**
-   - The **store probe** decides the store-wide back-off, as #124's did: a verdict for a tenant that already
-     has an entry, for any consumer, is that tenant's own cause while the store is not suspected; otherwise
-     a second tenant down before any success is the probe failing (`Shared`): the transport pauses, the
-     retry batch is abandoned, the store is suspected; otherwise the probe is pending. A success of any
-     consumer clears it and the suspicion.
+   - The **store probe** decides the store-wide back-off, on its evidence (PR #219, A25 — replacing the
+     withdrawal of a held consumer's probe and its exception, A19 and A22). The evidence is reset on any success, on `Shared`, on
+     `MarkSuspected` and when no entry is left. The **counted tenants**: a down verdict (not `Held`) counts
+     its tenant when that tenant had no entry for any consumer before it, or while the store's inbox is
+     suspected — one per verdict that counts, as #124's probe counts verdicts (read as a set, the same
+     tenant counted twice while suspected would differ from #124: V2 failed on 43 of 100 seeds). The
+     **failed consumers**: every consumer with a down verdict since the reset, with the tenants it failed
+     for. On a down verdict of C for T, after `Held` and the pair's entry: when the counted tenants number
+     two or more, `Shared` — the transport pauses, the retry batch is abandoned, the store is suspected,
+     every consumer's pending probe clears, no consumer back-off is set — unless the only failed consumer
+     is C and C has a consumer-wide back-off on record (in force, or ended and neither pruned nor cleared
+     by C's own success): then `Consumer`, C held again on its curve. Otherwise C's consumer probe decides
+     between `Consumer` and `Tenant`. A `Consumer` verdict withdraws C from the evidence: the tenants only
+     C failed for leave the counted tenants, and C leaves the failed consumers. A success of any consumer
+     clears the evidence and the suspicion. With one consumer nothing is on record: this is #124's probe.
    - The **consumer probe** decides a consumer-wide back-off, which never pauses anything: a verdict of C
      for a tenant that had no entry for C, with C's probe pending from another tenant, puts C in back-off
      for every tenant (`Consumer`), on the inbox curve, growing from its previous one; otherwise C's probe
@@ -2341,28 +2351,21 @@ nothing tells a tenant's database from the consumer's own dependency.
      it is not the store probe failing — another consumer succeeded since, or its tenant already failed for
      another consumer. With one consumer it never occurs, and the state answers exactly as `TenantBackoff`
      — verified on generated sequences.
-   - **A consumer verdict is no store evidence.** A verdict that puts C in consumer-wide back-off is
-     explained by C: it sets no store probe, and withdraws the pending one if C's own earlier failure set
-     it (the engine records which consumer and tenant set it) and that tenant failed for C alone; another
-     consumer's stands. Otherwise one unrelated
-     failure of another consumer for a new tenant, before any success, would pause the whole store.
-   - **A consumer on record never fails its own store probe** (PR #219 review, A22). While C's
-     consumer-wide back-off is on record — in force, or ended and neither pruned nor cleared by C's success
-     — a store probe C set is never failed by C itself, only by another consumer's failure, on record or
-     not: the evidence of a store-wide outage is different consumers failing with no success between. So an
-     on-record consumer's failure for a new tenant fails a store probe another consumer left pending
-     (Shared), and C's own probe still decides whether C is held again; the store probe C set is withdrawn
-     when C enters its consumer back-off, as above. Otherwise C's backlog, due at once when its back-off
-     ends and filling a whole retry claim with no other consumer's row to try in between, fails the store
-     probe on its second row: the batch is abandoned, batch after batch, and the other consumers' retries
-     wait behind it. None of this applies while the store's inbox is suspected: main's rules do. With one
-     consumer no back-off is ever on record. Two limits remain. A batch holding only one consumer's rows,
-     before that consumer has any consumer-wide back-off on record, still reads two of its failures, for two
-     tenants with no success between, as the store probe failing, and abandons the batch, as on main:
-     nothing in the verdict tells that from a store-wide outage. And two failures in a row of one consumer
-     on record are read as that consumer's own, even in a store-wide outage: X, X then W, W holds X and W
-     each for every tenant and pauses nothing. The retry order (5) tries another consumer after each
-     consumer's first failure, which makes that sequence rare.
+   - **Why this evidence.** A store-wide outage shows as different consumers failing for different tenants
+     with no success between (V7), however their records stand: two consumers on record failing for the
+     same tenants trip it too — X for T1, W for T1, X for T2. A consumer's own dependency shows as that
+     consumer failing alone: the withdrawal keeps a single later failure of another consumer from pausing
+     the store (V17), and the exemption keeps a held consumer's backlog, filling a retry claim alone — the
+     store suspected or not — from abandoning the batch on its second row, batch after batch (V16). A19
+     and A22, two patches on one flag, each opened a new stop-rule case; this statement replaces them.
+   - **Two limits remain.** A batch holding only one consumer's rows, before that consumer has any
+     consumer-wide back-off on record, still reads two of its failures, for two tenants with no success
+     between, as the store probe failing, and abandons the batch, as on main: nothing in the verdict tells
+     that from a store-wide outage. And two failures in a row of one consumer on record, with no other
+     consumer failing between, are read as that consumer's own, even in a store-wide outage: X, X then W,
+     W holds X and W each for every tenant and pauses nothing. That is the sequence when each retry claim
+     is filled by one held consumer's backlog in turn, and on the delivery path when one consumer's
+     deliveries fail in a row.
    - **Held.** A verdict while the pair or its consumer is in back-off changes nothing.
 3. **The claim key.** `IInboxProcessorStore.ClaimBatchAsync` takes `InboxClaimExclusions` — the consumers
    and the (consumer, tenant) pairs in back-off — in place of the excluded tenants: one signature, no
