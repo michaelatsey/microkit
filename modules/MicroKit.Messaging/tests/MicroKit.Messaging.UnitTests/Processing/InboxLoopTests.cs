@@ -89,18 +89,28 @@ public sealed class InboxLoopTests
         calls.ShouldBeGreaterThan(1, "the loop survived the failed cycle");
     }
 
+    /// <summary>
+    /// Waits for the call, never a fixed window (#213, as #217 did for the outbox): CI run 46054316604 failed
+    /// the fixed-window version of the transient-exception test below. The start token is
+    /// <see cref="CancellationToken.None"/> because the token handed to <c>BackgroundService.StartAsync</c> is
+    /// linked to the loop's stopping token, so a timed one ends the loop.
+    /// </summary>
     [Fact]
     public async Task RunAsync_CallsTheStoresProcessor()
     {
+        var calls = 0;
         var coordinator = Substitute.For<IInboxProcessor>();
         coordinator.ProcessBatchAsync(Arg.Any<int>(), Arg.Any<CancellationToken>())
-            .Returns(ValueTask.FromResult(InboxBatchResult.Empty));
+            .Returns(_ =>
+            {
+                Interlocked.Increment(ref calls);
+                return ValueTask.FromResult(InboxBatchResult.Empty);
+            });
 
         var sut = BuildWorker(coordinator, out _);
 
-        using var cts = new CancellationTokenSource(TimeSpan.FromMilliseconds(150));
-        await sut.StartAsync(cts.Token);
-        await Task.Delay(200);
+        await sut.StartAsync(CancellationToken.None);
+        await UntilAsync(() => Volatile.Read(ref calls) >= 1);
         await sut.StopAsync(default);
 
         await coordinator.Received().ProcessBatchAsync(Arg.Any<int>(), Arg.Any<CancellationToken>());
@@ -172,9 +182,9 @@ public sealed class InboxLoopTests
                 MaxPollingInterval = TimeSpan.FromMilliseconds(40),
             });
 
-        using var cts = new CancellationTokenSource(TimeSpan.FromMilliseconds(200));
-        await sut.StartAsync(cts.Token);
-        await Task.Delay(350);
+        // A counted condition, and no timed start token: see RunAsync_CallsTheStoresProcessor (#213).
+        await sut.StartAsync(CancellationToken.None);
+        await UntilAsync(() => Volatile.Read(ref callCount) > 1);
         await sut.StopAsync(default);
 
         callCount.ShouldBeGreaterThan(1);
@@ -312,6 +322,19 @@ public sealed class InboxLoopTests
     // -----------------------------------------------------------------------------------
     // Helpers
     // -----------------------------------------------------------------------------------
+
+    /// <summary>
+    /// Returns once <paramref name="condition"/> holds, or after 10 s on a monotonic clock, so the
+    /// caller's own assertion reports a miss.
+    /// </summary>
+    private static async Task UntilAsync(Func<bool> condition)
+    {
+        var elapsed = System.Diagnostics.Stopwatch.StartNew();
+        while (!condition() && elapsed.Elapsed < TimeSpan.FromSeconds(10))
+        {
+            await Task.Delay(10);
+        }
+    }
 
     private static InboxLoopHarness BuildWorker(
         IInboxProcessor coordinator,
