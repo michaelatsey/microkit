@@ -36,14 +36,19 @@ namespace MicroKit.Messaging.Processing;
 /// succeeded since, or its tenant already failed for another consumer. A verdict that holds C for every
 /// tenant is explained by C: it sets no store probe, and withdraws the one C's own failure set — unless that
 /// tenant failed for another consumer too — so a single later failure of another consumer, for a new tenant,
-/// does not pause the store. So is every failure of C while its consumer-wide back-off is on record — in force,
-/// or ended and neither pruned nor cleared by C's success: it neither sets the store probe nor trips a pending
-/// one, and C's probe alone decides whether C is held again, so C's backlog filling a retry batch on its own
-/// cannot fail the store probe. With one consumer none of this occurs, and this state answers exactly as
-/// <see cref="TenantBackoff"/> does. The limit that remains is <see cref="TenantBackoff"/>'s: a batch holding
-/// only one consumer's rows, before that consumer has any consumer-wide back-off on record, still reads two of
-/// its failures, for two tenants with no success between, as the store probe failing. Nothing in the verdict
-/// tells that from a store-wide outage.
+/// does not pause the store. While C's consumer-wide back-off is on record — in force, or ended and neither
+/// pruned nor cleared by C's success — a store probe C set is never failed by C itself, only by another
+/// consumer's failure, on record or not: the evidence of a store-wide outage is different consumers failing
+/// with no success between. C's probe alone decides whether C is held again, so C's backlog filling a retry
+/// batch on its own cannot fail the store probe. While the store is suspected, none of this applies: main's
+/// rules do. With one consumer none of this occurs, and this state answers exactly as
+/// <see cref="TenantBackoff"/> does. Two limits remain. A batch holding only one consumer's rows, before that
+/// consumer has any consumer-wide back-off on record, still reads two of its failures, for two tenants with no
+/// success between, as the store probe failing, as <see cref="TenantBackoff"/> does: nothing in the verdict
+/// tells that from a store-wide outage. And two failures in a row of one consumer on record are read as that
+/// consumer's own, even in a store-wide outage — X, X then W, W holds X and W each for every tenant and pauses
+/// nothing; the retry order, which tries another consumer after each consumer's first failure, makes that
+/// sequence rare.
 /// </para>
 /// <para>
 /// <b>Bounded, and free when idle.</b> A pair leaves on its success, a consumer back-off on its consumer's,
@@ -73,7 +78,7 @@ internal sealed class InboxBackoff
 
     // The consumer and the tenant whose verdict set the pending store probe: a verdict the consumer later
     // explains by its own consumer-wide back-off is no evidence against the store, unless that tenant failed
-    // for another consumer too (#210 D2 as amended).
+    // for another consumer too, and a consumer on record never fails the probe it set (#210 D2 as amended).
     private string? _probeOwner;
     private string? _probeTenant;
     private bool _suspected;
@@ -301,11 +306,14 @@ internal sealed class InboxBackoff
                 // The tenant already failed, for some consumer, and nothing proved the store down: its cause.
                 scope = OutageScope.Tenant;
             }
-            else if (state.Backoff is not null)
+            else if (_probePending
+                && !_suspected
+                && state.Backoff is not null
+                && string.Equals(_probeOwner, consumer, StringComparison.Ordinal))
             {
-                // The consumer was held for every tenant, and has not succeeded since: its own dependency explains
-                // its failures, which are no store-probe evidence — they neither set the probe nor trip it. Its
-                // probe, below, decides whether it is held again.
+                // The consumer was held for every tenant, has not succeeded since, and set this probe itself: its
+                // own dependency explains a second failure — the evidence of a shared cause is another consumer's
+                // failure. Its probe, below, decides whether it is held again.
                 scope = OutageScope.Tenant;
             }
             else if (_probePending)

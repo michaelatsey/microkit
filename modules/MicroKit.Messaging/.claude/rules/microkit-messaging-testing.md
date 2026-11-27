@@ -229,7 +229,7 @@ back-off per (consumer, tenant) (#210) is pinned by `InboxBackoffTests`, `InboxB
 (with one consumer it answers as `TenantBackoff` on generated sequences, the seed in the message) and
 `InboxBackoffQuietTests` (unit), and on PostgreSQL by `ConsumerBackoffInboxTests` (two consumers of one
 message, and three for V16's second case: V1, V3–V5, V7, V8, V16 — with a held backlog filling a whole
-batch too — V17) and `ConsumerTenantClaimTests` (the pair key matched exactly, an empty tenant id a tenant).
+batch too — V17, and V7 with two consumers on record) and `ConsumerTenantClaimTests` (the pair key matched exactly, an empty tenant id a tenant).
 
 ### InboxProcessor and the inbox retry policy (`UnitTests/Processing`)
 ```

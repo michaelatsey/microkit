@@ -832,12 +832,18 @@ named by its inbox key (`MessageConsumerKey`), so a handler of two message types
   rows left in the batch, a handler's own backlog heading the claim — its rows held while it waited for
   every tenant — cannot fail the probe before another handler's row is tried, and when that row
   succeeds, the failing handler's second failure holds it alone. Its backlog filling a batch on its own
-  cannot fail the probe either: until its success, a handler held for every tenant before is its own
-  cause — its failures neither leave the probe pending nor fail it — and its second failure for a tenant
-  new to it holds it again for every tenant, so the batch goes on and the next claim leaves it out. One
-  limit remains, as before: a batch holding only one handler's rows, while that handler has not been held
-  for every tenant since its last success, still reads two of its failures, for two tenants with no success between, as the probe
-  failing — nothing in the failure tells that from the store being down. The batch is abandoned with the store-wide back-off, as
+  cannot fail the probe either: while a handler held for every tenant before is on record — until its
+  success, or until its back-off has been over for a whole ceiling — a probe it left pending is never
+  failed by its own failure, only by another handler's, and its second failure for a tenant new to it
+  holds it again for every tenant, so the batch goes on and the next claim leaves it out. Different
+  handlers failing with no success between still fail the probe, on record or not; while the store is
+  backed off for every tenant and no success has followed, the rules are those of #124. Two limits
+  remain. A batch holding only one handler's rows, while that handler is not on record, still reads two
+  of its failures, for two tenants with no success between, as the probe failing, as before — nothing in
+  the failure tells that from the store being down. And two failures in a row of one handler on record
+  are read as its own even when the store is down: X, X then W, W holds X and W each for every tenant and
+  pauses nothing; the retry order above, which tries another handler after each handler's first failure,
+  makes that rare. The batch is abandoned with the store-wide back-off, as
   before, only when the probe fails, for a row with no tenant, or when the store itself is unreachable.
 - **New deliveries.** The handler's row is written `Failed`, no attempt counted, due at the end of the
   back-off, and the delivery is acknowledged once that row has committed: the store's retry loop owns

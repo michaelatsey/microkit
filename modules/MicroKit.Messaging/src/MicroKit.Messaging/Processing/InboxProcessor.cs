@@ -160,8 +160,8 @@ internal sealed class InboxProcessor(
                 tenantDeferred++;
                 if (pairHeld)
                 {
-                    // 2013 names the tenant: only for a pair that failed. A row its consumer's back-off holds
-                    // alone is a tenant that never failed for it, which 2015 reports with the consumer.
+                    // 2013 names the tenant: only for a pair in back-off. A row its consumer's back-off holds
+                    // alone is a pair not in back-off, which 2015 reports with the consumer.
                     Tally(ref tenantsDeferred, message.ConsumerType, blocked, blockedUntil);
                 }
 
@@ -240,7 +240,7 @@ internal sealed class InboxProcessor(
                         tenantDeferred++;
                         if (scope is not InboxBackoff.OutageScope.Held || pairInForce)
                         {
-                            // 2013 names a pair in back-off: not a tenant only its consumer's back-off holds —
+                            // 2013 names a pair in back-off: not a pair only its consumer's back-off holds —
                             // begun meanwhile by a delivery, which 2015 reports where it began.
                             Tally(ref tenantsDeferred, message.ConsumerType, tenant, tenantUntil);
                         }

@@ -269,9 +269,9 @@ public sealed class ConsumerBackoffInboxTests(PostgreSqlFixture fixture)
     /// <summary>
     /// V16 with X's held backlog filling the batch (PR #219 review): X was held for every tenant; once its back-off
     /// ends, its backlog for tenants new to it fills a whole claim, with no other consumer's row to try in between.
-    /// X's own dependency explains its failures: its first sets no store probe, its second holds it again for
-    /// every tenant, its later rows wait unattempted, and the batch is not abandoned. The next claim leaves X out,
-    /// and Y's rows are processed.
+    /// X is on record (A22): its first failure sets the store probe, which X itself never fails; its second holds
+    /// it again for every tenant and withdraws that probe, its later rows wait unattempted, and the batch is not
+    /// abandoned. The next claim leaves X out, and Y's rows are processed.
     /// </summary>
     [DockerRequiredFact]
     public async Task V16_AHeldConsumersBacklogFillingTheBatch_DoesNotAbandonIt_AndTheNextBatchProcessesTheOtherConsumersRows()
@@ -304,6 +304,38 @@ public sealed class ConsumerBackoffInboxTests(PostgreSqlFixture fixture)
         (await rig.Host.RetryOnceAsync()).AbortReason.ShouldBe(InboxBatchAbortReason.None);
         rig.TakeCalls().ShouldBe([$"{Y}:Y1", $"{Y}:Y1", $"{Y}:Y1"], "X left out: Y's rows are claimed");
         (await rig.RowsOfAsync(KeyOfY)).ShouldAllBe(r => r.Status == InboxMessageStatus.Processed);
+    }
+
+    /// <summary>
+    /// V7 with two consumers on record (A22, targeted review of 9ba69dc): X and W were each held for every tenant,
+    /// and their back-offs have ended. A shared dependency goes down: X's row fails for a new tenant and sets the
+    /// store probe, W's row — tried next, a consumer on record before one that just failed — fails it, with no
+    /// success between. A store-wide outage: the batch is abandoned and no consumer is held for it.
+    /// </summary>
+    [DockerRequiredFact]
+    public async Task V7_TwoConsumersOnRecord_DownForNewTenantsWithNoSuccessBetween_AbandonTheBatch()
+    {
+        await using var rig = await Rig.CreateAsync(fixture, third: true);
+        foreach (var tenant in new[] { "A", "B" })
+        {
+            rig.Down(X, tenant);
+            rig.Down(W, tenant);
+        }
+
+        await rig.ReceiveAsync("A");
+        await rig.ReceiveAsync("B");
+        rig.Host.Logs.Entries.Count(e => e.EventId == 2015).ShouldBe(2, "control: X and W were held consumer-wide");
+        rig.TakeCalls();
+        rig.Clock.Advance(Polling * 2);
+
+        rig.Down(X, "T1");
+        await rig.SeedFailedAsync<FirstGuardHandler>("T1");
+        rig.Down(W, "T2");
+        await rig.SeedFailedAsync<ThirdGuardHandler>("T2");
+
+        (await rig.Host.RetryOnceAsync()).AbortReason.ShouldBe(InboxBatchAbortReason.DependencyUnavailable, "two consumers down, no success: shared");
+        rig.TakeCalls().ShouldBe([$"{X}:T1", $"{W}:T2"]);
+        rig.Host.Logs.Entries.Count(e => e.EventId == 2015).ShouldBe(2, "a store-wide outage holds no consumer");
     }
 
     /// <summary>

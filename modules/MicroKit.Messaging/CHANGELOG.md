@@ -37,9 +37,12 @@
   tenant new to it, with no success of its own since, waits for every tenant without pausing the
   transport, when that failure is not the store probe failing: another consumer succeeded since, or the tenant already failed for another consumer; only its own success clears it. That
   verdict is no evidence against the store: it withdraws the store probe its own earlier failure set,
-  unless that tenant failed for another consumer too; another consumer's probe stands. Until its success,
-  neither is any failure of a consumer held for every tenant before, so its backlog filling a retry batch
-  on its own holds it again instead of abandoning the batch. At each
+  unless that tenant failed for another consumer too; another consumer's probe stands. While a consumer
+  held for every tenant before is on record — until its success, or until its back-off has been over for
+  a whole ceiling — the store probe it set is failed only by another consumer's failure, never by its own,
+  so its backlog filling a retry batch on its own holds it again instead of abandoning the batch; two
+  consumers failing with no success between still back the store off, and while the store is suspected
+  the rules are #124's. Two failures in a row of one consumer on record are read as its own. At each
   consumer's first dependency verdict in a retry batch that holds it, the rows not yet attempted are
   ordered again, alternating between consumers, those not known to fail first, so a consumer's held backlog heading the claim no longer
   abandons the batch before the other consumers' rows when one of them succeeds in between. Two tenants down before any success still pause the transport
