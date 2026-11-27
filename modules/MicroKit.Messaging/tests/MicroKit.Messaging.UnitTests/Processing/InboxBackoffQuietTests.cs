@@ -53,18 +53,15 @@ public sealed class InboxBackoffQuietTests
         held.Wait();
         try
         {
-            var allocated = await Task.Run(() =>
+            var allocated = await Task.Run(() => Allocation(() =>
             {
-                var before = GC.GetAllocatedBytesForCurrentThread();
                 for (var i = 0; i < 1_000; i++)
                 {
                     Checks(backoff);
                 }
+            })).WaitAsync(Deadline);
 
-                return GC.GetAllocatedBytesForCurrentThread() - before;
-            }).WaitAsync(Deadline);
-
-            allocated.ShouldBe(0L, "a quiet state allocates nothing");
+            allocated.Measured.ShouldBe(0L, $"a quiet state allocates nothing; {allocated}");
         }
         finally
         {
@@ -85,14 +82,33 @@ public sealed class InboxBackoffQuietTests
         backoff.CountUnrecoveredTenantsAt(Now, HalfOpen).ShouldBe(2, "control: there is something to count");
         backoff.CountUnrecoveredConsumersAt(Now, HalfOpen).ShouldBe(1, "control: there is something to count");
 
-        var before = GC.GetAllocatedBytesForCurrentThread();
-        for (var i = 0; i < 1_000; i++)
+        var allocated = Allocation(() =>
         {
-            backoff.CountUnrecoveredTenantsAt(Now, HalfOpen);
-            backoff.CountUnrecoveredConsumersAt(Now, HalfOpen);
-        }
+            for (var i = 0; i < 1_000; i++)
+            {
+                backoff.CountUnrecoveredTenantsAt(Now, HalfOpen);
+                backoff.CountUnrecoveredConsumersAt(Now, HalfOpen);
+            }
+        });
 
-        (GC.GetAllocatedBytesForCurrentThread() - before).ShouldBe(0L);
+        allocated.Measured.ShouldBe(0L, $"the counts allocate nothing; {allocated}");
+    }
+
+    /// <summary>
+    /// The bytes <paramref name="window"/> allocates on this thread, after one unmeasured run of it (A28): the
+    /// runtime's own first-run work on the measured calls — tiering, on-stack replacement — happens there, not in
+    /// the measured window. A second window, measured right after, comes with it: on a failure, an allocation of
+    /// the code under test shows in both, a one-off of the runtime in the first only.
+    /// </summary>
+    private static Allocated Allocation(Action window)
+    {
+        window();
+        var before = GC.GetAllocatedBytesForCurrentThread();
+        window();
+        var measured = GC.GetAllocatedBytesForCurrentThread() - before;
+        before = GC.GetAllocatedBytesForCurrentThread();
+        window();
+        return new Allocated(measured, GC.GetAllocatedBytesForCurrentThread() - before);
     }
 
     /// <summary>Every check the delivery and retry paths make, in the order a batch makes them.</summary>
@@ -116,4 +132,10 @@ public sealed class InboxBackoffQuietTests
             ?? throw new InvalidOperationException(
                 "InboxBackoff has no private Lock field '_lock': this test holds it to prove a quiet check takes no lock. " +
                 "Point it at the state's lock again.");
+
+    /// <summary>The bytes of the measured window, and of the window right after it.</summary>
+    private readonly record struct Allocated(long Measured, long Next)
+    {
+        public override string ToString() => $"measured window {Measured} B, next window {Next} B";
+    }
 }
