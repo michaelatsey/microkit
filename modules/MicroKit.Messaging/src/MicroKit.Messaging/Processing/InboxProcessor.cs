@@ -26,8 +26,9 @@ namespace MicroKit.Messaging.Processing;
 /// <b>Failure classification.</b> A failure known to be permanent dead-letters on sight; a
 /// dependency outage on a row with a tenant puts its (consumer, tenant) pair in back-off — and its
 /// consumer, for every tenant, when its consumer probe failed — the rows it holds wait to the end of it
-/// with no attempt counted, and the batch goes on (#124, #210); only the store probe failing (two tenants
-/// counted before any success, <see cref="InboxBackoff"/>), a row with no tenant, or the store itself unreachable abandon the
+/// with no attempt counted, and the batch goes on (#124, #210); only the store probe failing (two verdicts
+/// counted before any success, unless the only consumer that failed is on record and is held again,
+/// <see cref="InboxBackoff"/>), a row with no tenant, or the store itself unreachable abandon the
 /// batch and release the remainder with no attempt counted; a lost claim writes nothing; a
 /// host stop releases the remainder with no attempt counted; everything else is transient, retried with
 /// full-jitter back-off until <see cref="InboxProcessorOptions.MaxRetries"/>. Failures are settled in

@@ -37,15 +37,16 @@
   tenant new to it, with no success of its own since, waits for every tenant without pausing the
   transport, when that failure is not the store probe failing: another consumer succeeded since, or the tenant already failed for another consumer; only its own success clears it. That
   verdict is no evidence against the store: the tenants only it failed for leave the store probe's count.
-  The store probe trips on two tenants counted since the last success, unless the only consumer that
-  failed was held for every tenant before and is still on record — until its success, or until its
+  The store probe trips on two counted verdicts since the last success, unless the only consumer that
+  failed since then, apart from consumers held for every tenant since, was held for every tenant before and is still on record — until its success, or until its
   back-off has been over for a whole ceiling: it is then held again, so its backlog filling a retry batch
   on its own, the store suspected or not, no longer abandons the batch; two consumers failing for two
-  tenants with no success between still back the store off. Two failures in a row of one consumer on
-  record, with no other consumer failing between, are read as its own. At each
+  tenants with no success between still back the store off. Two failures of one consumer on
+  record are read as its own while no other consumer failed since the last success or the last store-wide
+  back-off, apart from consumers held for every tenant since. At each
   consumer's first dependency verdict in a retry batch that holds it, the rows not yet attempted are
   ordered again, alternating between consumers, those not known to fail first, so a consumer's held backlog heading the claim no longer
-  abandons the batch before the other consumers' rows when one of them succeeds in between. Two tenants down before any success still pause the transport
+  abandons the batch before the other consumers' rows when one of them succeeds in between. Two counted verdicts before any success, outside that exemption, still pause the transport
   and abandon the retry batch, as before.
 - `microkit.inbox.tenants.backoff` counts a tenant while at least one of its (consumer, tenant) pairs has
   not recovered; its name, unit and tags are unchanged.

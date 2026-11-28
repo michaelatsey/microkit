@@ -39,15 +39,18 @@ namespace MicroKit.Messaging.Processing;
 /// C's pending probe also clears once C has no entry left. A store-wide verdict wins: a verdict that is
 /// <see cref="OutageScope.Shared"/> sets no consumer back-off, and entering the store-wide back-off
 /// (<see cref="OutageScope.Shared"/>, <see cref="MarkSuspected"/>) clears every consumer's pending probe — C's
-/// second failure holds it for every tenant only when it is not the store probe failing: another consumer
-/// succeeded since, or its tenant already failed for another consumer. So a single later failure of another
+/// second failure holds it for every tenant in two cases only: by its consumer probe, when fewer than two
+/// verdicts are counted — another consumer succeeded since, or its tenant already failed for another consumer —
+/// and by the exemption above, when two are counted, C is the only failed consumer, and C is on record. So a
+/// single later failure of another
 /// consumer, for a new tenant, does not pause the store: the withdrawal took C's tenants out of the count. With
 /// one consumer none of this occurs, and this state answers exactly as <see cref="TenantBackoff"/> does. Two
 /// limits remain. A batch holding only one consumer's rows, before that consumer has any consumer-wide back-off
 /// on record, still reads two of its failures, for two tenants with no success between, as the store probe
 /// failing, as <see cref="TenantBackoff"/> does: nothing in the verdict tells that from a store-wide outage. And
-/// two failures in a row of one consumer on record, with no other consumer failing between, are read as that
-/// consumer's own, even in a store-wide outage: X, X then W, W holds X and W each for every tenant and pauses
+/// two failures of one consumer on record, while no other consumer is among the failed consumers — none failed
+/// since the last reset, or each was withdrawn by its own Consumer verdict — are read as that consumer's own,
+/// even in a store-wide outage: X, X then W, W holds X and W each for every tenant and pauses
 /// nothing. That is the sequence when each retry claim is filled by one held consumer's backlog in turn, and on
 /// the delivery path when one consumer's deliveries fail in a row.
 /// </para>

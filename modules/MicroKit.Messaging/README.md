@@ -806,11 +806,12 @@ named by its inbox key (`MessageConsumerKey`), so a handler of two message types
   tenant clears it: another handler's success for the same tenant leaves it, so its back-off grows while
   its dependency stays down.
 - **The probe still decides the store-wide back-off.** A failure for a tenant that already failed, for
-  any handler, is that tenant's own cause, unless the store is suspected; a second tenant down before
+  any handler, is that tenant's own cause, unless the store is suspected; a second counted verdict before
   any success is the probe failing, as on the outbox: the transport pauses and redelivers, the retry
   batch is abandoned. A success of any handler clears it. One exception: when the only handler that
-  failed since the last success was held for every tenant before and is still on record — until its own
-  success, or until its back-off has been over for a whole ceiling — its second tenant down is its own
+  failed since the last success or the last store-wide back-off, apart from handlers held for every tenant
+  since, was held for every tenant before and is still on record — until its own
+  success, or until its back-off has been over for a whole ceiling — its second counted verdict is its own
   cause, and it is held again for every tenant instead.
 - **A handler whose own dependency is down waits for every tenant**, and nothing pauses. When it fails
   for a second tenant new to it, with no success of its own since the first, and that failure is not the
@@ -840,8 +841,9 @@ named by its inbox key (`MessageConsumerKey`), so a handler of two message types
   tenants with no success between still fail the probe, held before or not. Two limits remain. A batch
   holding only one handler's rows, while that handler is not on record, still reads two of its failures,
   for two tenants with no success between, as the probe failing, as before — nothing in the failure tells
-  that from the store being down. And two failures in a row of one handler on record, with no other
-  handler failing between, are read as its own even when the store is down: X, X then W, W holds X and W
+  that from the store being down. And two failures of one handler on record, while no other handler
+  failed since the last success or the last store-wide back-off, apart from handlers held for every tenant
+  since, are read as its own even when the store is down: X, X then W, W holds X and W
   each for every tenant and pauses nothing. That is the sequence when each retry claim is filled by one
   held handler's backlog in turn, and on the delivery path when one handler's deliveries fail in a row.
   The batch is abandoned with the store-wide back-off, as

@@ -10,9 +10,17 @@ using static MicroKit.Messaging.Processing.InboxBackoff;
 /// and ending), every down verdict gets the same scope and the same end of back-off from both.
 /// </summary>
 /// <remarks>
+/// <para>
 /// Each sequence is drawn from its seed, which every failure message carries and the test output prints.
 /// <see cref="TheSequences_ReachEveryRule"/> checks that the seeds exercise each rule of the model, so a rule the
 /// generator never reaches cannot pass unseen.
+/// </para>
+/// <para>
+/// It checks the code against the rule's text, and cannot find a flaw in the rule itself: its structure follows
+/// that text, as the implementation's does, so a sequence the rule answers wrongly is answered the same way by
+/// both. What the rule should answer is pinned by the hand-written expectations of
+/// <see cref="InboxBackoffTests"/> and, on PostgreSQL, <c>ConsumerBackoffInboxTests</c>.
+/// </para>
 /// </remarks>
 public sealed class InboxBackoffOracleTests(ITestOutputHelper output)
 {
@@ -78,7 +86,6 @@ public sealed class InboxBackoffOracleTests(ITestOutputHelper output)
         total.KeptTenants.ShouldBeGreaterThan(10, "a tenant another consumer failed for stays counted");
         total.ResetBySuccess.ShouldBeGreaterThan(10);
         total.ResetByNoEntry.ShouldBeGreaterThan(10);
-        total.RecordEnded.ShouldBeGreaterThan(10, "a consumer back-off on record after its end");
         total.RecordPruned.ShouldBeGreaterThan(10);
     }
 
@@ -153,8 +160,6 @@ public sealed class InboxBackoffOracleTests(ITestOutputHelper output)
 
         public int ResetByNoEntry { get; set; }
 
-        public int RecordEnded { get; set; }
-
         public int RecordPruned { get; set; }
 
         public void Add(Reach other)
@@ -170,7 +175,6 @@ public sealed class InboxBackoffOracleTests(ITestOutputHelper output)
             KeptTenants += other.KeptTenants;
             ResetBySuccess += other.ResetBySuccess;
             ResetByNoEntry += other.ResetByNoEntry;
-            RecordEnded += other.RecordEnded;
             RecordPruned += other.RecordPruned;
         }
 
@@ -179,7 +183,7 @@ public sealed class InboxBackoffOracleTests(ITestOutputHelper output)
                 + $"shared one consumer {SharedOneConsumer}, shared several {SharedSeveralConsumers}, exempt {Exempt}, "
                 + $"consumer probe {ConsumerProbe}, withdrawn tenants {WithdrawnTenants}, kept tenants {KeptTenants}, "
                 + $"reset by success {ResetBySuccess}, reset by no entry {ResetByNoEntry}, "
-                + $"record ended {RecordEnded}, record pruned {RecordPruned}";
+                + $"record pruned {RecordPruned}";
     }
 
     /// <summary>
@@ -255,14 +259,10 @@ public sealed class InboxBackoffOracleTests(ITestOutputHelper output)
             OutageScope scope;
             if (_counted.Count >= 2)
             {
-                if (_failed.Count == 1 && _backoffs.TryGetValue(consumer, out var onRecord))
+                // A record in force returned Held above: every exemption is on a record that ended.
+                if (_failed.Count == 1 && _backoffs.ContainsKey(consumer))
                 {
                     Reached.Exempt++;
-                    if (now >= onRecord.Until)
-                    {
-                        Reached.RecordEnded++;
-                    }
-
                     scope = Hold(consumer, now, ref until);
                 }
                 else

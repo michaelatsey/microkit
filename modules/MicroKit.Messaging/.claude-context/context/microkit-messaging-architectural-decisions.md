@@ -2347,9 +2347,10 @@ nothing tells a tenant's database from the consumer's own dependency.
      C's pending probe also clears once C has no entry left.
    - **A store-wide verdict wins.** A `Shared` verdict sets no consumer back-off, and entering the
      store-wide back-off (`Shared`, or `MarkSuspected` for the store unreachable or a verdict with no tenant)
-     clears every consumer's pending probe: C's second failure puts it in consumer-wide back-off only when
-     it is not the store probe failing — another consumer succeeded since, or its tenant already failed for
-     another consumer. With one consumer it never occurs, and the state answers exactly as `TenantBackoff`
+     clears every consumer's pending probe: C's second failure puts it in consumer-wide back-off in two cases
+     only — by its consumer probe, when fewer than two verdicts are counted (another consumer succeeded since,
+     or its tenant already failed for another consumer), and by the store probe's exemption, when two are
+     counted, C is the only failed consumer, and C is on record. With one consumer it never occurs, and the state answers exactly as `TenantBackoff`
      — verified on generated sequences.
    - **Why this evidence.** A store-wide outage shows as different consumers failing for different tenants
      with no success between (V7), however their records stand: two consumers on record failing for the
@@ -2361,8 +2362,9 @@ nothing tells a tenant's database from the consumer's own dependency.
    - **Two limits remain.** A batch holding only one consumer's rows, before that consumer has any
      consumer-wide back-off on record, still reads two of its failures, for two tenants with no success
      between, as the store probe failing, and abandons the batch, as on main: nothing in the verdict tells
-     that from a store-wide outage. And two failures in a row of one consumer on record, with no other
-     consumer failing between, are read as that consumer's own, even in a store-wide outage: X, X then W,
+     that from a store-wide outage. And two failures of one consumer on record, while no other consumer is
+     among the failed consumers — none failed since the last reset, or each was withdrawn by its own
+     `Consumer` verdict — are read as that consumer's own, even in a store-wide outage: X, X then W,
      W holds X and W each for every tenant and pauses nothing. That is the sequence when each retry claim
      is filled by one held consumer's backlog in turn, and on the delivery path when one consumer's
      deliveries fail in a row.

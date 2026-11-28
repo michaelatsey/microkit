@@ -873,7 +873,8 @@ internal sealed class MessageReceivePipeline(
     /// consumer probe failed — and the row is written <c>Failed</c>, unattempted and uncounted, due at the end
     /// of the back-off: the store's retry loop owns it, and the transport keeps delivering the other pairs. Otherwise no row: the transport pauses and redelivers, nothing
     /// counted, as before — for a row with no tenant, the store itself unreachable, a local delivery
-    /// (the outbox defers it, D1), and the probe failing (a second tenant down before any success). The
+    /// (the outbox defers it, D1), and the store probe failing (two verdicts counted before any success, unless the only consumer that
+    /// failed is on record and is held again, <see cref="InboxBackoff"/>). The
     /// failed probe's pair is in back-off too, so its redeliveries are written to wait like any held
     /// tenant's: during an outage shared by every tenant, the held tenants' deliveries move into the
     /// inbox table instead of waiting in the broker — the documented cost of never holding one tenant
