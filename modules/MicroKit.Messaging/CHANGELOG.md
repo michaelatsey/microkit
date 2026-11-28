@@ -37,7 +37,7 @@
   tenant new to it, with no success of its own since, waits for every tenant without pausing the
   transport, when that failure is not the store probe failing: another consumer succeeded since, or the tenant already failed for another consumer; only its own success clears it. That
   verdict is no evidence against the store: the tenants only it failed for leave the store probe's count.
-  The store probe trips on two counted verdicts since the last success, unless the only consumer that
+  The store probe trips on two counted verdicts since the last success or the last store-wide back-off, unless the only consumer that
   failed since then, apart from consumers held for every tenant since, was held for every tenant before and is still on record — until its success, or until its
   back-off has been over for a whole ceiling: it is then held again, so its backlog filling a retry batch
   on its own, the store suspected or not, no longer abandons the batch; two consumers failing for two

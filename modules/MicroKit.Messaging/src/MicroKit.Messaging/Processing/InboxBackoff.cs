@@ -327,7 +327,7 @@ internal sealed class InboxBackoff
                 }
                 else
                 {
-                    // Two tenants counted before any success: the cause is shared. The pairs that failed stay in
+                    // Two counted verdicts since the reset: the cause is shared. The pairs that failed stay in
                     // back-off too, or two tenants that never recover would trip the store for ever.
                     EnterSuspicion();
                     scope = OutageScope.Shared;
