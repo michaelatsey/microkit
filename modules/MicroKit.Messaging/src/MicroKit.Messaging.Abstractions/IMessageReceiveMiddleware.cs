@@ -12,7 +12,7 @@ namespace MicroKit.Messaging;
 /// <para>
 /// An exception is classified like a handler's: <see cref="PermanentMessageException"/>
 /// dead-letters, <see cref="InboxDependencyUnavailableException"/> pauses the endpoint — or, with a
-/// store, backs the message's tenant off (#124) — anything else redelivers.
+/// store, backs the handler off for the message's tenant (#124, #210) — anything else redelivers.
 /// </para>
 /// </remarks>
 public interface IMessageReceiveMiddleware

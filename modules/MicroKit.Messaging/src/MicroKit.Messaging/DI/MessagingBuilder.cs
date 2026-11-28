@@ -259,11 +259,13 @@ public sealed class MessagingBuilder
                 nameof(handlerType));
         }
 
+        // The key first: a handler whose key is refused (U+001F, #210) leaves nothing registered.
+        var consumerKey = MessageConsumerKey.Of(handlerType);
         Services.TryAddTransient(handlerType);
 
         foreach (var messageType in handled)
         {
-            _composition.AddHandler(handlerType, messageType);
+            _composition.AddHandler(handlerType, messageType, consumerKey);
         }
     }
 

@@ -69,11 +69,12 @@ internal, or does not exist. Adding a public type means editing that list on pur
 | `IOutboxAdminStore` / `IOutboxRetentionStore` | `GetDeadLetteredAsync`, `RequeueAsync` / `DeleteProcessedAsync` |
 | `IInboxGuardStore` | `FindAsync`, `ExecuteAsync<TState, TResult>` (the store's execution strategy, with commit verification; the state reaches both callbacks), `BeginAsync`, `EnlistProcessedAsync` (new delivery), `MarkClaimedProcessedAsync` (retry), `CommitAsync`, `IsLeaseLost`, `TryInsertFailedAsync`. Scoped, keyed by the store key, one instance per attempt scope |
 | `InboxRowState` | `(InboxMessageStatus Status, bool DeadLettered, Guid RowId)` — what `FindAsync` reads |
-| `IInboxProcessorStore` | `ClaimBatchAsync(batchSize, leaseDuration, IReadOnlyList<string> excludedTenants, ct)` → `InboxClaim`, one signature, no default: the tenants in back-off are left out, never a row with no tenant; `ApplyOutcomesAsync` |
+| `IInboxProcessorStore` | `ClaimBatchAsync(batchSize, leaseDuration, InboxClaimExclusions excluded, ct)` → `InboxClaim`, one signature, no default: the consumers and the (consumer, tenant) pairs in back-off are left out, never a row with no tenant (#210); `ApplyOutcomesAsync` |
+| `InboxClaimExclusions` | `ConsumerTypes`, `Pairs` (`(ConsumerType, TenantId)`), `IsEmpty`, the shared `None` — what an inbox claim leaves out (#210) |
 | `IInboxAdminStore` / `IInboxRetentionStore` | `GetDeadLetteredAsync`, `RequeueAsync(InboxMessageKey)` / `DeleteProcessedAsync` |
 | `ILocalMessageSender` | `SendAsync(object message, MessageId messageId, DateTimeOffset occurredOnUtc, ct)` — a local message: never handed to a transport |
-| `MessageConsumerKey` | `Of(Type)`, `FromAssemblyQualifiedName(string)` — the version-free inbox key of a handler type: no `Version`, `Culture` or `PublicKeyToken`, generic arguments included |
-| `ILocalConsumerSource` / `LocalConsumer` | `GetConsumers()`; `LocalConsumer(MessageType, ConsumerType, HandlerType, Invoke)`. `ConsumerType` is the inbox key: keep it stable across deployments |
+| `MessageConsumerKey` | `Of(Type)`, `FromAssemblyQualifiedName(string)` — the version-free inbox key of a handler type: no `Version`, `Culture` or `PublicKeyToken`, generic arguments included. `Of` refuses a key containing U+001F, the inbox claim's pair separator (#210) |
+| `ILocalConsumerSource` / `LocalConsumer` | `GetConsumers()`; `LocalConsumer(MessageType, ConsumerType, HandlerType, Invoke)`. `ConsumerType` is the inbox key: keep it stable across deployments; never empty, never containing U+001F (#210) |
 | `MessagingIntegrationExtensions` | `AddLocalConsumerSource(source)`, `AddStartupCheck(check)` on `MessagingBuilder` |
 | `OutboxMessage`, `InboxMessage` | The rows. `OutboxMessage.Endpoint`: `null` = transport, `OutboxMessage.LocalEndpoint` (`"local"`) = local endpoint |
 | `OutboxClaim`, `InboxClaim`, `OutboxOutcome`, `InboxOutcome`, `InboxMessageKey` | What the stores exchange. Outcome factories: `Published`/`Processed`, `Retry`, `DeadLetter`, `Released`, and the outbox's `Deferred` (an endpoint down: next attempt set, retry count and error kept) |

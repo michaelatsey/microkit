@@ -49,7 +49,7 @@ internal sealed class InstanceHarness : IDisposable
         InstanceOptions = new StoreInstanceOptions { MaxConcurrentBatches = permits, TagInstances = tagInstances };
         Registry = new StoreInstanceRegistry(Composition, _provider, registryLogger ?? NullLogger<StoreInstanceRegistry>.Instance);
         Gate = new FifoGate(permits);
-        Inbox = new InboxTenantBackoff(InboxOptions);
+        Inbox = new InboxBackoffGroup(InboxOptions);
         Metrics = new OutboxMetrics(TimeProvider.System, OutboxOptions, InstanceOptions, Registry);
     }
 
@@ -78,7 +78,7 @@ internal sealed class InstanceHarness : IDisposable
 
     public FifoGate Gate { get; }
 
-    public InboxTenantBackoff Inbox { get; }
+    public InboxBackoffGroup Inbox { get; }
 
     public OutboxMetrics Metrics { get; }
 
@@ -127,7 +127,11 @@ internal sealed class TestInstanceSource : IMessageStoreInstanceSource, IDisposa
 
     private Exception? _throwOnRead;
 
-    /// <summary>Gets or sets an exception the next snapshot throws.</summary>
+    /// <summary>
+    /// Gets or sets an exception the next read throws, once: the round after it, a poll interval later, reads
+    /// the snapshot. A test that asserts what a failed round left must hold the fault until it has looked
+    /// (<c>StoreInstanceReconcilerTests.FailingReads</c>).
+    /// </summary>
     public Exception? ThrowOnRead
     {
         get

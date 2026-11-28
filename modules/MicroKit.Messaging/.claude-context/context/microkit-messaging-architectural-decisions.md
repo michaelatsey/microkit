@@ -2294,3 +2294,138 @@ that latency for a round trip per store, or per instance, per interval.
   Disposal order: Microsoft Learn, "Dependency injection scope disposal aggregates exceptions" (reverse
   capture order); a disposing scope refuses to resolve (dotnet/runtime `2ba107f`,
   `ServiceProviderEngineScope.cs:49-53, 283-298`).
+
+---
+
+## ADR-MSG-023: The Inbox Back-off Is Held per Consumer and Tenant
+
+**Status:** Accepted
+**Date:** 2026-11-24
+**Issue:** #210
+**Amends:** #124's inbox back-off (no ADR: its record is the README, *One tenant down*).
+
+### Context
+
+#124 held the inbox back-off per (store or instance, tenant): any consumer's success for tenant A
+cleared A's entry, and A's entry deferred every consumer's deliveries for A. With consumer X's dependency
+down for A and consumer Y healthy, Y's successes kept clearing A, so X's back-off never grew and X's rows
+for A were retried every polling interval against the down dependency; between Y's successes, Y's
+deliveries for A waited behind X. What the engine knows when a guarded handler fails is the store
+unreachable or not, an `InboxDependencyUnavailableException` with no scope, and the row's tenant or none:
+nothing tells a tenant's database from the consumer's own dependency.
+
+### Decision
+
+1. **The unit.** The inbox back-off is held per (store or instance, consumer, tenant). The consumer is the
+   row's `ConsumerType` (`MessageConsumerKey`), so a handler class consuming two message types has one
+   back-off. A new delivery, a retry, the retry order and the claim read the pair; a success of (C, T)
+   clears, of the pairs, (C, T) only — and C's own probe and back-off, never another consumer's. The state is one internal `InboxBackoff` per store or instance — entries tenant →
+   consumer → (until, delay), and per consumer its pending probe and its consumer-wide back-off — under one
+   lock; `TenantBackoff` stays the outbox's, unchanged.
+2. **Two probes, each deciding one thing.**
+   - The **store probe** decides the store-wide back-off, on its evidence (PR #219, A25 — replacing the
+     withdrawal of a held consumer's probe and its exception, A19 and A22). The evidence is reset on any success, on `Shared`, on
+     `MarkSuspected` and when no entry is left. The **counted tenants**: a down verdict (not `Held`) counts
+     its tenant when that tenant had no entry for any consumer before it, or while the store's inbox is
+     suspected — one per verdict that counts, as #124's probe counts verdicts (read as a set, the same
+     tenant counted twice while suspected would differ from #124: V2 failed on 43 of 100 seeds). The
+     **failed consumers**: every consumer with a down verdict since the reset, with the tenants it failed
+     for. On a down verdict of C for T, after `Held` and the pair's entry: when the counted tenants number
+     two or more, `Shared` — the transport pauses, the retry batch is abandoned, the store is suspected,
+     every consumer's pending probe clears, no consumer back-off is set — unless the only failed consumer
+     is C and C has a consumer-wide back-off on record (in force, or ended and neither pruned nor cleared
+     by C's own success): then `Consumer`, C held again on its curve. Otherwise C's consumer probe decides
+     between `Consumer` and `Tenant`. A `Consumer` verdict withdraws C from the evidence: the tenants only
+     C failed for leave the counted tenants, and C leaves the failed consumers. A success of any consumer
+     clears the evidence and the suspicion. With one consumer nothing is on record: this is #124's probe.
+   - The **consumer probe** decides a consumer-wide back-off, which never pauses anything: a verdict of C
+     for a tenant that had no entry for C, with C's probe pending from another tenant, puts C in back-off
+     for every tenant (`Consumer`), on the inbox curve, growing from its previous one; otherwise C's probe
+     is pending. A verdict for a tenant that already had an entry for C changes that entry only, so two
+     tenants that never recover hold C at most once: known to C, they cannot hold it again. Only a success
+     of C clears C's probe and back-off;
+     C's pending probe also clears once C has no entry left.
+   - **A store-wide verdict wins.** A `Shared` verdict sets no consumer back-off, and entering the
+     store-wide back-off (`Shared`, or `MarkSuspected` for the store unreachable or a verdict with no tenant)
+     clears every consumer's pending probe: C's second failure puts it in consumer-wide back-off in two cases
+     only — by its consumer probe, when fewer than two verdicts are counted (another consumer succeeded since,
+     or its tenant already failed for another consumer), and by the store probe's exemption, when two are
+     counted, C is the only failed consumer, and C is on record. With one consumer it never occurs, and the state answers exactly as `TenantBackoff`
+     — verified on generated sequences.
+   - **Why this evidence.** A store-wide outage shows as different consumers failing for different tenants
+     with no success between (V7), however their records stand: two consumers on record failing for the
+     same tenants trip it too — X for T1, W for T1, X for T2. A consumer's own dependency shows as that
+     consumer failing alone: the withdrawal keeps a single later failure of another consumer from pausing
+     the store (V17), and the exemption keeps a held consumer's backlog, filling a retry claim alone — the
+     store suspected or not — from abandoning the batch on its second row, batch after batch (V16). A19
+     and A22, two patches on one flag, each opened a new stop-rule case; this statement replaces them.
+   - **Two limits remain.** A batch holding only one consumer's rows, before that consumer has any
+     consumer-wide back-off on record, still reads two of its failures, for two tenants with no success
+     between, as the store probe failing, and abandons the batch, as on main: nothing in the verdict tells
+     that from a store-wide outage. And two failures of one consumer on record, while no other consumer is
+     among the failed consumers — none failed since the last reset, or each was withdrawn by its own
+     `Consumer` verdict — are read as that consumer's own, even in a store-wide outage: X, X then W,
+     W holds X and W each for every tenant and pauses nothing. That is the sequence when each retry claim
+     is filled by one held consumer's backlog in turn, and on the delivery path when one consumer's
+     deliveries fail in a row.
+   - **Held.** A verdict while the pair or its consumer is in back-off changes nothing.
+3. **The claim key.** `IInboxProcessorStore.ClaimBatchAsync` takes `InboxClaimExclusions` — the consumers
+   and the (consumer, tenant) pairs in back-off — in place of the excluded tenants: one signature, no
+   default implementation. A row with no tenant is never left out. The EF store sends one array parameter
+   of consumers and one of keys `ConsumerType + U+001F + TenantId`, compared with the same expression on the
+   columns; one SQL text for any exclusion, main's for none. The match is exact because no consumer key
+   contains U+001F: `MessageConsumerKey.Of` and the `LocalConsumer` constructor refuse one, so the first
+   separator of a key is at its consumer's length; a tenant id may contain anything, as the suffix.
+4. **Why no structured pair.** EF Core 10 translates parameter collections of primitive values only
+   (`RelationalQueryableMethodTranslatingExpressionVisitor.TranslatePrimitiveCollection`); a collection of
+   complex types maps only to a JSON column (EF Core, *Complex types*); and `unnest` would be PostgreSQL SQL
+   in the provider-neutral package.
+5. **Retry order.** A batch tries the rows of pairs with no entry first, in claim order, then the others by
+   their pair's delay. At each consumer's first dependency verdict in the batch that holds its pair or
+   itself (a verdict that abandons the batch reorders nothing), the rows not yet attempted are ordered
+   again, round-robin across consumers, each consumer's rows keeping their order — the order of pairs then
+   holds within each consumer's rows only; each round tries first the consumers with no such verdict in the
+   batch and no consumer-wide back-off on record (in force, or ended and neither pruned nor cleared by a
+   success), then those with one on record, then those that met such a verdict in the batch, in the order
+   they met it. Computed at most once per consumer per batch, so a batch with no failure keeps claim order
+   and pays nothing for it, and with one consumer left, or none, the order is unchanged. When no consumer succeeds in between, the store probe still trips. Without it, a consumer's held backlog —
+   the oldest rows once its consumer-wide back-off ends — heads the claim, and two of its rows failing back
+   to back, before any success, fail the store probe: the batch is abandoned before the other consumers'
+   rows, batch after batch, with no transport traffic to bring a success in between.
+6. **Observability.** `microkit.inbox.tenants.backoff` keeps its name, unit and meaning: a tenant counts
+   while at least one of its pairs is unrecovered. `microkit.inbox.consumers.backoff` (`{consumer}`, the
+   same tags and rule) counts the consumers in consumer-wide back-off: during one, a consumer's pairs age
+   out with no attempt, and the tenants counter alone would read 0 while the consumer is still down. Event
+   2013 names the consumer; 2015 (`Warning`) reports a consumer entering consumer-wide back-off, at most
+   once per entry — after the row or the batch that caused it is written, so not when that write fails;
+   2014 keeps its id, level and parameters.
+
+### Consequences
+
+- **Costs, documented.** When a tenant's database is down, each consumer of the tenant makes one uncounted
+  attempt before it waits: the handler cannot say the cause is its tenant's. "At most two attempts per
+  batch" holds between two successes: while another consumer keeps succeeding, a consumer-wide outage
+  costs at most two attempts on tenants new to that consumer per consumer back-off, plus each known pair
+  on its own curve. Pairs and consumers are compared by the columns' collation, as tenant ids were.
+- **The bound, measured.** Each claim reads, and never writes, the claimable rows of a held pair or
+  consumer. Against #124's tenant claim at equal exclusion, on PostgreSQL with 20,000 and 2,000 held rows:
+  the same plan, the same shared buffers (976, 98) and the same rows read past, at equal exclusion; plus the key comparison per
+  row read — Npgsql's translation evaluates it twice, EF Core's null compensation — about 40% more
+  execution time at 20,000 rows (6.0–6.8 ms against 8.3–9.7 ms, medians of two runs), within noise at
+  2,000. With 100 pairs the planner takes a bitmap scan and reads 13% more buffers. Paid once per batch,
+  and only while something is held (`TenantExclusionPlanTests`, D11).
+- **Breaking.** The claim SPI's signature changes; a store provider implements the new filter.
+  `MessageConsumerKey.Of` and `LocalConsumer` refuse a key containing U+001F, which no C# type name
+  contains: a key gets one only from an assembly name or a consumer source's own name. A row written by hand with such a `ConsumerType` names no consumer and can only be left out of
+  the claim while a pair whose key equals its own is held.
+- **Unchanged.** Rows and deliveries with no tenant; the store unreachable pausing or abandoning for every
+  tenant (a separate finding); local deliveries; the outbox back-off; `DeadLetterPendingAsync(tenantId)`,
+  which covers every consumer of the tenant; a dependency verdict never counts an attempt.
+- **Prior art.** MassTransit `d9f61f7`: `UseCircuitBreaker` is a pipe filter that can be put on one
+  consumer's pipe (`CircuitBreakerConfigurationExtensions.cs:16`) and fails the call without reaching the
+  consumer while open (`OpenBehavior.cs:33-35`); its kill switch stops a whole receive endpoint
+  (`KillSwitchConfigurationExtensions.cs:11-15`). Wolverine `3ee64e3`: the circuit breaker pauses its
+  listener (`CircuitBreaker.cs:192-204`). NServiceBus `1f68338`: consecutive failures rate-limit the whole
+  endpoint (`RateLimitSettings.cs:9-16`). CAP `a4f8cd3`: no breaker, each received message retried on its
+  own (`IProcessor.NeedRetry.cs:90-99`). None holds a tenant. The consumer back-off here is MassTransit's
+  per-consumer breaker; the store-wide back-off is the others' endpoint pause.

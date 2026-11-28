@@ -29,11 +29,12 @@ public sealed class StoreContractTests
     }
 
     /// <summary>
-    /// One claim, taking the tenant filter, with no default implementation: a default that ignored it
-    /// would re-defer a blocked tenant's whole backlog each time its back-off ends (#124).
+    /// One claim, taking what is in back-off — the consumers and the (consumer, tenant) pairs (#210) — with no
+    /// default implementation: a default that ignored it would re-defer a held backlog each time its back-off
+    /// ends (#124).
     /// </summary>
     [Fact]
-    public void IInboxProcessorStore_HasOneClaim_TakingTheTenantFilter_WithNoDefaultImplementation()
+    public void IInboxProcessorStore_HasOneClaim_TakingTheConsumerAndPairExclusions_WithNoDefaultImplementation()
     {
         var claims = typeof(IInboxProcessorStore)
             .GetMethods(BindingFlags.Public | BindingFlags.Instance)
@@ -42,7 +43,7 @@ public sealed class StoreContractTests
 
         var claim = claims.ShouldHaveSingleItem("one claim signature");
         claim.GetParameters().Select(p => p.ParameterType)
-            .ShouldBe([typeof(int), typeof(TimeSpan), typeof(IReadOnlyList<string>), typeof(CancellationToken)]);
+            .ShouldBe([typeof(int), typeof(TimeSpan), typeof(InboxClaimExclusions), typeof(CancellationToken)]);
         claim.IsAbstract.ShouldBeTrue("no default implementation: every store provider implements the filter");
     }
 }

@@ -4,7 +4,7 @@ namespace MicroKit.Messaging.Processing;
 
 /// <summary>
 /// Ingestion counters, so a deduplicated write is observable as a rate rather than only as a
-/// log line, and the tenants not recovered on each store's inbox (#126).
+/// log line, and the tenants and the consumers not recovered on each store's inbox (#126, #210).
 /// </summary>
 /// <remarks>
 /// <para>
@@ -31,33 +31,53 @@ namespace MicroKit.Messaging.Processing;
 /// <b>The tenants not recovered</b> — <c>microkit.inbox.tenants.backoff</c>, tag <c>store.key</c>, and
 /// <c>store.instance</c> on a partitioned store's instance with <c>StoreInstanceOptions.TagInstances</c>
 /// on (#191 D9) — are an
-/// observable up-down counter read from <see cref="InboxTenantBackoff"/>'s memory, never the database: a
-/// tenant counts 1 from a down verdict until a success, or until a ceiling plus <c>MaxPollingInterval</c>
+/// observable up-down counter read from <see cref="InboxBackoffGroup"/>'s memory, never the database. The
+/// back-off is held per (consumer, tenant) pair (#210), and a tenant counts 1 while at least one of its pairs
+/// has not recovered: a pair from its down verdict until its consumer's success for the tenant — another
+/// consumer's success leaves it — or until a ceiling plus <c>MaxPollingInterval</c>
 /// (<see cref="InboxProcessorOptions.DependencyUnavailableBackoff"/> plus
 /// <see cref="InboxProcessorOptions.MaxPollingInterval"/>) after its back-off ended with no new attempt; it
 /// also drops out when its entry is pruned, a ceiling after its back-off ended, by the next retry batch.
-/// The bound assumes the retry loop makes the next attempt: a transport delivery that leaves its tenant in
-/// back-off with no row — the tenant fails the probe, its deferred row cannot be written, the store is
+/// The bound assumes the retry loop makes the next attempt: a transport delivery that leaves its pair in
+/// back-off with no row — it fails the store probe, its deferred row cannot be written, the store is
 /// unreachable while writing it, or the host stops while writing it — is next attempted by the
 /// transport's redelivery, and a provider pausing longer than the bound reads 0 before it. A single store
-/// is reported once its state is created, by the first <see cref="InboxTenantBackoff.For"/> call for it,
+/// is reported once its state is created, by the first <see cref="InboxBackoffGroup.For"/> call for it,
 /// which a local delivery never makes: its retry loop's first cycle; a dependency outage, or the store
 /// unreachable, met by one of its transport deliveries; or, while
-/// <see cref="InboxTenantBackoff.IsQuiet"/> is false — a tenant in back-off, a probe pending or a
+/// <see cref="InboxBackoffGroup.IsQuiet"/> is false — a pair or a consumer in back-off, a probe pending or a
 /// suspicion standing, on any store's inbox — one of its transport deliveries with a tenant that passed
 /// the dedup read, or a transport success. So it can read 0 with no outage of its own. A single store none
 /// of these reaches reports nothing (event 1400 covers a retry loop whose processor never activates); once
 /// reported, it reports zero included, so an alert resolves. A partitioned store's instance state is
-/// created when the engine starts draining it (<c>InboxTenantBackoff.Add</c>). With instances not tagged, a
+/// created when the engine starts draining it (<c>InboxBackoffGroup.Add</c>). With instances not tagged, a
 /// configured partitioned store reports from the start, summed over its instances and zero while it has
 /// none, whether or not a processor of it activates (1409 reports a store its check refused, 1411 and 1414
 /// an instance's loop that cannot activate its processor or prepare its scope, 1415 an instance that
 /// cannot start). With instances tagged, each instance reports from the start of its draining, and a
-/// removed instance's series stops being reported once its loops have ended and its tenant back-off is
+/// removed instance's series stops being reported once its loops have ended and its inbox back-off is
 /// released (#191 D5). OpenTelemetry .NET 1.15.1 or later in the host exports only the attribute sets an
 /// observable instrument's callback reported in the current collection, so that series goes stale and an
 /// alert on it resolves for want of a sample; an earlier version keeps exporting its last value, and such
 /// an alert does not resolve.
+/// </para>
+/// <para>
+/// <b>The consumers not recovered</b> — <c>microkit.inbox.consumers.backoff</c>, unit <c>{consumer}</c>, the
+/// same tags, the same reporting per store and per instance, zero included once reported (#210) — count the
+/// consumers in consumer-wide back-off by the same rule and bound: from the verdict that put a consumer in it
+/// until the consumer's success, or a ceiling plus <c>MaxPollingInterval</c> past its end; it also drops out
+/// when its back-off is pruned, a ceiling after its end, by the next retry batch. It exists because
+/// the tenants counter cannot see such an outage: while a consumer is held for every tenant, its rows are
+/// left out of the claim and its deliveries written unattempted, so its pairs age out with no attempt and the
+/// tenants counter drops to 0 while the consumer is still down. Neither counter carries a consumer or a
+/// tenant tag: their values are bounded by the stores, not by the tenants.
+/// </para>
+/// <para>
+/// <b>Cost.</b> With no listener, no callback runs. A collection costs each counter one volatile read per
+/// store while it is quiet, and a walk of its entries under its lock otherwise; the counts themselves
+/// allocate nothing. Each callback allocates its list of measurements and, per series, the copy of its tags
+/// a <see cref="Measurement{T}"/> makes — once per collection, as <c>microkit.inbox.tenants.backoff</c> did
+/// before #210, never on a message's path.
 /// </para>
 /// <para>
 /// Registered as a singleton by <c>AddMicroKitMessaging()</c>.
@@ -69,15 +89,15 @@ internal sealed class InboxMetrics : IDisposable
     private readonly Counter<long> _added;
     private readonly Counter<long> _deduplicated;
     private readonly Counter<long> _unconsumed;
-    private readonly InboxTenantBackoff? _tenantBackoff;
+    private readonly InboxBackoffGroup? _backoffs;
     private readonly TimeProvider _timeProvider;
     private readonly TimeSpan _halfOpen;
     private readonly bool _tagInstances;
     private readonly MessageStoreKey[] _partitioned;
 
     /// <summary>Initializes a new <see cref="InboxMetrics"/>.</summary>
-    /// <param name="tenantBackoff">
-    /// The stores' tenant back-off the back-off counter reads. Null only for an instance built by hand,
+    /// <param name="backoffs">
+    /// The stores' inbox back-off the back-off counters read. Null only for an instance built by hand,
     /// which then reports no store.
     /// </param>
     /// <param name="timeProvider">The clock each back-off's end is compared with; the system clock when null.</param>
@@ -87,13 +107,13 @@ internal sealed class InboxMetrics : IDisposable
     /// <param name="instanceOptions">Whether instances are tagged (#191); not tagged when null.</param>
     /// <param name="instances">The partitioned stores, each reported at zero while untagged and empty; none when null.</param>
     public InboxMetrics(
-        InboxTenantBackoff? tenantBackoff = null,
+        InboxBackoffGroup? backoffs = null,
         TimeProvider? timeProvider = null,
         InboxProcessorOptions? options = null,
         StoreInstanceOptions? instanceOptions = null,
         StoreInstanceRegistry? instances = null)
     {
-        _tenantBackoff = tenantBackoff;
+        _backoffs = backoffs;
         _tagInstances = instanceOptions?.TagInstances ?? false;
         _partitioned = instances?.PartitionedStores ?? [];
         _timeProvider = timeProvider ?? TimeProvider.System;
@@ -123,6 +143,14 @@ internal sealed class InboxMetrics : IDisposable
             ObserveTenants,
             unit: "{tenant}",
             description: "Tenants not recovered on the store's inbox. Alert when above zero for a sustained period.");
+
+        _meter.CreateObservableUpDownCounter<int>(
+            "microkit.inbox.consumers.backoff",
+            ObserveConsumers,
+            unit: "{consumer}",
+            description:
+                "Consumers in consumer-wide back-off, not recovered, on the store's inbox. Alert when above zero " +
+                "for a sustained period.");
     }
 
     /// <summary>Gets the meter, for a test to listen to its own instance.</summary>
@@ -164,9 +192,16 @@ internal sealed class InboxMetrics : IDisposable
     public void Dispose() => _meter.Dispose();
 
     private List<Measurement<int>> ObserveTenants()
+        => Observe(static (backoff, now, halfOpen) => backoff.CountUnrecoveredTenantsAt(now, halfOpen));
+
+    private List<Measurement<int>> ObserveConsumers()
+        => Observe(static (backoff, now, halfOpen) => backoff.CountUnrecoveredConsumersAt(now, halfOpen));
+
+    /// <summary>One counter's measurements: <paramref name="count"/> of each store's, or each instance's, state.</summary>
+    private List<Measurement<int>> Observe(Func<InboxBackoff, DateTimeOffset, TimeSpan, int> count)
     {
         var measurements = new List<Measurement<int>>();
-        if (_tenantBackoff is null)
+        if (_backoffs is null)
         {
             return measurements;
         }
@@ -184,23 +219,23 @@ internal sealed class InboxMetrics : IDisposable
             }
         }
 
-        foreach (var (key, backoff) in _tenantBackoff.Stores)
+        foreach (var (key, backoff) in _backoffs.Stores)
         {
-            var count = backoff.CountUnrecoveredAt(now, _halfOpen);
+            var unrecovered = count(backoff, now, _halfOpen);
             if (key.Instance is null)
             {
-                measurements.Add(new Measurement<int>(count, new KeyValuePair<string, object?>("store.key", key.Store.Value)));
+                measurements.Add(new Measurement<int>(unrecovered, new KeyValuePair<string, object?>("store.key", key.Store.Value)));
             }
             else if (sums is null)
             {
                 measurements.Add(new Measurement<int>(
-                    count,
+                    unrecovered,
                     new KeyValuePair<string, object?>("store.key", key.Store.Value),
                     new KeyValuePair<string, object?>("store.instance", key.Instance)));
             }
             else
             {
-                sums[key.Store] = sums.GetValueOrDefault(key.Store) + count;
+                sums[key.Store] = sums.GetValueOrDefault(key.Store) + unrecovered;
             }
         }
 

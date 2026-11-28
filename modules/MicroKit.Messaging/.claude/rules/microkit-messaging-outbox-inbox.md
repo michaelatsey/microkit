@@ -361,14 +361,20 @@ drain.
    - **Transient**: `RetryCount` 1, `NextRetryAtUtc` from the back-off (2202) — or dead-lettered at
      once if `MaxRetries` is 1.
    - **Dependency unavailable** (`InboxDependencyUnavailableException`) on a delivery **with a
-     tenant** (#124 D6): the tenant is blocked in the store's inbox state (`InboxTenantBackoff`, one
-     `TenantBackoff` per store, shared with the retry loop and thread-safe), and the row is written
-     `Failed`, `RetryCount` 0, `NextRetryAtUtc` at the end of the tenant's back-off (2013); the
-     delivery is acknowledged once that row committed. A later delivery of a blocked tenant runs
-     `FindAsync`, then writes the same row **without running the handler** (2014, `Debug`). **No
-     row** — the transport pauses and redelivers, nothing counted — for a delivery with no tenant, a
-     local delivery (the outbox defers it, D1), the store unreachable, the probe failing, or a deferred
-     row that cannot be written.
+     tenant** (#124 D6, #210): its (consumer, tenant) pair is blocked in the store's inbox state
+     (`InboxBackoffGroup`, one `InboxBackoff` per store or instance, shared with the retry loop and
+     thread-safe) — and its consumer for every tenant when its consumer probe fails: a second tenant new
+     to it, not the store probe failing — another consumer succeeded since, or that tenant already failed
+     for another consumer (2015) — and the row is written `Failed`, `RetryCount` 0,
+     `NextRetryAtUtc` at the end of the back-off (2013); the delivery is acknowledged once that row
+     committed. A later delivery a back-off holds runs `FindAsync`, then writes the same row **without
+     running that handler** (2014, `Debug`). **No row** — the transport pauses and redelivers, nothing
+     counted — for a delivery with no tenant, a local delivery (the outbox defers it, D1), the store
+     unreachable, the store probe failing (two tenants counted before any success — unless the only consumer that
+     failed is still on record from an earlier consumer back-off, not cleared by its success nor pruned: then it is
+     held again, #210 A25), or a deferred row
+     that cannot be written. A success of a consumer for a tenant clears that pair, that consumer's
+     probe and back-off, and the store probe's evidence — never another consumer's back-off.
    - A row already there → another delivery owns it (2208): success.
    - The `Failed` row cannot be written (2204): transient — the transport redelivers, counted.
    - **The store reports itself unreachable** — `FindAsync` or `TryInsertFailedAsync` throws
@@ -487,8 +493,8 @@ settled in one `ApplyOutcomesAsync`.
 | lease lost (`MarkClaimedProcessedAsync` false, or `IsLeaseLost`) — 2205 | untouched, owned elsewhere | continues |
 | permanent — `PermanentMessageException`, `InboxPayloadException`, unknown consumer, type that no longer resolves, unreadable payload | dead-letter **now**, `RetryCount` unchanged | continues |
 | transient (anything unrecognised) | `Retry` with back-off; `DeadLetter` at `MaxRetries` | continues |
-| `InboxDependencyUnavailableException`, a row with a tenant (#124 D5) | `Retry` with `RetryCount` unchanged, `NextRetryAtUtc` at the end of the tenant's back-off; its later rows of the batch the same, unattempted (2013); the tenant is left out of the claims until then (`excludedTenants`, A7) | continues; counted as released |
-| `InboxDependencyUnavailableException`: no tenant, the store unreachable (`RetryOutcome.StoreUnreachable`, set when the guard's verify read throws it), or the probe failing | released, nothing counted | abandoned; back-off toward `DependencyUnavailableBackoff`; the store's inbox suspected |
+| `InboxDependencyUnavailableException`, a row with a tenant (#124 D5, #210) | `Retry` with `RetryCount` unchanged, `NextRetryAtUtc` at the end of its pair's back-off, or its consumer's (2015); the later rows of the batch it holds the same, unattempted (2013 per pair); the pair, or the consumer's rows with a tenant, left out of the claims until then (`InboxClaimExclusions`, A7) | continues; counted as released |
+| `InboxDependencyUnavailableException`: no tenant, the store unreachable (`RetryOutcome.StoreUnreachable`, set when the guard's verify read throws it), or the store probe failing | released, nothing counted | abandoned; back-off toward `DependencyUnavailableBackoff`; the store's inbox suspected |
 | `InboxConfigurationException` (no guard for the store) | released | abandoned, rethrown: that store's inbox loop backs off on the idle curve (1402), and never ends |
 | host stop | released, nothing counted | abandoned |
 
@@ -501,8 +507,10 @@ settled in one `ApplyOutcomesAsync`.
 
 Same shape as the outbox — candidates by `RowId` ordered on `ReceivedAtUtc`, sorted, stamped with the
 eligibility predicate replayed (`NOT DeadLettered AND (Status IN (Failed, Received) OR (Processing
-AND LockedUntilUtc <= now)) AND NextRetryAtUtc` reached), the tenants in back-off left out of the
-candidates as in the outbox (one array parameter, never a row with no tenant) — with two differences:
+AND LockedUntilUtc <= now)) AND NextRetryAtUtc` reached), the consumers and the (consumer, tenant)
+pairs in back-off left out of the candidates (#210: one array parameter of consumers, one of keys
+`ConsumerType + U+001F + TenantId`, exact because no consumer key contains U+001F; never a row with no
+tenant) — with two differences:
 
 - The read-back by token always runs, and fills a key → `RowId` map. **Settlement must run on the
   same store instance that claimed** (the loop's scope): an outcome whose key is not in the map is
@@ -581,7 +589,7 @@ down backs off alone**.
 `StoreInstanceReconciler` instead: it reads the source's snapshot at start and on each change of its
 token (signals coalesced in a bounded channel of one, `DropWrite`; a faulty snapshot is logged, 1407 /
 1408, and ignored) and runs the same four loops per instance, each with its own `StoreInstanceState`
-— outbox endpoint back-off, inbox tenant back-off, metric series — created when the instance appears
+— outbox endpoint back-off, inbox back-off (its pairs and consumers, #210), metric series — created when the instance appears
 and released once its loops have ended. Each loop scope is prepared for the instance (store and
 instance on `DeliveryStoreHolder`, then the instance initializer, then the store's pending instance
 check); the processors resolved there take the instance's state. A removal stops each loop between

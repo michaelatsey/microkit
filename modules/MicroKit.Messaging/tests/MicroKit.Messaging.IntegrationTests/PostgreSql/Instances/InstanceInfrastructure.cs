@@ -338,7 +338,8 @@ public sealed class InstanceRecorder
 
     public ConcurrentDictionary<string, int> OutboxClaims { get; } = new(StringComparer.Ordinal);
 
-    public ConcurrentQueue<(string Database, string[] ExcludedTenants)> InboxClaims { get; } = new();
+    /// <summary>Gets each inbox claim: its database, the tenants of its excluded pairs, its excluded consumers (#210).</summary>
+    public ConcurrentQueue<(string Database, string[] ExcludedTenants, string[] ExcludedConsumers)> InboxClaims { get; } = new();
 
     /// <summary>Gets or sets a (database, tenant) whose handler's dependency is down.</summary>
     public (string Database, string Tenant)? DependencyDown { get; set; }
@@ -401,10 +402,11 @@ internal sealed class CountingInboxStore(EfInboxStore<TestMessagingDbContext> in
     : IInboxProcessorStore
 {
     public ValueTask<InboxClaim> ClaimBatchAsync(
-        int batchSize, TimeSpan leaseDuration, IReadOnlyList<string> excludedTenants, CancellationToken ct = default)
+        int batchSize, TimeSpan leaseDuration, InboxClaimExclusions excluded, CancellationToken ct = default)
     {
-        recorder.InboxClaims.Enqueue((InstanceCatalog.DatabaseOf(connection.Value), [.. excludedTenants]));
-        return ((IInboxProcessorStore)inner).ClaimBatchAsync(batchSize, leaseDuration, excludedTenants, ct);
+        recorder.InboxClaims.Enqueue((
+            InstanceCatalog.DatabaseOf(connection.Value), [.. excluded.Pairs.Select(p => p.TenantId)], [.. excluded.ConsumerTypes]));
+        return ((IInboxProcessorStore)inner).ClaimBatchAsync(batchSize, leaseDuration, excluded, ct);
     }
 
     public ValueTask<int> ApplyOutcomesAsync(Guid claimToken, IReadOnlyList<InboxOutcome> outcomes, CancellationToken ct = default)

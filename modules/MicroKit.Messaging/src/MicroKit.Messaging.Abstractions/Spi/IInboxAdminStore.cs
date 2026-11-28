@@ -37,8 +37,9 @@ public interface IInboxAdminStore
     /// handlers' dependency will not recover (#124).
     /// </summary>
     /// <param name="tenantId">
-    /// The tenant. Never <see langword="null"/>: a tenant's back-off holds that tenant's rows only, and a
-    /// deployment whose messages carry no tenant has none to park.
+    /// The tenant, for every consumer of it. Never <see langword="null"/>: a back-off holds rows with a tenant
+    /// only — a (consumer, tenant) pair's, or a consumer's for every tenant (#210) — and a deployment whose
+    /// messages carry no tenant has none to park.
     /// </param>
     /// <param name="reason">Recorded as each row's error text, so <see cref="GetDeadLetteredAsync"/> shows why.</param>
     /// <param name="ct">Cancellation token.</param>
@@ -56,7 +57,9 @@ public interface IInboxAdminStore
     /// <para>
     /// The way back is <see cref="GetDeadLetteredAsync"/> narrowed to the tenant, then
     /// <see cref="RequeueAsync"/> for each row, once the tenant is healthy again. Nothing in the engine
-    /// dead-letters a tenant on its own.
+    /// dead-letters a tenant on its own. It parks the rows of every consumer of the tenant, healthy ones
+    /// included: it is no exit for one consumer whose own dependency will not recover (#210), whose rows
+    /// dead-letter on sight once it is removed from the composition, as rows of an unknown consumer.
     /// </para>
     /// </remarks>
     ValueTask<int> DeadLetterPendingAsync(string tenantId, string reason, CancellationToken ct = default);

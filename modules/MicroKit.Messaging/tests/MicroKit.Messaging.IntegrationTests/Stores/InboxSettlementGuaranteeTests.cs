@@ -258,7 +258,7 @@ public sealed class InboxSettlementGuaranteeTests
             await using var scope = Provider.CreateAsyncScope();
             var claim = await scope.ServiceProvider
                 .GetRequiredKeyedService<IInboxProcessorStore>(EntityFrameworkOutbox.KeyOf<TestMessagingDbContext>())
-                .ClaimBatchAsync(10, Lease, []);
+                .ClaimBatchAsync(10, Lease, InboxClaimExclusions.None);
 
             claim.Count.ShouldBe(1);
             return claim.Token;

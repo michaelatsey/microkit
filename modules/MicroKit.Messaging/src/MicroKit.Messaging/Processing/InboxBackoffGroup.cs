@@ -4,53 +4,56 @@ using System.Runtime.CompilerServices;
 namespace MicroKit.Messaging.Processing;
 
 /// <summary>
-/// The tenants in back-off on each store's inbox (#124): one <see cref="TenantBackoff"/> per single
-/// store, and one per instance of a partitioned store (#191), shared by its retry loop and by every
-/// transport delivery guarded by it.
+/// The inbox back-off of every store (#124, #210): one <see cref="InboxBackoff"/> per single store, and one
+/// per instance of a partitioned store (#191), shared by its retry loop and by every transport delivery
+/// guarded by it.
 /// </summary>
 /// <remarks>
 /// A singleton. Its curve is the inbox's: <see cref="InboxProcessorOptions.PollingInterval"/>,
-/// doubling to <see cref="InboxProcessorOptions.DependencyUnavailableBackoff"/>. While no store has
-/// anything in back-off, <see cref="IsQuiet"/> answers with one read, so a delivery pays no lookup.
-/// Its entries are keyed by <see cref="StoreInstanceKey"/>. A single store's entry is created on first
-/// use (<see cref="For"/>); an instance's (#191) is created and released by the engine alone
-/// (<see cref="Add"/>, <see cref="Release"/>), never by a delivery, which reaches it through the
-/// instance it was mapped to.
+/// doubling to <see cref="InboxProcessorOptions.DependencyUnavailableBackoff"/>, for a (consumer, tenant)
+/// pair and for a consumer alike. While no store has anything in back-off, <see cref="IsQuiet"/> answers with
+/// one read, so a delivery pays no lookup. Its entries are keyed by <see cref="StoreInstanceKey"/>. A single
+/// store's entry is created on first use (<see cref="For"/>); an instance's (#191) is created and released by
+/// the engine alone (<see cref="Add"/>, <see cref="Release"/>), never by a delivery, which reaches it through
+/// the instance it was mapped to.
 /// </remarks>
 /// <param name="options">The inbox options: the curve's base and ceiling.</param>
-internal sealed class InboxTenantBackoff(InboxProcessorOptions options)
+internal sealed class InboxBackoffGroup(InboxProcessorOptions options)
 {
-    private readonly ConcurrentDictionary<StoreInstanceKey, TenantBackoff> _stores = new();
+    private readonly ConcurrentDictionary<StoreInstanceKey, InboxBackoff> _stores = new();
     private readonly StrongBox<int> _loud = new();
     private readonly TimeSpan _initial = options.PollingInterval;
     private readonly TimeSpan _ceiling = options.DependencyUnavailableBackoff;
 
-    /// <summary>Gets a value indicating whether no store has a tenant, a probe or a suspicion to clear.</summary>
+    /// <summary>
+    /// Gets a value indicating whether no store has a pair or a consumer in back-off, a probe pending or a
+    /// suspicion standing.
+    /// </summary>
     public bool IsQuiet => Volatile.Read(ref _loud.Value) == 0;
 
     /// <summary>
-    /// Gets the stores whose state exists — each one from its first use — for the inbox's back-off
-    /// up-down counter (#126). Safe to enumerate while stores are added.
+    /// Gets the stores whose state exists — each one from its first use — for the inbox's back-off up-down
+    /// counters (#126, #210). Safe to enumerate while stores are added.
     /// </summary>
-    public IEnumerable<KeyValuePair<StoreInstanceKey, TenantBackoff>> Stores => _stores;
+    public IEnumerable<KeyValuePair<StoreInstanceKey, InboxBackoff>> Stores => _stores;
 
     /// <summary>The back-off state of <paramref name="store"/>'s inbox.</summary>
     /// <param name="store">The store.</param>
     /// <returns>Its state, created on first use.</returns>
-    public TenantBackoff For(MessageStoreKey store)
+    public InboxBackoff For(MessageStoreKey store)
         => _stores.GetOrAdd(
             new StoreInstanceKey(store, null),
-            static (_, self) => new TenantBackoff(self._initial, self._ceiling, self._loud),
+            static (_, self) => new InboxBackoff(self._initial, self._ceiling, self._loud),
             this);
 
     /// <summary>Creates the back-off state of an instance's inbox, when the engine starts draining it.</summary>
     /// <param name="key">The instance; never a single store's key.</param>
     /// <returns>Its new state.</returns>
     /// <exception cref="InvalidOperationException">The instance's state exists: it was not released.</exception>
-    public TenantBackoff Add(StoreInstanceKey key)
+    public InboxBackoff Add(StoreInstanceKey key)
     {
         ArgumentNullException.ThrowIfNull(key.Instance);
-        var state = new TenantBackoff(_initial, _ceiling, _loud);
+        var state = new InboxBackoff(_initial, _ceiling, _loud);
         return _stores.TryAdd(key, state)
             ? state
             : throw new InvalidOperationException(

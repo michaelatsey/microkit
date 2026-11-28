@@ -44,33 +44,58 @@ public sealed class InboxProcessorTests
         var sut = Build(store, out _, out _, options);
         await sut.ProcessBatchAsync(batchSize: 7, CancellationToken.None);
 
-        await store.Received(1).ClaimBatchAsync(7, TimeSpan.FromSeconds(97), Arg.Any<IReadOnlyList<string>>(), Arg.Any<CancellationToken>());
+        await store.Received(1).ClaimBatchAsync(7, TimeSpan.FromSeconds(97), Arg.Any<InboxClaimExclusions>(), Arg.Any<CancellationToken>());
     }
 
     /// <summary>
-    /// A tenant in back-off on the store's inbox is left out of the claim (#124 A7); with no tenant in
-    /// back-off the list is empty.
+    /// A (consumer, tenant) pair in back-off on the store's inbox is left out of the claim (#124 A7, #210
+    /// D4); with nothing in back-off the claim is passed the shared <see cref="InboxClaimExclusions.None"/>
+    /// (V13).
     /// </summary>
     [Fact]
-    public async Task ProcessBatch_LeavesATenantInBackOffOutOfTheClaim()
+    public async Task ProcessBatch_LeavesAPairInBackOffOutOfTheClaim_AndAQuietStorePassesNone()
     {
-        var lists = new List<IReadOnlyList<string>>();
+        var lists = new List<InboxClaimExclusions>();
         var store = StoreReturning(InboxClaim.Empty);
-        store.ClaimBatchAsync(Arg.Any<int>(), Arg.Any<TimeSpan>(), Arg.Any<IReadOnlyList<string>>(), Arg.Any<CancellationToken>())
+        store.ClaimBatchAsync(Arg.Any<int>(), Arg.Any<TimeSpan>(), Arg.Any<InboxClaimExclusions>(), Arg.Any<CancellationToken>())
             .Returns(ci =>
             {
-                lists.Add(ci.ArgAt<IReadOnlyList<string>>(2));
+                lists.Add(ci.ArgAt<InboxClaimExclusions>(2));
                 return ValueTask.FromResult(InboxClaim.Empty);
             });
         var sut = Build(store, out _, out var harness);
 
         await sut.ProcessBatchAsync(batchSize: 10, CancellationToken.None);
-        harness.TenantBackoff.For(GuardHarness.Store).OnDown("tenant-b", harness.Clock.GetUtcNow(), out _);
+        harness.Backoffs.For(GuardHarness.Store).OnDown(ConsumerType, "tenant-b", harness.Clock.GetUtcNow(), out _);
         await sut.ProcessBatchAsync(batchSize: 10, CancellationToken.None);
 
         lists.Count.ShouldBe(2);
-        lists[0].ShouldBeEmpty("control: nobody in back-off");
-        lists[1].ShouldBe(["tenant-b"]);
+        lists[0].ShouldBeSameAs(InboxClaimExclusions.None, "nothing in back-off: the shared value, no allocation");
+        lists[1].Pairs.ShouldBe([(ConsumerType, "tenant-b")]);
+        lists[1].ConsumerTypes.ShouldBeEmpty();
+    }
+
+    /// <summary>
+    /// A pair whose tenant id is empty, in back-off, is left out of the claim like any other (PR #219 review): the
+    /// batch is claimed, never refused.
+    /// </summary>
+    [Fact]
+    public async Task ProcessBatch_LeavesAPairWithAnEmptyTenantIdOutOfTheClaim_AndClaims()
+    {
+        var lists = new List<InboxClaimExclusions>();
+        var store = StoreReturning(InboxClaim.Empty);
+        store.ClaimBatchAsync(Arg.Any<int>(), Arg.Any<TimeSpan>(), Arg.Any<InboxClaimExclusions>(), Arg.Any<CancellationToken>())
+            .Returns(ci =>
+            {
+                lists.Add(ci.ArgAt<InboxClaimExclusions>(2));
+                return ValueTask.FromResult(InboxClaim.Empty);
+            });
+        var sut = Build(store, out _, out var harness);
+        harness.Backoffs.For(GuardHarness.Store).OnDown(ConsumerType, string.Empty, harness.Clock.GetUtcNow(), out _);
+
+        await sut.ProcessBatchAsync(batchSize: 10, CancellationToken.None);
+
+        lists.ShouldHaveSingleItem().Pairs.ShouldBe([(ConsumerType, string.Empty)]);
     }
 
     // ── Success: the row is written Processed in the handler's transaction ───────────────────
@@ -356,7 +381,7 @@ public sealed class InboxProcessorTests
 
         row.TenantId.ShouldNotBeNull("control: the row has a tenant to blame");
         result.AbortReason.ShouldBe(InboxBatchAbortReason.DependencyUnavailable);
-        harness.TenantBackoff.For(GuardHarness.Store).IsEmpty.ShouldBeTrue("no tenant is blamed for the store's outage");
+        harness.Backoffs.For(GuardHarness.Store).IsEmpty.ShouldBeTrue("no tenant is blamed for the store's outage");
     }
 
     /// <summary>A dependency of the row's tenant (#124 D5): that row waits, nothing counted, and the batch goes on.</summary>
@@ -405,7 +430,7 @@ public sealed class InboxProcessorTests
             harness.Database.Add(row);
         }
 
-        var tenants = harness.TenantBackoff.For(GuardHarness.Store);
+        var tenants = harness.Backoffs.For(GuardHarness.Store);
         DateTimeOffset blockedUntil = default;
         probe.ThrowWhen = context =>
         {
@@ -415,7 +440,7 @@ public sealed class InboxProcessorTests
             }
 
             // A delivery of A on a transport thread failed first and put A in back-off.
-            tenants.OnDown("A", harness.Clock.GetUtcNow(), out blockedUntil);
+            tenants.OnDown(ConsumerType, "A", harness.Clock.GetUtcNow(), out blockedUntil);
             return new InboxDependencyUnavailableException("A's partner is down");
         };
 
@@ -427,8 +452,48 @@ public sealed class InboxProcessorTests
         outcome.Kind.ShouldBe(InboxOutcomeKind.Retry);
         outcome.RetryCount.ShouldBe(2, "unchanged");
         outcome.NextRetryAtUtc.ShouldBe(blockedUntil, "the back-off the delivery began");
-        tenants.TryGetDelay("A", out var delay).ShouldBeTrue();
+        tenants.TryGetDelay(ConsumerType, "A", out var delay).ShouldBeTrue();
         delay.ShouldBe(DefaultOptions.PollingInterval, "one failure of the curve");
+    }
+
+    /// <summary>
+    /// A retry whose dependency fails while deliveries on a transport thread put its consumer in consumer-wide
+    /// back-off meanwhile, for other tenants (PR #219 review): the verdict is held by the consumer, the row waits
+    /// with no attempt counted, and 2013 names no tenant: its pair never entered back-off, and 2015 reports the
+    /// consumer's back-off where it began.
+    /// </summary>
+    [Fact]
+    public async Task ProcessBatch_WhenItsConsumerEntersConsumerWideBackOffWhileItsRetryIsInFlight_DefersTheRow_AndReportsNo2013()
+    {
+        var rows = new[] { Row(retryCount: 2, tenantId: "A") };
+        var claim = InboxFixtures.Claim(rows);
+        var store = StoreReturning(claim);
+        var logger = new CapturingLogger<InboxProcessor>();
+        var sut = Build(store, out var probe, out var harness, logger: logger);
+        rows[0].ClaimToken = claim.Token;
+        harness.Database.Add(rows[0]);
+
+        var backoff = harness.Backoffs.For(GuardHarness.Store);
+        var entered = default(InboxBackoff.OutageScope);
+        probe.ThrowWhen = context =>
+        {
+            // Deliveries of other tenants, on a transport thread, while this retry of A runs.
+            var now = harness.Clock.GetUtcNow();
+            backoff.OnDown(ConsumerType, "P", now, out _);
+            backoff.Succeeded("Tests.AnotherConsumer, Tests", "Z");
+            entered = backoff.OnDown(ConsumerType, "Q", now, out _);
+            return new InboxDependencyUnavailableException("the consumer's partner is down");
+        };
+
+        var result = await sut.ProcessBatchAsync(batchSize: 10, CancellationToken.None);
+
+        entered.ShouldBe(InboxBackoff.OutageScope.Consumer, "control: the consumer was held for every tenant meanwhile");
+        result.AbortReason.ShouldBe(InboxBatchAbortReason.None);
+        var outcome = (await CapturedOutcomes(store)).ShouldHaveSingleItem();
+        outcome.Kind.ShouldBe(InboxOutcomeKind.Retry);
+        outcome.RetryCount.ShouldBe(2, "unchanged");
+        backoff.TryGetDelay(ConsumerType, "A", out _).ShouldBeFalse("control: A's pair never entered back-off");
+        logger.Records.ShouldNotContain(r => r.EventId == 2013, "no tenant failed for the consumer as a pair");
     }
 
     // ── Transient failures ────────────────────────────────────────────────────────────────────
@@ -668,7 +733,7 @@ public sealed class InboxProcessorTests
     private static IInboxProcessorStore StoreReturning(InboxClaim claim)
     {
         var store = Substitute.For<IInboxProcessorStore>();
-        store.ClaimBatchAsync(Arg.Any<int>(), Arg.Any<TimeSpan>(), Arg.Any<IReadOnlyList<string>>(), Arg.Any<CancellationToken>())
+        store.ClaimBatchAsync(Arg.Any<int>(), Arg.Any<TimeSpan>(), Arg.Any<InboxClaimExclusions>(), Arg.Any<CancellationToken>())
             .Returns(ValueTask.FromResult(claim));
         store.ApplyOutcomesAsync(
                 Arg.Any<Guid>(), Arg.Any<IReadOnlyList<InboxOutcome>>(), Arg.Any<CancellationToken>())
@@ -694,7 +759,8 @@ public sealed class InboxProcessorTests
         InboxProcessorOptions? options = null,
         IMessageSerializer? serializer = null,
         bool registerGuard = true,
-        Exception? guardActivationFailure = null)
+        Exception? guardActivationFailure = null,
+        ILogger<InboxProcessor>? logger = null)
     {
         var shared = new RetryProbe();
         probe = shared;
@@ -727,9 +793,9 @@ public sealed class InboxProcessorTests
             harness.Pipeline,
             options,
             harness.Policy,
-            NullLogger<InboxProcessor>.Instance,
+            logger ?? NullLogger<InboxProcessor>.Instance,
             GuardHarness.Store,
-            harness.TenantBackoff.For(GuardHarness.Store));
+            harness.Backoffs.For(GuardHarness.Store));
     }
 
     private static IMessageSerializer RoundTripSerializer()

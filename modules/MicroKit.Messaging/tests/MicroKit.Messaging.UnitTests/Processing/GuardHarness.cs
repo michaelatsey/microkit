@@ -24,10 +24,10 @@ internal sealed class GuardHarness
         CapturingLogger<MessageReceivePipeline> logs,
         InboxRetryPolicy policy,
         IServiceProvider provider,
-        InboxTenantBackoff tenantBackoff,
+        InboxBackoffGroup backoffs,
         FakeTimeProvider clock)
     {
-        TenantBackoff = tenantBackoff;
+        Backoffs = backoffs;
         Clock = clock;
         Pipeline = pipeline;
         Database = database;
@@ -49,8 +49,8 @@ internal sealed class GuardHarness
 
     public IServiceProvider Provider { get; }
 
-    /// <summary>Gets the tenants in back-off on each store's inbox (#124), shared with an inbox processor.</summary>
-    public InboxTenantBackoff TenantBackoff { get; }
+    /// <summary>Gets the inbox back-off of each store (#124, #210), shared with an inbox processor.</summary>
+    public InboxBackoffGroup Backoffs { get; }
 
     /// <summary>Gets the clock of the retry policy and the guard.</summary>
     public FakeTimeProvider Clock { get; }
@@ -107,7 +107,7 @@ internal sealed class GuardHarness
 
         var inboxOptions = options ?? new InboxProcessorOptions();
         var policy = new InboxRetryPolicy(inboxOptions, clock, random ?? FixedRandom.NoJitter);
-        var tenantBackoff = new InboxTenantBackoff(inboxOptions);
+        var backoffs = new InboxBackoffGroup(inboxOptions);
         var logs = new CapturingLogger<MessageReceivePipeline>();
         var pipeline = new MessageReceivePipeline(
             contracts,
@@ -118,10 +118,10 @@ internal sealed class GuardHarness
             new MessageStoreResolver(composition, new StaticMessageStoreSet(composition)),
             policy,
             new InboxMetrics(),
-            tenantBackoff,
+            backoffs,
             logs);
 
-        return new GuardHarness(pipeline, database, scopes, logs, policy, provider, tenantBackoff, clock);
+        return new GuardHarness(pipeline, database, scopes, logs, policy, provider, backoffs, clock);
     }
 }
 

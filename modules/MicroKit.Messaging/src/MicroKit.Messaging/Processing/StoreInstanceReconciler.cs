@@ -34,7 +34,7 @@ internal sealed class StoreInstanceReconciler
 {
     private readonly MessageStoreKey _store;
     private readonly StoreInstanceRegistry _registry;
-    private readonly InboxTenantBackoff _inbox;
+    private readonly InboxBackoffGroup _inbox;
     private readonly OutboxMetrics _metrics;
     private readonly OutboxProcessorOptions _outboxOptions;
     private readonly StoreInstanceOptions _instanceOptions;
@@ -66,7 +66,7 @@ internal sealed class StoreInstanceReconciler
     public StoreInstanceReconciler(
         MessageStoreKey store,
         StoreInstanceRegistry registry,
-        InboxTenantBackoff inbox,
+        InboxBackoffGroup inbox,
         OutboxMetrics metrics,
         OutboxProcessorOptions outboxOptions,
         StoreInstanceOptions instanceOptions,
@@ -372,10 +372,10 @@ internal sealed class StoreInstanceReconciler
     {
         var key = new StoreInstanceKey(_store, instance.Id);
         var outbox = new OutboxEndpointBackoff(_outboxOptions.PollingInterval, _outboxOptions.TransportUnavailableBackoff);
-        var tenants = _inbox.Add(key);
+        var inbox = _inbox.Add(key);
         _metrics.Track(key, outbox);
         var state = new StoreInstanceState(
-            _store, instance, outbox, tenants, _gate, _registry, _instanceOptions.TagInstances, stoppingToken);
+            _store, instance, outbox, inbox, _gate, _registry, _instanceOptions.TagInstances, stoppingToken);
         _registry.Add(state);
         _running[instance] = state;
         GuardedLoop.Log(() => StoreInstanceLogs.InstanceStarted(_logger, _store.Value, instance.Id));

@@ -144,7 +144,7 @@ public sealed class PublicSurfaceTests
             // What a store provider calls once its rows committed, to wake the store's outbox loop (#215).
             "IOutboxCommitSignal",
             // The rows and the types the stores exchange.
-            "OutboxMessage", "InboxMessage", "OutboxClaim", "OutboxEndpoints", "MessageConsumerKey", "InboxClaim", "OutboxOutcome",
+            "OutboxMessage", "InboxMessage", "OutboxClaim", "OutboxEndpoints", "MessageConsumerKey", "InboxClaim", "InboxClaimExclusions", "OutboxOutcome",
             "InboxOutcome", "InboxMessageKey", "InboxRowState",
             // Value objects carried on a row.
             "CorrelationId", "CausationId",
